@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.2-beta.1] — 2026-07-28
+
+### Added
+
+- Added an update-independent external CSSwitch control bridge with its own loopback authentication record.
+- Added shared protocol and configuration cores for atomic writes, configuration fingerprints, profile mutations, model catalog fields, and runtime settings.
+- Updated CSSwitch Operator to prefer the external bridge while retaining native bridge compatibility.
+
+### Beta limitations
+
+- Runtime start/stop and end-to-end provider probing remain capability-gated until their Tauri transaction dependencies are fully extracted.
+- This beta is intended for the `agent/external-control-bridge` branch and is not a stable release.
+
 ## [0.8.1] — 2026-07-20
 
 ### Added
