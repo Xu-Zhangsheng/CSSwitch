@@ -692,6 +692,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "csswitch-config-core"
+version = "0.1.0"
+dependencies = [
+ "csswitch-control-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "csswitch-control-core"
 version = "0.1.0"
 dependencies = [
@@ -832,6 +841,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "csswitch-codex-network",
+ "csswitch-config-core",
  "csswitch-control-core",
  "csswitch-skill-install-core",
  "hkdf",
