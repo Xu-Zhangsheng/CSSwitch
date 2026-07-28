@@ -43,7 +43,8 @@
       "../../scripts/launch-virtual-sandbox.sh": "scripts/launch-virtual-sandbox.sh",
       "../../scripts/ssh-bridge/ssh": "scripts/ssh-bridge/ssh",
       "../../scripts/stop-science-sandbox.sh": "scripts/stop-science-sandbox.sh",
-      "../../scripts/verify-proxy.sh": "scripts/verify-proxy.sh"
+      "../../scripts/verify-proxy.sh": "scripts/verify-proxy.sh",
+      "../../scripts/csswitch-control.sh": "scripts/csswitch-control.sh"
     },
     "externalBin": [
       "binaries/csswitch-gateway"
