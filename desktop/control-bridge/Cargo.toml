@@ -1,0 +1,15 @@
+[package]
+name = "csswitch-control-bridge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "csswitch-control-bridge"
+path = "src/main.rs"
+
+[dependencies]
+csswitch-config-core = { path = "../config-core" }
+csswitch-control-core = { path = "../control-core" }
+getrandom = "0.2"
+serde_json = "1"

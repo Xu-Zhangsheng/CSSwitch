@@ -13,6 +13,7 @@
 
 mod codex_auth_supervisor;
 mod commands;
+mod control_bridge;
 mod config;
 mod config_legacy;
 mod lifecycle;
@@ -230,6 +231,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    control_bridge::remove_record();
     let supervisor = app.state::<SharedCodexAuthSupervisor>().inner().clone();
     // First give login its protocol-level cancel path and read-only preflight
     // its cancellation token. Do not signal a possibly committing login child
@@ -434,6 +436,11 @@ pub fn run() {
             // v1/v2/v3 的版本备份由 config::load_from 按不可覆盖合同保存；
             // 悬空 active 归一化为空。迁移逻辑并入 config::load_from（不再单独跑 relay_presets）。
             let _ = config::load_from(&config::default_dir());
+            control_bridge::start(
+                app.handle().clone(),
+                app.state::<SharedAppState>().inner().clone(),
+                app.state::<SharedLifecycle>().inner().clone(),
+            )?;
 
             // 关窗隐藏配置面板，不销毁窗口、不停止后台链路。显式退出清理代理与沙箱。
             if let Some(win) = app.get_webview_window("main") {

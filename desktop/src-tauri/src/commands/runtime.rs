@@ -601,6 +601,11 @@ pub(crate) fn open_science_download_page() -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) fn status(state: State<'_, SharedAppState>) -> serde_json::Value {
+    status_for_control(state.inner())
+}
+
+/// Shared status projection for the UI and authenticated local control bridge.
+pub(crate) fn status_for_control(state: &SharedAppState) -> serde_json::Value {
     // 只在锁内取值，锁外做短超时探活。这里是高频 UI 状态灯，
     // 不能反复调用外部 `claude-science status`，否则前端轮询会卡住主线程。
     // 沙箱强身份确认保留在 one_click_login 的启动/复用边界。
@@ -621,7 +626,7 @@ pub(crate) fn status(state: State<'_, SharedAppState>) -> serde_json::Value {
         active_contract_digest,
         science_runtime,
     ) = {
-        let mut st = lock(state.inner());
+        let mut st = lock(state);
         let cfg = match config::load_from(&config::default_dir()) {
             Ok(cfg) => cfg,
             Err(e) => return status_response_for_config_error(&e),
