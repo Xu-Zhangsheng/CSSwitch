@@ -40,11 +40,12 @@ Gateway 进程就把它们都解释成 model routing：
 - 真实 Claude OAuth/token、真实账号数据库、整个真实 HOME 和未经用户选择的外部
   凭证不得投影进第三方沙箱。
 
-该凭证边界当前存在明确 `SOURCE-GAP`：Tauri 启动脚本和脚本启动 Science 的两层
-process environment 尚未清空 ambient variables。两层环境 allowlist、provider
-secret 只进入 Gateway、opt-in bridge 变量隔离和 sentinel-secret regressions
-必须在生产机械拆分前先闭合；闭合前不得把本节写成 current source PASS。完整前置
-条件见下方能力依赖正文。
+凭证边界的 process environment 合同：Tauri → launch/stop script 与
+launch script → Science 均使用显式 allowlist（`runtime/launch_env.rs` +
+`scripts/launch-virtual-sandbox.sh` 的 `env -i`）；provider secret 只进入
+Gateway。sentinel 与 stub 回归见 `runtime::launch_env` 测试和
+`test/test_launch_science_env_allowlist.sh`。完整所有权与 bridge 边界见下方
+能力依赖正文。
 
 完整 ownership、运行路径、bridge 准入和拆分前冻结项见
 [Claude Science 能力依赖](science-capability-dependencies.md)；逐能力当前决策只在

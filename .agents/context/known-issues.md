@@ -10,14 +10,15 @@
 
 ## 下一轮重构的 P0 前置
 
-- 当前 Rust → shell → Science 启动链会继承 parent process 的 ambient
-  environment。隔离 HOME/data-dir 因此还不等于环境变量隔离。
-- 在机械拆分 `sandbox_session` 或 Gateway `server.rs` 前，必须先建立两级
-  allowlist：Runtime 只收到运行必需变量，provider credential 只进入 Gateway，
-  Skill/SSH/Codex bridge 变量逐项 opt-in。
-- 验收至少包含未知 sentinel 不进入 child、provider secret 不进入 Science、
-  bridge-disabled 时变量缺席、必要 proxy/locale/runtime 变量仍可用。该缺口未闭合
-  前不得把“第三方沙箱隔离”表述为完整凭证边界。
+- ~~Ambient environment 泄漏~~ **已闭合（source）**：`runtime/launch_env.rs`
+  对 launch/stop script 与 Gateway 执行 `env_clear` + allowlist；
+  `scripts/launch-virtual-sandbox.sh` 以 `env -i` 启动 Science。sentinel 与
+  stub 回归：`cargo test --lib launch_env` / `proxy_lifecycle`、
+  `bash test/test_launch_science_env_allowlist.sh`。
+- 下一刀仍是 typed failure projection，再机械拆分 `sandbox_session` 与
+  Gateway `server.rs`；拆分不得扩大已冻结的 Runtime/Gateway allowlist。
+- 已闭合的是 **process environment 边界**，不是全部真实 provider/SSH/Science
+  领域 live PASS，也不是 Developer ID / notarization。
 
 ## 第三方模型与 Science 原生能力
 

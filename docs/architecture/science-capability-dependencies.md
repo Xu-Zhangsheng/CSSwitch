@@ -109,30 +109,31 @@ socket 经过同一个进程就把所有 Science 出站统一归为 model Gatewa
 - 对 Science-owned opaque roots 的递归复制、恢复、清理或权限接管；
 - 没有 owner、清理规则和故障边界的环境变量、路径或进程投影。
 
-#### 当前 ambient environment 缺口
+#### Ambient environment allowlist（已闭合）
 
-上面的“禁止隐式 ingress”是目标合同，不是当前源码已经满足的事实。当前
-Tauri → launch script 的 process spawn 没有清空父环境，脚本最终又使用不带
-`-i` 的 `/usr/bin/env` 启动 Science；因此父进程导出的 API key、云/GitHub
-credential、`SSH_AUTH_SOCK` 或其他变量可能进入受管 Science，即使对应 bridge
-没有启用。
+“禁止隐式 ingress”已由两层 allowlist 落实为当前源码合同：
 
-该 `SOURCE-GAP` 是生产机械拆分的前置阻断项。进入 typed failure、
-`sandbox_session` 或 Gateway 模块移动前，必须先以独立行为修复闭合：
+1. Tauri → launch / stop script：`runtime/launch_env.rs` 对 child 执行
+   `env_clear` 后只注入控制面 allowlist（隔离 `SANDBOX_HOME`、runtime path、
+   `CSSWITCH_PROXY_URL`、`CSSWITCH_HOST_HOME`、SSH 开关与 hosts、opaque
+   bindings、固定安全 PATH/locale/temp）；
+2. launch script → Science：`scripts/launch-virtual-sandbox.sh` 使用
+   `/usr/bin/env -i` 再次从空环境建立 allowlist（隔离 HOME、
+   `ANTHROPIC_BASE_URL`、受限 proxy/`NO_PROXY`、固定 PATH、locale/temp、
+   以及 SSH bridge 显式启用时的最小集合）；
+3. Gateway：`configure_managed_proxy_command` 同样 `env_clear` + base
+   allowlist，再由 formal/scratch plan 显式注入 provider secret 与合同变量；
+4. provider credential 只进入 Gateway process，不进入 Science 或 launch script；
+5. SSH / Skill host 等 bridge 变量仅在对应 bridge 启用路径注入。
 
-1. Tauri → launch script 使用显式环境 allowlist，而不是继承 ambient environment；
-2. launch script → Science 再次从空环境建立 allowlist；
-3. 只重新加入隔离 HOME、Gateway/proxy、runtime identity、固定安全 PATH、必要
-   locale/temp，以及当前 opt-in bridge 明确授权的变量；
-4. provider credential 只进入对应 Gateway process，不进入 Science 或 bridge；
-5. SSH、Codex、Skill/MCP 等 bridge 变量仅在该 bridge 显式启用时注入，关闭后
-   restart 不得残留；
-6. 使用假 secret/sentinel 覆盖 cold start、stopped-to-started 和
-   CSSwitch restart/recovery 后的新 process，证明任意未列入 allowlist 的父环境
-   不可在 script 或 Science 中观察。
+验收：
 
-修复前不得把“未显式投影真实凭证”写成 current source PASS，也不得在机械拆分中
-顺手改变环境继承后只靠既有测试推断行为等价。
+- `runtime::launch_env` 与 `proxy_lifecycle` 的 sentinel / parent-secret 单测；
+- `test/test_launch_science_env_allowlist.sh`（stub Science + 污染父环境）证明
+  Science serve 子进程看不到 ambient secrets。
+
+后续 typed failure、`sandbox_session` 与 Gateway 机械拆分不得扩大上述
+allowlist；helper 移动时保持退出条件不变。
 
 egress 先按语义责任分为四类：
 
@@ -295,8 +296,8 @@ CSSwitch 不托管：
    receipt 和 recovery 的行为特征测试；
 6. Desktop、transaction、Gateway/provider、runtime adapter、bridge、
    Science-native 与 external service 的 typed failure domain；
-7. 上述 ambient environment `SOURCE-GAP` 已由两层 allowlist 与 sentinel-secret
-   regressions 闭合；未闭合时不得开始机械拆分。
+7. ambient environment 两层 allowlist 与 sentinel-secret regressions 已闭合
+   （见上文与 `runtime/launch_env`）；后续机械拆分不得扩大该 allowlist。
 
 这一步不要求先证明每项 Science 能力 current live，也不要求解决所有
 `UNKNOWN`。拆分前需要的是 owner、路径和不变量无歧义；具体版本/provider 的
