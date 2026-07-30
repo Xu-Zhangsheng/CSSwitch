@@ -577,11 +577,9 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     };
     match lifecycle.with_serialized(|| -> Result<_, TypedOneClickFailure> {
         if let Some(candidate_config) = candidate_config.as_ref() {
-            candidate_config
-                .verify_unchanged()
-                .map_err(|message| {
-                    TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
-                })?;
+            candidate_config.verify_unchanged().map_err(|message| {
+                TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
+            })?;
         }
         if let Some(prepared) = prepared.as_ref() {
             prepared.verify_unchanged().map_err(|message| {

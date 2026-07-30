@@ -14,9 +14,8 @@ use crate::runtime::legacy_proxy::{
 };
 use crate::runtime::operation::{self, OperationStage, OperationTrace, POLL_INTERVAL_MS};
 use crate::runtime::provider::{
-    assert_format_supported, current_shim_mode_for_adapter, is_openai_adapter,
-    normalize_shim_mode, proxy_args_for, proxy_fingerprint_with_runtime, FormalCredential,
-    FormalGatewayPlan,
+    assert_format_supported, current_shim_mode_for_adapter, is_openai_adapter, normalize_shim_mode,
+    proxy_args_for, proxy_fingerprint_with_runtime, FormalCredential, FormalGatewayPlan,
 };
 use crate::runtime::proxy::{health_timeout_reason, should_write_back, ProxyAction};
 use crate::runtime::system::{asset_root, log_path, open_log, redact, repo_root, tail_file};
@@ -1236,8 +1235,7 @@ mod tests {
                 .find(|(key, _)| *key == "CSSWITCH_UPSTREAM_URL")
                 .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()));
             assert_eq!(
-                upstream_override,
-                None,
+                upstream_override, None,
                 "{provider} must not inherit CSSWITCH_UPSTREAM_URL from ambient env"
             );
             let _ = removes_upstream; // table still documents former denylist intent
@@ -1257,14 +1255,14 @@ mod tests {
             assert!(cmd.get_envs().any(|(key, value)| {
                 key == "PATH"
                     && value
-                        .map(|value| value.to_string_lossy() == crate::runtime::launch_env::SAFE_PATH)
+                        .map(|value| {
+                            value.to_string_lossy() == crate::runtime::launch_env::SAFE_PATH
+                        })
                         .unwrap_or(false)
             }));
             let env_keys: Vec<String> = cmd
                 .get_envs()
-                .filter_map(|(key, value)| {
-                    value.map(|_| key.to_string_lossy().into_owned())
-                })
+                .filter_map(|(key, value)| value.map(|_| key.to_string_lossy().into_owned()))
                 .collect();
             for key in &env_keys {
                 assert!(
@@ -1339,7 +1337,6 @@ mod tests {
             None => std::env::remove_var("OPENAI_API_KEY"),
         }
     }
-
 
     #[test]
     fn formal_proxy_env_injects_openai_catalog_without_legacy_model_override() {

@@ -385,10 +385,7 @@ fn run_boot_coordinator(app: tauri::AppHandle) {
                             st.boot_attention = None;
                         }
                     }
-                    Err(e) => mark_boot_failed(
-                        &app,
-                        boot_prepare_failure(e.to_string()),
-                    ),
+                    Err(e) => mark_boot_failed(&app, boot_prepare_failure(e.to_string())),
                 }
             }
         }

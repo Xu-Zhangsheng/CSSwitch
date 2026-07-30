@@ -55,10 +55,9 @@ impl OneClickFailureKind {
             | Self::PreflightSnapshot
             | Self::Prepare => FailureDomain::Desktop,
             Self::ScienceStop | Self::AuthoritySnapshot => FailureDomain::RuntimeTransaction,
-            Self::GatewayStart
-            | Self::ProxySpawn
-            | Self::ProxyHealth
-            | Self::CatalogVerify => FailureDomain::GatewayProvider,
+            Self::GatewayStart | Self::ProxySpawn | Self::ProxyHealth | Self::CatalogVerify => {
+                FailureDomain::GatewayProvider
+            }
             Self::SandboxLogin
             | Self::SandboxLaunch
             | Self::SandboxHealth
@@ -187,8 +186,7 @@ impl TypedOneClickFailure {
     pub(crate) fn apply_open_journal_degraded(mut self, journal_open: bool) -> Self {
         if journal_open
             && self.recovery.recovery_status == ProjectedRecovery::NOT_NEEDED.recovery_status
-            && self.recovery.environment_status
-                == ProjectedRecovery::NOT_NEEDED.environment_status
+            && self.recovery.environment_status == ProjectedRecovery::NOT_NEEDED.environment_status
         {
             self.recovery = ProjectedRecovery::DEGRADED;
         }
@@ -250,13 +248,34 @@ mod tests {
 
     #[test]
     fn coarse_stage_table_is_stable() {
-        assert_eq!(OneClickFailureKind::ScienceStop.coarse_stage(), "science_stop");
-        assert_eq!(OneClickFailureKind::ProxyHealth.coarse_stage(), "gateway_start");
-        assert_eq!(OneClickFailureKind::ProxySpawn.coarse_stage(), "gateway_start");
-        assert_eq!(OneClickFailureKind::GatewayStart.coarse_stage(), "gateway_start");
-        assert_eq!(OneClickFailureKind::CatalogVerify.coarse_stage(), "catalog_verify");
-        assert_eq!(OneClickFailureKind::SandboxLaunch.coarse_stage(), "science_start");
-        assert_eq!(OneClickFailureKind::SandboxHealth.coarse_stage(), "science_start");
+        assert_eq!(
+            OneClickFailureKind::ScienceStop.coarse_stage(),
+            "science_stop"
+        );
+        assert_eq!(
+            OneClickFailureKind::ProxyHealth.coarse_stage(),
+            "gateway_start"
+        );
+        assert_eq!(
+            OneClickFailureKind::ProxySpawn.coarse_stage(),
+            "gateway_start"
+        );
+        assert_eq!(
+            OneClickFailureKind::GatewayStart.coarse_stage(),
+            "gateway_start"
+        );
+        assert_eq!(
+            OneClickFailureKind::CatalogVerify.coarse_stage(),
+            "catalog_verify"
+        );
+        assert_eq!(
+            OneClickFailureKind::SandboxLaunch.coarse_stage(),
+            "science_start"
+        );
+        assert_eq!(
+            OneClickFailureKind::SandboxHealth.coarse_stage(),
+            "science_start"
+        );
         assert_eq!(
             OneClickFailureKind::ScienceDbReverify.coarse_stage(),
             "science_start"
@@ -323,8 +342,10 @@ mod tests {
 
     #[test]
     fn deref_supports_legacy_error_contains_checks() {
-        let failure =
-            TypedOneClickFailure::new(OneClickFailureKind::ScienceStart, "science_db_reverify_timeout");
+        let failure = TypedOneClickFailure::new(
+            OneClickFailureKind::ScienceStart,
+            "science_db_reverify_timeout",
+        );
         assert!(failure.contains("science_db_reverify"));
         assert_eq!(failure.as_ref(), "science_db_reverify_timeout");
         assert_eq!(failure.to_string(), "science_db_reverify_timeout");

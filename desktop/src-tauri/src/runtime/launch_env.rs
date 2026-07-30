@@ -141,10 +141,7 @@ pub(crate) fn science_stop_script_env(
         HOST_HOME_ENV.into(),
         absolute_host_home_dir().display().to_string(),
     ));
-    env.push((
-        "SANDBOX_HOME".into(),
-        sandbox_home.display().to_string(),
-    ));
+    env.push(("SANDBOX_HOME".into(), sandbox_home.display().to_string()));
     env.push(("SCIENCE_BIN".into(), science_bin.display().to_string()));
     env
 }
@@ -215,10 +212,14 @@ mod tests {
             ])
         );
         assert_eq!(
-            env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.as_str()),
+            env.iter()
+                .find(|(k, _)| k == "PATH")
+                .map(|(_, v)| v.as_str()),
             Some(SAFE_PATH)
         );
-        assert!(!env.iter().any(|(k, _)| k.contains("API_KEY") || k.contains("SECRET")));
+        assert!(!env
+            .iter()
+            .any(|(k, _)| k.contains("API_KEY") || k.contains("SECRET")));
     }
 
     #[test]
@@ -329,14 +330,8 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            !stdout.contains(sentinel_key),
-            "child saw sentinel key"
-        );
-        assert!(
-            !stdout.contains(sentinel_value),
-            "child saw sentinel value"
-        );
+        assert!(!stdout.contains(sentinel_key), "child saw sentinel key");
+        assert!(!stdout.contains(sentinel_value), "child saw sentinel value");
         assert!(!stdout.contains(provider_key));
         assert!(!stdout.contains("sk-parent-leak"));
         assert!(stdout.contains("PATH="));
@@ -410,7 +405,10 @@ mod tests {
             .find(|line| line.starts_with("HOME="))
             .expect("HOME line");
         let home = &home_line["HOME=".len()..];
-        assert!(Path::new(home).is_absolute(), "child HOME not absolute: {home}");
+        assert!(
+            Path::new(home).is_absolute(),
+            "child HOME not absolute: {home}"
+        );
         match previous {
             Some(value) => std::env::set_var("OPENAI_API_KEY", value),
             None => std::env::remove_var("OPENAI_API_KEY"),
