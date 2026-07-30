@@ -14,8 +14,14 @@ DEFAULT_GATEWAY = ROOT / "desktop/gateway/target/debug/csswitch-gateway"
 
 def sandbox_session_source():
     module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
-    sources = [module_dir / "mod.rs"]
-    sources.extend(sorted(path for path in module_dir.glob("*.rs") if path.name != "mod.rs"))
+    sources = sorted(module_dir.rglob("*.rs"))
+    return "\n".join(path.read_text() for path in sources)
+
+
+def sandbox_session_one_click_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = [module_dir / "one_click.rs"]
+    sources.extend(sorted((module_dir / "one_click").rglob("*.rs")))
     return "\n".join(path.read_text() for path in sources)
 
 
@@ -324,10 +330,9 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             self.assertEqual(list(bridge_dir.iterdir()), [])
 
     def test_science_startup_registration_is_best_effort_and_prelaunch(self):
-        session = sandbox_session_source()
-        one_click = session.split("fn one_click_login_with_options", 1)[1].split(
-            "\n#[cfg(test)]\nmod transaction_tests", 1
-        )[0]
+        one_click = sandbox_session_one_click_source().split(
+            "fn one_click_login_with_options", 1
+        )[1]
         registration = one_click.index("register_before_science_start(")
         launch = one_click.index('let mut launch_cmd = Command::new("zsh")')
         self.assertLess(registration, launch)
@@ -379,9 +384,9 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             ROOT / "desktop/src-tauri/src/runtime/skill_install_bridge.rs"
         ).read_text()
         session = sandbox_session_source()
-        one_click = session.split("fn one_click_login_with_options", 1)[1].split(
-            "\n#[cfg(test)]\nmod transaction_tests", 1
-        )[0]
+        one_click = sandbox_session_one_click_source().split(
+            "fn one_click_login_with_options", 1
+        )[1]
         self.assertIn('ROUTE_SKILL_NAME: &str = "csswitch-external-skill-tools"', gateway)
         self.assertIn('matches!(url.host_str(), Some("127.0.0.1" | "localhost"))', gateway)
         self.assertIn('/api/agents/OPERON/skills', gateway)

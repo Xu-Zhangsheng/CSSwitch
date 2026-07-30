@@ -7,8 +7,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def sandbox_session_source():
     module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
-    sources = [module_dir / "mod.rs"]
-    sources.extend(sorted(path for path in module_dir.glob("*.rs") if path.name != "mod.rs"))
+    sources = sorted(module_dir.rglob("*.rs"))
     return "\n".join(path.read_text() for path in sources)
 
 

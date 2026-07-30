@@ -581,16 +581,13 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         expression_path(&initializer.expr).as_deref() == Some("None")
     }
 
-    // SSH validators live in ssh_preflight; orchestrator stays in façade mod.rs.
-    let facade_source = include_str!("../mod.rs");
-    let facade_product = &facade_source[..facade_source
-        .find("#[cfg(test)]\nmod transaction_tests")
-        .expect("product source must precede transaction tests")];
-    let facade = syn::parse_file(facade_product).expect("facade product Rust source must parse");
+    // SSH validators live in ssh_preflight; orchestration lives in one_click.
+    let one_click_file = syn::parse_file(include_str!("../one_click.rs"))
+        .expect("one-click product Rust source must parse");
     let ssh = syn::parse_file(include_str!("../ssh_preflight.rs"))
         .expect("ssh_preflight product Rust source must parse");
     let mut forbidden_cfg_macros = ForbiddenCfgMacros::default();
-    forbidden_cfg_macros.visit_file(&facade);
+    forbidden_cfg_macros.visit_file(&one_click_file);
     forbidden_cfg_macros.visit_file(&ssh);
     assert_eq!(
         forbidden_cfg_macros.0, 0,
@@ -599,13 +596,13 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let validator = top_level(&ssh, "validate_system_ssh_wrapper_path");
     let running = top_level(&ssh, "validate_running_system_ssh_bridge");
     let prevalidation = top_level(&ssh, "prevalidate_one_click_system_ssh");
-    let one_click = top_level(&facade, "one_click_login_with_options");
+    let one_click = top_level(&one_click_file, "one_click_login_with_options");
     assert!(
         returns_result_pathbuf_string(validator),
         "shared wrapper validator must return Result<PathBuf, String>"
     );
     let mut product_environment = ProductEnvironmentFacts::default();
-    product_environment.visit_file(&facade);
+    product_environment.visit_file(&one_click_file);
     product_environment.visit_file(&ssh);
     product_environment.environment_paths.sort();
     assert_eq!(
@@ -914,7 +911,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         "shared validator must not import or alias environment APIs"
     );
     let mut product_literals = ProductLiterals::default();
-    product_literals.visit_file(&facade);
+    product_literals.visit_file(&one_click_file);
     product_literals.visit_file(&ssh);
     assert_eq!(
         product_literals

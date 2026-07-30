@@ -165,11 +165,8 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         }
     }
 
-    let source = include_str!("../mod.rs");
-    let product_source = &source[..source
-        .find("#[cfg(test)]\nmod transaction_tests")
-        .expect("product source must precede transaction tests")];
-    let file = syn::parse_file(product_source).expect("product Rust source must parse");
+    let source = include_str!("../one_click.rs");
+    let file = syn::parse_file(source).expect("one-click product Rust source must parse");
     let one_click = top_level(&file, "one_click_login_with_options")
         .expect("one-click product function must remain module-level");
     let recovery_restart = top_level(&file, "restart_managed_science_with_budget")

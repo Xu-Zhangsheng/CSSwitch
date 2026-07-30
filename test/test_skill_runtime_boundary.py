@@ -12,8 +12,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def sandbox_session_source():
     module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
-    sources = [module_dir / "mod.rs"]
-    sources.extend(sorted(path for path in module_dir.glob("*.rs") if path.name != "mod.rs"))
+    sources = sorted(module_dir.rglob("*.rs"))
+    return "\n".join(path.read_text() for path in sources)
+
+
+def sandbox_session_one_click_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = [module_dir / "one_click.rs"]
+    sources.extend(sorted((module_dir / "one_click").rglob("*.rs")))
     return "\n".join(path.read_text() for path in sources)
 
 
@@ -43,10 +49,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertEqual(catalog["skills"], [])
 
     def test_gateway_starts_only_after_config_and_science_state_prechecks(self):
-        session = sandbox_session_source()
-        one_click = session.split("fn one_click_login_with_options", 1)[1].split(
-            "\n#[cfg(test)]\nmod transaction_tests", 1
-        )[0]
+        one_click = sandbox_session_one_click_source().split(
+            "fn one_click_login_with_options", 1
+        )[1]
         state_check = one_click.index("let (science_state, running_runtime)")
         self.assertLess(one_click.index("config::load_from(&dir)"), state_check)
         self.assertNotIn("ensure_proxy(", one_click[:state_check])
@@ -270,9 +275,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
         launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
-        one_click = session.split("fn one_click_login_with_options", 1)[1].split(
-            "\n#[cfg(test)]\nmod transaction_tests", 1
-        )[0]
+        one_click = sandbox_session_one_click_source().split(
+            "fn one_click_login_with_options", 1
+        )[1]
         self.assertIn("science_bin: Path::new(&launch_runtime.path)", session)
         self.assertIn("proxy_url: &proxy_url", session)
         self.assertIn('"SCIENCE_BIN".into(), cfg.science_bin.display().to_string()', launch_env)
