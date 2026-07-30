@@ -13,6 +13,8 @@
       "desktop/skill-package/src/science.rs",
       "desktop/skill-package/src/github.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
+      "test/test_external_skill_install_bridge.py",
+      "test/test_profile_pin_contract.py",
       "test/test_provider_mock_scenarios.py",
       "test/test_skill_runtime_boundary.py",
       "test/run_all.sh",

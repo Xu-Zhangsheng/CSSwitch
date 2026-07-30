@@ -9,7 +9,7 @@
     "owner": "science-runtime",
     "changed_paths": [
       "desktop/src-tauri/src/runtime/science.rs",
-      "desktop/src-tauri/src/runtime/sandbox_session.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/profile_switch.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/Cargo.lock",

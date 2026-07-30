@@ -89,12 +89,12 @@
       },
       {
         "statement": "Capture and restore traversal are descriptor-bound on both source and destination sides, rollback cleanup registration requires the root identity captured at creation, regular files use APFS clones, and only ENOTSUP or EXDEV may use a byte-copy fallback bounded at 128 MiB per file and 512 MiB per scope; logical trees remain bounded at 131,072 entries, 512 MiB per file, and 8 GiB per scope.",
-        "evidence_ref": "desktop/src-tauri/src/runtime/sandbox_session/mod.rs::runtime::sandbox_session::transaction_tests::authority_snapshot_uses_independent_inodes_and_restores_in_place_mutation",
+        "evidence_ref": "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs::runtime::sandbox_session::transaction_tests::authority_snapshot_uses_independent_inodes_and_restores_in_place_mutation",
         "verification_status": "confirmed"
       },
       {
         "statement": "Internal Science runtime symlinks are copied and restored as link objects without dereferencing; a symlinked authority root remains rejected.",
-        "evidence_ref": "desktop/src-tauri/src/runtime/sandbox_session/mod.rs::runtime::sandbox_session::transaction_tests::authority_snapshot_uses_independent_inodes_and_restores_in_place_mutation",
+        "evidence_ref": "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs::runtime::sandbox_session::transaction_tests::authority_snapshot_uses_independent_inodes_and_restores_in_place_mutation",
         "verification_status": "confirmed"
       }
     ],
