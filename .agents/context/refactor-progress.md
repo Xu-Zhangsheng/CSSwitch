@@ -15,10 +15,10 @@
 ## 当前工程线
 
 - 本地目标分支：`next`
-- 最后复核工程 HEAD：`c878df046b2ad97c1dcc57dda5b9e3ad8bf95f57`
-- 相对前一工程基线：`6ac840b94fe0c4f958ef908abad9c70cb7ff91db`
-- 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分
-- 下一阶段：只读评估 `sandbox_session/mod.rs` 与 `authority_snapshot.rs` 的剩余维护边界，再决定是否进入 Gateway `server.rs`
+- 最后复核工程 HEAD：`64e21e0fb17721cb5602c113b927adbd755046b7`
+- 相对前一工程基线：`c878df046b2ad97c1dcc57dda5b9e3ad8bf95f57`
+- 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开
+- 下一阶段：只读评估 `authority_snapshot.rs` 的 test seams、filesystem/copy primitives 与 capture/restore 边界，再决定是否继续拆分或进入 Gateway `server.rs`
 - 当前证据边界：source-test 与独立源码审查；没有因此新增 artifact、installed、live、真实 provider、Science、SSH、签名、公证或公开发布结论。
 
 ## 已合入切片
@@ -27,6 +27,7 @@
 |---|---|---|---|---|
 | 2026-07-31 | `desktop/src-tauri/src/runtime/sandbox_session.rs` 第一层目录化拆分 | `b7605bb` → `6ac840b` | 运行时实现显式装载 `sandbox_session/mod.rs`；按 authority snapshot、catalog verify、pending cleanup、recovery、route reconcile、SSH preflight 与 transaction tests 拆成私有子模块；旧 `.rs` 只保留 quality impact 兼容锚点 | 目标是机械拆分，不扩大 Runtime/Gateway allowlist，不改变 crate-facing surface 或测试 ID。`impact-pr --target-ref next` PASS；完整 source gate run `4521d369104f185bd2b89e23c5633833` 为 15/15 PASS，snapshot 精确绑定 `6ac840b`；第二轮 clean-context 独立审查 PASS、无 findings。 |
 | 2026-07-31 | `sandbox_session/transaction_tests.rs` 场景拆分 | `dcec25e` → `c878df0` | 父模块只保留共享环境锁、临时目录/树快照夹具与 health test；其余测试按 authority snapshot、cleanup/recovery、Gateway catalog、runtime journal、SSH behavior、SSH source contract 与 transaction source contract 拆为七个私有子模块 | 测试函数集合保持 26 个、正文无行为改写；test identity 显式迁移并同步 core contract、active Bug evidence ref、source-gate inventory 与 15 处 catalog identity hash。生产 `cargo check --lib` PASS；聚焦测试 24 PASS / 2 个既有 ignored；`impact-pr --target-ref next` PASS；完整 source gate run `f919be8a9d3685a97481ddb4086642bb` 为 15/15 PASS，snapshot 精确绑定 `c878df0`；clean-context 独立审查 PASS、无 findings。 |
+| 2026-07-31 | `sandbox_session/mod.rs` 一键事务收口 | `e0cb5e8` → `64e21e0` | `mod.rs` 只保留私有子模块装载、历史 crate-facing re-export 与父级测试夹具面；30 个生产函数迁入 `one_click.rs`。仅 healthy Science 的 Gateway/config 重绑因不触碰 authority snapshot 且拥有独立补偿边界，进一步拆入 `one_click/healthy_reopen.rs`；restart、authority capture 与失败补偿继续和主事务同处，保持锁序与单一补偿漏斗 | 30 个生产函数体逐体比较零差异；未扩大 Runtime/Gateway allowlist、typed failure 或 `pub(crate)` surface，测试专用桥只到 `pub(super)`。生产 `cargo check --lib` PASS；聚焦 transaction tests 24 PASS / 2 个既有 ignored；受影响 Python 源码合同与两项 Rust AST 合同 PASS；测试身份不变；隔离 `impact-pr --target-ref next` PASS；完整 source gate run `f01db6a7c0338627efa459cb3eb540e4` 为 15/15 PASS，snapshot 精确绑定 `64e21e0`；clean-context 独立审查 PASS、无 findings。 |
 
 ### `sandbox_session` 拆分提交
 
@@ -38,6 +39,7 @@
 | `fb7b603` | 外移 transaction tests，并闭合 active ChangeRecord 与测试路径映射 |
 | `6ac840b` | 保留旧路径兼容锚点，以显式 `#[path]` 装载新目录，消除 fail-closed rename/delete 状态 |
 | `c878df0` | 按测试场景拆分 `transaction_tests`，显式迁移测试身份并闭合 active quality / evidence 映射 |
+| `64e21e0` | 把 `mod.rs` 收口为 facade，将一键事务迁入 `one_click.rs`，并按独立补偿边界拆出 healthy reopen |
 
 ### 本切片暴露的维护约束
 
@@ -50,9 +52,8 @@
 
 ## 下一阶段边界
 
-`transaction_tests` 的第二层场景拆分已经闭合。继续对 `sandbox_session` 做只读的剩余收口评估：
+`mod.rs` 与 `transaction_tests` 的第二层拆分已经闭合。继续对 `sandbox_session` 做只读的剩余收口评估：
 
-- `mod.rs` 的一键编排、Science restart、补偿与 healthy reopen 是否已有不同维护原因；
 - `authority_snapshot.rs` 的 test seams、filesystem/copy primitives 与 capture/restore 是否应分开；
 - 已拆出的 transaction test 场景默认保持稳定；没有新的独立维护原因时不继续细分；
 - 行数不是单独拆分理由，只有独立职责、维护触发器或失效条件成立时才继续拆。
