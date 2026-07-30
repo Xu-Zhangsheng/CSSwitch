@@ -115,14 +115,16 @@ socket 经过同一个进程就把所有 Science 出站统一归为 model Gatewa
 
 1. Tauri → launch / stop script：`runtime/launch_env.rs` 对 child 执行
    `env_clear` 后只注入控制面 allowlist（隔离 `SANDBOX_HOME`、runtime path、
-   `CSSWITCH_PROXY_URL`、`CSSWITCH_HOST_HOME`、SSH 开关与 hosts、opaque
-   bindings、固定安全 PATH/locale/temp）；
+   `CSSWITCH_PROXY_URL`、显式 `CSSWITCH_HOST_HOME` 供主机侧路径护栏、SSH 开关
+   与 hosts、opaque bindings、固定安全 PATH/locale/temp）；stop 脚本不得依赖
+   ambient `HOME`；
 2. launch script → Science：`scripts/launch-virtual-sandbox.sh` 使用
    `/usr/bin/env -i` 再次从空环境建立 allowlist（隔离 HOME、
    `ANTHROPIC_BASE_URL`、受限 proxy/`NO_PROXY`、固定 PATH、locale/temp、
    以及 SSH bridge 显式启用时的最小集合）；
 3. Gateway：`configure_managed_proxy_command` 同样 `env_clear` + base
-   allowlist，再由 formal/scratch plan 显式注入 provider secret 与合同变量；
+   allowlist（含绝对 host `HOME`，供 Codex `$HOME/.csswitch` 等主机态路径），再由
+   formal/scratch plan 显式注入 provider secret 与合同变量；
 4. provider credential 只进入 Gateway process，不进入 Science 或 launch script；
 5. SSH / Skill host 等 bridge 变量仅在对应 bridge 启用路径注入。
 

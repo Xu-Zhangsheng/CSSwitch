@@ -1277,8 +1277,42 @@ mod tests {
 
     #[test]
     fn managed_proxy_command_allowlist_drops_parent_provider_secret() {
+        // Spawn a real child: Command::get_envs alone cannot prove ambient isolation.
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var_os("OPENAI_API_KEY");
         std::env::set_var("OPENAI_API_KEY", "sk-parent-must-not-reach-gateway");
+
+        let mut env_probe = Command::new("/usr/bin/env");
+        crate::runtime::launch_env::configure_gateway_base_command(&mut env_probe);
+        env_probe
+            .env("CSSWITCH_AUTH_TOKEN", "fake-managed-secret")
+            .env("CSSWITCH_LAUNCH_ID", "fake-launch-id")
+            .env("CSSWITCH_TOOLUSE_SHIM", "detect");
+        let output = env_probe
+            .output()
+            .expect("spawn env under gateway allowlist");
+        assert!(
+            output.status.success(),
+            "probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("OPENAI_API_KEY"));
+        assert!(!stdout.contains("sk-parent-must-not-reach-gateway"));
+        assert!(stdout.contains("HOME="));
+        let home = stdout
+            .lines()
+            .find(|line| line.starts_with("HOME="))
+            .map(|line| &line["HOME=".len()..])
+            .expect("HOME");
+        assert!(
+            std::path::Path::new(home).is_absolute(),
+            "gateway child HOME must be absolute: {home}"
+        );
+        assert!(stdout.contains("CSSWITCH_AUTH_TOKEN=fake-managed-secret"));
+
         let mut cmd = Command::new("csswitch-gateway");
         configure_managed_proxy_command(
             &mut cmd,
@@ -1289,15 +1323,23 @@ mod tests {
             "fake-launch-id",
         )
         .unwrap();
-        let has_openai = cmd.get_envs().any(|(key, value)| {
-            key == "OPENAI_API_KEY" && value.is_some()
-        });
-        assert!(!has_openai);
+        let home_from_cmd = cmd
+            .get_envs()
+            .find(|(key, _)| *key == "HOME")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+            .expect("configure_managed_proxy_command must set HOME");
+        assert!(
+            std::path::Path::new(&home_from_cmd).is_absolute(),
+            "configured HOME not absolute: {home_from_cmd}"
+        );
+
         match previous {
             Some(value) => std::env::set_var("OPENAI_API_KEY", value),
             None => std::env::remove_var("OPENAI_API_KEY"),
         }
     }
+
 
     #[test]
     fn formal_proxy_env_injects_openai_catalog_without_legacy_model_override() {

@@ -5,7 +5,18 @@ umask 077
 PROJ="${0:A:h:h}"
 SANDBOX_HOME="${SANDBOX_HOME:-$PROJ/.sandbox/home}"
 DATA_DIR="$SANDBOX_HOME/.claude-science"
-REAL_DATA_DIR="$HOME/.claude-science"
+# Host home is explicit (CSSWITCH_HOST_HOME from Desktop allowlist). Required for
+# the real-data-dir collision guard under set -u when ambient HOME is cleared.
+if [[ -n "${CSSWITCH_HOST_HOME:-}" ]]; then
+  REAL_HOME="$CSSWITCH_HOST_HOME"
+elif [[ -n "${HOME:-}" ]]; then
+  # Manual/dev fallback only; production Desktop always sets CSSWITCH_HOST_HOME.
+  REAL_HOME="$HOME"
+else
+  echo "拒绝：缺少 CSSWITCH_HOST_HOME（或 HOME）以解析主机侧路径" >&2
+  exit 1
+fi
+REAL_DATA_DIR="$REAL_HOME/.claude-science"
 APP_BIN="/Applications/Claude Science.app/Contents/Resources/bin/claude-science"
 BIN="${SCIENCE_BIN:-}"
 

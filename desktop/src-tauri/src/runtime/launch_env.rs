@@ -54,11 +54,25 @@ fn default_tmpdir() -> String {
 
 /// Real user home that owns `~/.csswitch` (parent of config dir).
 /// Used only for host-side paths such as system SSH config resolution.
+/// Never used as Science sandbox HOME.
 pub(crate) fn host_home_dir() -> PathBuf {
     config::default_dir()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Absolute host HOME for children that need `$HOME/.csswitch` or real-path
+/// collision checks. Prefer the config-dir parent; fall back to current_dir
+/// only when that path is somehow relative.
+pub(crate) fn absolute_host_home_dir() -> PathBuf {
+    let home = host_home_dir();
+    if home.is_absolute() {
+        return home;
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(&home))
+        .unwrap_or(home)
 }
 
 /// Control-plane environment for `scripts/launch-virtual-sandbox.sh`.
@@ -77,7 +91,7 @@ pub(crate) fn science_launch_script_env(cfg: &ScienceLaunchScriptEnv<'_>) -> Vec
     let mut env = base_process_env();
     env.push((
         HOST_HOME_ENV.into(),
-        host_home_dir().display().to_string(),
+        absolute_host_home_dir().display().to_string(),
     ));
     env.push((
         "SANDBOX_HOME".into(),
@@ -116,11 +130,17 @@ pub(crate) fn configure_science_launch_script_command(
 }
 
 /// Environment for `scripts/stop-science-sandbox.sh`.
+/// Includes `CSSWITCH_HOST_HOME` so the stop script can resolve the real-data-dir
+/// collision guard without ambient `HOME`.
 pub(crate) fn science_stop_script_env(
     sandbox_home: &Path,
     science_bin: &Path,
 ) -> Vec<(String, String)> {
     let mut env = base_process_env();
+    env.push((
+        HOST_HOME_ENV.into(),
+        absolute_host_home_dir().display().to_string(),
+    ));
     env.push((
         "SANDBOX_HOME".into(),
         sandbox_home.display().to_string(),
@@ -138,8 +158,19 @@ pub(crate) fn configure_science_stop_script_command(
 }
 
 /// Gateway base allowlist before plan-specific secrets and contract env.
+/// Includes absolute host `HOME` so adapters that store state under
+/// `$HOME/.csswitch` (notably Codex) keep working without ambient inheritance.
+pub(crate) fn gateway_base_env() -> Vec<(String, String)> {
+    let mut env = base_process_env();
+    env.push((
+        "HOME".into(),
+        absolute_host_home_dir().display().to_string(),
+    ));
+    env
+}
+
 pub(crate) fn configure_gateway_base_command(cmd: &mut Command) {
-    apply_allowlist(cmd, base_process_env());
+    apply_allowlist(cmd, gateway_base_env());
 }
 
 /// Keys that may appear after `configure_managed_proxy_command` base setup.
@@ -150,6 +181,7 @@ pub(crate) fn gateway_base_env_keys() -> &'static [&'static str] {
         "TMPDIR",
         "LANG",
         "LC_ALL",
+        "HOME",
         "CSSWITCH_AUTH_TOKEN",
         "CSSWITCH_LAUNCH_ID",
         "CSSWITCH_TOOLUSE_SHIM",
@@ -327,7 +359,61 @@ mod tests {
         assert!(keys.contains("SANDBOX_HOME"));
         assert!(keys.contains("SCIENCE_BIN"));
         assert!(keys.contains("PATH"));
+        assert!(keys.contains(HOST_HOME_ENV));
         assert!(!keys.contains("CSSWITCH_PROXY_URL"));
         assert!(!keys.contains("DEEPSEEK_API_KEY"));
+        // Stop must not receive provider secrets or proxy URL.
+        assert!(!keys.contains("CSSWITCH_AUTH_TOKEN"));
+    }
+
+    #[test]
+    fn gateway_base_env_includes_absolute_home_without_secrets() {
+        let env = gateway_base_env();
+        let keys = env_map_keys(&env);
+        assert!(keys.contains("HOME"));
+        assert!(keys.contains("PATH"));
+        assert!(!keys.contains("OPENAI_API_KEY"));
+        assert!(!keys.contains("DEEPSEEK_API_KEY"));
+        assert!(!keys.contains("CSSWITCH_AUTH_TOKEN"));
+        let home = env
+            .iter()
+            .find(|(k, _)| k == "HOME")
+            .map(|(_, v)| v.as_str())
+            .expect("HOME");
+        assert!(
+            Path::new(home).is_absolute(),
+            "gateway HOME must be absolute for Codex state root: {home}"
+        );
+    }
+
+    #[test]
+    fn gateway_allowlist_child_keeps_home_drops_parent_secret() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("OPENAI_API_KEY");
+        std::env::set_var("OPENAI_API_KEY", "sk-parent-must-not-reach-gateway-child");
+        let mut cmd = Command::new("/usr/bin/env");
+        apply_allowlist(&mut cmd, gateway_base_env());
+        let output = cmd.output().expect("env under gateway allowlist");
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("OPENAI_API_KEY"),
+            "gateway child saw parent OPENAI_API_KEY"
+        );
+        assert!(
+            !stdout.contains("sk-parent-must-not-reach-gateway-child"),
+            "gateway child saw parent secret value"
+        );
+        assert!(stdout.contains("HOME="));
+        let home_line = stdout
+            .lines()
+            .find(|line| line.starts_with("HOME="))
+            .expect("HOME line");
+        let home = &home_line["HOME=".len()..];
+        assert!(Path::new(home).is_absolute(), "child HOME not absolute: {home}");
+        match previous {
+            Some(value) => std::env::set_var("OPENAI_API_KEY", value),
+            None => std::env::remove_var("OPENAI_API_KEY"),
+        }
     }
 }

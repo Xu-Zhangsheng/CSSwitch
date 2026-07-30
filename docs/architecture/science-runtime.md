@@ -42,10 +42,11 @@ Gateway 进程就把它们都解释成 model routing：
 
 凭证边界的 process environment 合同：Tauri → launch/stop script 与
 launch script → Science 均使用显式 allowlist（`runtime/launch_env.rs` +
-`scripts/launch-virtual-sandbox.sh` 的 `env -i`）；provider secret 只进入
-Gateway。sentinel 与 stub 回归见 `runtime::launch_env` 测试和
-`test/test_launch_science_env_allowlist.sh`。完整所有权与 bridge 边界见下方
-能力依赖正文。
+`scripts/launch-virtual-sandbox.sh` 的 `env -i`）；stop/launch 控制面注入
+`CSSWITCH_HOST_HOME`，Gateway base 注入绝对 host `HOME`（Codex 等主机态路径）；
+provider secret 只进入 Gateway。sentinel 与 stub 回归见 `runtime::launch_env`
+测试和 `test/test_launch_science_env_allowlist.sh`。完整所有权与 bridge 边界
+见下方能力依赖正文。
 
 完整 ownership、运行路径、bridge 准入和拆分前冻结项见
 [Claude Science 能力依赖](science-capability-dependencies.md)；逐能力当前决策只在

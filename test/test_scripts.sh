@@ -162,6 +162,19 @@ out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$ALLOW_
 ALLOW_ENV="$ALLOW_SANDBOX/allowlist-env.txt"
 if [ $rc -eq 0 ] && [ -f "$ALLOW_ENV" ] && ! grep -q 'CSSWITCH_TEST_SENTINEL_SECRET\|parent-sentinel-must-not-leak\|OPENAI_API_KEY\|sk-parent-must-not-leak' "$ALLOW_ENV" && grep -q "^HOME=$ALLOW_SANDBOX$" "$ALLOW_ENV" && grep -q '^ANTHROPIC_BASE_URL=' "$ALLOW_ENV"; then ok "launch env -i drops ambient secrets and keeps required Science vars"; else no "launch env allowlist failed (rc=$rc): $out"; fi
 
+# Stop script must work under Desktop allowlist using CSSWITCH_HOST_HOME.
+STOP_SANDBOX="$T/vh-stop-allowlist"
+mkdir -p "$STOP_SANDBOX/.claude-science"
+STOP_STUB="$T/fake-stop-science"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$STOP_STUB"
+chmod +x "$STOP_STUB"
+# Prefer CSSWITCH_HOST_HOME; polluted HOME must not become REAL_HOME for guards.
+out="$(env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="/nonexistent-polluted-home-$$" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$STOP_SANDBOX" SCIENCE_BIN="$STOP_STUB" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && echo "$out" | grep -q "沙箱已停"; then ok "stop prefers CSSWITCH_HOST_HOME over polluted HOME"; else no "stop failed with CSSWITCH_HOST_HOME (rc=$rc): $out"; fi
+# Collision guard uses host home: sandbox home == host home must fail closed.
+out="$(env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" CSSWITCH_HOST_HOME="$STOP_SANDBOX" SANDBOX_HOME="$STOP_SANDBOX" SCIENCE_BIN="$STOP_STUB" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && echo "$out" | grep -q "真实目录"; then ok "stop collision guard uses CSSWITCH_HOST_HOME"; else no "stop collision guard missed CSSWITCH_HOST_HOME (rc=$rc): $out"; fi
+
 # 7.7 review: 畸形端口必须失败关闭（fail-closed），而不是绕过算术守卫
 out="$(SANDBOX_HOME="$T/vh2" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 8765x --dry-run 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && echo "$out" | grep -q "拒绝"; then ok "malformed port 8765x rejected fail-closed"; else no "malformed port 8765x slipped guard (rc=$rc): $out"; fi
