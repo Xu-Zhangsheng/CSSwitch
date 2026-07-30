@@ -1,0 +1,333 @@
+//! Explicit process environment allowlists for managed child launches.
+//!
+//! Desktop must not pass ambient parent environment into Science, the launch
+//! script, or the Gateway. Children start from `env_clear` and only receive
+//! variables listed here (plus later explicit `.env` calls for plan-specific
+//! secrets that remain Gateway-only).
+
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::config;
+
+/// Fixed PATH for managed children. Do not inherit ambient PATH.
+pub(crate) const SAFE_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// Fixed locale for managed children.
+pub(crate) const SAFE_LANG: &str = "en_US.UTF-8";
+
+/// Host home used by the launch script for opt-in system SSH config paths.
+/// Never treated as Science HOME.
+pub(crate) const HOST_HOME_ENV: &str = "CSSWITCH_HOST_HOME";
+
+/// Clear child environment, then set only the provided pairs.
+pub(crate) fn apply_allowlist<K, V, I>(cmd: &mut Command, pairs: I)
+where
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+    I: IntoIterator<Item = (K, V)>,
+{
+    cmd.env_clear();
+    for (key, value) in pairs {
+        cmd.env(key, value);
+    }
+}
+
+/// Minimal OS surface shared by Gateway, Science launch script, and stop script.
+pub(crate) fn base_process_env() -> Vec<(String, String)> {
+    vec![
+        ("PATH".into(), SAFE_PATH.into()),
+        ("TMPDIR".into(), default_tmpdir()),
+        ("LANG".into(), SAFE_LANG.into()),
+        ("LC_ALL".into(), SAFE_LANG.into()),
+    ]
+}
+
+fn default_tmpdir() -> String {
+    if cfg!(target_os = "macos") {
+        "/private/tmp".into()
+    } else {
+        "/tmp".into()
+    }
+}
+
+/// Real user home that owns `~/.csswitch` (parent of config dir).
+/// Used only for host-side paths such as system SSH config resolution.
+pub(crate) fn host_home_dir() -> PathBuf {
+    config::default_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Control-plane environment for `scripts/launch-virtual-sandbox.sh`.
+/// Provider credentials must never appear here.
+pub(crate) struct ScienceLaunchScriptEnv<'a> {
+    pub sandbox_home: &'a Path,
+    pub science_bin: &'a Path,
+    pub proxy_url: &'a str,
+    pub reuse_system_ssh: bool,
+    pub system_ssh_hosts: &'a str,
+    pub opaque_bindings: Option<&'a str>,
+    pub runtime_version_prechecked: bool,
+}
+
+pub(crate) fn science_launch_script_env(cfg: &ScienceLaunchScriptEnv<'_>) -> Vec<(String, String)> {
+    let mut env = base_process_env();
+    env.push((
+        HOST_HOME_ENV.into(),
+        host_home_dir().display().to_string(),
+    ));
+    env.push((
+        "SANDBOX_HOME".into(),
+        cfg.sandbox_home.display().to_string(),
+    ));
+    env.push(("SCIENCE_BIN".into(), cfg.science_bin.display().to_string()));
+    env.push(("CSSWITCH_PROXY_URL".into(), cfg.proxy_url.into()));
+    env.push((
+        "CSSWITCH_REUSE_SYSTEM_SSH".into(),
+        if cfg.reuse_system_ssh {
+            "1".into()
+        } else {
+            "0".into()
+        },
+    ));
+    env.push((
+        "CSSWITCH_SYSTEM_SSH_HOSTS".into(),
+        cfg.system_ssh_hosts.into(),
+    ));
+    if cfg.runtime_version_prechecked {
+        env.push(("CSSWITCH_RUNTIME_VERSION_PRECHECKED".into(), "1".into()));
+    }
+    if let Some(bindings) = cfg.opaque_bindings {
+        if !bindings.is_empty() {
+            env.push(("CSSWITCH_SCIENCE_OPAQUE_BINDINGS".into(), bindings.into()));
+        }
+    }
+    env
+}
+
+pub(crate) fn configure_science_launch_script_command(
+    cmd: &mut Command,
+    cfg: &ScienceLaunchScriptEnv<'_>,
+) {
+    apply_allowlist(cmd, science_launch_script_env(cfg));
+}
+
+/// Environment for `scripts/stop-science-sandbox.sh`.
+pub(crate) fn science_stop_script_env(
+    sandbox_home: &Path,
+    science_bin: &Path,
+) -> Vec<(String, String)> {
+    let mut env = base_process_env();
+    env.push((
+        "SANDBOX_HOME".into(),
+        sandbox_home.display().to_string(),
+    ));
+    env.push(("SCIENCE_BIN".into(), science_bin.display().to_string()));
+    env
+}
+
+pub(crate) fn configure_science_stop_script_command(
+    cmd: &mut Command,
+    sandbox_home: &Path,
+    science_bin: &Path,
+) {
+    apply_allowlist(cmd, science_stop_script_env(sandbox_home, science_bin));
+}
+
+/// Gateway base allowlist before plan-specific secrets and contract env.
+pub(crate) fn configure_gateway_base_command(cmd: &mut Command) {
+    apply_allowlist(cmd, base_process_env());
+}
+
+/// Keys that may appear after `configure_managed_proxy_command` base setup.
+#[cfg(test)]
+pub(crate) fn gateway_base_env_keys() -> &'static [&'static str] {
+    &[
+        "PATH",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "CSSWITCH_AUTH_TOKEN",
+        "CSSWITCH_LAUNCH_ID",
+        "CSSWITCH_TOOLUSE_SHIM",
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    // Process-global env mutations must be serialized across these tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_map_keys(pairs: &[(String, String)]) -> HashSet<String> {
+        pairs.iter().map(|(k, _)| k.clone()).collect()
+    }
+
+    #[test]
+    fn base_process_env_is_fixed_allowlist() {
+        let env = base_process_env();
+        let keys = env_map_keys(&env);
+        assert_eq!(
+            keys,
+            HashSet::from([
+                "PATH".into(),
+                "TMPDIR".into(),
+                "LANG".into(),
+                "LC_ALL".into()
+            ])
+        );
+        assert_eq!(
+            env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.as_str()),
+            Some(SAFE_PATH)
+        );
+        assert!(!env.iter().any(|(k, _)| k.contains("API_KEY") || k.contains("SECRET")));
+    }
+
+    #[test]
+    fn science_launch_script_env_excludes_provider_secrets() {
+        let home = Path::new("/tmp/csswitch-sandbox-home");
+        let bin = Path::new("/tmp/fake-claude-science");
+        let env = science_launch_script_env(&ScienceLaunchScriptEnv {
+            sandbox_home: home,
+            science_bin: bin,
+            proxy_url: "http://127.0.0.1:18991/deadbeef",
+            reuse_system_ssh: false,
+            system_ssh_hosts: "",
+            opaque_bindings: Some("binding=value"),
+            runtime_version_prechecked: true,
+        });
+        let keys = env_map_keys(&env);
+        for forbidden in [
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+            "CSSWITCH_RELAY_KEY",
+            "CSSWITCH_OPENAI_KEY",
+            "CSSWITCH_AUTH_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "SSH_AUTH_SOCK",
+            "CSSWITCH_TEST_SENTINEL_SECRET",
+        ] {
+            assert!(
+                !keys.contains(forbidden),
+                "science control env must not include {forbidden}"
+            );
+        }
+        assert!(keys.contains(HOST_HOME_ENV));
+        assert!(keys.contains("SANDBOX_HOME"));
+        assert!(keys.contains("SCIENCE_BIN"));
+        assert!(keys.contains("CSSWITCH_PROXY_URL"));
+        assert!(keys.contains("CSSWITCH_SCIENCE_OPAQUE_BINDINGS"));
+        assert_eq!(
+            env.iter()
+                .find(|(k, _)| k == "CSSWITCH_REUSE_SYSTEM_SSH")
+                .map(|(_, v)| v.as_str()),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn science_launch_script_env_ssh_flag_only_when_enabled() {
+        let home = Path::new("/tmp/csswitch-sandbox-home");
+        let bin = Path::new("/tmp/fake-claude-science");
+        let off = science_launch_script_env(&ScienceLaunchScriptEnv {
+            sandbox_home: home,
+            science_bin: bin,
+            proxy_url: "http://127.0.0.1:1/x",
+            reuse_system_ssh: false,
+            system_ssh_hosts: "lab",
+            opaque_bindings: None,
+            runtime_version_prechecked: true,
+        });
+        assert_eq!(
+            off.iter()
+                .find(|(k, _)| k == "CSSWITCH_REUSE_SYSTEM_SSH")
+                .map(|(_, v)| v.as_str()),
+            Some("0")
+        );
+        // Host list may be present but empty-use; flag off is the contract.
+        let on = science_launch_script_env(&ScienceLaunchScriptEnv {
+            sandbox_home: home,
+            science_bin: bin,
+            proxy_url: "http://127.0.0.1:1/x",
+            reuse_system_ssh: true,
+            system_ssh_hosts: "lab",
+            opaque_bindings: None,
+            runtime_version_prechecked: true,
+        });
+        assert_eq!(
+            on.iter()
+                .find(|(k, _)| k == "CSSWITCH_REUSE_SYSTEM_SSH")
+                .map(|(_, v)| v.as_str()),
+            Some("1")
+        );
+        assert_eq!(
+            on.iter()
+                .find(|(k, _)| k == "CSSWITCH_SYSTEM_SSH_HOSTS")
+                .map(|(_, v)| v.as_str()),
+            Some("lab")
+        );
+    }
+
+    #[test]
+    fn apply_allowlist_drops_parent_sentinel() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sentinel_key = "CSSWITCH_TEST_SENTINEL_SECRET";
+        let sentinel_value = "parent-ambient-must-not-leak";
+        let previous = std::env::var_os(sentinel_key);
+        std::env::set_var(sentinel_key, sentinel_value);
+        // Also pollute a common provider key name.
+        let provider_key = "OPENAI_API_KEY";
+        let previous_provider = std::env::var_os(provider_key);
+        std::env::set_var(provider_key, "sk-parent-leak");
+
+        let mut cmd = Command::new("/usr/bin/env");
+        apply_allowlist(&mut cmd, base_process_env());
+        let output = cmd
+            .output()
+            .expect("/usr/bin/env should run under allowlist");
+        assert!(
+            output.status.success(),
+            "env failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains(sentinel_key),
+            "child saw sentinel key"
+        );
+        assert!(
+            !stdout.contains(sentinel_value),
+            "child saw sentinel value"
+        );
+        assert!(!stdout.contains(provider_key));
+        assert!(!stdout.contains("sk-parent-leak"));
+        assert!(stdout.contains("PATH="));
+        assert!(stdout.contains(SAFE_PATH));
+
+        match previous {
+            Some(value) => std::env::set_var(sentinel_key, value),
+            None => std::env::remove_var(sentinel_key),
+        }
+        match previous_provider {
+            Some(value) => std::env::set_var(provider_key, value),
+            None => std::env::remove_var(provider_key),
+        }
+    }
+
+    #[test]
+    fn science_stop_script_env_is_minimal() {
+        let env = science_stop_script_env(Path::new("/tmp/sbx"), Path::new("/tmp/bin"));
+        let keys = env_map_keys(&env);
+        assert!(keys.contains("SANDBOX_HOME"));
+        assert!(keys.contains("SCIENCE_BIN"));
+        assert!(keys.contains("PATH"));
+        assert!(!keys.contains("CSSWITCH_PROXY_URL"));
+        assert!(!keys.contains("DEEPSEEK_API_KEY"));
+    }
+}

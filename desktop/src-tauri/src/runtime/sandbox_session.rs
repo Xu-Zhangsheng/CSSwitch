@@ -4864,20 +4864,25 @@ fn restart_managed_science_with_budget<R: Runtime>(
     let logf2 = logf.try_clone().map_err(|error| error.to_string())?;
     let proxy_url = format!("http://127.0.0.1:{proxy_port}/{secret}");
     let deadline = Instant::now() + Duration::from_millis(health_budget_ms.max(POLL_INTERVAL_MS));
-    let mut launch_child = Command::new("zsh")
+    let mut launch_cmd = Command::new("zsh");
+    launch_cmd
         .arg(&launch)
         .arg("--port")
         .arg(prior.port.to_string())
-        .arg("--skip-oauth-forge")
-        .env("SANDBOX_HOME", sandbox_home())
-        .env("SCIENCE_BIN", &prior.runtime.path)
-        .env("CSSWITCH_RUNTIME_VERSION_PRECHECKED", "1")
-        .env("CSSWITCH_PROXY_URL", proxy_url)
-        .env(
-            "CSSWITCH_REUSE_SYSTEM_SSH",
-            if cfg.reuse_system_ssh { "1" } else { "0" },
-        )
-        .env("CSSWITCH_SYSTEM_SSH_HOSTS", ssh_hosts.join(" "))
+        .arg("--skip-oauth-forge");
+    crate::runtime::launch_env::configure_science_launch_script_command(
+        &mut launch_cmd,
+        &crate::runtime::launch_env::ScienceLaunchScriptEnv {
+            sandbox_home: &sandbox_home(),
+            science_bin: Path::new(&prior.runtime.path),
+            proxy_url: &proxy_url,
+            reuse_system_ssh: cfg.reuse_system_ssh,
+            system_ssh_hosts: &ssh_hosts.join(" "),
+            opaque_bindings: None,
+            runtime_version_prechecked: true,
+        },
+    );
+    let mut launch_child = launch_cmd
         .stdout(Stdio::from(logf))
         .stderr(Stdio::from(logf2))
         .spawn()
@@ -5903,24 +5908,26 @@ fn one_click_login_with_options<R: Runtime>(
             authority_snapshot.validate_science_restore_root(),
             &rollback_context,
         )?;
-        let launch_child = Command::new("zsh")
+        let mut launch_cmd = Command::new("zsh");
+        launch_cmd
             .arg(&launch)
             .arg("--port")
             .arg(sport.to_string())
-            .arg("--skip-oauth-forge")
-            .env("SANDBOX_HOME", sandbox_home())
-            .env("SCIENCE_BIN", &launch_runtime.path)
-            .env("CSSWITCH_RUNTIME_VERSION_PRECHECKED", "1")
-            .env(
-                "CSSWITCH_SCIENCE_OPAQUE_BINDINGS",
-                authority_snapshot.science_opaque_bindings_env(),
-            )
-            .env("CSSWITCH_PROXY_URL", &proxy_url)
-            .env(
-                "CSSWITCH_REUSE_SYSTEM_SSH",
-                if cfg.reuse_system_ssh { "1" } else { "0" },
-            )
-            .env("CSSWITCH_SYSTEM_SSH_HOSTS", ssh_hosts.join(" "))
+            .arg("--skip-oauth-forge");
+        let opaque_bindings = authority_snapshot.science_opaque_bindings_env();
+        crate::runtime::launch_env::configure_science_launch_script_command(
+            &mut launch_cmd,
+            &crate::runtime::launch_env::ScienceLaunchScriptEnv {
+                sandbox_home: &sandbox_home(),
+                science_bin: Path::new(&launch_runtime.path),
+                proxy_url: &proxy_url,
+                reuse_system_ssh: cfg.reuse_system_ssh,
+                system_ssh_hosts: &ssh_hosts.join(" "),
+                opaque_bindings: Some(opaque_bindings.as_str()),
+                runtime_version_prechecked: true,
+            },
+        );
+        let launch_child = launch_cmd
             .stdout(Stdio::from(logf))
             .stderr(Stdio::from(logf2))
             .spawn();

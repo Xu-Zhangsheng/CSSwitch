@@ -17,7 +17,17 @@ umask 077
 PROJ="${0:A:h:h}"
 SANDBOX_HOME="${SANDBOX_HOME:-$PROJ/.sandbox/home}"
 DATA_DIR="$SANDBOX_HOME/.claude-science"   # = auth_dir（Science 按 HOME 推导）
-REAL_HOME="$HOME"
+# Host home is explicit (CSSWITCH_HOST_HOME from Desktop allowlist). Do not treat
+# ambient $HOME as the trusted host path when Desktop injects the control env.
+if [[ -n "${CSSWITCH_HOST_HOME:-}" ]]; then
+  REAL_HOME="$CSSWITCH_HOST_HOME"
+elif [[ -n "${HOME:-}" ]]; then
+  # Manual/dev fallback only; production Desktop always sets CSSWITCH_HOST_HOME.
+  REAL_HOME="$HOME"
+else
+  echo "拒绝：缺少 CSSWITCH_HOST_HOME（或 HOME）以解析主机侧路径" >&2
+  exit 1
+fi
 REAL_DATA_DIR="$REAL_HOME/.claude-science"
 APP_BIN="/Applications/Claude Science.app/Contents/Resources/bin/claude-science"
 BIN="${SCIENCE_BIN:-}"
@@ -333,9 +343,24 @@ if path_contains_symlink "$DATA_DIR"; then
   exit 1
 fi
 validate_science_opaque_bindings
+# Empty environment + explicit allowlist only. Never inherit ambient parent vars.
+_SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+_SCIENCE_PATH="$_SAFE_PATH"
+if [[ "$REUSE_SYSTEM_SSH" == "1" ]]; then
+  _SCIENCE_PATH="$SSH_BRIDGE_DIR:$_SAFE_PATH"
+fi
+_SCIENCE_TMPDIR="${TMPDIR:-/private/tmp}"
+_SCIENCE_LANG="${LANG:-en_US.UTF-8}"
+_SCIENCE_USER="$(/usr/bin/id -un 2>/dev/null || echo csswitch)"
 typeset -a _SCIENCE_ENV
 _SCIENCE_ENV=(
   "HOME=$SANDBOX_HOME"
+  "PATH=$_SCIENCE_PATH"
+  "TMPDIR=$_SCIENCE_TMPDIR"
+  "LANG=$_SCIENCE_LANG"
+  "LC_ALL=$_SCIENCE_LANG"
+  "USER=$_SCIENCE_USER"
+  "LOGNAME=$_SCIENCE_USER"
   "ANTHROPIC_BASE_URL=$PROXY_URL"
   "https_proxy=$_FASTFAIL_PROXY"
   "HTTPS_PROXY=$_FASTFAIL_PROXY"
@@ -344,11 +369,10 @@ _SCIENCE_ENV=(
 )
 if [[ "$REUSE_SYSTEM_SSH" == "1" ]]; then
   _SCIENCE_ENV+=(
-    "PATH=$SSH_BRIDGE_DIR:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
     "CSSWITCH_SYSTEM_SSH_CONFIG=$SYSTEM_SSH_CONFIG"
   )
 fi
-if ! /usr/bin/env "${_SCIENCE_ENV[@]}" "$BIN" serve \
+if ! /usr/bin/env -i "${_SCIENCE_ENV[@]}" "$BIN" serve \
     --data-dir "$DATA_DIR" \
     --host 127.0.0.1 \
     --port "$PORT" \

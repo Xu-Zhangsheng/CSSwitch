@@ -2162,10 +2162,14 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
         Some(root) => {
             let stop = root.join("scripts/stop-science-sandbox.sh");
             if stop.is_file() {
-                match Command::new("zsh")
-                    .arg(&stop)
-                    .env("SANDBOX_HOME", sandbox_home())
-                    .env("SCIENCE_BIN", &runtime.path)
+                let mut stop_cmd = Command::new("zsh");
+                stop_cmd.arg(&stop);
+                crate::runtime::launch_env::configure_science_stop_script_command(
+                    &mut stop_cmd,
+                    &sandbox_home(),
+                    Path::new(&runtime.path),
+                );
+                match stop_cmd
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()

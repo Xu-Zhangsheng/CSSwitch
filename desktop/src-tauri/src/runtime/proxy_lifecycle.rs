@@ -14,7 +14,7 @@ use crate::runtime::legacy_proxy::{
 };
 use crate::runtime::operation::{self, OperationStage, OperationTrace, POLL_INTERVAL_MS};
 use crate::runtime::provider::{
-    assert_format_supported, current_shim_mode_for_adapter, is_native_adapter, is_openai_adapter,
+    assert_format_supported, current_shim_mode_for_adapter, is_openai_adapter,
     normalize_shim_mode, proxy_args_for, proxy_fingerprint_with_runtime, FormalCredential,
     FormalGatewayPlan,
 };
@@ -263,6 +263,11 @@ pub(crate) fn configure_managed_proxy_command(
     launch_id: &str,
 ) -> Result<(), String> {
     let shim_mode = normalize_shim_mode(provider, Some(shim_mode));
+    // Allowlist: drop ambient parent env entirely, then set only Gateway base vars.
+    // Plan-specific secrets and contract keys are added by callers after this.
+    // CSSWITCH_UPSTREAM_URL is intentionally not inherited for any adapter; set it
+    // explicitly after this call when a test/diagnostic override is required.
+    crate::runtime::launch_env::configure_gateway_base_command(cmd);
     cmd.arg("--provider")
         .arg(provider)
         .arg("--port")
@@ -270,31 +275,6 @@ pub(crate) fn configure_managed_proxy_command(
         .env("CSSWITCH_AUTH_TOKEN", secret)
         .env("CSSWITCH_LAUNCH_ID", launch_id)
         .env("CSSWITCH_TOOLUSE_SHIM", shim_mode);
-    cmd.env_remove("CSSWITCH_PROVIDER_CONTRACT_ID")
-        .env_remove("CSSWITCH_PROVIDER_CONTRACT_DIGEST")
-        .env_remove(csswitch_codex_network::ROUTE_ENV);
-    for inherited in [
-        "CSSWITCH_STATIC_MODEL_CATALOG_V1",
-        "CSSWITCH_GATEWAY_INTENT",
-        "DEEPSEEK_API_KEY",
-        "DASHSCOPE_API_KEY",
-        "CSSWITCH_OPENAI_KEY",
-        "CSSWITCH_RELAY_KEY",
-        "CSSWITCH_OPENAI_BASE_URL",
-        "CSSWITCH_RELAY_BASE_URL",
-        "CSSWITCH_OPENAI_MODEL",
-        "CSSWITCH_RELAY_MODEL",
-        "CSSWITCH_RELAY_THINKING",
-    ] {
-        cmd.env_remove(inherited);
-    }
-    // CSSWITCH_UPSTREAM_URL is a native-provider test/diagnostic override. A stale
-    // value inherited from the desktop process must never replace a candidate relay
-    // or custom OpenAI base URL (or receive that candidate's key). Apply this at the
-    // Shared command boundary keeps formal and scratch Rust launches aligned.
-    if !is_native_adapter(provider) {
-        cmd.env_remove("CSSWITCH_UPSTREAM_URL");
-    }
     Ok(())
 }
 
@@ -1249,22 +1229,18 @@ mod tests {
                         .map(|value| value.to_string_lossy() == "fake-launch-id")
                         .unwrap_or(false)
             }));
+            // Allowlist base: no ambient inheritance, so CSSWITCH_UPSTREAM_URL is
+            // absent for every adapter until a caller sets it explicitly.
             let upstream_override = cmd
                 .get_envs()
                 .find(|(key, _)| *key == "CSSWITCH_UPSTREAM_URL")
-                .map(|(_, value)| value);
-            if removes_upstream {
-                assert_eq!(
-                    upstream_override,
-                    Some(None),
-                    "{provider} must remove inherited CSSWITCH_UPSTREAM_URL"
-                );
-            } else {
-                assert_eq!(
-                    upstream_override, None,
-                    "native provider {provider} must preserve the explicit override contract"
-                );
-            }
+                .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()));
+            assert_eq!(
+                upstream_override,
+                None,
+                "{provider} must not inherit CSSWITCH_UPSTREAM_URL from ambient env"
+            );
+            let _ = removes_upstream; // table still documents former denylist intent
             let contract_id = cmd
                 .get_envs()
                 .find(|(key, _)| *key == "CSSWITCH_PROVIDER_CONTRACT_ID")
@@ -1277,6 +1253,49 @@ mod tests {
                 .map(|value| value.to_string_lossy().into_owned());
             assert_eq!(contract_id, None);
             assert_eq!(contract_digest, None);
+            // Base allowlist surface is present and closed.
+            assert!(cmd.get_envs().any(|(key, value)| {
+                key == "PATH"
+                    && value
+                        .map(|value| value.to_string_lossy() == crate::runtime::launch_env::SAFE_PATH)
+                        .unwrap_or(false)
+            }));
+            let env_keys: Vec<String> = cmd
+                .get_envs()
+                .filter_map(|(key, value)| {
+                    value.map(|_| key.to_string_lossy().into_owned())
+                })
+                .collect();
+            for key in &env_keys {
+                assert!(
+                    crate::runtime::launch_env::gateway_base_env_keys().contains(&key.as_str()),
+                    "unexpected gateway base env key {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn managed_proxy_command_allowlist_drops_parent_provider_secret() {
+        let previous = std::env::var_os("OPENAI_API_KEY");
+        std::env::set_var("OPENAI_API_KEY", "sk-parent-must-not-reach-gateway");
+        let mut cmd = Command::new("csswitch-gateway");
+        configure_managed_proxy_command(
+            &mut cmd,
+            "deepseek",
+            "detect",
+            18991,
+            "fake-managed-secret",
+            "fake-launch-id",
+        )
+        .unwrap();
+        let has_openai = cmd.get_envs().any(|(key, value)| {
+            key == "OPENAI_API_KEY" && value.is_some()
+        });
+        assert!(!has_openai);
+        match previous {
+            Some(value) => std::env::set_var("OPENAI_API_KEY", value),
+            None => std::env::remove_var("OPENAI_API_KEY"),
         }
     }
 
