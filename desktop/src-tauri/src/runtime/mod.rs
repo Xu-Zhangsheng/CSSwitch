@@ -11,6 +11,7 @@ pub(crate) mod profile_switch;
 pub(crate) mod provider;
 pub(crate) mod proxy;
 pub(crate) mod proxy_lifecycle;
+#[path = "sandbox_session/mod.rs"]
 pub(crate) mod sandbox_session;
 pub(crate) mod science;
 pub(crate) mod settings;
