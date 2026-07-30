@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{Manager, Runtime};
 
+use crate::runtime::failure::{
+    recovery_from_diagnostic_codes, OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure,
+};
 use crate::runtime::operation::{
     self, OperationKind, OperationStage, OperationTrace, POLL_INTERVAL_MS,
 };
@@ -4335,7 +4338,7 @@ pub(crate) fn one_click_login<R: Runtime>(
     lifecycle: &lifecycle::Lifecycle,
     runtime_choice: Option<&str>,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
-) -> Result<Value, String> {
+) -> Result<Value, TypedOneClickFailure> {
     one_click_login_with_options(
         app,
         state,
@@ -4399,13 +4402,18 @@ pub(crate) fn reconcile_science_for_active<R: Runtime>(
         false,
         Some(&mut disposition),
     )
-    .map_err(|cause| match disposition {
-        PriorScienceDisposition::Restored => ReconcileScienceError::PriorScienceRestored { cause },
-        PriorScienceDisposition::EnvironmentUncertain => {
-            ReconcileScienceError::EnvironmentUncertain { cause }
-        }
-        PriorScienceDisposition::RestartRequired => {
-            ReconcileScienceError::RestartRequired { cause }
+    .map_err(|failure| {
+        let cause = failure.message;
+        match disposition {
+            PriorScienceDisposition::Restored => {
+                ReconcileScienceError::PriorScienceRestored { cause }
+            }
+            PriorScienceDisposition::EnvironmentUncertain => {
+                ReconcileScienceError::EnvironmentUncertain { cause }
+            }
+            PriorScienceDisposition::RestartRequired => {
+                ReconcileScienceError::RestartRequired { cause }
+            }
         }
     })
 }
@@ -4421,8 +4429,10 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
     state: SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
-) -> Result<Value, String> {
-    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
+) -> Result<Value, TypedOneClickFailure> {
+    let cfg = config::load_from(&config::default_dir()).map_err(|error| {
+        typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
+    })?;
     let remembered = { lock(&state).science_runtime.clone() };
     match remembered {
         Some(runtime) => match probe_known_runtime(cfg.sandbox_port, &runtime) {
@@ -4430,7 +4440,12 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                 let mut st = lock(&state);
                 st.science_runtime = Some(runtime);
                 stop_sandbox_state(&app, &mut st).map_err(|error| {
-                    format!("回滚时停止候选 Science 失败，未猜测 PID 或按端口结束进程：{error}")
+                    typed_one_click_err(
+                        OneClickFailureKind::ScienceStop,
+                        format!(
+                            "回滚时停止候选 Science 失败，未猜测 PID 或按端口结束进程：{error}"
+                        ),
+                    )
                 })?;
             }
             SandboxScienceState::Stopped => {
@@ -4439,10 +4454,10 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                 st.science_runtime = None;
             }
             SandboxScienceState::Unknown => {
-                return Err(
-                    "回滚时 Science 可能正在运行，但身份无法确认；已拒绝猜测 PID 或按端口结束进程。"
-                        .into(),
-                );
+                return Err(typed_one_click_err(
+                    OneClickFailureKind::ScienceStop,
+                    "回滚时 Science 可能正在运行，但身份无法确认；已拒绝猜测 PID 或按端口结束进程。",
+                ));
             }
         },
         None if proc::loopback_port_in_use(
@@ -4450,13 +4465,26 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
             operation::LOCAL_HEALTH_TIMEOUT_MS,
         ) =>
         {
-            return Err(
-                "回滚时 Science 端口仍被占用，但没有可确认的 runtime 身份；已拒绝强制结束。".into(),
-            );
+            return Err(typed_one_click_err(
+                OneClickFailureKind::ScienceStop,
+                "回滚时 Science 端口仍被占用，但没有可确认的 runtime 身份；已拒绝强制结束。",
+            ));
         }
         None => {}
     }
     one_click_login_with_options(app, state, lifecycle, None, auth_proof, false, None)
+}
+
+fn typed_one_click_err(
+    kind: OneClickFailureKind,
+    message: impl Into<String>,
+) -> TypedOneClickFailure {
+    let message = message.into();
+    let mut failure = TypedOneClickFailure::new(kind, message.clone());
+    if let Some(recovery) = recovery_from_diagnostic_codes(&message) {
+        failure = failure.with_recovery(recovery);
+    }
+    failure
 }
 
 fn advance_runtime_transaction(
@@ -4553,6 +4581,8 @@ struct OneClickRollbackContext {
     launch_confirmed_stopped: bool,
     candidate_stop_proof: ManagedScienceCandidateStopProof,
     ssh_stub_transaction: Option<crate::runtime::settings::ManagedSshStubTransaction>,
+    /// Produce-site failure kind for UI projection; updated at phase boundaries.
+    current_kind: OneClickFailureKind,
 }
 
 const SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE: i32 = 70;
@@ -4617,8 +4647,14 @@ impl From<&str> for ManagedScienceRestartError {
 }
 
 struct OneClickFailure {
-    message: String,
+    typed: TypedOneClickFailure,
     rollback: OneClickRollbackContext,
+}
+
+impl OneClickFailure {
+    fn message(&self) -> &str {
+        &self.typed.message
+    }
 }
 
 // Science 0.1.25 gives boot quick_check a 300s query timeout. Its own warning
@@ -4791,9 +4827,13 @@ enum AuthorityCaptureAfterQuiesceError {
 impl OneClickRollbackContext {
     fn failure(&self, message: impl Into<String>) -> OneClickFailure {
         OneClickFailure {
-            message: message.into(),
+            typed: TypedOneClickFailure::new(self.current_kind, message),
             rollback: self.clone(),
         }
+    }
+
+    fn set_kind(&mut self, kind: OneClickFailureKind) {
+        self.current_kind = kind;
     }
 }
 
@@ -5146,7 +5186,8 @@ fn compensate_one_click_failure<R: Runtime>(
     prior_science: Option<&PriorScienceContext>,
     failure: OneClickFailure,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
-) -> Result<Value, String> {
+) -> Result<Value, TypedOneClickFailure> {
+    let original_kind = failure.typed.kind;
     let environment_uncertain = failure.rollback.launch_attempted;
     let cross_runtime_environment = environment_uncertain
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
@@ -5207,13 +5248,16 @@ fn compensate_one_click_failure<R: Runtime>(
         } else {
             ""
         };
-        return Err(cleanup_required_error(
-            &format!(
-                "{}；compensation_science_cleanup_failed；compensation_restore_blocked_science_candidate；{cleanup_error}{environment_codes}",
-                failure.message,
+        return Err(typed_one_click_err(
+            original_kind,
+            cleanup_required_error(
+                &format!(
+                    "{}；compensation_science_cleanup_failed；compensation_restore_blocked_science_candidate；{cleanup_error}{environment_codes}",
+                    failure.message(),
+                ),
+                &authority_snapshot.backup_root,
+                "science_candidate_stop_unproven",
             ),
-            &authority_snapshot.backup_root,
-            "science_candidate_stop_unproven",
         ));
     }
     let ssh_cleanup = match failure.rollback.ssh_stub_transaction.as_ref() {
@@ -5297,7 +5341,17 @@ fn compensate_one_click_failure<R: Runtime>(
         }
     }
     let suffix = (!codes.is_empty()).then(|| format!("；{}", codes.join("; ")));
-    Err(format!("{}{}", failure.message, suffix.unwrap_or_default()))
+    let message = format!("{}{}", failure.message(), suffix.unwrap_or_default());
+    let recovery = if let Some(recovery) = recovery_from_diagnostic_codes(&message) {
+        recovery
+    } else if environment_uncertain {
+        ProjectedRecovery::ENVIRONMENT_UNCERTAIN
+    } else if authorities_restored {
+        ProjectedRecovery::NOT_NEEDED
+    } else {
+        ProjectedRecovery::DEGRADED
+    };
+    Err(TypedOneClickFailure::new(original_kind, message).with_recovery(recovery))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5314,10 +5368,10 @@ fn healthy_reopen_with_gateway_rollback<R: Runtime>(
     sport: u16,
     running_runtime: &ScienceRuntimeIdentity,
     open_surface: bool,
-) -> Result<Value, String> {
+) -> Result<Value, TypedOneClickFailure> {
     let app_snapshot = AppAuthoritySnapshot::capture(state);
     let prior_config = cfg.clone();
-    let attempt = (|| -> Result<Value, String> {
+    let attempt = (|| -> Result<Value, TypedOneClickFailure> {
         let (_pport, secret, proxy_action) = ensure_proxy(
             app,
             state,
@@ -5325,22 +5379,33 @@ fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             Some(running_runtime),
             Some(trace),
             auth_proof,
-        )?;
-        verify_gateway_model_catalog_traced(trace, cfg.proxy_port, &secret, active_profile)?;
-        let installer_bridge = skill_install_bridge_dir(&secret)?;
-        let refreshed_cfg = config::load_from(dir).map_err(|error| error.to_string())?;
+        )
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::GatewayStart, message))?;
+        verify_gateway_model_catalog_traced(trace, cfg.proxy_port, &secret, active_profile)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::CatalogVerify, message))?;
+        let installer_bridge = skill_install_bridge_dir(&secret)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+        let refreshed_cfg = config::load_from(dir).map_err(|error| {
+            typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
+        })?;
         let committed = crate::runtime::provider::desired_runtime_binding(
             &refreshed_cfg,
             refreshed_cfg
                 .active_profile()
-                .ok_or("生效 profile 在启动期间消失")?,
+                .ok_or_else(|| {
+                    typed_one_click_err(
+                        OneClickFailureKind::NoActiveProfile,
+                        "生效 profile 在启动期间消失",
+                    )
+                })?,
             running_runtime,
-        )?;
+        )
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
         config::update(dir, |config| {
             config.runtime_binding = Some(committed.clone());
             config.runtime_transaction = None;
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| typed_one_click_err(OneClickFailureKind::Prepare, error.to_string()))?;
         let installer = match current_skill_install_bridge_key() {
             Ok(installer_key) => {
                 inspect_while_science_running(app, auth_dir, &installer_bridge, &installer_key)
@@ -5415,10 +5480,15 @@ fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             if recovery_errors.is_empty() {
                 Err(primary)
             } else {
-                Err(format!(
-                    "{primary}；healthy_reopen_recovery={}",
-                    recovery_errors.join("; ")
-                ))
+                Err(TypedOneClickFailure::new(
+                    primary.kind,
+                    format!(
+                        "{}；healthy_reopen_recovery={}",
+                        primary.message,
+                        recovery_errors.join("; ")
+                    ),
+                )
+                .with_recovery(primary.recovery))
             }
         }
     }
@@ -5433,10 +5503,11 @@ fn one_click_login_with_options<R: Runtime>(
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     open_surface: bool,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
-) -> Result<Value, String> {
+) -> Result<Value, TypedOneClickFailure> {
     let trace = OperationTrace::start(OperationKind::OneClickLogin, "command=one_click_login");
     let dir = config::default_dir();
-    let cfg = config::load_from(&dir).map_err(|e| e.to_string())?;
+    let cfg = config::load_from(&dir)
+        .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
     let interrupted_environment_stage = cfg
         .runtime_transaction
         .as_ref()
@@ -5448,20 +5519,29 @@ fn one_click_login_with_options<R: Runtime>(
     validate_interrupted_science_transaction_entry(
         interrupted_environment_stage,
         interrupted_environment_runtime_id,
-    )?;
-    let active_profile = cfg
-        .active_profile()
-        .ok_or("未配置生效 profile，请先在面板选择或新建一条配置。")?;
-    config::require_template_enabled(&cfg, &active_profile.template_id)?;
-    let active_launch = crate::runtime::provider::resolve_launch_plan(active_profile)?;
-    crate::commands::codex::require_provider_auth_proof(&active_launch.adapter, auth_proof)?;
-    crate::runtime::settings::validate_runtime_ports(cfg.proxy_port, cfg.sandbox_port)?;
+    )
+    .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+    let active_profile = cfg.active_profile().ok_or_else(|| {
+        typed_one_click_err(
+            OneClickFailureKind::NoActiveProfile,
+            "未配置生效 profile，请先在面板选择或新建一条配置。",
+        )
+    })?;
+    config::require_template_enabled(&cfg, &active_profile.template_id)
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+    let active_launch = crate::runtime::provider::resolve_launch_plan(active_profile)
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::LaunchPlan, message))?;
+    crate::commands::codex::require_provider_auth_proof(&active_launch.adapter, auth_proof)
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::AuthPreflight, message))?;
+    crate::runtime::settings::validate_runtime_ports(cfg.proxy_port, cfg.sandbox_port)
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
     let sport = cfg.sandbox_port;
 
     let sbx_home = sandbox_home();
     let auth_dir = sbx_home.join(".claude-science");
     let ssh_prevalidation =
-        crate::runtime::sandbox_session::prevalidate_one_click_system_ssh(&app, &cfg, &sbx_home)?;
+        crate::runtime::sandbox_session::prevalidate_one_click_system_ssh(&app, &cfg, &sbx_home)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
     let ssh_stub_transaction = cfg
         .reuse_system_ssh
         .then(|| {
@@ -5470,8 +5550,10 @@ fn one_click_login_with_options<R: Runtime>(
                 &ssh_prevalidation,
             )
         })
-        .transpose()?;
-    retry_pending_authority_cleanup(&state)?;
+        .transpose()
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+    retry_pending_authority_cleanup(&state)
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::AuthoritySnapshot, message))?;
     let version_cache = { lock(&state).science_version_cache.clone() };
 
     let (remembered_runtime, confirmed_stopped) = {
@@ -5495,22 +5577,29 @@ fn one_click_login_with_options<R: Runtime>(
         {
             (SandboxScienceState::Stopped, None)
         }
-        None => probe_sandbox_runtime_cached(sport, &version_cache)?,
+        None => probe_sandbox_runtime_cached(sport, &version_cache)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStart, message))?,
     };
     let mut running_runtime_to_stop = None;
     let launch_runtime: ScienceRuntimeIdentity = match science_state {
         SandboxScienceState::RunningHealthy => {
-            let running_runtime =
-                running_runtime.ok_or("Science 状态为运行中，但无法确认其 binary 身份")?;
+            let running_runtime = running_runtime.ok_or_else(|| {
+                typed_one_click_err(
+                    OneClickFailureKind::ScienceStart,
+                    "Science 状态为运行中，但无法确认其 binary 身份",
+                )
+            })?;
             validate_interrupted_science_environment_runtime(
                 interrupted_environment_runtime_id,
                 &running_runtime,
-            )?;
+            )
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
             let desired_binding = crate::runtime::provider::desired_runtime_binding(
                 &cfg,
                 active_profile,
                 &running_runtime,
-            )?;
+            )
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
             let science_binding_matches = !crate::runtime::provider::science_restart_required(
                 cfg.runtime_binding.as_ref(),
                 &desired_binding,
@@ -5519,14 +5608,21 @@ fn one_click_login_with_options<R: Runtime>(
                 oauth_forge::login_intact(&auth_dir, "virtual@localhost.invalid", &sbx_home);
             if login_intact && science_binding_matches {
                 if cfg.reuse_system_ssh {
-                    validate_running_system_ssh_bridge(&app, &sbx_home)?;
+                    validate_running_system_ssh_bridge(&app, &sbx_home).map_err(|message| {
+                        typed_one_click_err(OneClickFailureKind::Prepare, message)
+                    })?;
                 }
                 oauth_forge::bootstrap_marker_for_intact_login(
                     &auth_dir,
                     "virtual@localhost.invalid",
                     &sbx_home,
                 )
-                .map_err(|error| format!("补齐历史恢复标记失败：{error}"))?;
+                .map_err(|error| {
+                    typed_one_click_err(
+                        OneClickFailureKind::SandboxLogin,
+                        format!("补齐历史恢复标记失败：{error}"),
+                    )
+                })?;
                 let mut reopened = healthy_reopen_with_gateway_rollback(
                     &app,
                     &state,
@@ -5551,31 +5647,38 @@ fn one_click_login_with_options<R: Runtime>(
             let selected = if login_intact {
                 running_runtime
             } else {
-                select_science_runtime_cached(runtime_choice, &version_cache)?
+                select_science_runtime_cached(runtime_choice, &version_cache).map_err(|message| {
+                    typed_one_click_err(OneClickFailureKind::ScienceStart, message)
+                })?
             };
             running_runtime_to_stop = Some(prior_runtime);
             selected
         }
         SandboxScienceState::Stopped => {
-            select_science_runtime_cached(runtime_choice, &version_cache)?
+            select_science_runtime_cached(runtime_choice, &version_cache)
+                .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStart, message))?
         }
         SandboxScienceState::Unknown => {
             trace.finish("error=sandbox_state_unknown_before_start");
             if interrupted_environment_runtime_id.is_some() {
-                return Err(
-                    "上次启动在 Science 环境暴露边界中断，且当前 listener/runtime 身份无法确认；已拒绝自动恢复；environment_uncertain；recovery_status=manual_recovery_required"
-                        .into(),
-                );
+                return Err(typed_one_click_err(
+                    OneClickFailureKind::ScienceStart,
+                    "上次启动在 Science 环境暴露边界中断，且当前 listener/runtime 身份无法确认；已拒绝自动恢复；environment_uncertain；recovery_status=manual_recovery_required",
+                ));
             }
-            return Err(format!(
-                "无法确认隔离 Science 状态（端口 {sport} 或 data-dir 状态不一致）。请先停止占用该端口的进程后重试。"
+            return Err(typed_one_click_err(
+                OneClickFailureKind::ScienceStart,
+                format!(
+                    "无法确认隔离 Science 状态（端口 {sport} 或 data-dir 状态不一致）。请先停止占用该端口的进程后重试。"
+                ),
             ));
         }
     };
     validate_interrupted_science_environment_runtime(
         interrupted_environment_runtime_id,
         &launch_runtime,
-    )?;
+    )
+    .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
     let mut rollback_context = OneClickRollbackContext {
         proxy_action: ProxyAction::Reused,
         sandbox_port: sport,
@@ -5585,13 +5688,19 @@ fn one_click_login_with_options<R: Runtime>(
         launch_confirmed_stopped: false,
         candidate_stop_proof: ManagedScienceCandidateStopProof::NotRequired,
         ssh_stub_transaction,
+        current_kind: OneClickFailureKind::Prepare,
     };
     let prior_science = match running_runtime_to_stop.as_ref() {
         Some(runtime) => Some(PriorScienceContext {
             runtime: runtime.clone(),
             port: sport,
             launch_token: crate::runtime::science::managed_launch_token_for_runtime(sport, runtime)
-                .ok_or("prior Science managed launch 身份无法确认，拒绝停止或快照")?,
+                .ok_or_else(|| {
+                    typed_one_click_err(
+                        OneClickFailureKind::ScienceStop,
+                        "prior Science managed launch 身份无法确认，拒绝停止或快照",
+                    )
+                })?,
         }),
         None => None,
     };
@@ -5609,7 +5718,8 @@ fn one_click_login_with_options<R: Runtime>(
                 sandbox_url,
                 Some(&prior.runtime),
                 Some(&prior.launch_token),
-            )?;
+            )
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStop, message))?;
             current.science_runtime = None;
             current.science_confirmed_stopped = Some(prior.runtime.clone());
         }
@@ -5619,8 +5729,11 @@ fn one_click_login_with_options<R: Runtime>(
             || receipt.exists()
         {
             let restart = restart_prior_science(&app, &state, lifecycle, auth_proof, prior);
-            return Err(format!(
-                "prior Science 未完成 verified stop，拒绝建立 authority 快照；restart={restart:?}"
+            return Err(typed_one_click_err(
+                OneClickFailureKind::ScienceStop,
+                format!(
+                    "prior Science 未完成 verified stop，拒绝建立 authority 快照；restart={restart:?}"
+                ),
             ));
         }
     }
@@ -5655,18 +5768,25 @@ fn one_click_login_with_options<R: Runtime>(
             if let Some(disposition) = reconcile_disposition.as_deref_mut() {
                 *disposition = PriorScienceDisposition::Restored;
             }
-            return Err(cause);
+            return Err(typed_one_click_err(
+                OneClickFailureKind::AuthoritySnapshot,
+                cause,
+            ));
         }
         Err(AuthorityCaptureAfterQuiesceError::RestartRequired(cause)) => {
             trace.stage(
                 OperationStage::AuthoritySnapshot,
                 "phase=capture_end outcome=error prior_science=restart_required",
             );
-            return Err(cause);
+            return Err(typed_one_click_err(
+                OneClickFailureKind::AuthoritySnapshot,
+                cause,
+            ));
         }
     };
     let transaction_result = (|| -> Result<Value, OneClickFailure> {
         if running_runtime_to_stop.is_some() {
+            rollback_context.set_kind(OneClickFailureKind::ScienceStop);
             one_click_step(
                 mark_stop_old_science_transaction(
                     &dir,
@@ -5676,6 +5796,7 @@ fn one_click_login_with_options<R: Runtime>(
                 &rollback_context,
             )?;
         }
+        rollback_context.set_kind(OneClickFailureKind::Prepare);
         let transaction_cfg = one_click_step(config::load_from(&dir), &rollback_context)?;
         one_click_step(
             advance_runtime_transaction(
@@ -5700,6 +5821,7 @@ fn one_click_login_with_options<R: Runtime>(
             )));
         }
         lock(&state).science_confirmed_stopped = None;
+        rollback_context.set_kind(OneClickFailureKind::AuthoritySnapshot);
         one_click_step(
             authority_snapshot.validate_science_restore_root(),
             &rollback_context,
@@ -5718,6 +5840,7 @@ fn one_click_login_with_options<R: Runtime>(
             &rollback_context,
         )?;
 
+        rollback_context.set_kind(OneClickFailureKind::SandboxLogin);
         trace.stage(OperationStage::SandboxLogin, "ensure_virtual_login");
         let (forged, login_action) = match oauth_forge::ensure_virtual_login(
             &auth_dir,
@@ -5766,6 +5889,8 @@ fn one_click_login_with_options<R: Runtime>(
             &forged.org_uuid,
             &forged.enc_file,
         );
+        // Resource discovery is prepare-class; only login failures keep SandboxLogin.
+        rollback_context.set_kind(OneClickFailureKind::Prepare);
         let root = match asset_root(&app) {
             Some(root) => root,
             None => {
@@ -5793,6 +5918,7 @@ fn one_click_login_with_options<R: Runtime>(
                 &rollback_context,
             )?;
         }
+        rollback_context.set_kind(OneClickFailureKind::Prepare);
         let ssh_hosts = if cfg.reuse_system_ssh {
             one_click_step(
                 crate::runtime::ssh_bridge::prepare_science_ssh_bridge(&sbx_home),
@@ -5813,6 +5939,7 @@ fn one_click_login_with_options<R: Runtime>(
                 )?;
             }
         }
+        rollback_context.set_kind(OneClickFailureKind::GatewayStart);
         let (pport, secret, proxy_action) = one_click_step(
             ensure_proxy(
                 &app,
@@ -5825,10 +5952,12 @@ fn one_click_login_with_options<R: Runtime>(
             &rollback_context,
         )?;
         rollback_context.proxy_action = proxy_action;
+        rollback_context.set_kind(OneClickFailureKind::CatalogVerify);
         one_click_step(
             verify_gateway_model_catalog_traced(&trace, pport, &secret, active_profile),
             &rollback_context,
         )?;
+        rollback_context.set_kind(OneClickFailureKind::SandboxLaunch);
         let environment_pending_stage = format!(
             "{SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX}{}",
             launch_runtime.environment_transaction_id()
@@ -5971,6 +6100,7 @@ fn one_click_login_with_options<R: Runtime>(
                 break;
             }
         }
+        rollback_context.set_kind(OneClickFailureKind::SandboxHealth);
         trace.stage(
             OperationStage::SandboxHealth,
             if healthy { "ready" } else { "not_ready" },
@@ -5996,6 +6126,7 @@ fn one_click_login_with_options<R: Runtime>(
                 )));
             }
         }
+        rollback_context.set_kind(OneClickFailureKind::ScienceDbReverify);
         one_click_step(
             advance_runtime_transaction(
                 &dir,
@@ -6108,6 +6239,7 @@ fn one_click_login_with_options<R: Runtime>(
                 }
             }
         }
+        rollback_context.set_kind(OneClickFailureKind::Prepare);
         one_click_step(
             advance_runtime_transaction(
                 &dir,
@@ -6151,6 +6283,7 @@ fn one_click_login_with_options<R: Runtime>(
             &rollback_context,
         )?;
         one_click_step(commit_runtime_binding(&dir, committed), &rollback_context)?;
+        rollback_context.set_kind(OneClickFailureKind::OpenSurface);
         let (message, fallback_url) = if open_surface {
             match open_science_surface(&app, &url) {
                 Ok("webview") => (format!("{started}，已打开 Science 窗口。"), None),
@@ -6182,6 +6315,7 @@ fn one_click_login_with_options<R: Runtime>(
             value["recovery_status"] = json!("environment_uncertain");
             value["environment_status"] = json!("uncertain");
         }
+        rollback_context.set_kind(OneClickFailureKind::AuthoritySnapshot);
         one_click_step(
             authority_snapshot.prepare_success(&mut value),
             &rollback_context,

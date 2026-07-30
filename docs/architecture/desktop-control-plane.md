@@ -72,11 +72,11 @@ commit 与 Science attach/readback 的局部边界。第二次复核不是互斥
 
 | Event | 发出方 | Payload | 当前边界 |
 |---|---|---|---|
-| `boot://failed` | auto-boot coordinator | string | 只保留 message；丢失一键 DTO 的 stage/recovery/environment |
+| `boot://failed` | auto-boot coordinator | JSON value（一键 failed DTO） | 与手动一键同 keys：`action/stage/status/recovery_status/environment_status/message/fallback_url`；frontend 兼容旧 string payload |
 | `boot://attention` | auto-boot coordinator | JSON value | 保留 history-choice 等 attention 对象 |
 | `codex-auth://operation` | Codex command | typed operation snapshot | sequence/state/error 等结构化字段保留 |
 
-frontend 启动时同时读取 `boot_error` / `boot_attention` command，并监听对应 event，覆盖 listener 注册前已经发生的启动结果。
+frontend 启动时同时读取 `boot_error` / `boot_attention` command，并监听对应 event，覆盖 listener 注册前已经发生的启动结果。`boot_error` 现返回结构化 failed DTO（与 event 一致），不再只是纯 message 字符串。
 
 ## 一键 DTO 与错误投影
 
@@ -84,12 +84,16 @@ frontend 启动时同时读取 `boot_error` / `boot_attention` command，并监�
 
 1. 成功或已复用：resolved object；
 2. 需要历史选择：resolved `status=attention` object；
-3. 普通失败：resolved `status=error` object，包含 `stage`、`recovery_status`、`environment_status` 等；
+3. 普通失败：resolved `status=error` object，包含 `stage`、`recovery_status`、`environment_status` 等；stage 来自内部 `OneClickFailureKind` 投影（`runtime/failure.rs`），**不**扫描 message 文案；
 4. Codex typed auth 等 command error：invoke rejection，由 frontend `catch` 处理。
 
-内部 operation trace、持久 journal 与 frontend stage 不是同一枚举。当前 `science_failure_stage()` 依赖错误字符串推断公共 stage，因此文案、语言或大小写变化可能改变投影；不能把 frontend stage 当成精确 journal/trace。
-
-auto-boot 又从完整 result 只提取 `message`，形成第二个 DTO 缺口。两项均是当前架构缺口，不是本文修复的产品行为。
+内部 operation trace、持久 journal 与 frontend stage 不是同一枚举。frontend
+coarse stage 由 `OneClickFailureKind` 在产生点投影，不扫描 message 文案；journal
+checkpoint 仍是 recovery 用的自由字符串，不能与 UI stage 无损互映。auto-boot 的
+`boot://failed` / `boot_error` 与手动一键共享 failed DTO shape。
+`recovery_status` 仍可能消费 message 内的诊断码（`recovery_status=…` /
+`environment_uncertain`）作为过渡；后续应在补偿点直接写入
+`ProjectedRecovery`。
 
 ## 选择、应用与诊断语义
 

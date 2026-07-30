@@ -134,8 +134,9 @@ socket 经过同一个进程就把所有 Science 出站统一归为 model Gatewa
 - `test/test_launch_science_env_allowlist.sh`（stub Science + 污染父环境）证明
   Science serve 子进程看不到 ambient secrets。
 
-后续 typed failure、`sandbox_session` 与 Gateway 机械拆分不得扩大上述
-allowlist；helper 移动时保持退出条件不变。
+typed failure 投影已在 source 层建立（`runtime/failure.rs`）。后续
+`sandbox_session` 与 Gateway 机械拆分不得扩大上述 allowlist；helper 移动时保持
+退出条件不变，且须继续通过 typed kind 投影失败，不得恢复文案反推 stage。
 
 egress 先按语义责任分为四类：
 
@@ -296,8 +297,9 @@ CSSwitch 不托管：
 4. bridge 准入、关闭、重启、补偿与局部降级规则；
 5. 现有 Tauri command/event/DTO、Gateway wire behavior、锁序、journal、
    receipt 和 recovery 的行为特征测试；
-6. Desktop、transaction、Gateway/provider、runtime adapter、bridge、
-   Science-native 与 external service 的 typed failure domain；
+6. Desktop、transaction、Gateway/provider、runtime adapter 的一键 typed failure
+   domain 已由 `runtime/failure.rs` 建立；bridge / Science-native / external
+   service 的局部 typed error 保持各自所有权，不并入全局 mega-enum；
 7. ambient environment 两层 allowlist 与 sentinel-secret regressions 已闭合
    （见上文与 `runtime/launch_env`）；后续机械拆分不得扩大该 allowlist。
 
@@ -305,7 +307,7 @@ CSSwitch 不托管：
 `UNKNOWN`。拆分前需要的是 owner、路径和不变量无歧义；具体版本/provider 的
 兼容结果可以继续是 `UNKNOWN`。
 
-拆分按这些边界机械进行：先建立 typed failure projection，再拆 runtime
+拆分按这些边界机械进行：typed failure projection 已建立；下一步拆 runtime
 transaction/recovery，随后拆 Gateway HTTP/inference/bridge，最后处理 frontend、
 config 与其他高 fan-in 模块。拆分期间不得顺手改变协议、权限、凭证来源、状态
 提交顺序或 feature ownership。

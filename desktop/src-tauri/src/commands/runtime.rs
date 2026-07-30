@@ -10,6 +10,9 @@ use crate::runtime::diagnostics::{
     build_status_response, proxy_status_last_error, science_diagnostics, status_lights,
     ScienceDiagnosticsInput, StatusProbeInput,
 };
+use crate::runtime::failure::{
+    recovery_from_diagnostic_codes, OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure,
+};
 use crate::runtime::operation::{self, OperationKind, OperationTrace};
 use crate::runtime::profile::profile_capabilities;
 use crate::runtime::provider::{
@@ -500,24 +503,40 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
     let cfg = match config::load_from(&config::default_dir()) {
         Ok(cfg) => cfg,
-        Err(error) => return Ok(one_click_failure_value(error.to_string())),
+        Err(error) => {
+            return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                OneClickFailureKind::ConfigLoad,
+                error.to_string(),
+            )))
+        }
     };
     let active = match cfg.active_profile() {
         Some(active) => active,
         None => {
-            return Ok(one_click_failure_value(
-                "未配置生效 profile，请先在面板选择或新建一条配置。".into(),
-            ))
+            return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                OneClickFailureKind::NoActiveProfile,
+                "未配置生效 profile，请先在面板选择或新建一条配置。",
+            )))
         }
     };
     let adapter = match resolve_launch_plan(active) {
         Ok(plan) => plan.adapter,
-        Err(message) => return Ok(one_click_failure_value(message)),
+        Err(message) => {
+            return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                OneClickFailureKind::LaunchPlan,
+                message,
+            )))
+        }
     };
     let candidate_config = OneClickCandidateConfigSnapshot::capture(&cfg, &adapter);
     let prior_gateway = match OneClickGatewayPreflightSnapshot::capture(&state) {
         Ok(snapshot) => snapshot,
-        Err(message) => return Ok(one_click_failure_value(message)),
+        Err(message) => {
+            return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                OneClickFailureKind::PreflightSnapshot,
+                message,
+            )))
+        }
     };
     let needs_codex_proof = if adapter == "codex" {
         true
@@ -529,7 +548,12 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
         {
             Ok(Some(required)) => required,
             Ok(None) => false,
-            Err(message) => return Ok(one_click_failure_value(message)),
+            Err(message) => {
+                return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                    OneClickFailureKind::PreflightSnapshot,
+                    message,
+                )))
+            }
         }
     };
     let preflight_adapter = if needs_codex_proof {
@@ -544,21 +568,46 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     ) {
         Ok(prepared) => prepared,
         Err(crate::commands::codex::RuntimeCommandError::Message(message)) => {
-            return Ok(one_click_failure_value(message))
+            return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                OneClickFailureKind::AuthPreflight,
+                message,
+            )))
         }
         Err(auth @ crate::commands::codex::RuntimeCommandError::Auth(_)) => return Err(auth),
     };
-    match lifecycle.with_serialized(|| -> Result<_, String> {
+    match lifecycle.with_serialized(|| -> Result<_, TypedOneClickFailure> {
         if let Some(candidate_config) = candidate_config.as_ref() {
-            candidate_config.verify_unchanged()?;
+            candidate_config
+                .verify_unchanged()
+                .map_err(|message| {
+                    TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
+                })?;
         }
         if let Some(prepared) = prepared.as_ref() {
-            prepared.verify_unchanged()?;
+            prepared.verify_unchanged().map_err(|message| {
+                TypedOneClickFailure::new(OneClickFailureKind::AuthPreflight, message)
+            })?;
         }
         if let Some(prior_gateway) = prior_gateway.as_ref() {
-            prior_gateway.verify_unchanged(&state)?;
+            prior_gateway.verify_unchanged(&state).map_err(|message| {
+                TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
+            })?;
         }
-        crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)?;
+        crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state).map_err(
+            |message| {
+                // recover_interrupted_gateway still returns String; map known
+                // Science journal-preservation refuses away from gateway_start.
+                let kind = if message.contains("Science authority/environment")
+                    || message.contains("authority 快照")
+                    || message.contains("Science 环境暴露")
+                {
+                    OneClickFailureKind::AuthoritySnapshot
+                } else {
+                    OneClickFailureKind::GatewayStart
+                };
+                TypedOneClickFailure::new(kind, message)
+            },
+        )?;
         crate::runtime::sandbox_session::one_click_login(
             app,
             state,
@@ -568,7 +617,7 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
         )
     }) {
         Ok(value) => Ok(value),
-        Err(message) => Ok(one_click_failure_value(message)),
+        Err(failure) => Ok(project_one_click_failure(failure)),
     }
 }
 
@@ -686,48 +735,21 @@ pub(crate) async fn restore_history_choice(
     .await
 }
 
-fn one_click_failure_value(message: String) -> serde_json::Value {
-    let environment_uncertain = message.contains("environment_uncertain");
-    let recovery_status = if environment_uncertain {
-        "environment_uncertain"
+fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_json::Value {
+    let journal_open = config::load_from(&config::default_dir())
+        .ok()
+        .and_then(|cfg| cfg.runtime_transaction)
+        .is_some();
+    let failure = if failure.recovery == ProjectedRecovery::NOT_NEEDED {
+        if let Some(recovery) = recovery_from_diagnostic_codes(&failure.message) {
+            failure.with_recovery(recovery)
+        } else {
+            failure.apply_open_journal_degraded(journal_open)
+        }
     } else {
-        config::load_from(&config::default_dir())
-            .ok()
-            .and_then(|cfg| cfg.runtime_transaction)
-            .map(|_| "degraded")
-            .unwrap_or("not_needed")
+        failure
     };
-    let stage = science_failure_stage(&message);
-    json!({
-        "action": "failed",
-        "stage": stage,
-        "status": "error",
-        "recovery_status": recovery_status,
-        "environment_status": if environment_uncertain { "uncertain" } else { "not_exposed" },
-        "message": message,
-        "fallback_url": null,
-    })
-}
-
-fn science_failure_stage(message: &str) -> &'static str {
-    if message.contains("停止旧进程") || message.contains("停止沙箱") {
-        "science_stop"
-    } else if message.contains("模型目录")
-        || message.contains("selector")
-        || message.contains("Codex published model snapshot")
-    {
-        "catalog_verify"
-    } else if message.contains("代理") || message.contains("gateway") {
-        "gateway_start"
-    } else if message.contains("沙箱")
-        || message.contains("Science")
-        || message.contains("science_api_")
-        || message.contains("science_db_")
-    {
-        "science_start"
-    } else {
-        "prepare"
-    }
+    failure.project_dto()
 }
 
 #[tauri::command]
@@ -915,7 +937,7 @@ pub(crate) fn status(state: State<'_, SharedAppState>) -> serde_json::Value {
 }
 
 #[tauri::command]
-pub(crate) fn boot_error(state: State<'_, SharedAppState>) -> Option<String> {
+pub(crate) fn boot_error(state: State<'_, SharedAppState>) -> Option<serde_json::Value> {
     lock(state.inner()).boot_error.clone()
 }
 
@@ -985,7 +1007,7 @@ pub(crate) async fn quit_app(
 #[cfg(test)]
 mod tests {
     use super::{
-        config_last_error_json, manual_open_result, science_failure_stage,
+        config_last_error_json, manual_open_result, project_one_click_failure,
         status_response_for_config_error, status_runtime_identity, status_upstream_applicable,
     };
     use crate::{
@@ -1066,27 +1088,67 @@ mod tests {
 
     #[test]
     fn science_operation_failures_have_stable_structured_stages() {
-        assert_eq!(science_failure_stage("停止旧进程失败"), "science_stop");
-        assert_eq!(science_failure_stage("代理探活失败"), "gateway_start");
-        assert_eq!(science_failure_stage("模型目录不一致"), "catalog_verify");
+        use crate::runtime::failure::{OneClickFailureKind, TypedOneClickFailure};
+
+        let project = |kind: OneClickFailureKind, message: &str| {
+            project_one_click_failure(TypedOneClickFailure::new(kind, message))
+        };
         assert_eq!(
-            science_failure_stage("gateway 模型目录探活无响应"),
+            project(OneClickFailureKind::ScienceStop, "停止旧进程失败")["stage"],
+            "science_stop"
+        );
+        assert_eq!(
+            project(OneClickFailureKind::ProxyHealth, "代理探活失败")["stage"],
+            "gateway_start"
+        );
+        assert_eq!(
+            project(OneClickFailureKind::CatalogVerify, "模型目录不一致")["stage"],
             "catalog_verify"
         );
         assert_eq!(
-            science_failure_stage("Codex published model snapshot 为空或包含非法 alias"),
+            project(
+                OneClickFailureKind::CatalogVerify,
+                "gateway 模型目录探活无响应"
+            )["stage"],
             "catalog_verify"
         );
-        assert_eq!(science_failure_stage("沙箱起后超时"), "science_start");
         assert_eq!(
-            science_failure_stage("science_api_health_status_401"),
+            project(
+                OneClickFailureKind::CatalogVerify,
+                "Codex published model snapshot 为空或包含非法 alias"
+            )["stage"],
+            "catalog_verify"
+        );
+        assert_eq!(
+            project(OneClickFailureKind::SandboxHealth, "沙箱起后超时")["stage"],
             "science_start"
         );
         assert_eq!(
-            science_failure_stage("science_db_reverify_timeout"),
+            project(
+                OneClickFailureKind::ScienceStart,
+                "science_api_health_status_401"
+            )["stage"],
             "science_start"
         );
-        assert_eq!(science_failure_stage("配置不可用"), "prepare");
+        assert_eq!(
+            project(
+                OneClickFailureKind::ScienceDbReverify,
+                "science_db_reverify_timeout"
+            )["stage"],
+            "science_start"
+        );
+        assert_eq!(
+            project(OneClickFailureKind::Prepare, "配置不可用")["stage"],
+            "prepare"
+        );
+        // Message text must not override kind.
+        assert_eq!(
+            project(
+                OneClickFailureKind::CatalogVerify,
+                "代理 gateway 停止旧进程 沙箱"
+            )["stage"],
+            "catalog_verify"
+        );
     }
 
     #[test]
@@ -2523,7 +2585,7 @@ exec '{}' "$@"
             env::set_var("PATH", bin_dir.as_os_str());
         }
         let operation_started = Instant::now();
-        let failed = if codex_gateway_oracle {
+        let failed: Result<serde_json::Value, String> = if codex_gateway_oracle {
             invoke_json(
                 &webview,
                 "one_click_login",
@@ -2547,6 +2609,7 @@ exec '{}' "$@"
                 None,
                 None,
             )
+            .map_err(|error| error.to_string())
         };
         let failure_surface = failed
             .as_ref()
@@ -3040,7 +3103,7 @@ exec '{}' "$@"
         } else {
             env::remove_var("CSSWITCH_TEST_MANAGED_LAUNCH_COMMIT_FAILURE");
         }
-        let retry = if codex_gateway_oracle {
+        let retry: Result<serde_json::Value, String> = if codex_gateway_oracle {
             invoke_json(
                 &webview,
                 "one_click_login",
@@ -3058,6 +3121,7 @@ exec '{}' "$@"
             })
         } else {
             sandbox_session::one_click_login(handle, state.clone(), lifecycle.as_ref(), None, None)
+                .map_err(|error| error.to_string())
         };
         let retry_started_once = retry
             .as_ref()
@@ -3940,7 +4004,7 @@ exec '{}' "$@"
         });
         let result_surface = match &failed {
             Ok(value) => value.to_string(),
-            Err(error) => error.clone(),
+            Err(error) => error.to_string(),
         };
 
         let safe_stop = {
@@ -5878,7 +5942,7 @@ exec '{}' "$@"
             sandbox_session::one_click_login(handle, state.clone(), lifecycle.as_ref(), None, None);
         let surface = match &result {
             Ok(value) => value.to_string(),
-            Err(error) => error.clone(),
+            Err(error) => error.to_string(),
         };
         let target_failure_reached = surface.contains("test-only managed launch commit failure");
         let diagnostic_credential_free = !surface.contains(&canary);
@@ -7408,7 +7472,7 @@ exec '{}' "$@"
         let failure_surface = failed
             .as_ref()
             .err()
-            .map(String::as_str)
+            .map(|error| error.as_ref())
             .unwrap_or_default()
             .to_string();
         let late_edge_reached = failure_marker.is_file()
@@ -7443,7 +7507,7 @@ exec '{}' "$@"
         let retry_surface = retry
             .as_ref()
             .map(serde_json::Value::to_string)
-            .unwrap_or_else(|error| error.clone());
+            .unwrap_or_else(|error| error.to_string());
         let retry_idempotent = retry.as_ref().is_ok_and(|value| {
             value["action"] == "started" && value["stage"] == "complete" && value["status"] == "ok"
         }) && fs::read_to_string(

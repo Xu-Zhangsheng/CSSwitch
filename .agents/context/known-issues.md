@@ -15,10 +15,18 @@
   `scripts/launch-virtual-sandbox.sh` 以 `env -i` 启动 Science。sentinel 与
   stub 回归：`cargo test --lib launch_env` / `proxy_lifecycle`、
   `bash test/test_launch_science_env_allowlist.sh`。
-- 下一刀仍是 typed failure projection，再机械拆分 `sandbox_session` 与
-  Gateway `server.rs`；拆分不得扩大已冻结的 Runtime/Gateway allowlist。
-- 已闭合的是 **process environment 边界**，不是全部真实 provider/SSH/Science
-  领域 live PASS，也不是 Developer ID / notarization。
+- ~~Typed failure projection~~ **已闭合（source，stage）**：`runtime/failure.rs`
+  的 `OneClickFailureKind` 在产生点标注；一键与 auto-boot 投影到冻结 coarse
+  stage；生产路径不再用 `science_failure_stage` 扫文案。journal checkpoint 仍为
+  string。**过渡残留**：`recovery_status` 仍可从 message 内诊断码解析
+  （`recovery_from_diagnostic_codes`），应在后续补偿点完全 typed。验证：
+  `cargo test --lib failure::`、
+  `science_operation_failures_have_stable_structured_stages`、
+  `auto_boot_rejects_structured_runtime_failure`。
+- 下一刀：机械拆分 `sandbox_session` 与 Gateway `server.rs`；拆分不得扩大已冻结
+  的 Runtime/Gateway allowlist，子模块须返回 typed failure。
+- 已闭合的是 **process environment 边界** 与 **一键/auto-boot 故障投影**，不是
+  全部真实 provider/SSH/Science 领域 live PASS，也不是 Developer ID / notarization。
 
 ## 第三方模型与 Science 原生能力
 

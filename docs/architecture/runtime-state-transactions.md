@@ -50,10 +50,10 @@ Skill 安装不取得 `Lifecycle`，而是在文件选择前后复核相同
 | 阶段域 | 形态 | 用途 |
 |---|---|---|
 | operation trace | typed `OperationStage` | 脱敏运行日志和耗时 |
-| runtime journal | string `stage` | crash/recovery 的持久 checkpoint |
+| runtime journal | string `stage` | crash/recovery 的持久 checkpoint（**未** typed 化） |
 | frontend DTO | coarse string | 用户可见失败定位 |
 
-三者当前不能无损互相映射。frontend DTO 仍通过 `science_failure_stage()` 对错误文字分类；auto-boot 还会丢失结构化字段。
+一键/auto-boot 失败由内部 `runtime/failure.rs` 的 `OneClickFailureKind` 在**产生点**标注，再投影到冻结的 coarse stage（`prepare|science_stop|gateway_start|catalog_verify|science_start`）与 `recovery_status` / `environment_status`。**不得**用用户文案 `contains` 反推 stage。journal checkpoint 字符串与 recovery 语义独立，本层不改。
 
 ## 一键开始事务
 
@@ -118,9 +118,11 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- journal/trace/frontend stage 没有统一 typed source；
-- `science_failure_stage()` 用字符串推断；
-- auto-boot 丢失 `stage/recovery_status/environment_status`；
+- ~~journal/trace/frontend stage 没有统一 typed source~~ 一键/auto-boot UI stage
+  已由 `OneClickFailureKind` 投影；journal 仍为 recovery checkpoint 字符串；
+- ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
+- ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与
+  `boot_error` 现携带与手动一键同 shape 的 failed DTO；
 - config 的外部并发检测不是跨进程共享锁；
 - `stop_all` 持有 `AppState` 锁跨越外部停止与信号等待；
 - 本地 Skill 安装不取得 `Lifecycle`；第二次 runtime-context 复核之后仍可能与

@@ -696,6 +696,23 @@ function applyModelCapability(t, ui, currentModel) {
   return cap;
 }
 
+/** Normalize auto-boot failure payload: plain string (legacy) or one-click DTO object. */
+function formatBootFailure(payload) {
+  if (payload == null || payload === "") return "未知原因";
+  if (typeof payload === "string") return payload;
+  if (typeof payload === "object") {
+    const message = payload.message || payload.msg || "未知原因";
+    const stage = payload.stage ? "（阶段：" + payload.stage + "）" : "";
+    const recovery = payload.recovery_status === "degraded"
+      ? "；恢复也未完全成功"
+      : payload.recovery_status === "environment_uncertain"
+        ? "；环境状态不确定"
+        : "";
+    return message + recovery + stage;
+  }
+  return String(payload);
+}
+
 function setMsg(text, kind) {
   // 去掉常驻「就绪。」：空消息或纯 idle 时整条反馈栏不占位，有真实反馈（结果/错误/自检）才冒出来。
   const t = text && text !== "就绪。" ? text : "";
@@ -2833,7 +2850,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       await Promise.all([
         window.__TAURI__.event.listen("boot://failed", (e) => {
-          setMsg("自动启动未成功：" + (e.payload || "未知原因") + "\n可检查配置后点「一键开始」重试。", "err");
+          setMsg("自动启动未成功：" + formatBootFailure(e.payload) + "\n可检查配置后点「一键开始」重试。", "err");
           refreshStatus();
         }),
         window.__TAURI__.event.listen("boot://attention", (e) => {
@@ -2850,7 +2867,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   try {
     const bootError = await call("boot_error");
-    if (bootError) setMsg("自动启动未成功：" + bootError + "\n可检查配置后点「一键开始」重试。", "err");
+    if (bootError) setMsg("自动启动未成功：" + formatBootFailure(bootError) + "\n可检查配置后点「一键开始」重试。", "err");
   } catch (e) {}
   try {
     const attention = await call("boot_attention");

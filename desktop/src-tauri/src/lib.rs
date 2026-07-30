@@ -118,7 +118,9 @@ pub(crate) struct AppState {
     /// backend-only and retried before the next one-click mutation.
     pub(crate) pending_authority_cleanup: Vec<std::path::PathBuf>,
     boot: BootState,
-    pub(crate) boot_error: Option<String>,
+    /// Structured one-click failure DTO (`action/stage/status/message/...`) or a
+    /// legacy plain-message object; never used for stage inference from text.
+    pub(crate) boot_error: Option<serde_json::Value>,
     pub(crate) boot_attention: Option<serde_json::Value>,
 }
 
@@ -282,16 +284,16 @@ fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     });
 }
 
-fn mark_boot_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, error: String) {
+fn mark_boot_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, failure: serde_json::Value) {
     let state = app.state::<SharedAppState>();
     {
         let mut st = lock(state.inner());
         st.boot = BootState::Failed;
-        st.boot_error = Some(error.clone());
+        st.boot_error = Some(failure.clone());
         st.boot_attention = None;
     }
     show_main_window(app);
-    let _ = app.emit("boot://failed", error);
+    let _ = app.emit("boot://failed", failure);
 }
 
 fn mark_boot_attention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, value: serde_json::Value) {
@@ -306,14 +308,19 @@ fn mark_boot_attention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, value: serd
     let _ = app.emit("boot://attention", value);
 }
 
-fn boot_result_error(value: &serde_json::Value) -> Option<String> {
+fn boot_result_error(value: &serde_json::Value) -> Option<serde_json::Value> {
     (value.get("status").and_then(serde_json::Value::as_str) == Some("error")).then(|| {
-        value
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("自动启动未完成")
-            .to_string()
+        // Preserve the full failed one-click DTO so auto-boot matches manual invoke.
+        value.clone()
     })
+}
+
+fn boot_prepare_failure(message: impl Into<String>) -> serde_json::Value {
+    crate::runtime::failure::TypedOneClickFailure::new(
+        crate::runtime::failure::OneClickFailureKind::Prepare,
+        message,
+    )
+    .project_dto()
 }
 
 fn boot_result_needs_attention(value: &serde_json::Value) -> bool {
@@ -335,7 +342,7 @@ fn run_boot_coordinator(app: tauri::AppHandle) {
         let cfg = match config::load_from(&config::default_dir()) {
             Ok(cfg) => cfg,
             Err(e) => {
-                mark_boot_failed(&app, format!("读取配置失败：{e}"));
+                mark_boot_failed(&app, boot_prepare_failure(format!("读取配置失败：{e}")));
                 return;
             }
         };
@@ -355,7 +362,7 @@ fn run_boot_coordinator(app: tauri::AppHandle) {
                     st.boot_error = None;
                     st.boot_attention = None;
                 }
-                Err(e) => mark_boot_failed(&app, e),
+                Err(e) => mark_boot_failed(&app, boot_prepare_failure(e)),
             },
             LaunchPath::BootScience => {
                 let state_inner = state.inner().clone();
@@ -369,8 +376,8 @@ fn run_boot_coordinator(app: tauri::AppHandle) {
                     Ok(value) => {
                         if boot_result_needs_attention(&value) {
                             mark_boot_attention(&app, value);
-                        } else if let Some(message) = boot_result_error(&value) {
-                            mark_boot_failed(&app, message);
+                        } else if let Some(failure) = boot_result_error(&value) {
+                            mark_boot_failed(&app, failure);
                         } else {
                             let mut st = lock(state.inner());
                             st.boot = BootState::Ready;
@@ -378,7 +385,10 @@ fn run_boot_coordinator(app: tauri::AppHandle) {
                             st.boot_attention = None;
                         }
                     }
-                    Err(e) => mark_boot_failed(&app, e.to_string()),
+                    Err(e) => mark_boot_failed(
+                        &app,
+                        boot_prepare_failure(e.to_string()),
+                    ),
                 }
             }
         }
@@ -487,13 +497,18 @@ mod tests {
     #[test]
     fn auto_boot_rejects_structured_runtime_failure() {
         let failed = serde_json::json!({
+            "action": "failed",
+            "stage": "gateway_start",
             "status": "error",
+            "recovery_status": "degraded",
+            "environment_status": "not_exposed",
             "message": "gateway recovery degraded",
+            "fallback_url": null,
         });
-        assert_eq!(
-            boot_result_error(&failed).as_deref(),
-            Some("gateway recovery degraded")
-        );
+        let projected = boot_result_error(&failed).expect("error dto");
+        assert_eq!(projected["message"], "gateway recovery degraded");
+        assert_eq!(projected["stage"], "gateway_start");
+        assert_eq!(projected["recovery_status"], "degraded");
         assert!(boot_result_error(&serde_json::json!({"status": "ok"})).is_none());
         assert!(boot_result_needs_attention(
             &serde_json::json!({"status": "attention", "action": "history_choice_required"})
