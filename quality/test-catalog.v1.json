@@ -36,6 +36,7 @@
     "test/test_external_skill_install_bridge.py",
     "test/test_gateway_rust.py",
     "test/test_installed_provider_matrix.py",
+    "test/test_launch_science_env_allowlist.sh",
     "test/test_ops_scripts.sh",
     "test/test_process_ownership_policy.py",
     "test/test_provider_mock_scenarios.py",
@@ -108,7 +109,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "QUALITY-METADATA"
       }
     },
@@ -191,7 +192,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "QUALITY-FOCUSED"
       }
     },
@@ -345,7 +346,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "RUN-EVIDENCE-CONTRACT"
       }
     },
@@ -550,7 +551,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "QUALITY-INVENTORY"
       }
     },
@@ -627,7 +628,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "PY-OFFLINE"
       }
     },
@@ -705,7 +706,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "PY-LOOPBACK"
       }
     },
@@ -736,6 +737,7 @@
       "environment_allowlist": [],
       "source_paths": [
         "test/run-scripts.sh",
+        "test/test_launch_science_env_allowlist.sh",
         "test/test_scripts.sh",
         "test/test_ops_scripts.sh",
         "test/test_real_machine_guard.sh"
@@ -771,7 +773,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "SHELL-SCRIPTS"
       }
     },
@@ -847,7 +849,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "RUST-DESKTOP"
       }
     },
@@ -918,7 +920,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "RUST-GATEWAY"
       }
     },
@@ -988,7 +990,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "RUST-CODEX-NETWORK"
       }
     },
@@ -1060,7 +1062,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "RUST-SKILL-PACKAGE"
       }
     },
@@ -1132,7 +1134,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "MJS-FRONTEND"
       }
     },
@@ -1370,7 +1372,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "ORPHAN-SKILL-BRIDGE"
       }
     },
@@ -1439,7 +1441,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "ORPHAN-SKILL-BOUNDARY"
       }
     },
@@ -1866,7 +1868,7 @@
       "environment_allowlist": [],
       "source_paths": [
         "desktop/src-tauri/src/runtime/science.rs",
-        "desktop/src-tauri/src/runtime/sandbox_session.rs"
+        "desktop/src-tauri/src/runtime/sandbox_session/"
       ],
       "evidence_layer": "source-test",
       "owner": "science-runtime",
@@ -1937,7 +1939,7 @@
         "desktop/src-tauri/src/commands/runtime.rs",
         "desktop/src-tauri/src/config.rs",
         "desktop/src-tauri/src/lib.rs",
-        "desktop/src-tauri/src/runtime/sandbox_session.rs",
+        "desktop/src-tauri/src/runtime/sandbox_session/",
         "desktop/src-tauri/src/runtime/science.rs",
         "desktop/src-tauri/src/runtime/settings.rs"
       ],
@@ -1965,7 +1967,7 @@
       "selection_rule": {
         "mode": "manual",
         "include_paths": [
-          "desktop/src-tauri/src/runtime/sandbox_session.rs"
+          "desktop/src-tauri/src/runtime/sandbox_session/"
         ],
         "exclude_statuses": [
           "legacy",
@@ -2051,7 +2053,7 @@
       "environment_allowlist": [],
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "3b9c3c6befae016da2db49785506ce36ab16287184b64b5cc73555dbf87a0bc0",
+        "sha256": "459c57703d557d60d2f4064a5741c00330268be7a48c0cfd3b87578ae720cad3",
         "suite_key": "SOURCE-GATE-CONTRACT"
       },
       "status": "implemented",

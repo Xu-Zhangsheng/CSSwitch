@@ -9,16 +9,20 @@ use serde_json::Value;
 use tauri::Runtime;
 
 use crate::config;
+#[cfg(test)]
 use crate::proc;
+#[cfg(test)]
 use crate::runtime::operation;
 use crate::runtime::proxy::ProxyAction;
 use crate::runtime::proxy_lifecycle::start_proxy_for;
 use crate::runtime::science::ScienceRuntimeIdentity;
 use crate::{lifecycle, lock, HistoryRecoverySession, SharedAppState};
 
+#[cfg(test)]
+use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
 use super::authority_snapshot::{
     inode_u64, AuthorityCopyBudget, AuthoritySnapshotScope, AuthorityTreeSnapshot,
-    SANDBOX_SESSION_TEST_SEAMS, SCIENCE_OWNED_OPAQUE_ROOTS, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
+    SCIENCE_OWNED_OPAQUE_ROOTS, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
 };
 use super::pending_cleanup::{
     finalize_failed_authority_snapshot, finalize_registered_authority_cleanup,

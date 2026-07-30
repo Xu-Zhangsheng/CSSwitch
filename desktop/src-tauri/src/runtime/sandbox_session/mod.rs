@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -40,6 +41,7 @@ mod route_reconcile;
 mod ssh_preflight;
 
 // Internal modules stay private; only re-export the historical crate-facing surface.
+#[cfg(test)]
 use authority_snapshot::{
     test_arm_authority_cleanup_parent_sync_failure, test_arm_authority_snapshot_clone_errno,
     test_arm_authority_snapshot_completion_sync_failure,
@@ -51,15 +53,17 @@ use authority_snapshot::{
     SANDBOX_SESSION_TEST_SEAMS, SCIENCE_OWNED_OPAQUE_ROOTS,
 };
 use catalog_verify::*;
+use pending_cleanup::{cleanup_required_error, retry_pending_authority_cleanup};
+#[cfg(test)]
 use pending_cleanup::{
-    cleanup_required_error, cleanup_tombstone_path, finalize_registered_authority_cleanup,
-    parse_pending_cleanup_manifest, retry_pending_authority_cleanup, PendingCleanupEntry,
-    RegisteredAuthorityCleanup, PENDING_CLEANUP_MARKER_FILE,
+    cleanup_tombstone_path, finalize_registered_authority_cleanup, parse_pending_cleanup_manifest,
+    PendingCleanupEntry, RegisteredAuthorityCleanup, PENDING_CLEANUP_MARKER_FILE,
 };
 use recovery::{AppAuthoritySnapshot, OneClickAuthoritySnapshot};
 use route_reconcile::configure_third_party_best_effort;
 use ssh_preflight::*;
 
+#[cfg(test)]
 pub(crate) use authority_snapshot::{
     test_arm_authority_snapshot_capture_failure, test_arm_authority_snapshot_cleanup_fault,
     test_arm_authority_snapshot_directory_barrier, test_arm_gateway_catalog_bypass,

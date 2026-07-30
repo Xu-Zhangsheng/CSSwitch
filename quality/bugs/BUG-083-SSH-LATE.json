@@ -15,7 +15,7 @@
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/config.rs",
       "desktop/src-tauri/src/lib.rs",
-      "desktop/src-tauri/src/runtime/sandbox_session.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/science.rs",
       "desktop/src-tauri/src/runtime/settings.rs"
     ],

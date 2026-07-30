@@ -10,9 +10,16 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def sandbox_session_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = [module_dir / "mod.rs"]
+    sources.extend(sorted(path for path in module_dir.glob("*.rs") if path.name != "mod.rs"))
+    return "\n".join(path.read_text() for path in sources)
+
+
 class SkillRuntimeBoundary(unittest.TestCase):
     def test_production_startup_has_no_skill_manager_dependency(self):
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         for forbidden in (
             "skill_manager",
             "commands::skills",
@@ -36,7 +43,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertEqual(catalog["skills"], [])
 
     def test_gateway_starts_only_after_config_and_science_state_prechecks(self):
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         one_click = session.split("fn one_click_login_with_options", 1)[1].split(
             "\n#[cfg(test)]\nmod transaction_tests", 1
         )[0]
@@ -88,7 +95,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
             science.write_text(
                 "#!/bin/sh\n"
                 "mkdir -p \"$HOME/.claude-science\"\n"
-                "printf 'HOME=%s\\nARGS=%s\\n' \"$HOME\" \"$*\" > \"$CSSWITCH_TEST_MARKER\"\n"
+                f"printf 'HOME=%s\\nARGS=%s\\n' \"$HOME\" \"$*\" > \"{marker}\"\n"
                 "exit 0\n"
             )
             science.chmod(0o700)
@@ -98,7 +105,6 @@ class SkillRuntimeBoundary(unittest.TestCase):
                     "HOME": str(outer_home),
                     "SANDBOX_HOME": str(sandbox_home),
                     "SCIENCE_BIN": str(science),
-                    "CSSWITCH_TEST_MARKER": str(marker),
                     "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin",
                 }
             )
@@ -208,7 +214,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
 
     def test_simple_model_inputs_and_one_click_failures_are_visible_and_structured(self):
         js = (ROOT / "desktop/src/main.js").read_text()
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
         lifecycle = (ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle.rs").read_text()
         lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
@@ -248,7 +254,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         for stage in ("start_gateway", "start_science", "verify_science_catalog"):
             self.assertIn(f'"{stage}"', session)
 
-        self.assertIn("recover_interrupted_gateway(&app, &state)?", runtime)
+        self.assertIn("recover_interrupted_gateway(&app, &state).map_err(", runtime)
         self.assertIn("stop_managed_gateway_on_port", lifecycle)
         self.assertIn('health.intent == "formal"', lifecycle)
         self.assertIn("journal.previous_gateway.as_ref()", lifecycle)
@@ -257,24 +263,28 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("boot_result_error(&value)", boot)
         self.assertIn("boot_result_needs_attention(&value)", boot)
         self.assertIn("mark_boot_attention(&app, value)", boot)
-        self.assertIn("mark_boot_failed(&app, message)", boot)
+        self.assertIn("mark_boot_failed(&app, failure)", boot)
 
     def test_science_runtime_identity_is_reused_for_serve_status_url_and_stop(self):
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
+        launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
         one_click = session.split("fn one_click_login_with_options", 1)[1].split(
             "\n#[cfg(test)]\nmod transaction_tests", 1
         )[0]
-        self.assertIn('.env("SCIENCE_BIN", &launch_runtime.path)', session)
-        self.assertIn('.env("CSSWITCH_PROXY_URL", &proxy_url)', session)
+        self.assertIn("science_bin: Path::new(&launch_runtime.path)", session)
+        self.assertIn("proxy_url: &proxy_url", session)
+        self.assertIn('"SCIENCE_BIN".into(), cfg.science_bin.display().to_string()', launch_env)
+        self.assertIn('"CSSWITCH_PROXY_URL".into(), cfg.proxy_url.into()', launch_env)
         self.assertNotIn('.arg(&proxy_url)', session)
         self.assertIn("current.science_runtime = Some(launch_runtime.clone())", one_click)
         self.assertIn("probe_known_runtime(sport, &runtime)", session)
         self.assertIn("sandbox_listener_matches_runtime(sport, &launch_runtime)", session)
         self.assertIn("sandbox_url(sport, &launch_runtime)", session)
         self.assertIn("runtime_identity_is_current(&launch_runtime)", session)
-        self.assertIn('.env("SCIENCE_BIN", &runtime.path)', science)
+        self.assertIn("configure_science_stop_script_command(", science)
+        self.assertIn("Path::new(&runtime.path)", science)
         self.assertIn('"source": runtime.source.code()', runtime)
 
     def test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry(self):
@@ -282,7 +292,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         html = (ROOT / "desktop/src/index.html").read_text()
         launch = (ROOT / "scripts/launch-virtual-sandbox.sh").read_text()
         wrapper = (ROOT / "scripts/ssh-bridge/ssh").read_text()
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
 
         self.assertNotIn("ssh_tunnel_info", js + runtime)
@@ -344,8 +354,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
             science = tmp / "fake-claude-science"
             science.write_text(
                 "#!/bin/sh\n"
-                "printf 'HOME=%s\\n' \"$HOME\" > \"$CSSWITCH_TEST_MARKER\"\n"
-                "printf 'ARGS=%s\\n' \"$*\" >> \"$CSSWITCH_TEST_MARKER\"\n"
+                f"printf 'HOME=%s\\n' \"$HOME\" > \"{marker}\"\n"
+                f"printf 'ARGS=%s\\n' \"$*\" >> \"{marker}\"\n"
                 "exit 0\n"
             )
             science.chmod(0o700)
@@ -366,7 +376,6 @@ class SkillRuntimeBoundary(unittest.TestCase):
                     "HOME": str(outer_home),
                     "SANDBOX_HOME": str(sandbox_home),
                     "SCIENCE_BIN": str(science),
-                    "CSSWITCH_TEST_MARKER": str(marker),
                     "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin",
                 }
             )

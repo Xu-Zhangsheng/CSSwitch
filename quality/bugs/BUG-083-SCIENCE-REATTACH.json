@@ -12,7 +12,7 @@
     "reproduction_state": "source-reproduced",
     "resolution_state": "source-fixed-product-pending",
     "affected_paths": [
-      "desktop/src-tauri/src/runtime/sandbox_session.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/science.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/runtime/process_ownership.rs",

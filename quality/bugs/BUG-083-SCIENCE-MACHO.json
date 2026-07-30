@@ -11,7 +11,7 @@
     "claim_state": "confirmed",
     "reproduction_state": "source-reproduced",
     "resolution_state": "source-fixed-product-pending",
-    "affected_paths": ["desktop/src-tauri/src/runtime/science.rs", "desktop/src-tauri/src/runtime/sandbox_session.rs", "test/run_all.sh"],
+    "affected_paths": ["desktop/src-tauri/src/runtime/science.rs", "desktop/src-tauri/src/runtime/sandbox_session/", "test/run_all.sh"],
     "requirement_ids": ["REQ-083-MACHO-METADATA", "REQ-083-SCIENCE-UPDATER", "REQ-083-EVIDENCE"],
     "change_ids": ["CHG-SCIENCE-MACHO"],
     "expected_suite_ids": ["SUITE-PRODUCT-MACHO", "SUITE-QUALITY-FOCUSED"],

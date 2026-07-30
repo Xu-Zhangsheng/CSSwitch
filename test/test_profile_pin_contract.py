@@ -5,10 +5,17 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def sandbox_session_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = [module_dir / "mod.rs"]
+    sources.extend(sorted(path for path in module_dir.glob("*.rs") if path.name != "mod.rs"))
+    return "\n".join(path.read_text() for path in sources)
+
+
 class ProfilePinContractTests(unittest.TestCase):
     def test_backend_pin_is_local_and_one_click_remains_the_apply_boundary(self):
         profiles = (ROOT / "desktop/src-tauri/src/commands/profiles.rs").read_text()
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         pin = profiles.split("fn pin_active_profile_in_dir(", 1)[1].split(
             "\n#[cfg(test)]", 1
         )[0]
@@ -92,7 +99,7 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertIn("await skillPage?.refreshIfLoaded()", run_one_click)
 
     def test_skill_and_browser_warnings_preserve_runtime_success(self):
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         self.assertIn("configure_third_party_best_effort", session)
         self.assertIn("RegistrationStatus::Warning", session)
         self.assertIn("服务已就绪；自动打开失败。", session)

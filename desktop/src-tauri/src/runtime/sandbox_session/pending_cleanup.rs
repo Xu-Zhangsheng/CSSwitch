@@ -8,9 +8,9 @@ use crate::runtime::science::sandbox_home;
 use crate::{config, lock, SharedAppState};
 use serde::{Deserialize, Serialize};
 
-use super::authority_snapshot::{
-    inode_u64, sync_authority_cleanup_parent, AuthorityTreeSnapshot, SANDBOX_SESSION_TEST_SEAMS,
-};
+#[cfg(test)]
+use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
+use super::authority_snapshot::{inode_u64, sync_authority_cleanup_parent, AuthorityTreeSnapshot};
 use super::runtime_transaction_requires_snapshot_preservation;
 pub(super) const PENDING_CLEANUP_MARKER_FILE: &str = ".csswitch-one-click-rollback.marker";
 pub(super) const MAX_PENDING_CLEANUP_MANIFEST_BYTES: usize = 64 * 1024;

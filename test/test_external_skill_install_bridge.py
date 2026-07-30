@@ -12,6 +12,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_GATEWAY = ROOT / "desktop/gateway/target/debug/csswitch-gateway"
 
 
+def sandbox_session_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = [module_dir / "mod.rs"]
+    sources.extend(sorted(path for path in module_dir.glob("*.rs") if path.name != "mod.rs"))
+    return "\n".join(path.read_text() for path in sources)
+
+
 def gateway_bin():
     override = os.environ.get("CSSWITCH_GATEWAY_BIN")
     return pathlib.Path(override) if override else DEFAULT_GATEWAY
@@ -317,12 +324,12 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             self.assertEqual(list(bridge_dir.iterdir()), [])
 
     def test_science_startup_registration_is_best_effort_and_prelaunch(self):
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         one_click = session.split("fn one_click_login_with_options", 1)[1].split(
             "\n#[cfg(test)]\nmod transaction_tests", 1
         )[0]
         registration = one_click.index("register_before_science_start(")
-        launch = one_click.index('let launch_child = Command::new("zsh")')
+        launch = one_click.index('let mut launch_cmd = Command::new("zsh")')
         self.assertLess(registration, launch)
         self.assertIn(".spawn();", one_click[launch:])
         self.assertIn("RegistrationStatus::Warning(error)", one_click)
@@ -371,7 +378,7 @@ class ExternalSkillInstallBridge(unittest.TestCase):
         bridge = (
             ROOT / "desktop/src-tauri/src/runtime/skill_install_bridge.rs"
         ).read_text()
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
+        session = sandbox_session_source()
         one_click = session.split("fn one_click_login_with_options", 1)[1].split(
             "\n#[cfg(test)]\nmod transaction_tests", 1
         )[0]

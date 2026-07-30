@@ -1,6 +1,7 @@
 //! Gateway model catalog verification for one-click / reopen paths.
 use serde_json::Value;
 
+#[cfg(test)]
 use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
 use crate::config;
 use crate::proc;
