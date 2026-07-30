@@ -23,8 +23,10 @@
   `cargo test --lib failure::`、
   `science_operation_failures_have_stable_structured_stages`、
   `auto_boot_rejects_structured_runtime_failure`。
-- 下一刀：机械拆分 `sandbox_session` 与 Gateway `server.rs`；拆分不得扩大已冻结
-  的 Runtime/Gateway allowlist，子模块须返回 typed failure。
+- `sandbox_session` 第一层目录化拆分已在 `next` 完成；第二层收口评估、验证和
+  Gateway `server.rs` 的后续顺序统一见
+  [工程重构进度](refactor-progress.md)。任何后续拆分都不得扩大已冻结的
+  Runtime/Gateway allowlist，子模块须返回 typed failure。
 - 已闭合的是 **process environment 边界** 与 **一键/auto-boot 故障投影**，不是
   全部真实 provider/SSH/Science 领域 live PASS，也不是 Developer ID / notarization。
 
