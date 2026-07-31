@@ -25,6 +25,34 @@ use crate::{config, proc};
 
 use super::system::{asset_root, kill_child};
 
+#[cfg(test)]
+static SCIENCE_LIFECYCLE_TEST_SEAMS: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
+pub(crate) struct ScienceLifecycleTestSeamGuard;
+
+#[cfg(test)]
+impl Drop for ScienceLifecycleTestSeamGuard {
+    fn drop(&mut self) {
+        *SCIENCE_LIFECYCLE_TEST_SEAMS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_post_stop_result_failure(
+    config_dir: PathBuf,
+) -> ScienceLifecycleTestSeamGuard {
+    *SCIENCE_LIFECYCLE_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some((std::thread::current().id(), config_dir));
+    ScienceLifecycleTestSeamGuard
+}
+
 // Keep include fragments on rustfmt's normal module-discovery path without
 // changing the runtime module or the historical visibility surface.
 #[cfg(any())]

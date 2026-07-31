@@ -352,6 +352,18 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
             err = Some(error);
         }
     }
+    #[cfg(test)]
+    if err.is_none()
+        && SCIENCE_LIFECYCLE_TEST_SEAMS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|(thread, config_dir)| {
+                *thread == std::thread::current().id() && *config_dir == config::default_dir()
+            })
+    {
+        err = Some("test-only post-stop failure after exact process and receipt cleanup".into());
+    }
     match err {
         Some(e) => Err(e),
         None => Ok(()),

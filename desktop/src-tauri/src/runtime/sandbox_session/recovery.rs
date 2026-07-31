@@ -668,6 +668,16 @@ impl OneClickAuthoritySnapshot {
                     ),
                 )
             })?;
+        #[cfg(test)]
+        if SANDBOX_SESSION_TEST_SEAMS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .one_click_exit_after_capture
+            .as_ref()
+            == Some(&config_dir.to_path_buf())
+        {
+            std::process::exit(86);
+        }
         Ok(Self {
             backup_root,
             cleanup_context,

@@ -48,10 +48,10 @@ use ssh_preflight::*;
 pub(crate) use authority_snapshot::{
     test_arm_authority_snapshot_capture_failure, test_arm_authority_snapshot_cleanup_fault,
     test_arm_authority_snapshot_directory_barrier, test_arm_gateway_catalog_bypass,
-    test_arm_healthy_reopen_catalog_failure, test_arm_one_click_snapshot_capture,
-    test_arm_prior_restart_post_spawn_failure, test_arm_rollback_diagnostic_canary,
-    test_prior_restart_post_spawn_identity, test_rollback_diagnostic_snapshot,
-    SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
+    test_arm_healthy_reopen_catalog_failure, test_arm_one_click_exit_after_snapshot_capture,
+    test_arm_one_click_snapshot_capture, test_arm_prior_restart_post_spawn_failure,
+    test_arm_rollback_diagnostic_canary, test_prior_restart_post_spawn_identity,
+    test_rollback_diagnostic_snapshot, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
 };
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ pub(super) struct SandboxSessionTestSeams {
     pub(super) directory_barrier: Option<(PathBuf, PathBuf)>,
     pub(super) snapshot_parent_barrier: Option<(PathBuf, PathBuf)>,
     pub(super) one_click_capture: Option<(PathBuf, PathBuf, bool, u32, PathBuf)>,
+    pub(super) one_click_exit_after_capture: Option<PathBuf>,
     pub(super) catalog_failure_port: Option<u16>,
     pub(super) catalog_bypass_port: Option<u16>,
     pub(super) prior_restart_post_spawn_failure_port: Option<u16>,
@@ -139,6 +140,17 @@ pub(crate) fn test_arm_one_click_snapshot_capture(
         expected_prior_pid,
         expected_receipt,
     ));
+    SandboxSessionTestSeamGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_one_click_exit_after_snapshot_capture(
+    config_dir: PathBuf,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .one_click_exit_after_capture = Some(config_dir);
     SandboxSessionTestSeamGuard
 }
 

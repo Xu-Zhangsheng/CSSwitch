@@ -195,6 +195,36 @@ fn tmpdir(label: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
+fn run_exact_ignored_runtime_characterization(test_name: &str, environment: &[(&str, &str)]) {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .arg("--exact")
+        .arg(test_name)
+        .arg("--ignored")
+        .arg("--nocapture");
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    let output = command.output().unwrap();
+    let exact_test_completed = exact_child_test_completed(test_name, &output);
+    assert!(
+        output.status.success() && exact_test_completed,
+        "isolated characterization {test_name} failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn exact_child_test_completed(test_name: &str, output: &std::process::Output) -> bool {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let exact_result = format!("test {test_name} ... ok");
+    stdout.lines().any(|line| line == "running 1 test")
+        && stdout.lines().any(|line| line == exact_result)
+        && stdout.lines().any(|line| {
+            line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured;")
+        })
+}
+
 fn free_port() -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -251,10 +281,10 @@ exit 0
 set -eu
 cmd="${1:-}"
 if [ "$#" -gt 0 ]; then shift; fi
-if [ -n "${CSSWITCH_FAKE_SCIENCE_CALL_LOG:-}" ]; then
-  printf '%s\n' "$cmd" >> "$CSSWITCH_FAKE_SCIENCE_CALL_LOG"
-fi
 if [ "$cmd" = "--version" ]; then
+  if [ -n "${CSSWITCH_FAKE_SCIENCE_CALL_LOG:-}" ]; then
+    printf '%s\n' "$cmd" >> "$CSSWITCH_FAKE_SCIENCE_CALL_LOG"
+  fi
   echo "claude-science 0.0.0-csswitch-test"
   exit 0
 fi
@@ -269,6 +299,13 @@ while [ "$#" -gt 0 ]; do
 done
 state="$data_dir/fake-science"
 mkdir -p "$state"
+call_log="${CSSWITCH_FAKE_SCIENCE_CALL_LOG:-}"
+if [ -z "$call_log" ] && [ -f "$state/call-log-path" ]; then
+  call_log="$(cat "$state/call-log-path")"
+fi
+if [ -n "$call_log" ]; then
+  printf '%s\n' "$cmd" >> "$call_log"
+fi
 case "$cmd" in
   serve)
     count="$(cat "$state/serve-count" 2>/dev/null || echo 0)"
@@ -285,14 +322,18 @@ case "$cmd" in
       fi
       exit 23
     fi
-    if [ "$count" -eq 2 ] && [ -n "${CSSWITCH_FAKE_SCIENCE_SECOND_BOOT_BLOCKS:-}" ]; then
+    unbound_pid_path="${CSSWITCH_FAKE_SCIENCE_UNBOUND_PID:-}"
+    unbound_mutation_path="${CSSWITCH_FAKE_SCIENCE_UNBOUND_MUTATION:-}"
+    [ -n "$unbound_pid_path" ] || unbound_pid_path="$(cat "$state/unbound-pid-path" 2>/dev/null || true)"
+    [ -n "$unbound_mutation_path" ] || unbound_mutation_path="$(cat "$state/unbound-mutation-path" 2>/dev/null || true)"
+    if [ "$count" -eq 2 ] && { [ -n "${CSSWITCH_FAKE_SCIENCE_SECOND_BOOT_BLOCKS:-}" ] || [ -f "$state/second-boot-blocks" ]; }; then
       trap '' HUP
-      printf '%s\n' "mutated-by-blocked-second-candidate" > "$CSSWITCH_FAKE_SCIENCE_UNBOUND_MUTATION"
-      printf '%s' "$$" > "$CSSWITCH_FAKE_SCIENCE_UNBOUND_PID"
+      printf '%s\n' "mutated-by-blocked-second-candidate" > "$unbound_mutation_path"
+      printf '%s' "$$" > "$unbound_pid_path"
       while :; do sleep 60; done
     fi
-    if [ "$count" -eq 2 ] && [ -n "${CSSWITCH_FAKE_SCIENCE_SECOND_BOOT_NO_LISTENER:-}" ]; then
-      python3 - "$CSSWITCH_FAKE_SCIENCE_UNBOUND_PID" "$CSSWITCH_FAKE_SCIENCE_UNBOUND_MUTATION" >/dev/null 2>&1 <<'PY' &
+    if [ "$count" -eq 2 ] && { [ -n "${CSSWITCH_FAKE_SCIENCE_SECOND_BOOT_NO_LISTENER:-}" ] || [ -f "$state/second-boot-no-listener" ]; }; then
+      python3 - "$unbound_pid_path" "$unbound_mutation_path" >/dev/null 2>&1 <<'PY' &
 import os
 import sys
 import time
@@ -306,13 +347,15 @@ while True:
     time.sleep(60)
 PY
       for _ in 1 2 3 4 5 6 7 8 9 10; do
-        [ -s "$CSSWITCH_FAKE_SCIENCE_UNBOUND_PID" ] && break
+        [ -s "$unbound_pid_path" ] && break
         sleep 0.02
       done
       exit 0
     fi
+    db_health="${CSSWITCH_FAKE_SCIENCE_DB_HEALTH:-}"
+    [ -n "$db_health" ] || db_health="$(cat "$state/db-health" 2>/dev/null || echo clear)"
     printf '%s' "$port" > "$state/port"
-    python3 - "$port" "$state/pid" "$data_dir" "$count" >/dev/null 2>&1 <<'PY' &
+    python3 - "$port" "$state/pid" "$data_dir" "$count" "$db_health" >/dev/null 2>&1 <<'PY' &
 import http.server
 import os
 import socketserver
@@ -323,9 +366,9 @@ port = int(sys.argv[1])
 pidfile = sys.argv[2]
 data_dir = sys.argv[3]
 generation = sys.argv[4]
+db_health = sys.argv[5]
 origin = f"http://127.0.0.1:{port}"
 auth_cookie = generation.zfill(64)
-db_health = os.environ.get("CSSWITCH_FAKE_SCIENCE_DB_HEALTH", "clear")
 verdict = os.path.join(data_dir, "fake-db-damage-verdict")
 boot_skipped = db_health == "stateful" and os.path.exists(verdict)
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -1400,6 +1443,33 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
         env_guard.set("CSSWITCH_FAKE_SCIENCE_UNBOUND_MUTATION", &inplace_authority);
         env_guard.set("CSSWITCH_TEST_DB_RECOVERY_RESTART_BUDGET_MS", "250");
         fs::create_dir_all(&science_data).unwrap();
+        let fake_state = science_data.join("fake-science");
+        fs::create_dir_all(&fake_state).unwrap();
+        fs::write(fake_state.join("db-health"), b"stateful\n").unwrap();
+        fs::write(
+            fake_state.join("call-log-path"),
+            science_call_log.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        fs::write(
+            fake_state.join("unbound-pid-path"),
+            unbound_candidate_pid.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        fs::write(
+            fake_state.join("unbound-mutation-path"),
+            inplace_authority.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        fs::write(
+            fake_state.join(if failure_edge == "db-restart-no-listener" {
+                "second-boot-no-listener"
+            } else {
+                "second-boot-blocks"
+            }),
+            b"1\n",
+        )
+        .unwrap();
         fs::write(science_data.join("fake-db-damage-verdict"), b"flagged\n").unwrap();
         fs::write(&inplace_authority, b"prior-inplace-authority\n").unwrap();
     } else if failure_edge == "serve-mutates-then-exits" {
@@ -2600,6 +2670,279 @@ exec '{}' "$@"
                 && drift_port_closed_after,
             "after exactly one union preflight blocks on the real lifecycle serializer, a distinct free proxy_port snapshot drift must return typed config_changed_retry before Gateway/Science/authority mutation while preserving the exact prior owned child/context, keeping the drift port listener-free, and keeping sinks credential-free: preflight_seen={preflight_seen}, preflight_count={preflight_count}, rejected_typed={rejected_typed}, child_context_unchanged={child_context_unchanged}, no_candidate_publish={no_candidate_publish}, canary_free={canary_free}, drift_port_closed_before={drift_port_closed_before}, drift_port_closed_after={drift_port_closed_after}"
         );
+}
+
+const R0_PRE_SNAPSHOT_CHILD: &str = "CSSWITCH_TEST_R0_PRE_SNAPSHOT_CHILD";
+const R0_PRE_SNAPSHOT_ROOT: &str = "CSSWITCH_TEST_R0_PRE_SNAPSHOT_ROOT";
+
+fn run_r0_pre_snapshot_child(oracle: &str, tmp: &Path) {
+    assert!(
+        matches!(oracle, "prior-stop-error" | "snapshot-journal-exit"),
+        "unknown R0 pre-snapshot oracle: {oracle}"
+    );
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
+    let mock_upstream = start_mock_upstream();
+    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let observation = tmp.join("snapshot-observation.log");
+    let science_call_log = tmp.join("science-call.log");
+    fs::write(tmp.join("sandbox-port"), sandbox_port.to_string()).unwrap();
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("SCIENCE_BIN", &fake_science);
+    env_guard.set("CSSWITCH_TEST_OPEN_BIN", bin_dir.join("open"));
+    env_guard.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+    env_guard.set("CSSWITCH_FAKE_SCIENCE_CALL_LOG", &science_call_log);
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set(
+        "PATH",
+        format!(
+            "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            bin_dir.to_string_lossy()
+        ),
+    );
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    cfg.runtime_binding = None;
+    config::save_to(&config_dir, &cfg).unwrap();
+    let sandbox_home = home
+        .join(config::CONFIG_DIR_NAME)
+        .join("sandbox")
+        .join("home");
+    let science_data = sandbox_home.join(".claude-science");
+    fs::create_dir_all(&science_data).unwrap();
+    crate::oauth_forge::ensure_virtual_login(
+        &science_data,
+        "virtual@localhost.invalid",
+        &sandbox_home,
+    )
+    .unwrap();
+    let stable_authority = science_data.join("orgs/csswitch-test/prior-authority.db");
+    fs::create_dir_all(stable_authority.parent().unwrap()).unwrap();
+    fs::write(&stable_authority, b"prior-authority-before-r0\n").unwrap();
+    fs::set_permissions(&stable_authority, fs::Permissions::from_mode(0o600)).unwrap();
+    let prior_runtime =
+        science::select_science_runtime_cached(None, &science::ScienceVersionCache::default())
+            .unwrap();
+    let prior_pid = start_managed_fake_science(
+        &fake_science,
+        &sandbox_home,
+        &science_data,
+        sandbox_port,
+        &prior_runtime,
+    );
+    fs::write(tmp.join("prior.pid"), prior_pid.to_string()).unwrap();
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    {
+        let mut authority = lock(&state);
+        authority.sandbox_port = sandbox_port;
+        authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}/prior"));
+        authority.science_runtime = Some(prior_runtime.clone());
+        authority.science_confirmed_stopped = None;
+    }
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle.clone())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let handle = app.handle().clone();
+    let receipt_path = config_dir.join("science-managed-launch.v1.json");
+
+    if oracle == "prior-stop-error" {
+        let _stop_seam = science::test_arm_post_stop_result_failure(config_dir.clone());
+        let result =
+            sandbox_session::one_click_login(handle, state.clone(), lifecycle.as_ref(), None, None);
+        let config_after = config::load_from(&config_dir).unwrap();
+        let app_after = app_authority_projection(&state);
+        let snapshot_count = fs::read_dir(config_dir.join("sandbox"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".one-click-rollback-")
+            })
+            .count();
+        let no_restart = call_count(&science_call_log, "serve") == 1;
+        let exact_stopped = process_start_identity_if_alive(prior_pid).is_none()
+            && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
+            && !receipt_path.exists();
+        let no_durable_recovery = config_after.runtime_transaction.is_none()
+            && config::read_pending_authority_cleanup_manifest(&config_dir)
+                .unwrap()
+                .is_none()
+            && snapshot_count == 0;
+        force_cleanup_isolated_fixture(&state, tmp, sandbox_port, proxy_port);
+        assert!(
+            result.as_ref().is_err_and(|error| error
+                .contains("test-only post-stop failure after exact process and receipt cleanup")),
+            "fixture must return the injected post-stop error: {result:?}"
+        );
+        assert!(
+            exact_stopped
+                && no_restart
+                && no_durable_recovery
+                && app_after.science_runtime == Some(prior_runtime)
+                && app_after.science_confirmed_stopped.is_none(),
+            "a stop helper error after real stop/receipt cleanup must not trigger coordinator restart or create snapshot/journal recovery: exact_stopped={exact_stopped}, no_restart={no_restart}, no_durable_recovery={no_durable_recovery}, app={app_after:?}"
+        );
+        return;
+    }
+
+    let _capture_seam = sandbox_session::test_arm_one_click_snapshot_capture(
+        config_dir.clone(),
+        observation,
+        false,
+        prior_pid,
+        receipt_path,
+    );
+    let _exit_seam =
+        sandbox_session::test_arm_one_click_exit_after_snapshot_capture(config_dir.clone());
+    let unexpected =
+        sandbox_session::one_click_login(handle, state, lifecycle.as_ref(), None, None);
+    panic!("snapshot-to-journal exit seam did not terminate the child: {unexpected:?}");
+}
+
+fn run_r0_pre_snapshot_process(test_name: &str, oracle: &str, tmp: &Path) -> std::process::Output {
+    std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(test_name)
+        .arg("--nocapture")
+        .env(R0_PRE_SNAPSHOT_CHILD, oracle)
+        .env(R0_PRE_SNAPSHOT_ROOT, tmp)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart() {
+    if env::var(R0_PRE_SNAPSHOT_CHILD).ok().as_deref() == Some("prior-stop-error") {
+        let tmp = PathBuf::from(env::var_os(R0_PRE_SNAPSHOT_ROOT).unwrap());
+        run_r0_pre_snapshot_child("prior-stop-error", &tmp);
+        return;
+    }
+    let tmp = tmpdir("r0-prior-stop-error");
+    let output = run_r0_pre_snapshot_process(
+        "commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart",
+        "prior-stop-error",
+        &tmp,
+    );
+    let exact_test_completed = exact_child_test_completed(
+        "commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart",
+        &output,
+    );
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        output.status.success() && exact_test_completed,
+        "prior-stop characterization child failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn r0_one_click_snapshot_to_journal_boundary_is_frozen() {
+    if env::var(R0_PRE_SNAPSHOT_CHILD).ok().as_deref() == Some("snapshot-journal-exit") {
+        let tmp = PathBuf::from(env::var_os(R0_PRE_SNAPSHOT_ROOT).unwrap());
+        run_r0_pre_snapshot_child("snapshot-journal-exit", &tmp);
+        return;
+    }
+    let tmp = tmpdir("r0-snapshot-journal-exit");
+    let output = run_r0_pre_snapshot_process(
+        "commands::runtime::tests::r0_one_click_snapshot_to_journal_boundary_is_frozen",
+        "snapshot-journal-exit",
+        &tmp,
+    );
+    let config_dir = tmp.join("home").join(config::CONFIG_DIR_NAME);
+    let config_after = config::load_from(&config_dir).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &config::read_pending_authority_cleanup_manifest(&config_dir)
+            .unwrap()
+            .expect("captured snapshot must durably register recovery"),
+    )
+    .unwrap();
+    let entry = &manifest["entries"][0];
+    let snapshot_root = PathBuf::from(entry["path"].as_str().unwrap());
+    let snapshot_metadata = fs::symlink_metadata(&snapshot_root).unwrap();
+    let prior_pid = fs::read_to_string(tmp.join("prior.pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let sandbox_port = fs::read_to_string(tmp.join("sandbox-port"))
+        .unwrap()
+        .trim()
+        .parse::<u16>()
+        .unwrap();
+    let observation = fs::read_to_string(tmp.join("snapshot-observation.log")).unwrap();
+    let receipt_path = config_dir.join("science-managed-launch.v1.json");
+    let boundary_exact = output.status.code() == Some(86)
+        && config_after.runtime_transaction.is_none()
+        && manifest["disposition"] == "active_recovery"
+        && manifest["entries"]
+            .as_array()
+            .is_some_and(|entries| entries.len() == 1)
+        && snapshot_root.parent() == Some(config_dir.join("sandbox").as_path())
+        && snapshot_metadata.is_dir()
+        && !snapshot_metadata.file_type().is_symlink()
+        && snapshot_metadata.permissions().mode() & 0o777 == 0o700
+        && process_start_identity_if_alive(prior_pid).is_none()
+        && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
+        && !receipt_path.exists()
+        && observation.contains("listener=stopped")
+        && observation.contains("prior_process=absent")
+        && observation.contains("prior_receipt=absent");
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        boundary_exact,
+        "exit after durable snapshot capture and before the first runtime journal must leave prior Science stopped, an ActiveRecovery snapshot, and no runtime journal: status={:?}, config_transaction_present={}, manifest={}, observation={observation:?}, stdout={}, stderr={}",
+        output.status.code(),
+        config_after.runtime_transaction.is_some(),
+        manifest,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn r0_one_click_snapshot_capture_failure_restarts_prior_runtime() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science",
+        &[],
+    );
+}
+
+#[test]
+fn r0_one_click_db_restart_unproven_candidate_blocks_restore() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent",
+        &[(
+            "CSSWITCH_TEST_SSH_LATE_FAILURE_EDGE",
+            "db-restart-no-listener",
+        )],
+    );
+}
+
+#[test]
+fn r0_one_click_post_receipt_failure_restores_prior_runtime() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt",
+        &[],
+    );
 }
 
 #[test]

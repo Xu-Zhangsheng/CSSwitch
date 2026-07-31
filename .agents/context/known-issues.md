@@ -16,10 +16,16 @@
 `requirements-open`；已有 helper 或源码顺序检查不代表 command-level fault
 injection 完成。
 
+`R0-A` 已收口（source）：五个 source gate 身份分别冻结 one-click prior-stop
+错误、durable snapshot 到首个 journal 的中断窗口、snapshot capture rollback、
+DB recovery restart 未证实候选，以及 late-failure prior-runtime restore。测试均在
+隔离 HOME、fake Science、mock upstream 与动态 loopback 端口内执行；结论不扩展到
+installed/live provider 或产品行为修复。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
-| `R0-A` | **NEXT** | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
-| `R0-B` | PENDING | healthy reopen 与 history restore |
+| `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
+| `R0-B` | **NEXT** | healthy reopen 与 history restore |
 | `R0-C` | PENDING | interrupted Gateway recovery 与 start-gateway-only |
 | `R0-D` | PENDING | mode/settings/stop/quit/native exit |
 | `R0-E` | PENDING | profile select/update/sync/revoke |
