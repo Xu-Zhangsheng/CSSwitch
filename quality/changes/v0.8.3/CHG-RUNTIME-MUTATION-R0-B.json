@@ -16,6 +16,7 @@
       "quality/runtime-mutation-inventory.v1.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
       "test/quality/test_source_gate_runtime.py"
     ],
     "requirement_ids": [
