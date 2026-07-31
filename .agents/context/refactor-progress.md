@@ -18,14 +18,21 @@
 - 最后复核工程 HEAD：`ef51c358c2c80a6015c864ebb6642fcb1ee9757b`
 - 相对前一工程基线：`653ecbeb6dc8e0ea4532d3c33851ee8ae4c14557`
 - 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开；`authority_snapshot.rs` 按 test seams、filesystem/copy、capture 与 restore 的独立维护原因完成第二层拆分；Gateway `server.rs` 收口为 listener / method-dispatch facade，并按 HTTP codec、inference dispatch、Skill bridge host 与测试夹具拆分；前端 `main.js` 收口为 bootstrap / shell，并拆出 preview adapter、IPC client、Codex、runtime 与 profile controller
-- 下一阶段：前端机械拆分已经闭合；转入逻辑重构合同评估，统一界定受管 Skill/MCP/Plugin 扩展控制面、前后端职责、故障 envelope、operation correlation、脱敏日志和只读 diagnostics，再决定后续实现切片
+- 下一阶段：当前待合入累积候选已经完成 `commands/runtime.rs` 与 `runtime/science.rs` 职责拆分；下一刀先研究 `runtime/proxy_lifecycle.rs` 的状态所有权、调用面和测试，再按独立维护原因判断是否需要机械拆分。受管 Skill/MCP/Plugin 扩展控制面、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics 仍属于后续逻辑重构合同，不夹入机械拆分。
 - 当前证据边界：source-test 与独立源码审查；没有因此新增 artifact、installed、live、真实 provider、Science、SSH、签名、公证或公开发布结论。
 
 ## 已审查待合入切片
 
 | 日期 | 切片 | 目标基线 → 候选提交 | 结构结果 | 行为边界与验证 |
 |---|---|---|---|---|
-| 2026-07-31 | `desktop/src-tauri/src/commands/runtime.rs` 职责拆分 | `next@e0115cb` → `dcff27b` | 根文件从 7,546 行收口为 168 行 Tauri command façade；生产实现按本地动作、Gateway / model discovery、lifecycle / settings、one-click / history recovery、status / diagnostics 拆为五个私有子模块；跨 command 隔离测试迁入显式 `runtime/tests.rs`，保留原模块 identity | 15 个 `commands::runtime::*` command 名称、泛型、参数、DTO 与返回类型保持；crate-facing `FetchModelsReq`、`UiSettings`、`stop_sandbox_state`、`one_click_login_cmd` 保持原路径；锁序、journal / 补偿、Gateway 恢复、Runtime/Gateway allowlist 与 typed failure projection 未改。27 个 `commands::runtime::tests::*` identity 完全一致；默认 Desktop lib 429 PASS / 29 个既有 ignored；21 个显式 ignored 隔离 Acceptance 为 17 PASS / 4 FAIL，四项在 exact 基线逐项同值复现，不归因于候选。metadata、`impact-pr --target-ref next`、源码合同与格式检查 PASS；clean-context 独立审查 PASS、无 findings；完整 source gate run `75b2cd0473529b084772b1a41418783e` 为 15/15 PASS，completion seal 精确绑定 `dcff27b164e7e8ebdab7edf58b4740561764fed9`。该提交尚未合入 `next`，不得写入下方完成表。 |
+| 2026-07-31 | `commands/runtime.rs` 与 `runtime/science.rs` 累积职责拆分 | `next@e0115cb` → `5c074ff` | command 根文件从 7,546 行收口为 168 行 Tauri façade，生产实现按 actions、Gateway/model discovery、lifecycle/settings、one-click/history recovery、status/diagnostics 拆分，测试迁入显式 `runtime/tests.rs`。Science 根文件从 3,416 行收口为 54 行同模块 façade，按基础合同、executable 选择与 snapshot、runtime state/process identity、managed launch receipt、lifecycle/probe/stop 拆为五个 include 片段，测试迁入显式 `science/tests.rs` | 两刀都只做机械搬迁。15 个 command 名称、泛型、参数、DTO、crate-facing helper 与 27 个 `commands::runtime::tests::*` identity 保持；Science 原 2,233 行生产声明按原顺序拼接仅差片段空行，visibility、`cfg`、failure 文本、identity/stop 安全合同与 29 个 `runtime::science::tests::*` identity 保持，聚焦隔离结果 27 PASS / 2 个真实 Science oracle 既有 ignored。Runtime/Gateway allowlist、typed failure、协议、权限与凭证来源未改；active Bug、suite source/evidence 与 ChangeRecord 路径已迁移。两刀均经 clean-context 独立审查；Science 首轮格式 BLOCK 与 SSH-LATE path MEDIUM 修复后由全新 reviewer `PASS`、无 findings，独立 tester `TEST PASS`。metadata、`impact-pr --target-ref next`、源码合同、格式、production check 与 clippy PASS；完整 source gate run `b801dd64667960767717cae506696fab` 为 15/15 PASS，completion seal 精确绑定 `5c074ffeea8bc108ff6f436cc57cf9d4116a3b54`。该累积候选尚未合入 `next`，不得写入下方完成表。 |
+
+### 已审查待合入累积候选提交
+
+| Commit | 作用 |
+|---|---|
+| `dcff27b` | 把 `commands/runtime.rs` 收口为稳定 command façade，并按独立 command 维护原因拆出五个生产子模块与显式测试模块 |
+| `5c074ff` | 把 `runtime/science.rs` 收口为同模块 façade，按 runtime 合同边界拆出五个生产片段与显式测试模块，并闭合 active quality 路径 |
 
 ## 已合入切片
 
@@ -81,7 +88,7 @@
 
 ## 下一阶段边界
 
-`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分、Gateway `server.rs` 职责拆分与前端 `main.js` 职责拆分已经闭合；`commands/runtime.rs` 候选也已完成独立审查和完整 source gate，但仍须获得单独授权后合入 `next`，合入时再移入完成表并更新工程 HEAD。已拆出的 runtime、Gateway 与前端 controller 默认保持稳定；没有新的独立维护原因时不继续按行数细分。下一阶段另立逻辑重构合同，评估受管 Skill/MCP/Plugin 扩展控制面，并同时冻结前后端职责、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
+`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分、Gateway `server.rs` 职责拆分与前端 `main.js` 职责拆分已经闭合；当前累积候选中的 `commands/runtime.rs` 与 `runtime/science.rs` 也已完成独立审查和完整 source gate，但仍须获得单独授权后合入 `next`，合入时再移入完成表并更新工程 HEAD。已拆出的 runtime、Gateway 与前端 controller 默认保持稳定；没有新的独立维护原因时不继续按行数细分。下一刀只对 `runtime/proxy_lifecycle.rs` 做调用面、状态 owner、恢复边界与测试合同研究；确认存在独立维护原因后才机械拆分。受管 Skill/MCP/Plugin 扩展控制面、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics 继续留在后续逻辑重构合同；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
 
 - 先冻结现有对外 surface、测试身份、Runtime/Gateway allowlist 与 typed failure 边界；
 - 子模块按单一维护原因拆分，不借机改变 provider、transport 或协议语义；
