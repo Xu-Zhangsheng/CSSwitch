@@ -15,10 +15,10 @@
 ## 当前工程线
 
 - 本地目标分支：`next`
-- 最后复核工程 HEAD：`9b809b39dc81a55f4596e9aae7ff64161d00b6e1`
-- 相对前一工程基线：`c878df046b2ad97c1dcc57dda5b9e3ad8bf95f57`
-- 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开；`authority_snapshot.rs` 按 test seams、filesystem/copy、capture 与 restore 的独立维护原因完成第二层拆分
-- 下一阶段：只读评估 Gateway `server.rs` 的职责、调用面、状态所有权与协议边界，再决定是否继续拆分
+- 最后复核工程 HEAD：`653ecbeb6dc8e0ea4532d3c33851ee8ae4c14557`
+- 相对前一工程基线：`9b809b39dc81a55f4596e9aae7ff64161d00b6e1`
+- 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开；`authority_snapshot.rs` 按 test seams、filesystem/copy、capture 与 restore 的独立维护原因完成第二层拆分；Gateway `server.rs` 收口为 listener / method-dispatch facade，并按 HTTP codec、inference dispatch、Skill bridge host 与测试夹具拆分
+- 下一阶段：只读评估前端 `desktop/src/main.js` 的 preview adapter、IPC client 与 feature controller 边界，再决定是否继续拆分
 - 当前证据边界：source-test 与独立源码审查；没有因此新增 artifact、installed、live、真实 provider、Science、SSH、签名、公证或公开发布结论。
 
 ## 已合入切片
@@ -29,6 +29,7 @@
 | 2026-07-31 | `sandbox_session/transaction_tests.rs` 场景拆分 | `dcec25e` → `c878df0` | 父模块只保留共享环境锁、临时目录/树快照夹具与 health test；其余测试按 authority snapshot、cleanup/recovery、Gateway catalog、runtime journal、SSH behavior、SSH source contract 与 transaction source contract 拆为七个私有子模块 | 测试函数集合保持 26 个、正文无行为改写；test identity 显式迁移并同步 core contract、active Bug evidence ref、source-gate inventory 与 15 处 catalog identity hash。生产 `cargo check --lib` PASS；聚焦测试 24 PASS / 2 个既有 ignored；`impact-pr --target-ref next` PASS；完整 source gate run `f919be8a9d3685a97481ddb4086642bb` 为 15/15 PASS，snapshot 精确绑定 `c878df0`；clean-context 独立审查 PASS、无 findings。 |
 | 2026-07-31 | `sandbox_session/mod.rs` 一键事务收口 | `e0cb5e8` → `64e21e0` | `mod.rs` 只保留私有子模块装载、历史 crate-facing re-export 与父级测试夹具面；30 个生产函数迁入 `one_click.rs`。仅 healthy Science 的 Gateway/config 重绑因不触碰 authority snapshot 且拥有独立补偿边界，进一步拆入 `one_click/healthy_reopen.rs`；restart、authority capture 与失败补偿继续和主事务同处，保持锁序与单一补偿漏斗 | 30 个生产函数体逐体比较零差异；未扩大 Runtime/Gateway allowlist、typed failure 或 `pub(crate)` surface，测试专用桥只到 `pub(super)`。生产 `cargo check --lib` PASS；聚焦 transaction tests 24 PASS / 2 个既有 ignored；受影响 Python 源码合同与两项 Rust AST 合同 PASS；测试身份不变；隔离 `impact-pr --target-ref next` PASS；完整 source gate run `f01db6a7c0338627efa459cb3eb540e4` 为 15/15 PASS，snapshot 精确绑定 `64e21e0`；clean-context 独立审查 PASS、无 findings。 |
 | 2026-07-31 | `sandbox_session/authority_snapshot.rs` 边界拆分 | `cf7ec66` → `9b809b3` | 保留原路径作为同模块 facade；按合同与常量、共享 test seams、copy budget/entry identity、descriptor-relative filesystem primitives、capture/copy、restore 拆为六个片段。`include!` 保持历史模块与可见性；恒 false 的 path modules 只把片段纳入标准 rustfmt 发现路径 | 原函数体、声明顺序、`cfg`/`allow`、135 处 failure code、预算、protected/opaque allowlist 与 capture/restore/cleanup 安全不变量保持不变。`cargo fmt --all -- --check`、直接 rustfmt、生产 `cargo check --offline --lib`、聚焦 transaction tests 24 PASS / 2 个既有 ignored、受影响 Python 源码聚合 26 PASS / 5 个既有 skip、两项 Rust AST/flow 合同、458 个 Rust 测试身份、metadata 与 `impact-pr --target-ref next` 均 PASS；完整 source gate run `f844a3b602f4eaedfc2d9ac2cc162cc0` 为 15/15 PASS，snapshot 精确绑定 `9b809b39dc81a55f4596e9aae7ff64161d00b6e1`；最终 clean-context 独立审查 PASS、无 findings。 |
+| 2026-07-31 | Gateway `server.rs` 职责拆分 | `e426bae` → `653ecbe` | `server.rs` 从协议实现主体收口为 125 行私有模块装载、listener 与 method dispatch facade；HTTP 编解码与流过滤迁入 `server/http_codec.rs`，GET/POST、provider/Codex inference 与 SSE 迁入 `server/inference_dispatch.rs`，Skill bridge host lifecycle 迁入 `server/skill_bridge_host.rs`；测试外移到 `server/tests.rs`，并以显式 path 保持 `server::tests::*` identity | 66 个顶层生产函数与 8 个方法逐体 token 比较无行为改写；唯一 crate-facing public entry 仍为 `server::serve(GatewayConfig)`，跨子模块可见性最多 `pub(super)`。CONNECT 优先分派、path secret、header/body bounds、HTTP/error/SSE、provider/Codex dispatch、Skill bridge replay/heartbeat/terminal-once/host lock、Unix/non-Unix cfg 均保持。33 个目标测试 identity 不变；`cargo fmt --check`、生产 `cargo check --lib`、`clippy --all-targets -D warnings`、Gateway 278 个 lib + 1 个 integration test、loopback 103 tests、metadata 与 `impact-pr --target-ref next` 均 PASS。完整 source gate run `fde08943ce9d77472fcf3cd5e863710d` 为 15/15 PASS，completion seal 精确绑定 `653ecbeb6dc8e0ea4532d3c33851ee8ae4c14557`；修复首次独立审查发现的 catalog ChangeRecord BLOCK 后，最终 clean-context 独立审查 PASS、无 findings。 |
 
 ### `sandbox_session` 拆分提交
 
@@ -43,6 +44,13 @@
 | `64e21e0` | 把 `mod.rs` 收口为 facade，将一键事务迁入 `one_click.rs`，并按独立补偿边界拆出 healthy reopen |
 | `9b809b3` | 按独立维护原因拆分 authority snapshot 合同、test seams、filesystem/copy、capture 与 restore，并把 include 片段纳入标准 rustfmt 发现路径 |
 
+### Gateway `server.rs` 拆分提交
+
+| Commit | 作用 |
+|---|---|
+| `b5d64ae` | 把 Gateway listener/method dispatch、HTTP codec、inference dispatch、Skill bridge host 与测试夹具拆成独立私有模块，并同步当前 capability / active Bug 路径 |
+| `653ecbe` | 把 runtime-loaded `catalog/` 纳入 production path policy，并以专用 active ChangeRecord 闭合本切片的 changed-path 与 required suite/gate 映射 |
+
 ### 本切片暴露的维护约束
 
 - 只跑 `cargo test --lib` 不足以证明生产 target 可编译；拆分后必须覆盖非测试 target。
@@ -52,10 +60,13 @@
 - 测试模块层级变化会改变 Rust test identity；必须同时迁移完整 discovered inventory、approved ignored 子集、core contract 与 active evidence ref，且重新绑定 catalog identity hash。
 - active Bug / ChangeRecord 与 suite source path 必须随当前源码位置迁移；dated audit / evidence 中的历史路径不改写。
 - Git 的 rename/delete/copy 状态受 quality policy fail-closed 约束；结构切片必须在候选冻结前检查最终 `name-status`。
+- compile-time 或 runtime 装载的 `catalog/` 不是纯叙事文件；其变更必须进入 production path policy，并由真实 active ChangeRecord 覆盖。
+- 拆出测试文件但需要保持 Rust test identity 时，可用显式 `#[path]` 保留原模块层级；仍须比较完整 discovered identity，不能只比较函数名。
+- 主工作树中的 ignored runtime 数据可能被动态测试发现机制纳入扫描；不得为门禁删除用户数据，正式 metadata / impact / source gate 应在 clean exact-HEAD worktree 执行。
 
 ## 下一阶段边界
 
-`sandbox_session` 的 `mod.rs`、`transaction_tests` 与 `authority_snapshot` 第二层拆分已经闭合。已拆出的 transaction test 与 authority snapshot 边界默认保持稳定；没有新的独立维护原因时不继续细分。下一阶段从 Gateway `server.rs` 做只读评估，行数仍不是拆分理由，只有独立职责、维护触发器或失效条件成立时才继续拆。后续结构切片继续遵守：
+`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分与 Gateway `server.rs` 职责拆分已经闭合。已拆出的 runtime 与 Gateway 子模块默认保持稳定；没有新的独立维护原因时不继续细分。下一阶段从前端 `desktop/src/main.js` 的 preview adapter、IPC client 与 feature controller 做只读评估，行数仍不是拆分理由，只有独立职责、维护触发器或失效条件成立时才继续拆。后续结构切片继续遵守：
 
 - 先冻结现有对外 surface、测试身份、Runtime/Gateway allowlist 与 typed failure 边界；
 - 子模块按单一维护原因拆分，不借机改变 provider、transport 或协议语义；
