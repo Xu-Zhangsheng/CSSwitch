@@ -43,14 +43,21 @@ best-effort cleanup 与 AppState Drop 的 tracked Gateway 兜底。测试均在�
 fake Science identity、fake tracked Gateway child 与动态 loopback 端口内执行；结论
 不扩展到 installed/live provider、artifact 或产品行为修复。
 
+`R0-E` 已收口（source）：六个 source gate 身份冻结 profile select 的 changed/no-op
+与拒绝路径、connection intent 的 selected/applied 与 validation tri-state、preset sync
+的 stale/open transaction 和四种角色下 `selection_pending` 前后结果，以及 key clear /
+profile delete 的 selected-only、applied-only、selected=applied、neither 矩阵。撤销测试
+使用短寿命隔离假 Science 子进程并确认同一 PID 保持运行；结论不扩展到
+installed/live provider、artifact 或产品行为修复。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
 | `R0-B` | DONE | healthy reopen 与 history restore |
 | `R0-C` | DONE | interrupted Gateway recovery 与 start-gateway-only |
 | `R0-D` | DONE | mode/settings/stop/quit/native exit |
-| `R0-E` | **NEXT** | profile select/update/sync/revoke |
-| `R0-F` | PENDING | Codex mutation |
+| `R0-E` | DONE | profile select/update/sync/revoke |
+| `R0-F` | **NEXT** | Codex mutation |
 | `R0-G` | PENDING | Skill/bridge/doctor/startup migration |
 | `R0-H` | PENDING | 整体 inventory、source gate 与最终独立审查收口 |
 

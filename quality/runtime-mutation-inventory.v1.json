@@ -571,7 +571,7 @@
       "ordered_effects": ["reject open transaction", "validate profile/template/launch plan locally", "commit active_id", "report selected/applied divergence and Science-running hint without runtime mutation"],
       "failure_points": [{"id": "select-profile.commit", "after_effects": ["no runtime mutation"], "observed_outcome": "Validation or atomic config failure leaves selected/applied/live state unchanged.", "compensation": "config update is atomic"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "pin_active_profile_in_dir"}, "contract": "Intent-only commit never stops or starts Gateway/Science and never changes runtime_binding."},
-      "characterization_tests": ["profiles::tests::r0_select_profile_role_matrix_preserves_applied_and_live_state"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::pin_rejects_transaction_unknown_disabled_and_invalid_without_writes", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_select_profile_role_matrix_preserves_applied_and_live_state"],
       "known_gaps": ["Intent mutations share the broad lifecycle serializer but have no typed operation plan."]
     },
     {
@@ -588,7 +588,7 @@
         {"id": "update-connection.inconclusive", "after_effects": ["scratch returned 405, 429, 5xx, or no response"], "observed_outcome": "Commit with validated=false; applied/live state remains unchanged.", "compensation": "none needed for accepted intent"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "update_profile_connection_inner_cmd"}, "contract": "Only profile intent commits; scratch process is isolated and the command never applies the candidate."},
-      "characterization_tests": ["profiles::tests::r0_update_connection_validation_tristate_preserves_applied_runtime"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_update_connection_validation_tristate_preserves_applied_runtime"],
       "known_gaps": ["Outcome is projected as boolean validated plus error rather than a typed intent result."]
     },
     {
@@ -602,7 +602,7 @@
       "ordered_effects": ["reject open transaction", "rebuild preview", "require fingerprint match", "apply recommended catalog to target profile", "validate launch plan", "commit target profile only"],
       "failure_points": [{"id": "sync-preset.precommit", "after_effects": ["no durable or runtime mutation"], "observed_outcome": "Stale preview/invalid target/open transaction rejects without commit.", "compensation": "none"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "apply_profile_preset_sync"}, "contract": "Fingerprint-bound intent commit preserves active_id, runtime_binding, Gateway, and Science."},
-      "characterization_tests": ["profiles::tests::r0_sync_preset_role_matrix_preserves_selection_pending_and_live_state"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_sync_preset_role_matrix_preserves_selection_pending_and_live_state"],
       "known_gaps": ["Registered command currently has no bundled production caller."]
     },
     {
@@ -619,7 +619,7 @@
       "ordered_effects": ["reject open transaction", "derive applied role from runtime_binding", "commit key clear/profile delete first", "if applied: bump generation and stop tracked Gateway", "always retain Science"],
       "failure_points": [{"id": "revoke-profile.config", "after_effects": ["no runtime stop yet"], "observed_outcome": "Atomic config failure leaves Gateway unchanged.", "compensation": "none"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key_cmd"}, "contract": "Config-first revocation uses runtime_binding truth; selected-only does not stop Gateway, applied revocation stops Gateway after commit, and Science remains."},
-      "characterization_tests": ["profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "profiles::tests::r0_profile_revocation_selected_applied_role_matrix"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_profile_revocation_selected_applied_role_matrix"],
       "known_gaps": ["No journal or typed revocation receipt."]
     },
     {
