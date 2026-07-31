@@ -18,7 +18,7 @@
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
       "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
     ],
-    "test_identity_semantics": "characterization_tests lists required stable identities for R0 completion, not evidence that every identity already exists. The fail-closed inventory test resolves these identities before R0 can be declared complete; planned names remain an explicit incomplete state until their tests are implemented.",
+    "test_identity_semantics": "characterization_tests lists required stable identities for R0 completion, not evidence that every identity already exists. R0 may be declared complete only when every listed value is an exact discovered source-gate identity and is neither ignored nor skipped; planned names remain an explicit incomplete state until their tests are implemented.",
     "characterization_status": "requirements-open"
   },
   "state_owners": [

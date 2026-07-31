@@ -1,12 +1,34 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-07-30 文档治理基线整理
+状态：当前；按 v0.8.4 release source 与 2026-08-01 R0 分片基线整理
 
-最后复核：2026-07-31（Asia/Taipei）
+最后复核：2026-08-01（Asia/Taipei）
 
 失效条件：对应 change/bug record、Science 版本、release source、artifact 或 installed/live 证据改变时，受影响条目立即失效并须按当前版本重审。
 
 已解决历史放入 CHANGELOG 或 dated evidence，不在这里重复。
+
+## Runtime 架构分片进度
+
+`R0-0` 已收口：恢复仓库安全边界，并把 runtime mutation inventory
+的完成条件收紧为“每个 characterization 都是 source gate 发现且实际
+执行的精确身份，不得位于 ignored/skipped 集合”。当前 inventory 仍为
+`requirements-open`；已有 helper 或源码顺序检查不代表 command-level fault
+injection 完成。
+
+| 阶段 | 状态 | 边界 |
+|---|---|---|
+| `R0-A` | **NEXT** | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
+| `R0-B` | PENDING | healthy reopen 与 history restore |
+| `R0-C` | PENDING | interrupted Gateway recovery 与 start-gateway-only |
+| `R0-D` | PENDING | mode/settings/stop/quit/native exit |
+| `R0-E` | PENDING | profile select/update/sync/revoke |
+| `R0-F` | PENDING | Codex mutation |
+| `R0-G` | PENDING | Skill/bridge/doctor/startup migration |
+| `R0-H` | PENDING | 整体 inventory、source gate 与最终独立审查收口 |
+
+每个窗口只完成表中一个阶段；阶段结束时更新本表、完成该分片的
+验证/审查/提交和临时内容清理，并留下干净工作树再进入下一阶段。
 
 ## 下一轮重构的 P0 前置
 

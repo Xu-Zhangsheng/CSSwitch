@@ -9,6 +9,9 @@ from test.quality.validate_quality_metadata import Validator
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "quality/runtime-mutation-inventory.v1.json"
+SOURCE_IDENTITIES_PATH = (
+    ROOT / "test/quality/fixtures/source_gate/expected_test_ids.v1.json"
+)
 SCHEMA_NAME = "runtime-mutation-inventory.v1.schema.json"
 MUTATION_CLASSES = {
     "config-mutation",
@@ -173,34 +176,12 @@ EXPECTED_NATIVE_CONTRACT = {
     "single_instance_boot": ("runtime-mutation", "op.one-click"),
     "window_close_requested": ("ui-only", "none"),
 }
-TEST_MODULE_SOURCES = {
-    "codex::tests": [ROOT / "desktop/src-tauri/src/commands/codex.rs"],
-    "codex_auth::lifecycle_tests": [ROOT / "desktop/gateway/src/codex_auth/mod.rs"],
-    "codex_auth::storage::tests": [ROOT / "desktop/gateway/src/codex_auth/storage.rs"],
-    "codex_auth_supervisor::tests": [ROOT / "desktop/src-tauri/src/codex_auth_supervisor.rs"],
-    "config::tests": [ROOT / "desktop/src-tauri/src/config.rs"],
-    "diagnostics::tests": [ROOT / "desktop/src-tauri/src/commands/diagnostics.rs"],
-    "lib::tests": [ROOT / "desktop/src-tauri/src/lib.rs"],
-    "model_discovery::tests": [ROOT / "desktop/src-tauri/src/runtime/model_discovery.rs"],
-    "codex_models::tests": [ROOT / "desktop/gateway/src/codex_models.rs"],
-    "gateway_skill_install::tests": [ROOT / "desktop/gateway/src/skill_install.rs"],
-    "skill_bridge_host::tests": [ROOT / "desktop/gateway/src/server/skill_bridge_host.rs"],
-    "profile::tests": [ROOT / "desktop/src-tauri/src/runtime/profile.rs"],
-    "profiles::tests": [ROOT / "desktop/src-tauri/src/commands/profiles.rs"],
-    "proxy_lifecycle::tests": [ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs"],
-    "runtime::tests": [ROOT / "desktop/src-tauri/src/commands/runtime/tests.rs"],
-    "sandbox_session::transaction_tests": list(
-        (ROOT / "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests").rglob("*.rs")
-    ),
-    "skill_install::tests": [ROOT / "desktop/src-tauri/src/commands/skill_install.rs"],
-}
-RUST_SOURCE_PATHS = tuple((ROOT / "desktop/src-tauri/src").rglob("*.rs")) + tuple(
-    (ROOT / "desktop/gateway/src").rglob("*.rs")
-)
-
-
 def load_inventory():
     return json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
+
+
+def load_source_identities():
+    return json.loads(SOURCE_IDENTITIES_PATH.read_text(encoding="utf-8"))["suites"]
 
 
 def registered_commands():
@@ -266,15 +247,23 @@ def bundled_caller_resolves(caller, command_name=None):
     return True
 
 
+def source_test_identities():
+    executable = set()
+    ignored = set()
+    skipped = set()
+    for suite in load_source_identities().values():
+        discovered = set(suite["discovered_test_ids"])
+        suite_ignored = set(suite["approved_ignored_test_ids"])
+        suite_skipped = set(suite["approved_skipped_test_ids"])
+        executable.update(discovered - suite_ignored - suite_skipped)
+        ignored.update(suite_ignored)
+        skipped.update(suite_skipped)
+    return executable, ignored, skipped
+
+
 def test_identity_resolves(identity):
-    module, separator, function = identity.rpartition("::")
-    if not separator or module not in TEST_MODULE_SOURCES:
-        return False
-    pattern = re.compile(rf"\b(?:async\s+)?fn\s+{re.escape(function)}\s*\(")
-    return any(
-        path.is_file() and pattern.search(path.read_text(encoding="utf-8"))
-        for path in TEST_MODULE_SOURCES[module]
-    )
+    executable, _, _ = source_test_identities()
+    return identity in executable
 
 
 class RuntimeMutationInventoryTests(unittest.TestCase):
@@ -643,21 +632,13 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             for operation in inventory["operations"]
             for test_id in operation["characterization_tests"]
         }
-        function_locations = {}
-        declaration = re.compile(r"\b(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-        for path in RUST_SOURCE_PATHS:
-            for function in declaration.findall(path.read_text(encoding="utf-8")):
-                function_locations.setdefault(function, []).append(path)
-        for test_id in required:
-            module, separator, function = test_id.rpartition("::")
-            self.assertTrue(separator, test_id)
-            self.assertIn(module, TEST_MODULE_SOURCES, test_id)
-            if function_locations.get(function):
-                self.assertTrue(test_identity_resolves(test_id), test_id)
-        missing = sorted(test_id for test_id in required if not test_identity_resolves(test_id))
+        executable, ignored, skipped = source_test_identities()
+        missing = sorted(required - executable)
         status = inventory["scope"]["characterization_status"]
         if status == "complete":
             self.assertEqual(missing, [])
+            self.assertEqual(sorted(required & ignored), [])
+            self.assertEqual(sorted(required & skipped), [])
         else:
             self.assertEqual(status, "requirements-open")
             self.assertTrue(missing, "open status must not hide a fully resolved inventory")
@@ -722,9 +703,12 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
 
         self.assertFalse(
             test_identity_resolves(
-                "does_not_exist::tests::login_finalization_requires_profile_ready_before_succeeded"
+                "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::does_not_exist"
             )
         )
+        _, ignored, _ = source_test_identities()
+        self.assertTrue(ignored)
+        self.assertFalse(test_identity_resolves(next(iter(ignored))))
 
 
 if __name__ == "__main__":
