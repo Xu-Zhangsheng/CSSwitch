@@ -29,12 +29,19 @@ reference 轮换和成功后仍由 frontend 另起 one-click。隔离边界为�
 Science、必要时 real local Gateway、mock upstream 与动态 loopback；结论不扩展到
 installed/live provider 或产品行为修复。
 
+`R0-C` 已收口（source）：四个 source gate 身份冻结 interrupted Gateway recovery
+在持久化 recovery stage 后的 stopped、identity recheck 拒绝与 stop failure 结果，
+以及 start-gateway-only 启动失败时保留 runtime binding、transaction journal 与
+既有 Science，同时保留已写入的 path secret / bridge key。隔离边界为临时 HOME、
+fake Gateway / Science 与动态 loopback；结论不扩展到 installed/live provider 或
+产品行为修复。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
 | `R0-B` | DONE | healthy reopen 与 history restore |
-| `R0-C` | **NEXT** | interrupted Gateway recovery 与 start-gateway-only |
-| `R0-D` | PENDING | mode/settings/stop/quit/native exit |
+| `R0-C` | DONE | interrupted Gateway recovery 与 start-gateway-only |
+| `R0-D` | **NEXT** | mode/settings/stop/quit/native exit |
 | `R0-E` | PENDING | profile select/update/sync/revoke |
 | `R0-F` | PENDING | Codex mutation |
 | `R0-G` | PENDING | Skill/bridge/doctor/startup migration |

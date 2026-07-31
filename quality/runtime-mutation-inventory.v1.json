@@ -465,7 +465,7 @@
         {"id": "interrupted-recovery.stop-failed", "after_effects": ["journal stage changed", "TERM/KILL may have been attempted"], "observed_outcome": "Return error without stage rollback or prior Gateway restart; later retry rechecks identity.", "compensation": "none"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "contract": "Preserve current post-stage StopFailed behavior: no rollback, late-exit wait policy, or prior restart."},
-      "characterization_tests": ["proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity"],
       "known_gaps": ["Stop outcome is string/error based and stage update precedes process stop."]
     },
     {
@@ -479,7 +479,7 @@
       "ordered_effects": ["load selected profile", "obtain provider auth proof if needed", "serialize and recheck proof", "create/retain path secret and rotate Skill bridge key as needed", "reuse/restart/spawn Gateway using effective Science context", "return port without committing runtime binding or journal"],
       "failure_points": [{"id": "start-gateway-only.launch", "after_effects": ["path secret or bridge key may already be durable", "prior Gateway may have been replaced"], "observed_outcome": "Error is returned; binding/journal stay unchanged and Science is retained.", "compensation": "Gateway lifecycle performs only its local start cleanup; no operation receipt restores every durable side effect"}],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/lifecycle.rs", "symbol": "start_proxy_for"}, "contract": "Local child cleanup only; command has no binding commit and no full prior/new Gateway receipt."},
-      "characterization_tests": ["runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect", "runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait"],
       "known_gaps": ["Registered command has no bundled caller.", "Persisted launch recipe can omit derived Science host context."]
     },
     {

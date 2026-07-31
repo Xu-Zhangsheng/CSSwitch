@@ -144,6 +144,42 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
         );
     }
     let binary = gateway_bin_path(app).ok_or("未找到本次应用打包的 Gateway，无法安全恢复事务")?;
+    finish_interrupted_gateway_recovery(dir, journal, || {
+        let initial_for_probe = initial.clone();
+        stop_managed_gateway_on_port(cfg.proxy_port, &binary, || {
+            let Some(current) = proc::http_gateway_health(
+                cfg.proxy_port,
+                Some(&cfg.secret),
+                operation::LOCAL_HEALTH_TIMEOUT_MS,
+            ) else {
+                return false;
+            };
+            current == initial_for_probe
+                && proc::http_health_gateway(
+                    cfg.proxy_port,
+                    Some(&cfg.secret),
+                    operation::LOCAL_HEALTH_TIMEOUT_MS,
+                    proc::GatewayHealthExpectation {
+                        gateway: "rust",
+                        provider: Some(&initial_for_probe.provider),
+                        shim: Some(&initial_for_probe.shim),
+                        launch_id: Some(&initial_for_probe.launch_id),
+                        provider_contract_id: Some(&initial_for_probe.provider_contract_id),
+                        provider_contract_digest: Some(&initial_for_probe.provider_contract_digest),
+                    },
+                )
+        })
+    })
+}
+
+fn finish_interrupted_gateway_recovery<F>(
+    dir: &Path,
+    journal: &config::RuntimeTransactionJournal,
+    cleanup: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> ManagedGatewayCleanup,
+{
     config::update(dir, |current| {
         if let Some(current_journal) = current.runtime_transaction.as_mut() {
             if current_journal.transaction_id == journal.transaction_id
@@ -156,31 +192,7 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
         }
     })
     .map_err(|error| error.to_string())?;
-    let initial_for_probe = initial.clone();
-    let cleanup = stop_managed_gateway_on_port(cfg.proxy_port, &binary, || {
-        let Some(current) = proc::http_gateway_health(
-            cfg.proxy_port,
-            Some(&cfg.secret),
-            operation::LOCAL_HEALTH_TIMEOUT_MS,
-        ) else {
-            return false;
-        };
-        current == initial_for_probe
-            && proc::http_health_gateway(
-                cfg.proxy_port,
-                Some(&cfg.secret),
-                operation::LOCAL_HEALTH_TIMEOUT_MS,
-                proc::GatewayHealthExpectation {
-                    gateway: "rust",
-                    provider: Some(&initial_for_probe.provider),
-                    shim: Some(&initial_for_probe.shim),
-                    launch_id: Some(&initial_for_probe.launch_id),
-                    provider_contract_id: Some(&initial_for_probe.provider_contract_id),
-                    provider_contract_digest: Some(&initial_for_probe.provider_contract_digest),
-                },
-            )
-    });
-    match cleanup {
+    match cleanup() {
         ManagedGatewayCleanup::Stopped(_) => Ok(()),
         ManagedGatewayCleanup::NotManaged => Err(
             "未完成事务的 listener 未通过精确 Gateway binary/uid/PID 复核；已拒绝结束进程。".into(),

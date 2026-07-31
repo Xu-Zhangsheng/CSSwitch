@@ -4149,6 +4149,112 @@ fn r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback() {
 }
 
 #[test]
+fn r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_start_gateway_only_secret_effect",
+        &[],
+    );
+}
+
+#[test]
+fn r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
+        &[],
+    );
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary start-gateway-only failure characterization; temp HOME, fake Gateway, retained fake Science process, and loopback only"]
+fn isolated_r0_start_gateway_only_secret_effect() {
+    let tmp = tmpdir("r0-start-gateway-only");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    let gateway = bin_dir.join("csswitch-gateway-exit");
+    write_executable(
+        &gateway,
+        r#"#!/bin/sh
+exit 23
+"#,
+    );
+    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway);
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(9, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    cfg.secret.clear();
+    let binding = config::RuntimeBindingCommit {
+        profile_id: cfg.active_id.clone(),
+        route_fp: "committed-route".into(),
+        catalog_fp: "committed-catalog".into(),
+        binding_fp: "committed-binding".into(),
+    };
+    let journal = config::RuntimeTransactionJournal {
+        transaction_id: "preexisting-transaction".into(),
+        target_profile_id: cfg.active_id.clone(),
+        stage: "preexisting-stage".into(),
+        previous_binding: Some(binding.clone()),
+        previous_gateway: None,
+    };
+    cfg.runtime_binding = Some(binding.clone());
+    cfg.runtime_transaction = Some(journal.clone());
+    config::save_to(&config_dir, &cfg).unwrap();
+
+    let science_child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("controlled fake Science process should start");
+    let science_pid = science_child.id();
+    let mut app_state = AppState::default();
+    app_state.sandbox = Some(science_child);
+    app_state.sandbox_port = sandbox_port;
+    app_state.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}"));
+    let state: SharedAppState = Arc::new(Mutex::new(app_state));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let result =
+        super::gateway::start_proxy_inner_cmd(app.handle().clone(), state.clone(), lifecycle);
+    assert!(
+        result.is_err(),
+        "the fake Gateway must fail before publication"
+    );
+
+    let after = config::load_from(&config_dir).unwrap();
+    assert_eq!(after.runtime_binding, Some(binding));
+    assert_eq!(after.runtime_transaction, Some(journal));
+    assert!(!after.secret.is_empty(), "path secret must remain durable");
+    assert!(
+        config_dir
+            .join("runtime/skill-install-bridge.key")
+            .is_file(),
+        "bridge-key publication precedes Gateway health failure"
+    );
+    {
+        let mut current = lock(&state);
+        assert!(current.proxy.is_none());
+        let science = current
+            .sandbox
+            .as_mut()
+            .expect("start-gateway-only must retain the Science child");
+        assert_eq!(science.id(), science_pid);
+        assert!(science.try_wait().unwrap().is_none());
+        science.kill().unwrap();
+        science.wait().unwrap();
+        current.sandbox = None;
+    }
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
 #[ignore = "explicit Acceptance-boundary healthy reopen Gateway rollback; temp HOME, managed fake Science, real local Gateway, and loopback only"]
 fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
     let oracle = env::var("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE")

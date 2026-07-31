@@ -498,12 +498,14 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_start_gateway_only_secret_effect",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_union_proof_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_ssh_feature_off_ignores_missing_optional_wrapper_and_system_config",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_ssh_prevalidation_precedes_oauth_mutation",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::ssh_behavior::enabled_ssh_prevalidation_rejects_unwritable_science_authority",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::ssh_behavior::reuse_system_ssh_false_does_not_require_packaged_wrapper_or_system_home",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::real_installed_app_seed_is_selected_without_mutating_data_dir",
@@ -578,6 +580,10 @@
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary history restore command contract; temp HOME, managed fake Science, and loopback only"
         },
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_start_gateway_only_secret_effect": {
+          "boundary": "acceptance",
+          "reason": "explicit Acceptance-boundary start-gateway-only failure characterization; temp HOME, fake Gateway, retained fake Science process, and loopback only"
+        },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary serialized non-Codex credential recheck; temp HOME, fake auth, fake Science, and loopback only"
@@ -601,6 +607,10 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_ssh_prevalidation_precedes_oauth_mutation": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary SSH transaction smoke; temp HOME, fake OAuth, fake Science, and loopback only"
+        },
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener": {
+          "boundary": "acceptance",
+          "reason": "explicit Acceptance-boundary interrupted-recovery identity recheck listener; test binary, temp state, and dynamic loopback only"
         },
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::ssh_behavior::enabled_ssh_prevalidation_rejects_unwritable_science_authority": {
           "boundary": "acceptance",
@@ -703,6 +713,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_start_gateway_only_secret_effect",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_union_proof_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science",
@@ -722,6 +733,8 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_capture_failure_restarts_prior_runtime",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_to_journal_boundary_is_frozen",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::science_operation_failures_have_stable_structured_stages",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::status_response_for_config_error_is_fail_closed",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::status_runtime_identity_prefers_launched_identity_and_fail_closes_partial_launch",
@@ -974,9 +987,11 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_lookup_prefers_explicit_env_binary",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::invalid_explicit_gateway_binary_fails_closed_without_fallback",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::managed_proxy_command_allowlist_drops_parent_provider_secret",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::managed_proxy_command_keeps_secret_out_of_argv_and_injects_canonical_shim",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::mismatched_recovery_target_preserves_listener_and_journal",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::skill_bridge_token_rotates_with_gateway_launch_identity",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::authority_snapshot::authority_snapshot_accepts_observed_science_0125_tree_via_independent_clones",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::authority_snapshot::authority_snapshot_fails_closed_when_directory_membership_changes_mid_capture",

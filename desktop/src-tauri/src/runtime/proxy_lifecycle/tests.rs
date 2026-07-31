@@ -1,6 +1,7 @@
 use super::{
-    configure_managed_proxy_command, find_gateway_in, formal_proxy_env, gateway_bin_path_from,
-    interrupted_health_matches, recover_interrupted_gateway_from_dir, skill_install_bridge_token,
+    configure_managed_proxy_command, find_gateway_in, finish_interrupted_gateway_recovery,
+    formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
+    recover_interrupted_gateway_from_dir, skill_install_bridge_token, ManagedGatewayCleanup,
 };
 use crate::provider_contracts::{
     CachePolicy, EndpointPolicy, ModelPolicy, TimeoutPolicy, Transport,
@@ -13,6 +14,28 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+struct TestOwnedChild(std::process::Child);
+
+impl TestOwnedChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.0.try_wait()
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        if self.0.try_wait()?.is_none() {
+            self.0.kill()?;
+            self.0.wait()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TestOwnedChild {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
 
 fn health(provider: &str, launch_id: &str, catalog_fp: &str) -> crate::proc::GatewayHealth {
     let provider_contract_id = match provider {
@@ -78,6 +101,202 @@ fn interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity(
         Some("target-catalog"),
         Some(&previous_identity),
     ));
+}
+
+#[test]
+fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
+    for (label, cleanup, expected_error) in [
+        (
+            "not-managed",
+            ManagedGatewayCleanup::NotManaged,
+            Some("未通过精确 Gateway binary/uid/PID 复核"),
+        ),
+        (
+            "stop-failed",
+            ManagedGatewayCleanup::StopFailed(4242),
+            Some("安全停止失败"),
+        ),
+        ("stopped", ManagedGatewayCleanup::Stopped(4242), None),
+    ] {
+        let dir = std::env::temp_dir().join(format!(
+            "csswitch-r0-interrupted-recovery-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let previous_binding = crate::config::RuntimeBindingCommit {
+            profile_id: "prior-profile".into(),
+            route_fp: "prior-route".into(),
+            catalog_fp: "prior-catalog".into(),
+            binding_fp: "prior-binding".into(),
+        };
+        let journal = crate::config::RuntimeTransactionJournal {
+            transaction_id: format!("tx-{label}"),
+            target_profile_id: "target-profile".into(),
+            stage: "start_formal_gateway".into(),
+            previous_binding: Some(previous_binding.clone()),
+            previous_gateway: None,
+        };
+        let (model_catalog, default_model_route_id, role_bindings) =
+            crate::model_catalog::new_profile_catalog(
+                "deepseek",
+                "anthropic",
+                Some("deepseek-v4-flash"),
+            )
+            .unwrap();
+        let cfg = crate::config::Config {
+            profiles: vec![crate::config::Profile {
+                id: "target-profile".into(),
+                template_id: "deepseek".into(),
+                api_format: "anthropic".into(),
+                model: "deepseek-v4-flash".into(),
+                model_catalog,
+                default_model_route_id,
+                role_bindings,
+                model_policy: crate::provider_contracts::ModelPolicy::SavedCatalog,
+                ..Default::default()
+            }],
+            active_id: "target-profile".into(),
+            runtime_binding: Some(previous_binding.clone()),
+            runtime_transaction: Some(journal.clone()),
+            ..Default::default()
+        };
+        crate::config::save_to(&dir, &cfg).unwrap();
+
+        let result = finish_interrupted_gateway_recovery(&dir, &journal, || cleanup);
+        match expected_error {
+            Some(expected) => assert!(
+                result.as_ref().is_err_and(|error| error.contains(expected)),
+                "{label} must keep its exact post-stage error: {result:?}"
+            ),
+            None => assert!(result.is_ok(), "stopped outcome must succeed: {result:?}"),
+        }
+        let after = crate::config::load_from(&dir).unwrap();
+        let after_journal = after.runtime_transaction.unwrap();
+        assert_eq!(after_journal.transaction_id, journal.transaction_id);
+        assert_eq!(after_journal.target_profile_id, journal.target_profile_id);
+        assert_eq!(after_journal.previous_binding, journal.previous_binding);
+        assert_eq!(after_journal.previous_gateway, journal.previous_gateway);
+        assert_eq!(after_journal.stage, "recover_interrupted_gateway");
+        assert_eq!(after.runtime_binding, Some(previous_binding));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    let dir = std::env::temp_dir().join(format!(
+        "csswitch-r0-interrupted-recovery-recheck-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    assert_ne!(port, 8765);
+    drop(reservation);
+    let ready = dir.join("ready");
+    let current_exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+    let mut listener_child = TestOwnedChild(
+        Command::new(&current_exe)
+        .arg("--exact")
+        .arg("runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener")
+        .arg("--ignored")
+        .arg("--nocapture")
+        .env("CSSWITCH_TEST_R0_RECOVERY_PORT", port.to_string())
+        .env("CSSWITCH_TEST_R0_RECOVERY_READY", &ready)
+        .spawn()
+        .unwrap(),
+    );
+    let mut ready_observed = false;
+    for _ in 0..100 {
+        if ready.is_file() {
+            ready_observed = true;
+            break;
+        }
+        assert!(
+            listener_child.try_wait().unwrap().is_none(),
+            "identity-recheck listener child exited before readiness"
+        );
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        ready_observed,
+        "identity-recheck listener did not become ready"
+    );
+
+    let journal = crate::config::RuntimeTransactionJournal {
+        transaction_id: "tx-identity-recheck".into(),
+        target_profile_id: String::new(),
+        stage: "start_formal_gateway".into(),
+        previous_binding: None,
+        previous_gateway: None,
+    };
+    let cfg = crate::config::Config {
+        runtime_transaction: Some(journal.clone()),
+        ..Default::default()
+    };
+    crate::config::save_to(&dir, &cfg).unwrap();
+    let recheck_observed = std::cell::Cell::new(false);
+    let result = finish_interrupted_gateway_recovery(&dir, &journal, || {
+        assert_eq!(
+            crate::config::load_from(&dir)
+                .unwrap()
+                .runtime_transaction
+                .as_ref()
+                .unwrap()
+                .stage,
+            "recover_interrupted_gateway",
+            "durable recovery stage must precede the final process identity recheck"
+        );
+        super::stop_managed_gateway_on_port(port, &current_exe, || {
+            recheck_observed.set(true);
+            assert_eq!(
+                crate::config::load_from(&dir)
+                    .unwrap()
+                    .runtime_transaction
+                    .as_ref()
+                    .unwrap()
+                    .stage,
+                "recover_interrupted_gateway"
+            );
+            false
+        })
+    });
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("未通过精确 Gateway binary/uid/PID 复核")),
+        "failed final identity recheck must preserve the post-stage NotManaged result: {result:?}"
+    );
+    assert!(
+        recheck_observed.get(),
+        "the real managed-listener path must execute its final identity callback"
+    );
+    assert!(
+        listener_child.try_wait().unwrap().is_none(),
+        "identity recheck refusal must not stop the listener"
+    );
+    listener_child.stop().unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary interrupted-recovery identity recheck listener; test binary, temp state, and dynamic loopback only"]
+fn isolated_r0_interrupted_recovery_identity_recheck_listener() {
+    let port = std::env::var("CSSWITCH_TEST_R0_RECOVERY_PORT")
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    let ready = std::env::var_os("CSSWITCH_TEST_R0_RECOVERY_READY").unwrap();
+    let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    fs::write(ready, b"ready\n").unwrap();
+    loop {
+        thread::sleep(std::time::Duration::from_secs(60));
+    }
 }
 
 #[test]
