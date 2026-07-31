@@ -173,7 +173,7 @@
       "format": "config schema v4 JSON",
       "authority_owner": "config.desired",
       "fields": ["active_id", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
-      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn save_to("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update<"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update_result<"}],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "fn commit_migrated_config("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn save_to("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update<"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update_result<"}],
       "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"},
       "known_gap": "Several non-one-click commands stop managed runtime before committing config and do not retain a durable prior-restart receipt."
@@ -702,7 +702,7 @@
       "id": "op.startup-config-migration",
       "mutation_kind": "startup",
       "serialization": "none",
-      "entrypoints": [{"kind": "startup-hook", "name": "startup_config_load", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "let _ = config::load_from(&config::default_dir());"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::let _ = config::load_from(&config::default_dir());"]}],
+      "entrypoints": [{"kind": "startup-hook", "name": "startup_config_load", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "let _ = config::load_from(&config::default_dir());"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::let _ = config::load_from(&config::default_dir());"]}, {"kind": "startup-hook", "name": "boot_coordinator_config_load", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "fn run_boot_coordinator("}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::fn run_boot_coordinator("]}, {"kind": "startup-hook", "name": "single_instance_boot_reentry", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "tauri_plugin_single_instance::init"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::tauri_plugin_single_instance::init"]}],
       "state_owners": ["config.desired"],
       "durable_records": {"reads": ["record.config-v4"], "writes": ["record.config-v4"], "clears": []},
       "ordered_effects": ["load and validate legacy/current config", "publish one or more non-overwriting version backups for legacy input", "atomically publish the normalized current v4 config", "ignore setup load error and continue to boot coordinator"],

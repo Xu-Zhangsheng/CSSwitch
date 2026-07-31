@@ -373,7 +373,19 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
     def test_r0_scope_and_critical_failure_boundaries_are_explicit(self):
         inventory = load_inventory()
         operations = {item["id"]: item for item in inventory["operations"]}
+        records = {item["id"]: item for item in inventory["durable_records"]}
         surface = {item["name"]: item for item in inventory["registered_surface"]}
+
+        config_writers = {
+            (item["path"], item["symbol"])
+            for item in records["record.config-v4"]["writers"]
+        }
+        self.assertTrue(
+            {
+                ("desktop/src-tauri/src/config.rs", "pub fn load_from("),
+                ("desktop/src-tauri/src/config.rs", "fn commit_migrated_config("),
+            }.issubset(config_writers)
+        )
 
         self.assertEqual(
             {
@@ -438,6 +450,14 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         )
 
         migration = operations["op.startup-config-migration"]
+        self.assertEqual(
+            {item["name"] for item in migration["entrypoints"]},
+            {
+                "startup_config_load",
+                "boot_coordinator_config_load",
+                "single_instance_boot_reentry",
+            },
+        )
         backup_index = migration["ordered_effects"].index(
             "publish one or more non-overwriting version backups for legacy input"
         )
