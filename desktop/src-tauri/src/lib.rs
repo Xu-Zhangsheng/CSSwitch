@@ -327,6 +327,18 @@ fn load_boot_config(dir: &std::path::Path) -> Result<config::Config, serde_json:
     config::load_from(dir).map_err(|error| boot_prepare_failure(format!("读取配置失败：{error}")))
 }
 
+fn run_startup_config_sequence<W, B>(dir: &std::path::Path, install_window_hook: W, boot: B)
+where
+    W: FnOnce(),
+    B: FnOnce(),
+{
+    // Setup migration is intentionally best-effort; boot performs a fresh load
+    // and owns the user-visible typed prepare failure.
+    let _ = config::load_from(dir);
+    install_window_hook();
+    boot();
+}
+
 fn boot_result_needs_attention(value: &serde_json::Value) -> bool {
     value.get("status").and_then(serde_json::Value::as_str) == Some("attention")
 }
@@ -456,22 +468,23 @@ pub fn run() {
         .setup(|app| {
             install_menu(app)?;
 
-            // 启动即触发一次 load：旧 v1/v2/v3 配置在这里经迁移链升级并只提交一次当前 v4；
-            // v1/v2/v3 的版本备份由 config::load_from 按不可覆盖合同保存；
-            // 悬空 active 归一化为空。迁移逻辑并入 config::load_from（不再单独跑 relay_presets）。
-            let _ = config::load_from(&config::default_dir());
-
-            // 关窗隐藏配置面板，不销毁窗口、不停止后台链路。显式退出清理代理与沙箱。
-            if let Some(win) = app.get_webview_window("main") {
-                let w = win.clone();
-                win.on_window_event(move |ev| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = ev {
-                        api.prevent_close();
-                        let _ = w.hide();
+            let config_dir = config::default_dir();
+            run_startup_config_sequence(
+                &config_dir,
+                || {
+                    // 关窗隐藏配置面板，不销毁窗口、不停止后台链路。显式退出清理代理与沙箱。
+                    if let Some(win) = app.get_webview_window("main") {
+                        let w = win.clone();
+                        win.on_window_event(move |ev| {
+                            if let tauri::WindowEvent::CloseRequested { api, .. } = ev {
+                                api.prevent_close();
+                                let _ = w.hide();
+                            }
+                        });
                     }
-                });
-            }
-            run_boot_coordinator(app.handle().clone());
+                },
+                || run_boot_coordinator(app.handle().clone()),
+            );
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -499,8 +512,8 @@ mod tests {
     use crate::runtime::system::redact;
     use crate::{
         boot_result_error, boot_result_needs_attention, cleanup_for_exit,
-        decide_launch_with_auto_boot, load_boot_config, lock, should_begin_boot, AppState,
-        BootState, LaunchPath, SharedAppState, SharedLifecycle,
+        decide_launch_with_auto_boot, load_boot_config, lock, run_startup_config_sequence,
+        should_begin_boot, AppState, BootState, LaunchPath, SharedAppState, SharedLifecycle,
     };
 
     #[test]
@@ -540,12 +553,18 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("config.json"), b"{invalid-config").unwrap();
 
-        let setup_load = config::load_from(&dir);
-        assert!(
-            setup_load.is_err(),
-            "setup intentionally ignores this result"
+        let events = std::cell::RefCell::new(Vec::new());
+        let failure = std::cell::RefCell::new(None);
+        run_startup_config_sequence(
+            &dir,
+            || events.borrow_mut().push("window-hook"),
+            || {
+                events.borrow_mut().push("boot-load");
+                failure.replace(Some(load_boot_config(&dir).unwrap_err()));
+            },
         );
-        let failure = load_boot_config(&dir).unwrap_err();
+        assert_eq!(*events.borrow(), vec!["window-hook", "boot-load"]);
+        let failure = failure.borrow_mut().take().unwrap();
         assert_eq!(failure["status"], "error");
         assert_eq!(failure["stage"], "prepare");
         assert!(failure["message"]

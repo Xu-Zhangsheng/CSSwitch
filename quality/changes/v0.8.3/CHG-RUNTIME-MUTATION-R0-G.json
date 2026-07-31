@@ -16,6 +16,7 @@
       "desktop/src-tauri/src/config.rs",
       "desktop/src-tauri/src/lib.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs",
+      "desktop/src-tauri/src/runtime/skill_install_bridge.rs",
       "quality/changes/v0.8.3/CHG-RUNTIME-MUTATION-R0-G.json",
       "quality/runtime-mutation-inventory.v1.json",
       "quality/schema/runtime-mutation-inventory.v1.schema.json",
@@ -69,7 +70,7 @@
       ],
       "basis": [
         "source-gate-executed R0-G characterization identities",
-        "temporary directories, fake Science executable/context, private bridge mailbox, and mock host mutation",
+        "temporary directories, real local archive commits, fake Science executable/context, private bridge mailbox, complete doctor command body, and thread-scoped mock host mutation",
         "runtime mutation inventory and source-identity fixture validation"
       ]
     },

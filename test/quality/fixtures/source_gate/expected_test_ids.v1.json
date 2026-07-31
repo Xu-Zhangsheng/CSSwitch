@@ -483,6 +483,7 @@
     "RUST-DESKTOP": {
       "approved_ignored_test_ids": [
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract",
+        "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_race_revalidates_before_delete",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_rejects_unsafe_entries_before_runtime",
@@ -522,6 +523,10 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract": {
           "boundary": "acceptance",
           "reason": "source-gate parents execute exact isolated R0-F Codex mutation cases with temp HOME, fake processes, fake sidecar, and dynamic loopback ports"
+        },
+        "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile": {
+          "boundary": "acceptance",
+          "reason": "source-gate parent executes the complete R0-G doctor command body with temp HOME, fake doctor assets, mock AppHandle, and no live Science or provider"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent": {
           "boundary": "acceptance",
@@ -709,6 +714,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::structured_auth_errors_have_exact_reason_cause_and_retryability_contracts",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::terminal_ensure_races_repair_manual_create_logout_and_disable_without_deadlock",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::doctor_config_rejects_reserved_port_instead_of_defaulting",
+        "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::r0_doctor_diagnostic_failure_skips_reconcile",
         "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::catalog_edit_requires_all_three_fields_and_rejects_legacy_mix",
         "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::clear_active_profile_key_stops_runtime_proxy_identity",

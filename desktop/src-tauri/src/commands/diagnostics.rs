@@ -13,26 +13,18 @@ pub(crate) async fn run_doctor(
 ) -> Result<String, String> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
-    run_blocking(move || {
-        run_doctor_workflow(
-            || run_doctor_inner_cmd(&app),
-            || {
-                lifecycle.with_serialized(|| {
-                    crate::runtime::sandbox_session::force_third_party_reconcile(&app, &state)
-                })
-            },
-        )
-    })
-    .await
+    run_blocking(move || run_doctor_cmd(&app, &state, &lifecycle)).await
 }
 
-fn run_doctor_workflow<D, R>(diagnostics: D, reconcile: R) -> Result<String, String>
-where
-    D: FnOnce() -> Result<String, String>,
-    R: FnOnce() -> Result<String, String>,
-{
-    let mut output = diagnostics()?;
-    let route = reconcile();
+fn run_doctor_cmd<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &SharedLifecycle,
+) -> Result<String, String> {
+    let mut output = run_doctor_inner_cmd(app)?;
+    let route = lifecycle.with_serialized(|| {
+        crate::runtime::sandbox_session::force_third_party_reconcile(app, state)
+    });
     output.push_str("\n[Skill 路由] ");
     match route {
         Ok(message) => output.push_str(&message),
@@ -41,7 +33,7 @@ where
     Ok(output)
 }
 
-fn run_doctor_inner_cmd(app: &tauri::AppHandle) -> Result<String, String> {
+fn run_doctor_inner_cmd<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<String, String> {
     let root = asset_root(app).ok_or("找不到 scripts/doctor.sh（打包资源或仓库根均未命中）。")?;
     let cfg = doctor_config_from(&config::default_dir())?;
     let doctor = root.join("scripts/doctor.sh");
@@ -162,9 +154,16 @@ pub(crate) fn open_logs() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{doctor_config_from, run_doctor_workflow};
-    use std::cell::Cell;
+    use super::doctor_config_from;
+    use crate::runtime::skill_install_bridge::{
+        mark_route_configuration_current, route_configuration_is_current,
+    };
+    use crate::{AppState, SharedAppState, SharedLifecycle};
+    use std::env;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn tmpdir(name: &str) -> std::path::PathBuf {
@@ -192,15 +191,77 @@ mod tests {
 
     #[test]
     fn r0_doctor_diagnostic_failure_skips_reconcile() {
-        let reconcile_called = Cell::new(false);
-        let result = run_doctor_workflow(
-            || Err("doctor subprocess failed".into()),
-            || {
-                reconcile_called.set(true);
-                Ok("must not run".into())
-            },
+        let child_name =
+            "commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile";
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(child_name)
+            .arg("--ignored")
+            .arg("--nocapture")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success()
+                && stdout.lines().any(|line| line == "running 1 test")
+                && stdout
+                    .lines()
+                    .any(|line| line == format!("test {child_name} ... ok")),
+            "isolated doctor characterization failed:\nstdout={}\nstderr={}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(result.unwrap_err(), "doctor subprocess failed");
-        assert!(!reconcile_called.get());
+    }
+
+    #[test]
+    #[ignore = "source-gate parent runs the complete run_doctor command body in an isolated HOME"]
+    fn isolated_r0_doctor_diagnostic_failure_skips_reconcile() {
+        let root = tmpdir("r0-command-sequence");
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let home = root.join("home");
+        let repo = root.join("repo");
+        let doctor = repo.join("scripts/doctor.sh");
+        fs::create_dir_all(doctor.parent().unwrap()).unwrap();
+        fs::create_dir_all(repo.join("desktop/gateway")).unwrap();
+        fs::write(
+            repo.join("desktop/gateway/Cargo.toml"),
+            b"[package]\nname='fake'\n",
+        )
+        .unwrap();
+        fs::write(&doctor, b"#!/bin/sh\nprintf 'doctor-ok\\n'\n").unwrap();
+        fs::set_permissions(&doctor, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        env::set_var("HOME", &home);
+        env::set_var("CSSWITCH_REPO", &repo);
+
+        let config_dir = crate::config::default_dir();
+        let data_dir = config_dir.join("sandbox/home/.claude-science");
+        fs::create_dir_all(&data_dir).unwrap();
+        mark_route_configuration_current(&data_dir, "science-v1").unwrap();
+        fs::write(config_dir.join("config.json"), b"{invalid-config").unwrap();
+
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let first = super::run_doctor_cmd(app.handle(), &state, &lifecycle).unwrap_err();
+        assert!(first.contains("读取配置失败"));
+        assert!(route_configuration_is_current(&data_dir, "science-v1").unwrap());
+
+        let cfg = crate::config::Config {
+            proxy_port: 18_992,
+            sandbox_port: 18_993,
+            ..Default::default()
+        };
+        crate::config::save_to(&config_dir, &cfg).unwrap();
+        let second = super::run_doctor_cmd(app.handle(), &state, &lifecycle).unwrap();
+        assert!(second.contains("doctor-ok"));
+        assert!(!route_configuration_is_current(&data_dir, "science-v1").unwrap());
+
+        drop(app);
+        fs::remove_dir_all(root).unwrap();
     }
 }

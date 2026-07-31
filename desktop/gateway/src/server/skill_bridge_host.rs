@@ -537,7 +537,30 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();
-        path
+        path.canonicalize().unwrap()
+    }
+
+    fn bridge_config(bridge: &std::path::Path) -> GatewayConfig {
+        GatewayConfig {
+            provider: "deepseek".into(),
+            port: 0,
+            auth_secret: None,
+            api_key: Some("fake-key".into()),
+            upstream_url: "http://127.0.0.1:9/v1/messages".into(),
+            models_url: None,
+            relay_thinking: None,
+            provider_contract: None,
+            intent: crate::config::GatewayIntent::Formal,
+            static_model_resolver: None,
+            shim_mode: "off".into(),
+            codex_state_root: None,
+            codex_contract: None,
+            launch_id: "r0-g-test".into(),
+            skill_data_dir: Some(bridge.join("science-data")),
+            skill_bridge_dir: Some(bridge.to_path_buf()),
+            skill_bridge_token: Some("r0-g-private-test-token".into()),
+            science_host_context: None,
+        }
     }
 
     #[test]
@@ -547,7 +570,7 @@ mod tests {
         fs::write(bridge.join(format!("{id}.processing")), b"claimed-request").unwrap();
         fs::write(bridge.join(format!("{id}.status.json")), b"advisory-status").unwrap();
 
-        recover_orphaned_bridge_processing(&bridge).unwrap();
+        start_skill_install_bridge(&bridge_config(&bridge)).unwrap();
 
         let response: Value =
             serde_json::from_slice(&fs::read(bridge.join(format!("{id}.response.json"))).unwrap())

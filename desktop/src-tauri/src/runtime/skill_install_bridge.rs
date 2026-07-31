@@ -94,6 +94,17 @@ pub(crate) fn configure_third_party_after_science_start<R: Runtime>(
     control_url: &str,
 ) -> Result<(), String> {
     #[cfg(test)]
+    if let Some(log) = TEST_THIRD_PARTY_PARTIAL_FAILURE.with(|slot| slot.borrow().clone()) {
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        let mut file = options
+            .open(log)
+            .map_err(|_| "无法写入第三方配置 partial-mutation 测试证据")?;
+        file.write_all(b"configure-third-party-partial\n")
+            .map_err(|_| "无法写入第三方配置 partial-mutation 测试证据")?;
+        return Err("测试注入：host 配置在 partial mutation 后失败".into());
+    }
+    #[cfg(test)]
     if let Some(log) = std::env::var_os("CSSWITCH_TEST_THIRD_PARTY_CONFIG_LOG") {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
@@ -130,6 +141,37 @@ pub(crate) fn configure_third_party_after_science_start<R: Runtime>(
         return Err("本地 Science 第三方能力配置结果不完整".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_THIRD_PARTY_PARTIAL_FAILURE: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(crate) struct TestThirdPartyPartialFailureGuard;
+
+#[cfg(test)]
+impl Drop for TestThirdPartyPartialFailureGuard {
+    fn drop(&mut self) {
+        TEST_THIRD_PARTY_PARTIAL_FAILURE.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_third_party_partial_failure(
+    log: PathBuf,
+) -> TestThirdPartyPartialFailureGuard {
+    TEST_THIRD_PARTY_PARTIAL_FAILURE.with(|slot| {
+        let previous = slot.borrow_mut().replace(log);
+        assert!(
+            previous.is_none(),
+            "third-party partial failure seam already armed"
+        );
+    });
+    TestThirdPartyPartialFailureGuard
 }
 
 fn expected_route_state(science_version: &str) -> Value {

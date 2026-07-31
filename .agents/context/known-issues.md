@@ -61,13 +61,15 @@ stop → export → backup → v2 publication/latch → direct exit 顺序和安
 loopback 端口；结论不扩展到 installed/live provider、artifact 或产品行为修复。
 
 `R0-G` 已收口（source）：九个精确 source gate 身份冻结本地 Skill picker 期间
-runtime context 变化的提交前拒绝、文件提交后的 attach 失败保留，Gateway bridge 的
-interrupted/finalization recovery 与 install/uninstall 文件和绑定分离结果，doctor 的
-diagnostics-before-reconcile、marker invalidation/host partial mutation，以及 startup config
-migration 的 backup-before-single-v4-commit 与 setup 忽略首次错误后 boot prepare 失败。
-测试只使用临时目录、fake Science executable/context、私有 bridge mailbox 与 mock host
-mutation；结论不扩展到 installed/live provider、artifact、Science Skill runtime 或产品
-行为修复。
+runtime context 变化的提交前拒绝、真实 archive 文件提交后的 attach 失败保留，Gateway
+bridge startup 的 interrupted recovery、finalization recovery，以及真实 request operation
+中的 install/uninstall 文件和绑定分离结果；doctor 身份执行完整 command body 与真实
+reconcile wrapper，冻结 diagnostics-before-reconcile、marker invalidation/host partial
+mutation；startup 身份执行 setup 使用的 config sequence，冻结 migration 的
+backup-before-single-v4-commit 与 setup 忽略首次错误后 boot prepare 失败。测试只使用临时
+目录/HOME、fake Science executable/context、私有 bridge mailbox、fake doctor asset 与
+线程绑定 mock host mutation；结论不扩展到 installed/live provider、artifact、Science
+Skill runtime 或产品行为修复。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|

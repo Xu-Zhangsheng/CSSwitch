@@ -345,13 +345,12 @@ fn local_error(code: &str, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csswitch_skill_install_core::{
-        InstallAction, ScienceExecutableFingerprint, SourceKind, IMPORT_ORIGIN_FILE,
-    };
+    use csswitch_skill_install_core::{ScienceExecutableFingerprint, IMPORT_ORIGIN_FILE};
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_root(label: &str) -> PathBuf {
@@ -401,6 +400,26 @@ mod tests {
         }
     }
 
+    fn write_skill_archive(root: &Path, skill_name: &str) -> PathBuf {
+        let source = root.join(format!("{skill_name}-source"));
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            format!("---\nname: {skill_name}\n---\n# {skill_name}\n"),
+        )
+        .unwrap();
+        let archive = root.join(format!("{skill_name}.zip"));
+        let output = Command::new("/usr/bin/zip")
+            .args(["-q", "-r"])
+            .arg(&archive)
+            .arg("SKILL.md")
+            .current_dir(&source)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "zip fixture creation failed");
+        archive
+    }
+
     #[test]
     fn not_ready_is_non_committing() {
         let value = not_ready("not running");
@@ -434,26 +453,10 @@ mod tests {
             br#"{"org_uuid":"org-test"}"#,
         )
         .unwrap();
+        let archive = write_skill_archive(&root, "demo");
         let skill = context.data_dir.join("orgs/org-test/skills/demo");
-        fs::create_dir_all(&skill).unwrap();
-        fs::write(skill.join("SKILL.md"), b"---\nname: demo\n---\n").unwrap();
-        fs::write(skill.join(IMPORT_ORIGIN_FILE), b"committed-marker").unwrap();
-        let value = attach_result_payload(
-            &context,
-            InstallCommit {
-                skill_name: "demo".into(),
-                source_kind: SourceKind::LocalZip,
-                active_org: "org-test".into(),
-                content_sha256: "a".repeat(64),
-                source_digest_sha256: Some("b".repeat(64)),
-                resolved_commit_sha: None,
-                source_repo: "csswitch/local-archive".into(),
-                source_path: "demo".into(),
-                dependency_scan: "BEST_EFFORT",
-                action: InstallAction::Committed,
-                directory_commit: true,
-            },
-        );
+        assert!(!skill.exists(), "fixture must begin before package commit");
+        let value = install_selected_path(&archive, &context).unwrap();
         assert_eq!(value["status"], "FILES_COMMITTED_ATTACH_REQUIRED");
         assert_eq!(value["directory_commit"], true);
         assert_eq!(value["attach_attempted"], true);

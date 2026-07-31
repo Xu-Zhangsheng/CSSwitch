@@ -79,6 +79,7 @@ where
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> std::path::PathBuf {
@@ -97,42 +98,54 @@ mod tests {
     #[test]
     fn r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes() {
         let data_dir = temp_dir();
+        let fake_science = data_dir.join("fake-science");
+        fs::write(&fake_science, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&fake_science, fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = crate::runtime::science::test_runtime_identity(fake_science);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
         mark_route_configuration_current(&data_dir, "science-v1").unwrap();
-        let skipped = configure_third_party_best_effort_with(
+        let skipped = configure_third_party_best_effort(
+            app.handle(),
             RegistrationStatus::Warning("inspect failed".into()),
             &data_dir,
-            Some("science-v1"),
+            19_951,
+            &runtime,
             true,
-            || panic!("untrusted inspect result must not mutate the host"),
         );
         assert!(matches!(skipped, RegistrationStatus::Warning(_)));
-        assert!(!route_configuration_is_current(&data_dir, "science-v1").unwrap());
+        assert!(!route_configuration_is_current(&data_dir, "test-only").unwrap());
 
-        mark_route_configuration_current(&data_dir, "science-v1").unwrap();
+        mark_route_configuration_current(&data_dir, "test-only").unwrap();
         let retained_host_effect = data_dir.join("host-effect-retained");
-        let failed = configure_third_party_best_effort_with(
+        let partial_guard =
+            crate::runtime::skill_install_bridge::test_arm_third_party_partial_failure(
+                retained_host_effect.clone(),
+            );
+        let failed = configure_third_party_best_effort(
+            app.handle(),
             RegistrationStatus::Registered,
             &data_dir,
-            Some("science-v1"),
+            19_951,
+            &runtime,
             true,
-            || {
-                fs::write(&retained_host_effect, b"partial host mutation").unwrap();
-                Err("host configure failed after mutation".into())
-            },
         );
         assert!(matches!(failed, RegistrationStatus::Warning(_)));
         assert!(retained_host_effect.is_file());
-        assert!(!route_configuration_is_current(&data_dir, "science-v1").unwrap());
+        assert!(!route_configuration_is_current(&data_dir, "test-only").unwrap());
+        drop(partial_guard);
 
         let succeeded = configure_third_party_best_effort_with(
             RegistrationStatus::AlreadyRegistered,
             &data_dir,
-            Some("science-v1"),
+            Some("test-only"),
             true,
             || Ok(()),
         );
         assert_eq!(succeeded, RegistrationStatus::AlreadyRegistered);
-        assert!(route_configuration_is_current(&data_dir, "science-v1").unwrap());
+        assert!(route_configuration_is_current(&data_dir, "test-only").unwrap());
+        drop(app);
         fs::remove_dir_all(data_dir).unwrap();
     }
 }

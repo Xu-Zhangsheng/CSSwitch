@@ -15,6 +15,8 @@ use csswitch_skill_install_core::{
     InstallError, InstalledPackage, ScienceHostContext, GITHUB_BUNDLE_OPERATION_TIMEOUT_SECONDS,
     SCHEMA_VERSION,
 };
+#[cfg(test)]
+use csswitch_skill_install_core::{install_local_package, LocalArchiveInput};
 
 const INSTALL_TOOL_NAME: &str = "install_external_skill";
 const UNINSTALL_TOOL_NAME: &str = "uninstall_external_skill";
@@ -706,7 +708,7 @@ fn install_from_arguments_with_context_and_progress(
         return install_not_ready(skill_name, "CSSwitch 尚未确认可用的 Science runtime");
     };
     progress("preflight", "正在确认 Science runtime 与 OPERON 控制面");
-    if let Err(error) = verify_attach_control_ready(science_context) {
+    if let Err(error) = verify_attach_control_ready_for_operation(science_context) {
         return install_not_ready(skill_name, &error.message);
     }
     match install_external_skill(data_dir, source_url, science_context, progress) {
@@ -715,13 +717,23 @@ fn install_from_arguments_with_context_and_progress(
     }
 }
 
+fn verify_attach_control_ready_for_operation(
+    context: &ScienceHostContext,
+) -> Result<(), csswitch_skill_install_core::AttachError> {
+    #[cfg(test)]
+    if TEST_READY_CONTEXT.with(|slot| slot.borrow().as_ref() == Some(context)) {
+        return Ok(());
+    }
+    verify_attach_control_ready(context)
+}
+
 fn install_external_skill(
     data_dir: &Path,
     source_url: &str,
     science_context: &ScienceHostContext,
     progress: &mut dyn FnMut(&str, &str),
 ) -> Result<Value, InstallError> {
-    match install_github_package_with_progress(data_dir, source_url, progress)? {
+    match resolve_install_package(data_dir, source_url, progress)? {
         InstalledPackage::Skill(commit) => {
             progress("attach", "文件已提交，正在绑定 OPERON 并回读确认");
             Ok(attach_install_commit(science_context, commit))
@@ -731,6 +743,88 @@ fn install_external_skill(
             Ok(attach_bundle_commit(science_context, commit))
         }
     }
+}
+
+fn resolve_install_package(
+    data_dir: &Path,
+    source_url: &str,
+    progress: &mut dyn FnMut(&str, &str),
+) -> Result<InstalledPackage, InstallError> {
+    #[cfg(test)]
+    if let Some(archive) = test_local_archive_for(data_dir) {
+        let archive_name = archive
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("test archive name");
+        let mut file = File::open(&archive).expect("test archive must remain readable");
+        progress("download", "测试夹具已提供隔离 archive");
+        return install_local_package(
+            data_dir,
+            LocalArchiveInput {
+                file: &mut file,
+                archive_name,
+            },
+        );
+    }
+    install_github_package_with_progress(data_dir, source_url, progress)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_LOCAL_ARCHIVE: std::cell::RefCell<Option<(PathBuf, PathBuf)>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static TEST_READY_CONTEXT: std::cell::RefCell<Option<ScienceHostContext>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+struct TestLocalArchiveGuard;
+
+#[cfg(test)]
+struct TestReadyContextGuard;
+
+#[cfg(test)]
+impl Drop for TestLocalArchiveGuard {
+    fn drop(&mut self) {
+        TEST_LOCAL_ARCHIVE.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestReadyContextGuard {
+    fn drop(&mut self) {
+        TEST_READY_CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+fn test_arm_local_archive(data_dir: &Path, archive: PathBuf) -> TestLocalArchiveGuard {
+    TEST_LOCAL_ARCHIVE.with(|slot| {
+        let previous = slot.borrow_mut().replace((data_dir.to_path_buf(), archive));
+        assert!(previous.is_none(), "test archive seam already armed");
+    });
+    TestLocalArchiveGuard
+}
+
+#[cfg(test)]
+fn test_arm_ready_context(context: ScienceHostContext) -> TestReadyContextGuard {
+    TEST_READY_CONTEXT.with(|slot| {
+        let previous = slot.borrow_mut().replace(context);
+        assert!(previous.is_none(), "test ready context seam already armed");
+    });
+    TestReadyContextGuard
+}
+
+#[cfg(test)]
+fn test_local_archive_for(data_dir: &Path) -> Option<PathBuf> {
+    TEST_LOCAL_ARCHIVE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(expected, _)| expected == data_dir)
+            .map(|(_, archive)| archive.clone())
+    })
 }
 
 fn attach_bundle_commit(context: &ScienceHostContext, commit: BundleCommit) -> Value {
@@ -1477,6 +1571,26 @@ mod tests {
         (root, data)
     }
 
+    fn write_skill_archive(root: &Path, skill_name: &str) -> PathBuf {
+        let source = root.join(format!("{skill_name}-source"));
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            format!("---\nname: {skill_name}\n---\n# {skill_name}\n"),
+        )
+        .unwrap();
+        let archive = root.join(format!("{skill_name}.zip"));
+        let output = std::process::Command::new("/usr/bin/zip")
+            .args(["-q", "-r"])
+            .arg(&archive)
+            .arg("SKILL.md")
+            .current_dir(&source)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "zip fixture creation failed");
+        archive
+    }
+
     fn write_poll_json(path: &Path, value: &Value) {
         let temp = path.with_extension("tmp");
         fs::write(&temp, serde_json::to_vec(value).unwrap()).unwrap();
@@ -1673,7 +1787,12 @@ mod tests {
     #[test]
     fn r0_bridge_install_and_uninstall_freeze_file_and_attachment_outcomes() {
         let (root, data) = standard_data_dir("r0-file-attachment-outcomes");
-        let installed = imported_skill(&data, "install-retained");
+        let archive = write_skill_archive(&root, "install-retained");
+        let installed = data.join("orgs/org-test/skills/install-retained");
+        assert!(
+            !installed.exists(),
+            "fixture must begin before package commit"
+        );
         let context = ScienceHostContext {
             binary: root.join("missing-science"),
             version: "test-version".into(),
@@ -1690,32 +1809,36 @@ mod tests {
             data_dir: data.clone(),
             sandbox_port: 19_941,
         };
-        let install = attach_install_commit(
-            &context,
-            InstallCommit {
-                skill_name: "install-retained".into(),
-                source_kind: csswitch_skill_install_core::SourceKind::Github,
-                active_org: "org-test".into(),
-                content_sha256: "a".repeat(64),
-                source_digest_sha256: Some("b".repeat(64)),
-                resolved_commit_sha: Some("c".repeat(40)),
-                source_repo: "owner/repo".into(),
-                source_path: "skills/install-retained".into(),
-                dependency_scan: "BEST_EFFORT",
-                action: csswitch_skill_install_core::InstallAction::Committed,
-                directory_commit: true,
-            },
+        let _archive_guard = test_arm_local_archive(&data, archive);
+        let _ready_guard = test_arm_ready_context(context.clone());
+        let mut phases = Vec::new();
+        let install = handle_bridge_request_with_progress(
+            &data,
+            Some(&context),
+            &json!({
+                "operation":"install",
+                "arguments":{
+                    "source_url":"https://github.com/csswitch/r0-g-test/tree/main/install-retained",
+                    "skill_name":"install-retained"
+                }
+            }),
+            &mut |phase, _| phases.push(phase.to_string()),
         );
         assert_eq!(install["status"], "FILES_COMMITTED_ATTACH_REQUIRED");
         assert_eq!(install["directory_commit"], true);
         assert_eq!(install["attach_required"], true);
         assert!(installed.is_dir());
+        assert_eq!(phases, vec!["preflight", "download", "attach"]);
 
         let removed = imported_skill(&data, "uninstall-quarantined");
-        let uninstall = uninstall_from_arguments_with_context(
+        let uninstall = handle_bridge_request_with_progress(
             &data,
             None,
-            &json!({"skill_name":"uninstall-quarantined"}),
+            &json!({
+                "operation":"uninstall",
+                "arguments":{"skill_name":"uninstall-quarantined"}
+            }),
+            &mut |_, _| {},
         );
         assert_eq!(uninstall["status"], "QUARANTINED_DETACH_REQUIRED");
         assert_eq!(uninstall["directory_removed"], true);
