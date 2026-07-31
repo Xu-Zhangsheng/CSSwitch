@@ -430,7 +430,7 @@
         {"id": "healthy-reopen.post-gateway", "after_effects": ["Gateway may have changed", "config may have changed"], "observed_outcome": "Restore prior config and AppState/Gateway snapshot; Science remains running.", "compensation": "dedicated config and Gateway rollback"}
       ],
       "compensation": {"kind": "dedicated-rollback", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, "contract": "Restore prior config and AppState/Gateway on failure; do not delete a marker created before the attempt and do not restart Science."},
-      "characterization_tests": ["runtime::tests::r0_healthy_reopen_created_marker_survives_later_failure", "runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_existing_marker_is_read_only", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback"],
       "known_gaps": ["Marker creation is a non-compensated durable upgrade."]
     },
     {
@@ -448,7 +448,7 @@
         {"id": "history-restore.credential-write", "after_effects": ["managed Science stopped"], "observed_outcome": "Write/revalidation failure leaves Science stopped and references reusable.", "compensation": "oauth_forge handles its local atomicity; command has no runtime compensation"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, "contract": "Current command has no journal, authority snapshot, or prior Science restart; only successful credential selection rotates all references."},
-      "characterization_tests": ["runtime::tests::r0_history_restore_post_stop_config_drift_leaves_science_stopped", "runtime::tests::r0_history_restore_rotates_all_references_only_after_success"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_pre_stop_rejection_preserves_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_config_drift_leaves_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_candidate_and_credential_failures_leave_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_rotates_all_references_only_after_success"],
       "known_gaps": ["Independent sibling transaction is not journaled or compensated."]
     },
     {

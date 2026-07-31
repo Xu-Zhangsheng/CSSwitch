@@ -497,6 +497,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_post_spawn_failure_cleans_candidate",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_union_proof_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science",
@@ -572,6 +573,10 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary profile-switch snapshot rollback; temp HOME, managed fake Science, real local Gateway, and loopback only"
+        },
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract": {
+          "boundary": "acceptance",
+          "reason": "explicit Acceptance-boundary history restore command contract; temp HOME, managed fake Science, and loopback only"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait": {
           "boundary": "acceptance",
@@ -697,6 +702,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_post_spawn_failure_cleans_candidate",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_union_proof_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science",
@@ -704,6 +710,13 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_ssh_prevalidation_precedes_oauth_mutation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::manual_browser_failure_returns_the_same_fresh_url_for_copy_and_retry",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_existing_marker_is_read_only",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_candidate_and_credential_failures_leave_science_stopped",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_config_drift_leaves_science_stopped",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_pre_stop_rejection_preserves_runtime",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_rotates_all_references_only_after_success",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_post_receipt_failure_restores_prior_runtime",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart",

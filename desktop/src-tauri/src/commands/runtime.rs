@@ -107,8 +107,8 @@ pub(crate) async fn one_click_login<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub(crate) async fn restore_history_choice(
-    app: tauri::AppHandle,
+pub(crate) async fn restore_history_choice<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     reference: String,

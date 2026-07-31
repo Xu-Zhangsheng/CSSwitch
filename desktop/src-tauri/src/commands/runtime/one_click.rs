@@ -240,8 +240,8 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     }
 }
 
-pub(super) async fn restore_history_choice_command(
-    app: tauri::AppHandle,
+pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     reference: String,
@@ -299,6 +299,8 @@ pub(super) async fn restore_history_choice_command(
                     return Err("Science 端口被未知进程占用，已拒绝改写历史身份".into());
                 }
             }
+            #[cfg(test)]
+            apply_history_restore_post_stop_config_drift(expected_port)?;
             let current_cfg =
                 config::load_from(&config::default_dir()).map_err(|e| e.to_string())?;
             if current_cfg.mode != "proxy"
@@ -351,6 +353,42 @@ pub(super) async fn restore_history_choice_command(
         })
     })
     .await
+}
+
+#[cfg(test)]
+static HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(super) struct HistoryRestorePostStopConfigDriftGuard;
+
+#[cfg(test)]
+impl Drop for HistoryRestorePostStopConfigDriftGuard {
+    fn drop(&mut self) {
+        HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+pub(super) fn test_arm_history_restore_post_stop_config_drift(
+) -> HistoryRestorePostStopConfigDriftGuard {
+    HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT.store(true, std::sync::atomic::Ordering::SeqCst);
+    HistoryRestorePostStopConfigDriftGuard
+}
+
+#[cfg(test)]
+fn apply_history_restore_post_stop_config_drift(expected_port: u16) -> Result<(), String> {
+    if !HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    config::update(&config::default_dir(), |current| {
+        current.sandbox_port = expected_port
+            .checked_add(1)
+            .filter(|port| *port != 8765)
+            .unwrap_or(expected_port.saturating_sub(1));
+    })
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 pub(super) fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_json::Value {

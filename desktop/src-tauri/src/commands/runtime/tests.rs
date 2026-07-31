@@ -3794,8 +3794,369 @@ fn isolated_profile_switch_snapshot_failure_reuses_restored_prior_science() {
 }
 
 #[test]
+fn r0_history_restore_pre_stop_rejection_preserves_runtime() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        &[(
+            "CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE",
+            "pre-stop-rejection",
+        )],
+    );
+}
+
+#[test]
+fn r0_history_restore_post_stop_config_drift_leaves_science_stopped() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        &[(
+            "CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE",
+            "post-stop-config-drift",
+        )],
+    );
+}
+
+#[test]
+fn r0_history_restore_post_stop_candidate_and_credential_failures_leave_science_stopped() {
+    for oracle in ["candidate-revalidation-failure", "credential-write-failure"] {
+        run_exact_ignored_runtime_characterization(
+            "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+            &[("CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE", oracle)],
+        );
+    }
+}
+
+#[test]
+fn r0_history_restore_rotates_all_references_only_after_success() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        &[("CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE", "success")],
+    );
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary history restore command contract; temp HOME, managed fake Science, and loopback only"]
+fn isolated_r0_history_restore_command_contract() {
+    let oracle =
+        env::var("CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE").unwrap_or_else(|_| "success".into());
+    assert!(matches!(
+        oracle.as_str(),
+        "pre-stop-rejection"
+            | "post-stop-config-drift"
+            | "candidate-revalidation-failure"
+            | "credential-write-failure"
+            | "success"
+    ));
+    let tmp = tmpdir("r0-history-restore");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
+    let mock_upstream = start_mock_upstream();
+    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("SCIENCE_BIN", &fake_science);
+    env_guard.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set(
+        "PATH",
+        format!(
+            "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            bin_dir.to_string_lossy()
+        ),
+    );
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    config::save_to(&config_dir, &cfg).unwrap();
+    let sandbox_home = config_dir.join("sandbox").join("home");
+    let science_data = sandbox_home.join(".claude-science");
+    fs::create_dir_all(&science_data).unwrap();
+    let (forged, _) = crate::oauth_forge::ensure_virtual_login(
+        &science_data,
+        "virtual@localhost.invalid",
+        &sandbox_home,
+    )
+    .unwrap();
+    let history_orgs = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ];
+    for org in history_orgs {
+        fs::create_dir_all(science_data.join("orgs").join(org)).unwrap();
+    }
+    fs::remove_file(&forged.enc_file).unwrap();
+    fs::remove_file(science_data.join("active-org.json")).unwrap();
+    let marker = config_dir
+        .join("sandbox")
+        .join("state")
+        .join("virtual-org.v1.json");
+    fs::remove_file(&marker).unwrap();
+    let candidates = match crate::oauth_forge::ensure_virtual_login(
+        &science_data,
+        "virtual@localhost.invalid",
+        &sandbox_home,
+    )
+    .unwrap_err()
+    {
+        crate::oauth_forge::EnsureVirtualLoginError::HistoryChoiceRequired(candidates) => {
+            candidates
+        }
+        other => panic!("expected history choice fixture, got {other}"),
+    };
+    assert_eq!(candidates.len(), 2);
+    let choices = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, candidate)| crate::HistoryRecoveryChoice {
+            reference: format!("history-reference-{index}"),
+            candidate,
+        })
+        .collect::<Vec<_>>();
+    let old_references = choices
+        .iter()
+        .map(|choice| choice.reference.clone())
+        .collect::<Vec<_>>();
+    let selected_reference = old_references[0].clone();
+    let active_profile_id = cfg.active_profile().unwrap().id.clone();
+    let prior_runtime =
+        science::select_science_runtime_cached(None, &science::ScienceVersionCache::default())
+            .unwrap();
+    let prior_science_pid = start_managed_fake_science(
+        &fake_science,
+        &sandbox_home,
+        &science_data,
+        sandbox_port,
+        &prior_runtime,
+    );
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    {
+        let mut authority = lock(&state);
+        authority.sandbox_port = sandbox_port;
+        authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}/history"));
+        authority.science_runtime = Some(prior_runtime.clone());
+        authority.science_confirmed_stopped = None;
+        authority.history_recovery = Some(crate::HistoryRecoverySession {
+            active_profile_id,
+            sandbox_port,
+            auth_dir: science_data.clone(),
+            sandbox_root: sandbox_home.clone(),
+            choices,
+        });
+        authority.boot_attention = Some(serde_json::json!({"status": "history"}));
+    }
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle)
+        .invoke_handler(tauri::generate_handler![super::restore_history_choice])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let _config_drift = (oracle == "post-stop-config-drift")
+        .then(super::one_click::test_arm_history_restore_post_stop_config_drift);
+    if oracle == "pre-stop-rejection" {
+        cfg.mode = "official".into();
+        config::save_to(&config_dir, &cfg).unwrap();
+    } else if oracle == "candidate-revalidation-failure" {
+        let chosen = science_data.join("orgs").join(history_orgs[0]);
+        fs::remove_dir(&chosen).unwrap();
+        fs::create_dir(&chosen).unwrap();
+    } else if oracle == "credential-write-failure" {
+        let key = science_data.join("encryption.key");
+        let outside = tmp.join("immutable-test-key");
+        fs::write(&outside, fs::read(&key).unwrap()).unwrap();
+        fs::remove_file(&key).unwrap();
+        symlink(&outside, &key).unwrap();
+    }
+
+    let result = invoke_json(
+        &webview,
+        "restore_history_choice",
+        serde_json::json!({"reference": selected_reference}),
+    );
+    let (current_references, boot_attention_present, runtime_present, confirmed_stopped) = {
+        let authority = lock(&state);
+        (
+            authority
+                .history_recovery
+                .as_ref()
+                .map(|session| {
+                    session
+                        .choices
+                        .iter()
+                        .map(|choice| choice.reference.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            authority.boot_attention.is_some(),
+            authority.science_runtime.is_some(),
+            authority.science_confirmed_stopped.clone(),
+        )
+    };
+    let listener_after = listener_pid_if_unique(sandbox_port);
+    let serve_count =
+        fs::read_to_string(science_data.join("fake-science/serve-count")).unwrap_or_default();
+    let receipt_exists = config_dir.join("science-managed-launch.v1.json").exists();
+    let exact_stopped = process_start_identity_if_alive(prior_science_pid).is_none()
+        && listener_after.is_none()
+        && !receipt_exists
+        && !runtime_present
+        && confirmed_stopped.as_ref() == Some(&prior_runtime);
+    let selected_org_after = fs::read_to_string(science_data.join("active-org.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_str::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value["org_uuid"].as_str().map(str::to_string));
+    let marker_present_after = marker.is_file();
+
+    if oracle == "pre-stop-rejection" {
+        let safe_stop = {
+            let mut authority = lock(&state);
+            let runtime = authority.science_runtime.clone();
+            let AppState {
+                sandbox,
+                sandbox_url,
+                ..
+            } = &mut *authority;
+            science::stop_sandbox(
+                &app.handle().clone(),
+                sandbox,
+                sandbox_url,
+                runtime.as_ref(),
+            )
+        };
+        assert!(safe_stop.is_ok());
+    }
+    force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
+
+    match oracle.as_str() {
+        "pre-stop-rejection" => {
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("第三方模型模式")),
+                "pre-stop config rejection must be explicit: {result:?}"
+            );
+            assert!(
+                listener_after == Some(prior_science_pid)
+                    && runtime_present
+                    && confirmed_stopped.is_none()
+                    && current_references == old_references
+                    && boot_attention_present,
+                "pre-stop rejection must preserve exact managed Science and all history references"
+            );
+        }
+        "post-stop-config-drift" => {
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("运行配置或事务在恢复前已变化")),
+                "post-stop config drift must reject before credential mutation: {result:?}"
+            );
+            assert!(
+                exact_stopped && current_references == old_references && boot_attention_present
+            );
+        }
+        "candidate-revalidation-failure" => {
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("历史记录候选已变化")),
+                "candidate identity replacement must fail after exact stop: {result:?}"
+            );
+            assert!(
+                exact_stopped && current_references == old_references && boot_attention_present
+            );
+        }
+        "credential-write-failure" => {
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("符号链接")),
+                "credential publication guard must fail after exact stop: {result:?}"
+            );
+            assert!(
+                exact_stopped && current_references == old_references && boot_attention_present
+            );
+        }
+        "success" => {
+            let returned_references = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value["choices"].as_array())
+                .map(|choices| {
+                    choices
+                        .iter()
+                        .filter_map(|choice| choice["reference"].as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert!(
+                result.as_ref().is_ok_and(|value| {
+                    value["status"] == "ok" && value["action"] == "history_choice_restored"
+                }),
+                "history restore must return its narrow success DTO: {result:?}"
+            );
+            assert!(
+                exact_stopped
+                    && serve_count.trim() == "1"
+                    && current_references.len() == old_references.len()
+                    && current_references
+                        .iter()
+                        .zip(&old_references)
+                        .all(|(current, old)| current != old)
+                    && current_references
+                        .iter()
+                        .all(|current| !old_references.contains(current))
+                    && returned_references == current_references
+                    && !boot_attention_present
+                    && selected_org_after.as_deref() == Some(history_orgs[0])
+                    && marker_present_after,
+                "successful history restore must rotate every reference, select only the chosen org, and leave Science stopped for the frontend's separate one-click: stopped={exact_stopped}, serve_count={serve_count:?}, old={old_references:?}, current={current_references:?}, returned={returned_references:?}, boot_attention_present={boot_attention_present}, selected_org={selected_org_after:?}, marker_present={marker_present_after}"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn r0_healthy_reopen_existing_marker_is_read_only() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
+        &[("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE", "existing-marker-success")],
+    );
+}
+
+#[test]
+fn r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
+        &[("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE", "marker-bootstrap-failure")],
+    );
+}
+
+#[test]
+fn r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
+        &[("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE", "marker-late-failure")],
+    );
+}
+
+#[test]
 #[ignore = "explicit Acceptance-boundary healthy reopen Gateway rollback; temp HOME, managed fake Science, real local Gateway, and loopback only"]
 fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
+    let oracle = env::var("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE")
+        .unwrap_or_else(|_| "marker-late-failure".into());
+    assert!(matches!(
+        oracle.as_str(),
+        "existing-marker-success" | "marker-bootstrap-failure" | "marker-late-failure"
+    ));
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -3840,12 +4201,34 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
         .join("home");
     let science_data = sandbox_home.join(".claude-science");
     fs::create_dir_all(&science_data).unwrap();
-    crate::oauth_forge::ensure_virtual_login(
+    let (forged, _) = crate::oauth_forge::ensure_virtual_login(
         &science_data,
         "virtual@localhost.invalid",
         &sandbox_home,
     )
     .unwrap();
+    let marker = config_dir
+        .join("sandbox")
+        .join("state")
+        .join("virtual-org.v1.json");
+    let credential_snapshot = [
+        (
+            science_data.join("encryption.key"),
+            fs::read(science_data.join("encryption.key")).unwrap(),
+        ),
+        (forged.enc_file.clone(), fs::read(&forged.enc_file).unwrap()),
+        (
+            science_data.join("active-org.json"),
+            fs::read(science_data.join("active-org.json")).unwrap(),
+        ),
+    ];
+    let marker_before = fs::read(&marker).unwrap();
+    let marker_metadata_before = fs::metadata(&marker).unwrap();
+    let marker_identity_before = (
+        marker_metadata_before.dev(),
+        marker_metadata_before.ino(),
+        marker_metadata_before.permissions().mode() & 0o777,
+    );
     let prior_runtime =
         science::select_science_runtime_cached(None, &science::ScienceVersionCache::default())
             .unwrap();
@@ -3903,9 +4286,18 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
         crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
     )
     .expect("prior Gateway must be healthy");
-    let _catalog_seam = sandbox_session::test_arm_healthy_reopen_catalog_failure(proxy_port);
+    let sandbox_dir = sandbox_home.parent().unwrap().to_path_buf();
+    if oracle != "existing-marker-success" {
+        fs::remove_file(&marker).unwrap();
+    }
+    if oracle == "marker-bootstrap-failure" {
+        fs::remove_dir(marker.parent().unwrap()).unwrap();
+        fs::set_permissions(&sandbox_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    let _catalog_seam = (oracle == "marker-late-failure")
+        .then(|| sandbox_session::test_arm_healthy_reopen_catalog_failure(proxy_port));
 
-    let failed = sandbox_session::one_click_login(
+    let result = sandbox_session::one_click_login(
         handle.clone(),
         state.clone(),
         lifecycle.as_ref(),
@@ -3989,6 +4381,26 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
         });
     let science_untouched = listener_pid_if_unique(sandbox_port) == Some(prior_science_pid)
         && TcpStream::connect(("127.0.0.1", sandbox_port)).is_ok();
+    if oracle == "marker-bootstrap-failure" {
+        fs::set_permissions(&sandbox_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let credentials_unchanged = credential_snapshot
+        .iter()
+        .all(|(path, expected)| fs::read(path).is_ok_and(|actual| actual == *expected));
+    let marker_after = fs::read(&marker).ok();
+    let marker_identity_after = fs::metadata(&marker).ok().map(|metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.permissions().mode() & 0o777,
+        )
+    });
+    let prior_gateway_still_owned = {
+        let mut authority = lock(&state);
+        authority.proxy.as_mut().is_some_and(|child| {
+            child.id() == prior_gateway_pid.unwrap() && child.try_wait().unwrap().is_none()
+        })
+    };
     let safe_science_stop = {
         let mut authority = lock(&state);
         let runtime = authority.science_runtime.clone();
@@ -4001,16 +4413,60 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
     };
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
-    assert!(
-        failed
-            .as_ref()
-            .is_err_and(|error| { error.contains("test-only healthy reopen catalog failure") }),
-        "fixture must fail only after the active Gateway restart: {failed:?}"
-    );
-    assert!(
-            gateway_restored && science_untouched && safe_science_stop.is_ok(),
-            "healthy reopen catalog failure must stop candidate and restart the exact prior owned Gateway, including prior key fingerprint and in-memory launch context, without snapshotting or restarting healthy Science: publishes={publishes:?}, prior_gateway_pid={prior_gateway_pid:?}, tracked={tracked_gateway_pid:?}, candidate={candidate_pid:?}, context_restored={launch_context_matches_prior}, health={restored_gateway_health:?}, science_pid={prior_science_pid}, safe_science_stop={safe_science_stop:?}"
-        );
+    match oracle.as_str() {
+        "existing-marker-success" => {
+            assert!(
+                result.as_ref().is_ok_and(|value| {
+                    value["status"] == "ok" && value["action"] == "reopened"
+                }),
+                "healthy reopen with an existing marker must succeed: {result:?}"
+            );
+            assert!(
+                credentials_unchanged
+                    && marker_after.as_deref() == Some(marker_before.as_slice())
+                    && marker_identity_after == Some(marker_identity_before)
+                    && science_untouched
+                    && safe_science_stop.is_ok(),
+                "existing-marker healthy reopen must reuse marker and credentials byte-for-byte without restarting Science: marker_present={}, credentials_unchanged={credentials_unchanged}, science_pid={prior_science_pid}, result={result:?}",
+                marker_after.is_some()
+            );
+        }
+        "marker-bootstrap-failure" => {
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("CSSwitch 私有状态目录")),
+                "fixture must fail while publishing the missing marker: {result:?}"
+            );
+            assert!(
+                credentials_unchanged
+                    && marker_after.is_none()
+                    && prior_gateway_still_owned
+                    && science_untouched
+                    && safe_science_stop.is_ok(),
+                "marker bootstrap failure must preserve credentials, prior Gateway, and healthy Science without creating a marker: credentials_unchanged={credentials_unchanged}, marker_present={}, prior_gateway_still_owned={prior_gateway_still_owned}, science_pid={prior_science_pid}, result={result:?}",
+                marker_after.is_some()
+            );
+        }
+        "marker-late-failure" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("test-only healthy reopen catalog failure")
+                }),
+                "fixture must fail only after the active Gateway restart: {result:?}"
+            );
+            assert!(
+                credentials_unchanged
+                    && marker_after.is_some()
+                    && gateway_restored
+                    && science_untouched
+                    && safe_science_stop.is_ok(),
+                "healthy reopen must retain its newly bootstrapped marker while restoring the exact prior Gateway and leaving credentials/Science untouched: marker_present={}, credentials_unchanged={credentials_unchanged}, publishes={publishes:?}, prior_gateway_pid={prior_gateway_pid:?}, tracked={tracked_gateway_pid:?}, candidate={candidate_pid:?}, context_restored={launch_context_matches_prior}, health={restored_gateway_health:?}, science_pid={prior_science_pid}, safe_science_stop={safe_science_stop:?}",
+                marker_after.is_some()
+            );
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]

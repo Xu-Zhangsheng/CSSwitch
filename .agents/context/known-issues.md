@@ -22,11 +22,18 @@ DB recovery restart 未证实候选，以及 late-failure prior-runtime restore�
 隔离 HOME、fake Science、mock upstream 与动态 loopback 端口内执行；结论不扩展到
 installed/live provider 或产品行为修复。
 
+`R0-B` 已收口（source）：七个 source gate 父身份冻结 healthy reopen 的既有 marker
+只读复用、marker bootstrap 失败、marker 写入后 Gateway/catalog rollback，以及显式
+history restore 的 stop 前拒绝、exact stop 后 config/candidate/credential 失败、全量
+reference 轮换和成功后仍由 frontend 另起 one-click。隔离边界为临时 HOME、fake
+Science、必要时 real local Gateway、mock upstream 与动态 loopback；结论不扩展到
+installed/live provider 或产品行为修复。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
-| `R0-B` | **NEXT** | healthy reopen 与 history restore |
-| `R0-C` | PENDING | interrupted Gateway recovery 与 start-gateway-only |
+| `R0-B` | DONE | healthy reopen 与 history restore |
+| `R0-C` | **NEXT** | interrupted Gateway recovery 与 start-gateway-only |
 | `R0-D` | PENDING | mode/settings/stop/quit/native exit |
 | `R0-E` | PENDING | profile select/update/sync/revoke |
 | `R0-F` | PENDING | Codex mutation |
