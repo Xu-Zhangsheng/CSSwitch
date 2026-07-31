@@ -35,6 +35,7 @@
 ## 证据
 
 - [证据索引](evidence/README.md)：按发布证据或日期化调查进入对应二级索引。
+- [2026-07-31 工程重构后基线](audits/2026-07-31-v084-post-refactor-baseline.md)：绑定本地 `next` 的最终工程合并 SHA，记录职责映射、source-test 证据和未验证边界。
 - [2026-07-30 文档结构与拆分审计](audits/2026-07-30-v084-document-structure.md)：记录全库 Markdown 的 keep / shrink / split / delete-pointer 结论及本期验证。
 - [2026-07-30 架构与 Science 边界调研](audits/2026-07-30-v084-architecture-reconnaissance.md)：固定 exact HEAD、源码/官方资料、架构 findings、UNKNOWN 与 A/B/C 探针队列。
 - [v0.8.3 测试系统审计](audits/v083-test-system-audit.md)：记录当时的 BLOCK、入口清单与证据分层，不代表当前 gate 结果。

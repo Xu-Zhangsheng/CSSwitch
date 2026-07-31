@@ -2,7 +2,7 @@
 
 状态：当前；按 v0.8.4 release source 与 2026-07-30 文档治理基线整理
 
-最后复核：2026-07-30（Asia/Shanghai）
+最后复核：2026-07-31（Asia/Taipei）
 
 失效条件：对应 change/bug record、Science 版本、release source、artifact 或 installed/live 证据改变时，受影响条目立即失效并须按当前版本重审。
 
@@ -23,10 +23,11 @@
   `cargo test --lib failure::`、
   `science_operation_failures_have_stable_structured_stages`、
   `auto_boot_rejects_structured_runtime_failure`。
-- `sandbox_session` 第一层目录化拆分已在 `next` 完成；第二层收口评估、验证和
-  Gateway `server.rs` 的后续顺序统一见
-  [工程重构进度](refactor-progress.md)。任何后续拆分都不得扩大已冻结的
-  Runtime/Gateway allowlist，子模块须返回 typed failure。
+- 本轮 runtime、Gateway 与 frontend 机械职责拆分已经在本地 `next` 收口，结构、
+  验证层与后续逻辑重构边界见
+  [工程重构后基线](../../docs/audits/2026-07-31-v084-post-refactor-baseline.md)。
+  任何后续拆分都不得扩大已冻结的 Runtime/Gateway allowlist，子模块须返回
+  typed failure。
 - 已闭合的是 **process environment 边界** 与 **一键/auto-boot 故障投影**，不是
   全部真实 provider/SSH/Science 领域 live PASS，也不是 Developer ID / notarization。
 

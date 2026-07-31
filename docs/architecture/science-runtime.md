@@ -53,6 +53,26 @@ provider secret 只进入 Gateway。sentinel 与 stub 回归见 `runtime::launch
 [产品与 Claude Science 能力地图](../features/product-science-capability-map.md)
 维护。
 
+## 当前源码 owner
+
+`desktop/src-tauri/src/runtime/science.rs` 是保持历史 module surface 的同模块
+façade；生产实现按独立维护原因分布为：
+
+| 边界 | 当前源码 owner |
+|---|---|
+| 基础类型、常量、receipt/runtime 合同 | `runtime/science/contracts.rs` |
+| executable 选择、安全读取、snapshot 与版本识别 | `runtime/science/executable.rs` |
+| live process/listener identity 与 runtime state | `runtime/science/runtime_state.rs` |
+| managed launch、receipt 与启动后身份提交 | `runtime/science/managed_launch.rs` |
+| preflight、probe、reuse、URL 与 stop lifecycle | `runtime/science/lifecycle.rs` |
+| 历史测试身份 | `runtime/science/tests.rs`；仍保持 `runtime::science::tests::*` |
+
+这些片段仍编译在原 `runtime::science` 模块内；拆分没有建立新的状态 owner，也没有
+扩大 executable 来源、environment allowlist、凭证读取、listener 控制或 stop
+权限。Science transaction 与 protected projection 继续由
+`runtime/sandbox_session/` 拥有，Gateway 进程编排继续由
+`runtime/proxy_lifecycle/` 拥有。
+
 ## 分离六个事实
 
 1. **executable**：实际执行的 `claude-science` 文件；

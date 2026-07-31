@@ -17,6 +17,24 @@ Desktop build 会构建并打包同变体 Rust Gateway sidecar。当前生产运
 
 这些入口共享二进制，不共享同一状态承诺。
 
+## 当前源码 owner
+
+| 边界 | 当前源码 owner |
+|---|---|
+| Gateway listener、method dispatch 与唯一 public server entry | `desktop/gateway/src/server.rs` |
+| HTTP head/body codec、limits 与错误响应 | `desktop/gateway/src/server/http_codec.rs` |
+| GET/POST、provider/Codex inference 与 SSE | `desktop/gateway/src/server/inference_dispatch.rs` |
+| Skill install bridge host lifecycle | `desktop/gateway/src/server/skill_bridge_host.rs` |
+| `server::tests::*` 测试身份 | `desktop/gateway/src/server/tests.rs` |
+| Desktop 侧 launch plan、recovery、reuse/spawn/stop | `desktop/src-tauri/src/runtime/proxy_lifecycle.rs` façade |
+| launch contract / allowlist、binary lookup、Science Skill bridge 与 lifecycle 编排 | `runtime/proxy_lifecycle/launch_contract.rs`、`binary.rs`、`skill_bridge.rs`、`recovery.rs`、`lifecycle.rs` |
+| 旧 Python listener 与错误 sidecar 的 fail-closed 清理 | `desktop/src-tauri/src/runtime/legacy_proxy.rs`，只作为兼容清理边界 |
+
+`server.rs` 不拥有 Desktop 进程状态；`proxy_lifecycle` 也不拥有 provider 协议实现。
+前者接受冻结的 `GatewayConfig` 并服务请求，后者在 `AppState`、`Lifecycle` 与
+config 合同下管理受管 sidecar。legacy proxy 路径不能作为 Python fallback 或
+当前 provider implementation。
+
 ## 正式 Gateway
 
 Tauri 从 active profile 与 provider contract 解析 launch plan；saved-model profile

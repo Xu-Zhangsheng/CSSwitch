@@ -32,6 +32,26 @@ Tauri backend
 
 `desktop/src-tauri/src/lib.rs::run` 是 command 注册权威入口。frontend 可达性必须检查生产 bundle 的全部调用模块：`desktop/src/main.js` 是装载、注入和主要 `call()` / listener 入口，动态导入的 `desktop/src/skill-page.js` 等模块也可以持有真实 `call` 并形成 production caller。preview 的 `mockInvoke` 只模拟 DTO，不算生产 caller。
 
+## 当前源码 owner
+
+控制面按维护原因落在以下 owner；根文件是组合或注册面，不重新拥有子模块实现：
+
+| 边界 | 当前源码 owner |
+|---|---|
+| frontend bootstrap、共享 busy/activation/page/feedback 状态 | `desktop/src/main.js` |
+| preview/mock adapter | `desktop/src/preview-adapter.js` |
+| Tauri invoke/event/window transport | `desktop/src/ipc-client.js` |
+| Codex OAuth、network 与 downgrade 交互 | `desktop/src/codex-controller.js` |
+| runtime lifecycle、status 与一键交互 | `desktop/src/runtime-controller.js` |
+| profile、catalog 与表单交互 | `desktop/src/profile-controller.js` |
+| Tauri runtime command façade 与 crate-facing command surface | `desktop/src-tauri/src/commands/runtime.rs` |
+| command 实现 | `commands/runtime/actions.rs`、`gateway.rs`、`lifecycle.rs`、`one_click.rs`、`status.rs` |
+| command 测试身份 | `commands/runtime/tests.rs`；仍保持 `commands::runtime::tests::*` |
+
+`commands/runtime.rs` 只保留 command attribute、签名、转发和必要 re-export；新增或
+移动实现时仍须从 `lib.rs::run`、frontend caller、DTO、event 与测试 identity
+整条链复核，不能只检查 façade。
+
 ## command 面
 
 当前注册面按公共职责分组：

@@ -23,6 +23,25 @@
 
 任何单一文件、端口或内存字段都不能独立证明完整运行身份。
 
+## 当前源码 owner
+
+| 状态或事务边界 | 当前源码 owner |
+|---|---|
+| `AppState` / `SharedLifecycle` 类型与进程级组合 | `desktop/src-tauri/src/lib.rs` |
+| command 级 mode/settings/stop/quit 串行编排 | `commands/runtime/lifecycle.rs` |
+| 一键启动、history recovery 与 UI failure 投影 | `commands/runtime/one_click.rs` |
+| protected projection、journal recovery、route reconcile、SSH preflight 与一键事务 | `runtime/sandbox_session/` |
+| protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
+| healthy daemon reopen 的独立补偿分支 | `runtime/sandbox_session/one_click/healthy_reopen.rs` |
+| Gateway recovery/reuse/spawn/stop | `runtime/proxy_lifecycle.rs` façade及其 `proxy_lifecycle/` 片段 |
+| Science executable、runtime identity、managed receipt 与 stop | `runtime/science.rs` façade及其 `science/` 片段 |
+| 持久配置、runtime binding 与 journal schema | `desktop/src-tauri/src/config.rs` |
+
+这些路径是当前维护映射，不改变上表的 source of truth。`runtime.rs`、
+`science.rs`、`proxy_lifecycle.rs` 和部分 `sandbox_session` 根文件是保持历史
+module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`、
+`Lifecycle`、`Config`、receipt/manifest 与 live identity 的既有组合决定。
+
 ## 锁序与并发
 
 跨命令变更遵守固定顺序：
