@@ -599,7 +599,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             "no export rollback and no runtime restart",
         )
         self.assertIn(
-            "config::tests::completed_export_survives_later_config_precommit_failure",
+            "desktop/src-tauri/Cargo.toml::lib::config::tests::completed_export_survives_later_config_precommit_failure",
             downgrade["characterization_tests"],
         )
 

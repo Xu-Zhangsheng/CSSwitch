@@ -405,6 +405,52 @@ enum DowngradeCommandOutcome {
     TerminalFailure(String),
 }
 
+fn downgrade_command_outcome(
+    result: Result<Option<PathBuf>, config::DowngradeError>,
+    success: Value,
+) -> DowngradeCommandOutcome {
+    match result {
+        Ok(_) => DowngradeCommandOutcome::Committed(success),
+        Err(error) if error.exit_required => DowngradeCommandOutcome::TerminalFailure(format!(
+            "v2 配置发布后的持久化或回滚状态不确定；进程已锁存并强制退出，禁止再次读取配置：{}",
+            error.message
+        )),
+        Err(error) => DowngradeCommandOutcome::SafeFailure(error.message),
+    }
+}
+
+fn run_downgrade_mutation_at(
+    dir: &Path,
+    actions: &BTreeMap<String, config::CodexDowngradeAction>,
+    destination: &Path,
+    expected_fingerprint: &str,
+    success: Value,
+    stop_runtime: impl FnOnce() -> Result<(), String>,
+) -> Result<DowngradeCommandOutcome, String> {
+    stop_runtime()?;
+    Ok(downgrade_command_outcome(
+        config::downgrade_to_v2_and_latch(dir, actions, Some(destination), expected_fingerprint),
+        success,
+    ))
+}
+
+fn finish_downgrade_command(
+    outcome: DowngradeCommandOutcome,
+    exit: impl FnOnce(i32),
+) -> Result<Value, String> {
+    match outcome {
+        DowngradeCommandOutcome::SafeFailure(error) => Err(error),
+        DowngradeCommandOutcome::Committed(result) => {
+            exit(0);
+            Ok(result)
+        }
+        DowngradeCommandOutcome::TerminalFailure(error) => {
+            exit(1);
+            Err(error)
+        }
+    }
+}
+
 fn known_non_codex_provider(provider: &str) -> bool {
     matches!(
         provider,
@@ -561,6 +607,26 @@ fn set_experimental_codex_enabled_at(
     Ok(json!({ "experimental_codex_enabled": enabled }))
 }
 
+fn set_codex_network_at(
+    dir: &Path,
+    settings: csswitch_codex_network::CodexNetworkSettings,
+    resolved: &csswitch_codex_network::ResolvedCodexNetworkRoute,
+    before_commit: impl FnOnce() -> Result<(), String>,
+) -> Result<Value, String> {
+    before_commit()?;
+    let mode = settings.mode;
+    config::update(dir, move |cfg| {
+        cfg.codex_network = settings;
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "mode": mode,
+        "source": resolved.source,
+        "proxy_scheme": resolved.proxy_scheme,
+        "restarted": false,
+    }))
+}
+
 fn codex_downgrade_preview_for(cfg: &config::Config) -> Result<Value, String> {
     let profiles: Vec<Value> = cfg
         .profiles
@@ -632,8 +698,8 @@ fn downgrade_actions_for_expected(
     Ok(actions)
 }
 
-fn stop_all_before_downgrade(
-    app: &tauri::AppHandle,
+fn stop_all_before_downgrade<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &SharedAppState,
     lifecycle: &crate::lifecycle::Lifecycle,
 ) -> Result<(), String> {
@@ -1970,7 +2036,6 @@ pub(crate) async fn set_codex_network(
 ) -> Result<Value, RuntimeCommandError> {
     let resolved = csswitch_codex_network::resolve_from_process(&settings)
         .map_err(|_| RuntimeCommandError::from("proxy_config_invalid：Codex 网络代理配置非法。"))?;
-    let mode = settings.mode;
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
     let supervisor = supervisor.inner().clone();
@@ -1978,18 +2043,10 @@ pub(crate) async fn set_codex_network(
         lifecycle.with_serialized(|| -> Result<_, RuntimeCommandError> {
             let _mutation = CodexAuthSupervisor::begin_mutation(&supervisor)
                 .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
-            prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref())
-                .map_err(RuntimeCommandError::from)?;
-            config::update(&config::default_dir(), move |cfg| {
-                cfg.codex_network = settings;
+            set_codex_network_at(&config::default_dir(), settings, &resolved, || {
+                prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
             })
-            .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
-            Ok(json!({
-                "mode": mode,
-                "source": resolved.source,
-                "proxy_scheme": resolved.proxy_scheme,
-                "restarted": false,
-            }))
+            .map_err(RuntimeCommandError::from)
         })
     })
     .await
@@ -2046,57 +2103,41 @@ pub(crate) async fn codex_downgrade_export_all(
                 &expected_profile_ids,
                 &expected_preview_fingerprint,
             )?;
-            stop_all_before_downgrade(&app, &state, lifecycle.as_ref())?;
-            Ok(match config::downgrade_to_v2_and_latch(
+            run_downgrade_mutation_at(
                 &dir,
                 &actions,
-                Some(&destination),
+                &destination,
                 &expected_preview_fingerprint,
-            ) {
-                Ok(_) => DowngradeCommandOutcome::Committed(json!({
+                json!({
                     "schema_version": 1,
                     "status": "DOWNGRADED_EXIT_REQUIRED",
                     "profile_count": actions.len(),
                     "exported": true,
                     "credentials_unchanged": true,
                     "app_exit_required": true,
-                })),
-                Err(error) if error.exit_required => {
-                    DowngradeCommandOutcome::TerminalFailure(format!(
-                        "v2 配置发布后的持久化或回滚状态不确定；进程已锁存并强制退出，禁止再次读取配置：{}",
-                        error.message
-                    ))
-                }
-                Err(error) => DowngradeCommandOutcome::SafeFailure(error.message),
-            })
+                }),
+                || stop_all_before_downgrade(&app, &state, lifecycle.as_ref()),
+            )
         })
     })
     .await?;
-    match outcome {
-        DowngradeCommandOutcome::SafeFailure(error) => Err(error),
-        DowngradeCommandOutcome::Committed(result) => {
-            // The managed runtime was already stopped before the v2 commit. Do
-            // not use generic quit_app: it may reload config to rediscover a
-            // stopped sandbox and migrate v2 back to v3.
-            exit_app.exit(0);
-            Ok(result)
-        }
-        DowngradeCommandOutcome::TerminalFailure(error) => {
-            // Even an error is terminal once rename publication cannot be
-            // proven rolled back. The latch rejects every config caller during
-            // the short interval before this direct exit.
-            exit_app.exit(1);
-            Err(error)
-        }
-    }
+    // The managed runtime was already stopped before the v2 commit. Do not use
+    // generic quit_app: it may reload config to rediscover a stopped sandbox
+    // and migrate v2 back to v3. Post-publish uncertainty uses the same direct
+    // terminal path with exit code one.
+    finish_downgrade_command(outcome, move |code| exit_app.exit(code))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::fs;
     use std::net::TcpListener;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicI32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3321,5 +3362,410 @@ mod tests {
         .is_err());
         assert!(downgrade_actions_for_expected(&cfg, &["other".into()], &fingerprint).is_err());
         assert!(downgrade_actions_for_expected(&cfg, &["codex-1".into()], "stale").is_err());
+    }
+
+    fn run_exact_ignored_codex_characterization(case: &str) {
+        let child_name = "commands::codex::tests::isolated_r0_codex_mutation_command_contract";
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(child_name)
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env("CSSWITCH_TEST_R0_F_CASE", case)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success()
+                && stdout.lines().any(|line| line == "running 1 test")
+                && stdout
+                    .lines()
+                    .any(|line| line == format!("test {child_name} ... ok")),
+            "isolated R0-F {case} characterization failed:\nstdout={}\nstderr={}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn r0_listener() -> TcpListener {
+        loop {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            if listener.local_addr().unwrap().port() != 8765 {
+                return listener;
+            }
+        }
+    }
+
+    fn r0_distinct_ports() -> (u16, u16) {
+        let proxy = r0_listener();
+        let sandbox = r0_listener();
+        (
+            proxy.local_addr().unwrap().port(),
+            sandbox.local_addr().unwrap().port(),
+        )
+    }
+
+    fn r0_codex_config(home: &Path) -> PathBuf {
+        env::set_var("HOME", home);
+        let dir = config::default_dir();
+        let (proxy_port, sandbox_port) = r0_distinct_ports();
+        let mut cfg = config::Config {
+            experimental_codex_enabled: true,
+            proxy_port,
+            sandbox_port,
+            ..Default::default()
+        };
+        let profile = config::Profile {
+            id: "codex-r0-f".into(),
+            name: "Codex R0-F".into(),
+            template_id: "codex".into(),
+            api_format: "openai_responses".into(),
+            credential_source: crate::provider_contracts::CredentialSource::CsswitchOauth,
+            credential_ref: Some("csswitch:codex:default".into()),
+            model_policy: crate::provider_contracts::ModelPolicy::DynamicCatalog,
+            ..Default::default()
+        };
+        cfg.active_id = profile.id.clone();
+        cfg.profiles.push(profile);
+        config::save_to(&dir, &cfg).unwrap();
+        dir
+    }
+
+    fn r0_proxy_state(provider: &str) -> (SharedAppState, u32) {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn isolated R0-F Gateway fixture");
+        let pid = child.id();
+        let mut state = AppState::default();
+        state.proxy = Some(child);
+        state.provider = provider.into();
+        (Arc::new(Mutex::new(state)), pid)
+    }
+
+    fn r0_process_is_running(pid: u32) -> bool {
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    #[test]
+    fn r0_codex_login_prepare_failure_preserves_other_provider_and_stopped_codex_state() {
+        run_exact_ignored_codex_characterization("login-prepare");
+    }
+
+    #[test]
+    fn r0_cancel_writes_exact_ndjson_and_write_failure_is_safely_terminalized() {
+        let temp = TempDir::new("r0-f-cancel-wire");
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let reservation = supervisor.begin_login().unwrap();
+        let operation_id = reservation.operation_id.clone();
+        let line_path = temp.0.join("cancel-line");
+        let script = temp.script(&format!(
+            "IFS= read -r cancel\nprintf '%s' \"$cancel\" > \"$HOME/cancel-line\"\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"cancel_ack\",\"disposition\":\"accepted\"}}'\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"terminal\",\"state\":\"cancelled\",\"error\":{{\"code\":\"auth_cancelled\",\"stage\":\"cancelled\",\"retryable\":true}}}}'\nexit 7"
+        ));
+        let process = spawn_codex_auth_sidecar_at(
+            &script,
+            &temp.0,
+            CodexAuthAction::LoginBrowser,
+            None,
+            Some(&operation_id),
+            false,
+        )
+        .unwrap();
+        let waiter_supervisor = supervisor.clone();
+        let waiter_operation_id = operation_id.clone();
+        let cancel = reservation.cancel.clone();
+        let waiter = std::thread::spawn(move || {
+            let result = wait_for_login_sidecar(
+                process,
+                CodexAuthAction::LoginBrowser,
+                &waiter_operation_id,
+                cancel.as_ref(),
+                |_| {},
+                |disposition| {
+                    waiter_supervisor.record_cancel_disposition(&waiter_operation_id, disposition)
+                },
+            );
+            waiter_supervisor
+                .finish(&waiter_operation_id, "cancelled", None)
+                .unwrap();
+            result
+        });
+        assert_eq!(supervisor.cancel(&operation_id).unwrap(), "accepted");
+        assert_eq!(supervisor.cancel(&operation_id).unwrap(), "accepted");
+        assert_eq!(waiter.join().unwrap().unwrap()["state"], "cancelled");
+        assert_eq!(
+            supervisor.cancel(&operation_id).unwrap(),
+            "already_terminal"
+        );
+        let expected = json!({
+            "schema_version": AUTH_SCHEMA_VERSION,
+            "operation_id": operation_id,
+            "command": "cancel",
+        });
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(line_path).unwrap()).unwrap(),
+            expected
+        );
+
+        let failing = supervisor.begin_login().unwrap();
+        let failing_id = failing.operation_id.clone();
+        let failing_script =
+            temp.script("exec 0<&-\n: > \"$HOME/cancel-closed\"\nexec /bin/sleep 1");
+        let failing_process = spawn_codex_auth_sidecar_at(
+            &failing_script,
+            &temp.0,
+            CodexAuthAction::LoginBrowser,
+            None,
+            Some(&failing_id),
+            false,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !temp.0.join("cancel-closed").exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(temp.0.join("cancel-closed").exists());
+        let failing_supervisor = supervisor.clone();
+        let waiter_id = failing_id.clone();
+        let failing_cancel = failing.cancel.clone();
+        let failing_waiter = std::thread::spawn(move || {
+            let result = wait_for_login_sidecar(
+                failing_process,
+                CodexAuthAction::LoginBrowser,
+                &waiter_id,
+                failing_cancel.as_ref(),
+                |_| {},
+                |_| {},
+            );
+            assert_eq!(
+                failing_supervisor.snapshot().unwrap().state,
+                "starting",
+                "write failure is observed before the login worker terminalizes the operation"
+            );
+            failing_supervisor
+                .finish(&waiter_id, "failed", None)
+                .unwrap();
+            result
+        });
+        assert_eq!(supervisor.cancel(&failing_id).unwrap(), "already_terminal");
+        assert!(failing_waiter
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .contains("发送取消请求"));
+        assert_eq!(supervisor.snapshot().unwrap().state, "failed");
+    }
+
+    #[test]
+    fn r0_codex_logout_failure_leaves_confirmed_codex_runtime_stopped() {
+        run_exact_ignored_codex_characterization("logout-failure");
+    }
+
+    #[test]
+    fn r0_codex_disable_config_failure_preserves_other_provider_and_does_not_restart_codex() {
+        run_exact_ignored_codex_characterization("disable-config");
+    }
+
+    #[test]
+    fn r0_codex_network_commit_failure_leaves_codex_stopped_and_other_provider_untouched() {
+        run_exact_ignored_codex_characterization("network-config");
+    }
+
+    #[test]
+    fn r0_downgrade_safe_failure_retains_stopped_runtime() {
+        run_exact_ignored_codex_characterization("downgrade-safe");
+    }
+
+    #[test]
+    fn r0_downgrade_post_publish_uncertainty_is_terminal() {
+        run_exact_ignored_codex_characterization("downgrade-uncertain");
+    }
+
+    #[test]
+    #[ignore = "source-gate parents execute exact isolated R0-F Codex mutation cases with temp HOME, fake processes, fake sidecar, and dynamic ports"]
+    fn isolated_r0_codex_mutation_command_contract() {
+        let requested = env::var("CSSWITCH_TEST_R0_F_CASE").unwrap_or_default();
+        assert!(
+            matches!(
+                requested.as_str(),
+                "login-prepare"
+                    | "logout-failure"
+                    | "disable-config"
+                    | "network-config"
+                    | "downgrade-safe"
+                    | "downgrade-uncertain"
+            ),
+            "unknown isolated R0-F case"
+        );
+        let temp = TempDir::new(&format!("r0-f-{requested}"));
+        let home = temp.0.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let config_dir = r0_codex_config(&home);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+
+        if requested == "login-prepare" {
+            let (other_state, other_pid) = r0_proxy_state("deepseek");
+            assert_eq!(
+                prepare_codex_auth_mutation(app.handle(), &other_state, &lifecycle).unwrap(),
+                AuthRuntimeAction::PreserveOtherProvider
+            );
+            assert!(r0_process_is_running(other_pid));
+            lock(&other_state).stop_proxy();
+
+            let (codex_state, codex_pid) = r0_proxy_state("codex");
+            let supervisor = CodexAuthSupervisor::default();
+            let reservation = supervisor.begin_login().unwrap();
+            assert_eq!(
+                prepare_codex_auth_mutation(app.handle(), &codex_state, &lifecycle).unwrap(),
+                AuthRuntimeAction::StopManagedCodex
+            );
+            let failed = spawn_codex_auth_sidecar_at(
+                &temp.0.join("missing-sidecar"),
+                &home,
+                CodexAuthAction::LoginBrowser,
+                Some(&csswitch_codex_network::direct_route()),
+                Some(&reservation.operation_id),
+                false,
+            );
+            assert!(failed.is_err());
+            supervisor.abort_login_start(&reservation.operation_id);
+            assert!(supervisor.snapshot().is_none());
+            assert!(lock(&codex_state).proxy.is_none());
+            assert!(!r0_process_is_running(codex_pid));
+        }
+
+        if requested == "logout-failure" {
+            let (codex_state, codex_pid) = r0_proxy_state("codex");
+            let supervisor = Arc::new(CodexAuthSupervisor::default());
+            let mutation = CodexAuthSupervisor::begin_mutation(&supervisor).unwrap();
+            assert_eq!(
+                prepare_codex_auth_mutation(app.handle(), &codex_state, &lifecycle).unwrap(),
+                AuthRuntimeAction::StopManagedCodex
+            );
+            let sidecar = temp.script("exit 7");
+            assert!(run_codex_auth_sidecar_at(&sidecar, &home, CodexAuthAction::Logout).is_err());
+            drop(mutation);
+            assert!(lock(&codex_state).proxy.is_none());
+            assert!(!r0_process_is_running(codex_pid));
+        }
+
+        if requested == "disable-config" {
+            let before = fs::read(config_dir.join("config.json")).unwrap();
+            let (other_state, other_pid) = r0_proxy_state("deepseek");
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let result = set_experimental_codex_enabled_at(&config_dir, false, || {
+                prepare_codex_auth_mutation(app.handle(), &other_state, &lifecycle).map(|_| ())
+            });
+            drop(fault);
+            assert!(result
+                .unwrap_err()
+                .contains("test-only config update commit failure"));
+            assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+            assert!(r0_process_is_running(other_pid));
+            lock(&other_state).stop_proxy();
+
+            let (codex_state, codex_pid) = r0_proxy_state("codex");
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let result = set_experimental_codex_enabled_at(&config_dir, false, || {
+                prepare_codex_auth_mutation(app.handle(), &codex_state, &lifecycle).map(|_| ())
+            });
+            drop(fault);
+            assert!(result
+                .unwrap_err()
+                .contains("test-only config update commit failure"));
+            assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+            assert!(lock(&codex_state).proxy.is_none());
+            assert!(!r0_process_is_running(codex_pid));
+        }
+
+        if requested == "network-config" {
+            let before = fs::read(config_dir.join("config.json")).unwrap();
+            let settings = csswitch_codex_network::CodexNetworkSettings::default();
+            let resolved = csswitch_codex_network::direct_route();
+            let (other_state, other_pid) = r0_proxy_state("deepseek");
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let result = set_codex_network_at(&config_dir, settings.clone(), &resolved, || {
+                prepare_codex_auth_mutation(app.handle(), &other_state, &lifecycle).map(|_| ())
+            });
+            drop(fault);
+            assert!(result
+                .unwrap_err()
+                .contains("test-only config update commit failure"));
+            assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+            assert!(r0_process_is_running(other_pid));
+            lock(&other_state).stop_proxy();
+
+            let (codex_state, codex_pid) = r0_proxy_state("codex");
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let result = set_codex_network_at(&config_dir, settings, &resolved, || {
+                prepare_codex_auth_mutation(app.handle(), &codex_state, &lifecycle).map(|_| ())
+            });
+            drop(fault);
+            assert!(result
+                .unwrap_err()
+                .contains("test-only config update commit failure"));
+            assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+            assert!(lock(&codex_state).proxy.is_none());
+            assert!(!r0_process_is_running(codex_pid));
+        }
+
+        if matches!(requested.as_str(), "downgrade-safe" | "downgrade-uncertain") {
+            let cfg = config::load_from(&config_dir).unwrap();
+            let actions = BTreeMap::from([(
+                "codex-r0-f".into(),
+                config::CodexDowngradeAction::ExportThenRemove,
+            )]);
+            let fingerprint = config::prepare_downgrade_to_v2(&cfg, &actions)
+                .unwrap()
+                .fingerprint;
+            let destination = home.join("codex-export.json");
+            let (codex_state, codex_pid) = r0_proxy_state("codex");
+
+            let _commit_fault = (requested == "downgrade-uncertain")
+                .then(|| config::test_arm_downgrade_commit_failure(config_dir.clone(), true));
+            if requested == "downgrade-safe" {
+                let backup = config_dir.join("config.json.bak");
+                let backup = std::ffi::CString::new(backup.as_os_str().as_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(backup.as_ptr(), 0o600) }, 0);
+            }
+            let outcome = run_downgrade_mutation_at(
+                &config_dir,
+                &actions,
+                &destination,
+                &fingerprint,
+                json!({"status": "DOWNGRADED_EXIT_REQUIRED"}),
+                || stop_all_before_downgrade(app.handle(), &codex_state, &lifecycle),
+            )
+            .unwrap();
+            assert!(lock(&codex_state).proxy.is_none());
+            assert!(!r0_process_is_running(codex_pid));
+            assert!(
+                destination.exists(),
+                "export must precede the injected failure"
+            );
+
+            let exit_code = AtomicI32::new(-1);
+            let result =
+                finish_downgrade_command(outcome, |code| exit_code.store(code, Ordering::SeqCst));
+            if requested == "downgrade-safe" {
+                assert!(result.unwrap_err().contains("滚动备份失败"));
+                assert_eq!(exit_code.load(Ordering::SeqCst), -1);
+                assert_eq!(config::load_from(&config_dir).unwrap().schema_version, 4);
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(exit_code.load(Ordering::SeqCst), 1);
+                assert!(error.contains("禁止再次读取配置"));
+                assert!(error.contains("test-only downgrade commit failure"));
+                assert!(config::load_from(&config_dir)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("终态退出"));
+            }
+        }
     }
 }

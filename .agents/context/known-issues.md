@@ -50,6 +50,16 @@ profile delete 的 selected-only、applied-only、selected=applied、neither 矩
 使用短寿命隔离假 Science 子进程并确认同一 PID 保持运行；结论不扩展到
 installed/live provider、artifact 或产品行为修复。
 
+`R0-F` 已收口（source）：九个 `op.codex-*` 操作的二十一个精确 source gate
+身份冻结 login 的 stop-before-sidecar 与失败后不恢复、cancel 的 operation-ID 绑定、
+exact NDJSON、重复请求与写失败终态化、profile ensure 的认证与幂等边界、logout 的
+stop-before-revoke、refresh 的 generation guard 与成对回滚、catalog 的 scratch/formal
+共享 cache epoch、cache/invalidation 顺序、models 401 guarded refresh wiring 与 scratch
+child 回收、disable/network 的 stop-before-config，以及 downgrade 的
+stop → export → backup → v2 publication/latch → direct exit 顺序和安全/不确定失败结果。
+测试边界为临时 HOME、fake sidecar、fake managed children、私有 auth/catalog 状态与动态
+loopback 端口；结论不扩展到 installed/live provider、artifact 或产品行为修复。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
@@ -57,8 +67,8 @@ installed/live provider、artifact 或产品行为修复。
 | `R0-C` | DONE | interrupted Gateway recovery 与 start-gateway-only |
 | `R0-D` | DONE | mode/settings/stop/quit/native exit |
 | `R0-E` | DONE | profile select/update/sync/revoke |
-| `R0-F` | **NEXT** | Codex mutation |
-| `R0-G` | PENDING | Skill/bridge/doctor/startup migration |
+| `R0-F` | DONE | Codex mutation |
+| `R0-G` | **NEXT** | Skill/bridge/doctor/startup migration |
 | `R0-H` | PENDING | 整体 inventory、source gate 与最终独立审查收口 |
 
 每个窗口只完成表中一个阶段；阶段结束时更新本表、完成该分片的

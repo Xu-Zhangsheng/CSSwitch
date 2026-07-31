@@ -632,12 +632,12 @@
       "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4"], "clears": ["record.science-receipt-v1"]},
       "ordered_effects": ["reserve auth operation", "under lifecycle stop only confirmed Codex runtime", "register and spawn sidecar", "release lifecycle while OAuth waits", "atomically commit OAuth through sidecar", "ensure canonical Codex profile", "publish terminal operation snapshot"],
       "failure_points": [
-        {"id": "codex-login.prepare", "after_effects": ["operation reserved", "confirmed Codex runtime may be stopped"], "observed_outcome": "Failure publishes safe terminal status; no other provider runtime is stopped.", "compensation": "no prior Codex runtime restart"},
+        {"id": "codex-login.prepare", "after_effects": ["operation reserved", "confirmed Codex runtime may be stopped"], "observed_outcome": "Failure aborts the reserved operation and clears its starting snapshot; the command returns a safe error and no other provider runtime is stopped.", "compensation": "no prior Codex runtime restart"},
         {"id": "codex-login.storage-commit", "after_effects": ["one or both new secret records may have been written", "auth-state generation is not yet committed"], "observed_outcome": "Restore both prior secret records; if either restore fails return RollbackFailed and make no restoration claim.", "compensation": "AuthRepository rollback_or restores both old secret records or reports rollback failure"},
         {"id": "codex-login.profile-ensure", "after_effects": ["OAuth, thinking key, and committed auth generation may be safely committed"], "observed_outcome": "Terminal profile_ensure_failed; committed auth records are retained for idempotent repair.", "compensation": "do not roll back committed authentication"}
       ],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_start"}, "contract": "Supervisor reaps/cancels exact sidecar and preserves safely committed OAuth; stopped Codex runtime is not restarted."},
-      "characterization_tests": ["codex::tests::login_finalization_requires_profile_ready_before_succeeded", "codex::tests::r0_codex_login_prepare_failure_preserves_other_provider_and_stopped_codex_state"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_finalization_requires_profile_ready_before_succeeded", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_login_prepare_failure_preserves_other_provider_and_stopped_codex_state"],
       "known_gaps": ["No shared RuntimeOperationPlan or prior restart receipt."]
     },
     {
@@ -650,7 +650,7 @@
       "ordered_effects": ["validate operation id", "send one-line cancel to exact registered sidecar", "update process-local operation snapshot when acknowledgement/terminal arrives"],
       "failure_points": [{"id": "codex-cancel.write", "after_effects": ["operation remains active"], "observed_outcome": "Return safe error or current snapshot; no credential/config mutation is inferred.", "compensation": "supervisor exit cleanup still owns exact child"}],
       "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/codex_auth_supervisor.rs", "symbol": "pub(crate) fn cancel(&self"}, "contract": "Cancellation is process-local and idempotent for the exact operation; app exit performs bounded child cleanup."},
-      "characterization_tests": ["codex_auth_supervisor::tests::r0_cancel_is_operation_id_bound_and_idempotent"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::r0_cancel_is_operation_id_bound_and_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_cancel_writes_exact_ndjson_and_write_failure_is_safely_terminalized"],
       "known_gaps": ["Does not participate in lifecycle serializer by design."]
     },
     {
@@ -664,7 +664,7 @@
       "ordered_effects": ["require authenticated status through sidecar proof", "serialize and verify proof unchanged", "idempotently create canonical profile only when none exists"],
       "failure_points": [{"id": "codex-ensure-profile.commit", "after_effects": ["authentication proof obtained"], "observed_outcome": "Config failure reports safe profile_ensure failure and leaves OAuth untouched.", "compensation": "atomic config write"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "ensure_codex_profile_authenticated"}, "contract": "Intent repair never changes active_id and never starts/stops managed runtime."},
-      "characterization_tests": ["codex::tests::profile_repair_requires_authentication_and_is_idempotent", "codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_requires_authentication_and_is_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable"],
       "known_gaps": ["Authentication status is external to config and validated through a lease/proof."]
     },
     {
@@ -681,7 +681,7 @@
         {"id": "codex-logout.secret-delete", "after_effects": ["logged-out generation committed", "both secret deletions attempted"], "observed_outcome": "Return error with stale secret file possible, but committed=false prevents authentication use.", "compensation": "no rollback to the active generation and no prior Codex restart"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_logout"}, "contract": "Stop-before-credential revoke behavior is preserved; no runtime journal or restart."},
-      "characterization_tests": ["codex::tests::runtime_decision_stops_only_confirmed_codex_and_fails_closed_on_unknown_live_child", "codex::tests::r0_codex_logout_failure_leaves_confirmed_codex_runtime_stopped"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::runtime_decision_stops_only_confirmed_codex_and_fails_closed_on_unknown_live_child", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_logout_failure_leaves_confirmed_codex_runtime_stopped"],
       "known_gaps": ["No durable operation receipt."]
     },
     {
@@ -697,7 +697,7 @@
         {"id": "codex-refresh.storage-commit", "after_effects": ["one or both refreshed secret records may have been written", "auth-state generation is not yet committed"], "observed_outcome": "Restore both prior secret records; return RollbackFailed if either restoration cannot be proven.", "compensation": "AuthRepository rollback_or restores the exact prior OAuth and thinking records"}
       ],
       "compensation": {"kind": "dedicated-rollback", "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "fn rollback_or("}, "contract": "Secret records are restored as a pair on failed refresh publication; the prior committed state generation remains authoritative, and rollback uncertainty is explicit."},
-      "characterization_tests": ["codex_auth::lifecycle_tests::concurrent_refresh_for_same_generation_has_one_network_writer", "codex_auth::storage::tests::refresh_thinking_failure_restores_both_records", "codex_auth::storage::tests::refresh_state_failure_restores_both_records"],
+      "characterization_tests": ["desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::concurrent_refresh_for_same_generation_has_one_network_writer", "desktop/gateway/Cargo.toml::lib::codex_auth::storage::tests::refresh_thinking_failure_restores_both_records", "desktop/gateway/Cargo.toml::lib::codex_auth::storage::tests::refresh_state_failure_restores_both_records"],
       "known_gaps": ["Refresh is serialized by the private auth file lock rather than the desktop Lifecycle lock."]
     },
     {
@@ -715,7 +715,7 @@
         {"id": "codex-catalog.auth-invalidation", "after_effects": ["invalidated epoch committed", "old cache deletion attempted", "guarded OAuth refresh may have run after upstream 401"], "observed_outcome": "Cache deletion failure or OAuth refresh failure is retained as separate state; the previous OAuth generation remains authoritative unless guarded refresh fully commits.", "compensation": "AuthRepository restores partial refresh publication; catalog invalidation has no rollback"}
       ],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn persist_invalidation("}, "contract": "Gateway process lifecycle is independent from shared catalog/auth publications; auth refresh has record rollback, while cache epoch/invalidation effects are retained."},
-      "characterization_tests": ["model_discovery::tests::r0_codex_fetch_models_mutates_shared_catalog_cache", "codex_models::tests::r0_cache_epoch_precedes_cache_and_invalidation_removes_cache", "codex_auth::lifecycle_tests::r0_scratch_401_refresh_is_generation_guarded"],
+      "characterization_tests": ["desktop/gateway/Cargo.toml::lib::codex_models::tests::r0_codex_fetch_models_mutates_shared_catalog_cache", "desktop/gateway/Cargo.toml::lib::codex_models::tests::r0_cache_epoch_precedes_cache_and_invalidation_removes_cache", "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::r0_scratch_401_refresh_is_generation_guarded", "desktop/gateway/Cargo.toml::lib::server::tests::r0_scratch_models_401_wires_observed_generation_to_guarded_refresh", "desktop/src-tauri/Cargo.toml::lib::scratch::tests::r0_scratch_guard_stops_and_reaps_exact_child"],
       "known_gaps": ["Scratch and formal Gateway processes intentionally share durable catalog/auth state under the same private HOME.", "Cache and auth mutations use separate domain locks with no cross-record operation receipt."]
     },
     {
@@ -729,7 +729,7 @@
       "ordered_effects": ["when disabling begin mutation lease", "when disabling stop only confirmed Codex runtime", "commit experimental flag", "do not delete credentials or profiles"],
       "failure_points": [{"id": "codex-enable.commit", "after_effects": ["confirmed Codex runtime may be stopped"], "observed_outcome": "Config failure leaves old flag but stopped Codex runtime; other providers preserved.", "compensation": "no prior restart"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_experimental_codex_enabled_at"}, "contract": "Disable is stop-before-config and retains credentials/profiles; enable only commits config."},
-      "characterization_tests": ["codex::tests::r0_codex_disable_config_failure_preserves_other_provider_and_does_not_restart_codex"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_disable_config_failure_preserves_other_provider_and_does_not_restart_codex"],
       "known_gaps": ["No durable operation receipt."]
     },
     {
@@ -743,7 +743,7 @@
       "ordered_effects": ["validate network settings", "begin mutation lease", "stop only confirmed Codex runtime", "commit network setting", "return restarted=false"],
       "failure_points": [{"id": "codex-network.commit", "after_effects": ["confirmed Codex runtime stopped"], "observed_outcome": "Commit failure leaves previous network setting and stopped Codex runtime; other providers preserved.", "compensation": "no prior restart"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_codex_network"}, "contract": "Stop-before-config behavior is preserved and never auto-restarts."},
-      "characterization_tests": ["codex::tests::r0_codex_network_commit_failure_leaves_codex_stopped_and_other_provider_untouched"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_network_commit_failure_leaves_codex_stopped_and_other_provider_untouched"],
       "known_gaps": ["No durable operation receipt."]
     },
     {
@@ -761,7 +761,7 @@
         {"id": "codex-downgrade.post-publish", "after_effects": ["v2 publication may have occurred", "process latch active", "runtime stopped"], "observed_outcome": "Force terminal exit one and forbid further config reads.", "compensation": "terminal fail-closed, no rollback claim"}
       ],
       "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_downgrade_export_all"}, "contract": "Safe precommit errors return with stopped runtime; committed or uncertain publication is terminal and exits directly."},
-      "characterization_tests": ["config::tests::completed_export_survives_later_config_precommit_failure", "codex::tests::r0_downgrade_safe_failure_retains_stopped_runtime", "codex::tests::r0_downgrade_post_publish_uncertainty_is_terminal"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::config::tests::completed_export_survives_later_config_precommit_failure", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_downgrade_safe_failure_retains_stopped_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_downgrade_post_publish_uncertainty_is_terminal"],
       "known_gaps": ["No prior runtime restart on safe failure."]
     },
     {

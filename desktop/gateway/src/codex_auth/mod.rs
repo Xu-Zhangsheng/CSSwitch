@@ -277,6 +277,43 @@ mod lifecycle_tests {
         assert_eq!(repository.status().unwrap().auth_generation, 2);
     }
 
+    struct ImmediateRefresh(Arc<AtomicUsize>);
+
+    impl oauth::RefreshTransport for ImmediateRefresh {
+        fn refresh(&self, refresh_token: &str) -> Result<storage::RefreshUpdate, OAuthFlowError> {
+            assert_eq!(refresh_token, "refresh-old");
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(storage::RefreshUpdate {
+                access_token: Some("access-new".into()),
+                refresh_token: Some("refresh-new".into()),
+                id_token: None,
+                account_id: None,
+                expires_at: Some(2_100_000_000),
+            })
+        }
+    }
+
+    #[test]
+    fn r0_scratch_401_refresh_is_generation_guarded() {
+        let root = TempRoot::new();
+        let repository = repository(&root);
+        login(&repository);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transport = ImmediateRefresh(Arc::clone(&calls));
+
+        let stale = refresh_for_generation(&repository, &transport, 0).unwrap();
+        assert_eq!(stale.auth_generation, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let refreshed = refresh_for_generation(&repository, &transport, 1).unwrap();
+        assert_eq!(refreshed.auth_generation, 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let repeated_stale = refresh_for_generation(&repository, &transport, 1).unwrap();
+        assert_eq!(repeated_stale.auth_generation, 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
     struct FailedRefresh;
 
     impl oauth::RefreshTransport for FailedRefresh {

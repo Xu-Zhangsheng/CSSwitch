@@ -482,6 +482,7 @@
     },
     "RUST-DESKTOP": {
       "approved_ignored_test_ids": [
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_race_revalidates_before_delete",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_rejects_unsafe_entries_before_runtime",
@@ -518,6 +519,10 @@
         "desktop/src-tauri/Cargo.toml::lib::tests::isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup"
       ],
       "approved_ignored_tests": {
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract": {
+          "boundary": "acceptance",
+          "reason": "source-gate parents execute exact isolated R0-F Codex mutation cases with temp HOME, fake processes, fake sidecar, and dynamic loopback ports"
+        },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary manifest pre-rename crash consistency; temp HOME, fake Science, and loopback only"
@@ -664,6 +669,7 @@
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::exit_tracks_and_waits_for_mutation_sidecar",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::one_login_and_sequence_checked_snapshots_are_replayable",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::preflight_is_exclusive_and_ready_proof_holds_the_use_lease",
+        "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::r0_cancel_is_operation_id_bound_and_idempotent",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::ready_proof_is_invalidated_when_exit_starts",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::stale_cancel_cannot_cancel_new_operation_and_terminal_is_idempotent",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::use_and_mutation_leases_close_check_then_start_races",
@@ -675,6 +681,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::experimental_toggle_commits_only_after_disable_precondition_succeeds",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::failed_or_cancelled_login_never_runs_profile_ensure",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::interactive_status_cancellation_reaps_the_child_promptly",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::launch_snapshot_ignores_unrelated_config_but_detects_every_launch_boundary",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::legacy_method_is_rejected_by_the_real_tauri_invoke_handler",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_and_logout_replace_the_last_known_auth_observation",
@@ -685,6 +692,13 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_terminal_rejects_missing_and_unknown_status_reason",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_requires_authentication_and_is_idempotent",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_cancel_writes_exact_ndjson_and_write_failure_is_safely_terminalized",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_disable_config_failure_preserves_other_provider_and_does_not_restart_codex",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_login_prepare_failure_preserves_other_provider_and_stopped_codex_state",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_logout_failure_leaves_confirmed_codex_runtime_stopped",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_network_commit_failure_leaves_codex_stopped_and_other_provider_untouched",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_downgrade_post_publish_uncertainty_is_terminal",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_downgrade_safe_failure_retains_stopped_runtime",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::runtime_decision_stops_only_confirmed_codex_and_fails_closed_on_unknown_live_child",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::sidecar_protocol_rejects_multiline_mismatch_unknown_fields_and_oversize",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::sidecar_runner_returns_typed_failure_but_discards_untrusted_message_and_stderr",
@@ -1110,6 +1124,7 @@
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::discovery_fallback_source_splits_unsupported_from_network",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::gateway_models_error_kind_is_allowlisted_and_ignores_messages",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::pick_scratch_port_returns_usable_nonreserved_port",
+        "desktop/src-tauri/Cargo.toml::lib::scratch::tests::r0_scratch_guard_stops_and_reaps_exact_child",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::scratch_env_empty_thinking_not_injected",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::scratch_env_gateway_owned_auth_never_invents_a_key_env",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::scratch_env_models_discovery_does_not_pin_openai_model",
@@ -1185,6 +1200,7 @@
         "desktop/gateway/Cargo.toml::lib::codex_auth::handshake_tests::auth_state_root_is_compile_time_isolated_by_build_variant",
         "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::concurrent_refresh_for_same_generation_has_one_network_writer",
         "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::failed_refresh_keeps_generation_and_credentials_active",
+        "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::r0_scratch_401_refresh_is_generation_guarded",
         "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::revoke_failure_never_prevents_local_logout",
         "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::unavailable_revoke_client_still_performs_local_logout",
         "desktop/gateway/Cargo.toml::lib::codex_auth::login_async::tests::async_browser_denial_and_timeout_never_commit",
@@ -1248,7 +1264,6 @@
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::cache_symlink_is_rejected_without_touching_target",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::cross_process_cache_epoch_blocks_aba_late_commit_and_restart_reuse",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::expired_or_protocol_invalid_catalog_never_uses_stale_cache",
-        "desktop/gateway/Cargo.toml::lib::codex_models::tests::explicit_refresh_replaces_shared_snapshot_and_failures_keep_last_generation",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::fresh_cache_avoids_network_and_identity_mismatch_never_reuses_it",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::gpt_5_6_visible_models_keep_priority_display_alias_and_reverse_mapping",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::late_refresh_cannot_publish_over_a_newer_cross_process_cache_epoch",
@@ -1257,6 +1272,8 @@
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::official_catalog_parse_errors_are_bounded_and_field_typed",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::official_summary_capability_prefers_canonical_then_legacy_then_default",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::production_catalog_query_uses_explicit_codex_compat_version",
+        "desktop/gateway/Cargo.toml::lib::codex_models::tests::r0_cache_epoch_precedes_cache_and_invalidation_removes_cache",
+        "desktop/gateway/Cargo.toml::lib::codex_models::tests::r0_codex_fetch_models_mutates_shared_catalog_cache",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::retry_policy_is_bounded_and_auth_never_uses_stale_cache",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::routable_canonical_roles_are_published_for_science_settings",
         "desktop/gateway/Cargo.toml::lib::codex_models::tests::stale_cache_revalidates_with_etag_and_network_failure_falls_back",
@@ -1405,6 +1422,7 @@
         "desktop/gateway/Cargo.toml::lib::server::tests::kimi_invalid_thinking_emits_one_terminal_error_without_message_stop",
         "desktop/gateway/Cargo.toml::lib::server::tests::kimi_read_error_is_terminal_and_does_not_finalize_buffer",
         "desktop/gateway/Cargo.toml::lib::server::tests::openai_reasoning_history_survives_loopback_token_rotation_but_not_profile_changes",
+        "desktop/gateway/Cargo.toml::lib::server::tests::r0_scratch_models_401_wires_observed_generation_to_guarded_refresh",
         "desktop/gateway/Cargo.toml::lib::server::tests::request_nonce_generator_is_sequential_and_id_safe",
         "desktop/gateway/Cargo.toml::lib::server::tests::request_nonce_generator_is_unique_under_concurrency",
         "desktop/gateway/Cargo.toml::lib::skill_install::tests::bridge_request_signature_rejects_tampering_expiry_and_wrong_filename",

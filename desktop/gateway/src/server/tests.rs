@@ -13,8 +13,8 @@ use super::inference_dispatch::{
     apply_dsml_nonstream, collect_codex_nonstream, dsml_stream_filter, forward_stream_body,
     handle_codex_messages_with_catalog, handle_codex_messages_with_secrets, handle_post,
     map_codex_auth_error, openai_chat_reasoning_signer, pump_codex_stream, stream_error_event,
-    CodexComponents, CodexNonstreamError, CodexPumpError, RequestNonceGenerator, StreamFilter,
-    StreamTermination,
+    write_codex_models_with_refresh, CodexComponents, CodexNonstreamError, CodexPumpError,
+    RequestNonceGenerator, StreamFilter, StreamTermination,
 };
 #[cfg(unix)]
 use super::skill_bridge_host::{
@@ -825,6 +825,62 @@ fn codex_models_response_exposes_science_aliases_and_cache_diagnostics() {
     assert!(!serde_json::to_string(&body)
         .unwrap()
         .contains("\"id\":\"gpt-5.6-sol\""));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn r0_scratch_models_401_wires_observed_generation_to_guarded_refresh() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let listener = bind_loopback();
+    let address = listener.local_addr().unwrap();
+    let upstream = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        read_mock_http_request(&mut stream);
+        stream
+            .write_all(
+                b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .unwrap();
+    });
+    let mut random = [0_u8; 8];
+    getrandom::getrandom(&mut random).unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "csswitch-r0-f-scratch-401-{}-{}",
+        std::process::id(),
+        u64::from_ne_bytes(random)
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let catalog =
+        CodexModelCatalog::for_test(format!("http://{address}/models"), root.clone()).unwrap();
+    let secrets = InferenceSecrets::for_test("access", "account");
+    let observed_generation = secrets.auth_generation();
+    let refresh_call = Arc::new(Mutex::new(None));
+    let recorded = Arc::clone(&refresh_call);
+    let state_root = root.join("auth-root");
+    let response = capture_tcp_response(|stream| {
+        write_codex_models_with_refresh(
+            stream,
+            &catalog,
+            &secrets,
+            true,
+            Some(state_root.clone()),
+            |root, generation| *recorded.lock().unwrap() = Some((root, generation)),
+        )
+    });
+    upstream.join().unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 401 Unauthorized"));
+    assert_eq!(
+        *refresh_call.lock().unwrap(),
+        Some((state_root, observed_generation))
+    );
+    assert!(!root.join("codex-models-cache.v3.json").exists());
+    let epoch: Value = serde_json::from_slice(
+        &std::fs::read(root.join("codex-models-cache-epoch.v3.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(epoch["auth_generation"], observed_generation);
     let _ = std::fs::remove_dir_all(root);
 }
 

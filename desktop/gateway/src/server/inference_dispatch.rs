@@ -204,31 +204,16 @@ pub(super) fn handle_get(
                     return;
                 }
             };
-            let snapshot = if cfg.intent == crate::config::GatewayIntent::ScratchModels {
-                catalog.refresh_published_snapshot(&secrets)
-            } else {
-                catalog.published_snapshot(&secrets)
-            };
-            match snapshot {
-                Ok(snapshot) => write_codex_models_response(stream, &snapshot),
-                Err(error) => {
-                    if error.upstream_status == Some(401) {
-                        if let Some(root) = cfg.codex_state_root.clone() {
-                            let _ = codex_auth::refresh_production_for_generation(
-                                root,
-                                secrets.auth_generation(),
-                            );
-                        }
-                    }
-                    models_error_json(
-                        stream,
-                        error.status,
-                        error.error_kind,
-                        error.upstream_status,
-                        error.detail,
-                    );
-                }
-            }
+            write_codex_models_with_refresh(
+                stream,
+                catalog,
+                &secrets,
+                cfg.intent == crate::config::GatewayIntent::ScratchModels,
+                cfg.codex_state_root.clone(),
+                |root, generation| {
+                    let _ = codex_auth::refresh_production_for_generation(root, generation);
+                },
+            );
         }
         "/v1/models"
             if cfg.provider == "openai-custom"
@@ -269,6 +254,38 @@ pub(super) fn handle_get(
         }
         "/v1/models" => write_json(stream, 200, "OK", models::deepseek_models_response()),
         _ => not_found_json(stream, &path),
+    }
+}
+
+pub(super) fn write_codex_models_with_refresh(
+    stream: &mut TcpStream,
+    catalog: &codex_models::CodexModelCatalog,
+    secrets: &codex_auth::InferenceSecrets,
+    force_refresh: bool,
+    state_root: Option<std::path::PathBuf>,
+    refresh: impl FnOnce(std::path::PathBuf, u64),
+) {
+    let snapshot = if force_refresh {
+        catalog.refresh_published_snapshot(secrets)
+    } else {
+        catalog.published_snapshot(secrets)
+    };
+    match snapshot {
+        Ok(snapshot) => write_codex_models_response(stream, &snapshot),
+        Err(error) => {
+            if error.upstream_status == Some(401) {
+                if let Some(root) = state_root {
+                    refresh(root, secrets.auth_generation());
+                }
+            }
+            models_error_json(
+                stream,
+                error.status,
+                error.error_kind,
+                error.upstream_status,
+                error.detail,
+            );
+        }
     }
 }
 

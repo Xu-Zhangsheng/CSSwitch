@@ -844,4 +844,26 @@ mod tests {
         assert_eq!(supervisor.cancel(&second.operation_id).unwrap(), "accepted");
         assert!(second.cancel.load(Ordering::SeqCst));
     }
+
+    #[test]
+    fn r0_cancel_is_operation_id_bound_and_idempotent() {
+        let supervisor = CodexAuthSupervisor::default();
+        let first = supervisor.begin_login().unwrap();
+        let first_id = first.operation_id.clone();
+
+        supervisor.record_cancel_disposition(&first_id, "accepted");
+        assert_eq!(supervisor.cancel(&first_id).unwrap(), "accepted");
+        assert_eq!(supervisor.cancel(&first_id).unwrap(), "accepted");
+        assert!(first.cancel.load(Ordering::SeqCst));
+        supervisor.finish(&first_id, "cancelled", None).unwrap();
+        assert_eq!(supervisor.cancel(&first_id).unwrap(), "already_terminal");
+
+        let second = supervisor.begin_login().unwrap();
+        assert_ne!(second.operation_id, first_id);
+        assert!(supervisor.cancel(&first_id).is_err());
+        assert!(!second.cancel.load(Ordering::SeqCst));
+        supervisor
+            .finish(&second.operation_id, "cancelled", None)
+            .unwrap();
+    }
 }

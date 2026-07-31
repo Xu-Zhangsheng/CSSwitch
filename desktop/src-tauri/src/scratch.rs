@@ -577,6 +577,21 @@ mod tests {
     }
 
     #[test]
+    fn r0_scratch_guard_stops_and_reaps_exact_child() {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let guard = ScratchGuard(Some(child));
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0);
+        drop(guard);
+        assert_ne!(unsafe { libc::kill(pid as i32, 0) }, 0);
+    }
+
+    #[test]
     fn thinking_enabled_message_probe_uses_a_valid_minimum_envelope() {
         assert_eq!(message_probe_max_tokens("enabled"), 1025);
         assert_eq!(message_probe_max_tokens("adaptive"), 1);

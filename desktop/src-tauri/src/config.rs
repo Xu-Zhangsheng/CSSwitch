@@ -176,6 +176,11 @@ static CONFIG_UPDATE_COMMIT_FAILURE: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[cfg(test)]
+static DOWNGRADE_COMMIT_FAILURE: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf, bool)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
 pub(crate) struct ConfigUpdateCommitFailureGuard;
 
 #[cfg(test)]
@@ -193,6 +198,30 @@ pub(crate) fn test_arm_update_commit_failure(dir: PathBuf) -> ConfigUpdateCommit
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some((std::thread::current().id(), dir));
     ConfigUpdateCommitFailureGuard
+}
+
+#[cfg(test)]
+pub(crate) struct DowngradeCommitFailureGuard;
+
+#[cfg(test)]
+impl Drop for DowngradeCommitFailureGuard {
+    fn drop(&mut self) {
+        *DOWNGRADE_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_downgrade_commit_failure(
+    dir: PathBuf,
+    exit_required: bool,
+) -> DowngradeCommitFailureGuard {
+    *DOWNGRADE_COMMIT_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some((std::thread::current().id(), dir, exit_required));
+    DowngradeCommitFailureGuard
 }
 
 #[cfg(test)]
@@ -2408,6 +2437,21 @@ fn downgrade_to_v2_unlocked(
 
     // 所有 action、序列化与必需 export 先完整完成；之后才允许写 v2 config。
     write_rolling_backup_unlocked(dir).map_err(|error| format!("降级滚动备份失败：{error}"))?;
+    #[cfg(test)]
+    {
+        let failure = DOWNGRADE_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .filter(|(thread, target, _)| *thread == std::thread::current().id() && target == dir)
+            .map(|(_, _, exit_required)| *exit_required);
+        if let Some(exit_required) = failure {
+            return Err(DowngradeError {
+                message: "test-only downgrade commit failure".into(),
+                exit_required,
+            });
+        }
+    }
     atomic_write_config_bytes(dir, &v2_bytes).map_err(DowngradeError::commit)?;
     Ok(export_path)
 }
