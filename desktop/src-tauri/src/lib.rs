@@ -587,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "source-gate parent executes exact isolated native-exit cleanup with temp HOME, fake process identity, and a dynamic port"]
+    #[ignore = "source-gate parent executes exact isolated native-exit cleanup with temp HOME, fake process identity, and a dynamic loopback port"]
     fn isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)

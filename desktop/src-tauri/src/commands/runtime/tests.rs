@@ -7547,7 +7547,7 @@ fn r0_d_config(home: &Path, sandbox_port: u16, proxy_port: u16) -> PathBuf {
 }
 
 #[test]
-#[ignore = "source-gate parent executes exact isolated R0-D lifecycle cases with temp HOME, fake processes, and dynamic ports"]
+#[ignore = "source-gate parents execute exact isolated R0-D lifecycle cases with temp HOME, fake processes, and dynamic loopback ports"]
 fn isolated_r0_d_lifecycle_command_contract() {
     let requested = env::var("CSSWITCH_TEST_R0_D_CASE").unwrap_or_default();
     assert!(
