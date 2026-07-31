@@ -11,7 +11,7 @@
     "claim_state": "confirmed",
     "reproduction_state": "source-reproduced",
     "resolution_state": "source-fixed-product-pending",
-    "affected_paths": ["desktop/src-tauri/src/runtime/science.rs", "desktop/src-tauri/src/runtime/sandbox_session/", "test/run_all.sh"],
+    "affected_paths": ["desktop/src-tauri/src/runtime/science.rs", "desktop/src-tauri/src/runtime/science/", "desktop/src-tauri/src/runtime/sandbox_session/", "test/run_all.sh"],
     "requirement_ids": ["REQ-083-MACHO-METADATA", "REQ-083-SCIENCE-UPDATER", "REQ-083-EVIDENCE"],
     "change_ids": ["CHG-SCIENCE-MACHO"],
     "expected_suite_ids": ["SUITE-PRODUCT-MACHO", "SUITE-QUALITY-FOCUSED"],
@@ -29,8 +29,8 @@
     },
     "confirmed_facts": [
       {"statement": "The field Science 0.1.25 updater and installed-App seed are byte-identical, arm64 Mach-O, SHA-256 63b0f57aa3b9588ba9e61433d27c78df788f8fe2c1b51842db107d6697e9c03f, Identifier com.anthropic.operon.cli, and Team ID Q6L2SF6YDW.", "evidence_ref": "docs/evidence/investigations/2026-07-28-claude-science-0.1.25-compatibility.md", "verification_status": "confirmed"},
-      {"statement": "The v0.8.4 source accepts both exact observed updater identifiers and independently rejects unknown identifiers, wrong Team IDs, identifier prefix spoofing, and Team ID suffix spoofing.", "evidence_ref": "desktop/src-tauri/src/runtime/science.rs::runtime::science::tests::official_updater_identity_parser_accepts_only_known_exact_variants", "verification_status": "confirmed"},
-      {"statement": "The App-seeded 0.1.25 fixed-path executable passes the complete isolated candidate-to-snapshot-to-version source oracle without reading real Science data.", "evidence_ref": "desktop/src-tauri/src/runtime/science.rs::runtime::science::tests::real_updated_runtime_candidate_is_eligible_without_reading_real_science_data", "verification_status": "confirmed"}
+      {"statement": "The v0.8.4 source accepts both exact observed updater identifiers and independently rejects unknown identifiers, wrong Team IDs, identifier prefix spoofing, and Team ID suffix spoofing.", "evidence_ref": "desktop/src-tauri/src/runtime/science/tests.rs::runtime::science::tests::official_updater_identity_parser_accepts_only_known_exact_variants", "verification_status": "confirmed"},
+      {"statement": "The App-seeded 0.1.25 fixed-path executable passes the complete isolated candidate-to-snapshot-to-version source oracle without reading real Science data.", "evidence_ref": "desktop/src-tauri/src/runtime/science/tests.rs::runtime::science::tests::real_updated_runtime_candidate_is_eligible_without_reading_real_science_data", "verification_status": "confirmed"}
     ],
     "hypotheses": [],
     "retirement": null

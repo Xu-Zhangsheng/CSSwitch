@@ -37,6 +37,14 @@ def runtime_command_module(name):
     ).read_text()
 
 
+def science_runtime_source():
+    root = ROOT / "desktop/src-tauri/src/runtime/science.rs"
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/science"
+    sources = [root]
+    sources.extend(sorted(module_dir.rglob("*.rs")))
+    return "\n".join(path.read_text() for path in sources)
+
+
 class SkillRuntimeBoundary(unittest.TestCase):
     def test_production_startup_has_no_skill_manager_dependency(self):
         session = sandbox_session_source()
@@ -160,7 +168,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         main = (ROOT / "desktop/src/main.js").read_text()
         js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         runtime = runtime_command_source()
-        science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
+        science = science_runtime_source()
 
         for element_id in (
             "runtimeChoiceSec",
@@ -294,7 +302,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
 
     def test_science_runtime_identity_is_reused_for_serve_status_url_and_stop(self):
         session = sandbox_session_source()
-        science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
+        science = science_runtime_source()
         launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
         runtime = runtime_command_source()
         one_click = sandbox_session_one_click_source().split(

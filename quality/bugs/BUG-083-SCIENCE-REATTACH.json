@@ -14,6 +14,7 @@
     "affected_paths": [
       "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/science.rs",
+      "desktop/src-tauri/src/runtime/science/",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/commands/runtime/",
       "desktop/src-tauri/src/runtime/process_ownership.rs",
@@ -84,7 +85,7 @@
       },
       {
         "statement": "Managed receipt tombstone restoration uses an atomic no-clobber destination commit and preserves both files on conflict.",
-        "evidence_ref": "desktop/src-tauri/src/runtime/science.rs::runtime::science::tests::managed_launch_tombstone_restore_is_atomic_no_clobber",
+        "evidence_ref": "desktop/src-tauri/src/runtime/science/tests.rs::runtime::science::tests::managed_launch_tombstone_restore_is_atomic_no_clobber",
         "verification_status": "confirmed"
       }
     ],

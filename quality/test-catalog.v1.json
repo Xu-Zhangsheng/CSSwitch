@@ -1538,6 +1538,7 @@
       "environment_allowlist": [],
       "source_paths": [
         "desktop/src-tauri/src/runtime/science.rs",
+        "desktop/src-tauri/src/runtime/science/",
         "docs/evidence/investigations/2026-07-28-claude-science-0.1.25-compatibility.md"
       ],
       "evidence_layer": "source-test",
@@ -1564,7 +1565,8 @@
       "selection_rule": {
         "mode": "manual",
         "include_paths": [
-          "desktop/src-tauri/src/runtime/science.rs"
+          "desktop/src-tauri/src/runtime/science.rs",
+          "desktop/src-tauri/src/runtime/science/"
         ],
         "exclude_statuses": [
           "legacy",
@@ -1868,6 +1870,7 @@
       "environment_allowlist": [],
       "source_paths": [
         "desktop/src-tauri/src/runtime/science.rs",
+        "desktop/src-tauri/src/runtime/science/",
         "desktop/src-tauri/src/runtime/sandbox_session/"
       ],
       "evidence_layer": "source-test",
@@ -1894,7 +1897,8 @@
       "selection_rule": {
         "mode": "manual",
         "include_paths": [
-          "desktop/src-tauri/src/runtime/science.rs"
+          "desktop/src-tauri/src/runtime/science.rs",
+          "desktop/src-tauri/src/runtime/science/"
         ],
         "exclude_statuses": [
           "legacy",
@@ -1942,6 +1946,7 @@
         "desktop/src-tauri/src/lib.rs",
         "desktop/src-tauri/src/runtime/sandbox_session/",
         "desktop/src-tauri/src/runtime/science.rs",
+        "desktop/src-tauri/src/runtime/science/",
         "desktop/src-tauri/src/runtime/settings.rs"
       ],
       "evidence_layer": "source-test",
