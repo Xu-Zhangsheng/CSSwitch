@@ -267,7 +267,7 @@ fn reserve_ssh_fixture_ports() -> SshFixturePortReservations {
         let sandbox = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let proxy_port = proxy.local_addr().unwrap().port();
         let sandbox_port = sandbox.local_addr().unwrap().port();
-        if matches!(sandbox_port, 8764 | 8765 | 65535) {
+        if proxy_port == 8765 || matches!(sandbox_port, 8764 | 8765 | 65535) {
             continue;
         }
         let preview_port = sandbox_port + 1;
