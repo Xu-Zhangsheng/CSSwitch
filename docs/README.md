@@ -38,6 +38,7 @@
 - [2026-07-31 工程重构后基线](audits/2026-07-31-v084-post-refactor-baseline.md)：绑定本地 `next` 的最终工程合并 SHA，记录职责映射、source-test 证据和未验证边界。
 - [2026-07-30 文档结构与拆分审计](audits/2026-07-30-v084-document-structure.md)：记录全库 Markdown 的 keep / shrink / split / delete-pointer 结论及本期验证。
 - [2026-07-30 架构与 Science 边界调研](audits/2026-07-30-v084-architecture-reconnaissance.md)：固定 exact HEAD、源码/官方资料、架构 findings、UNKNOWN 与 A/B/C 探针队列。
+- [2026-07-31 `next` 运行架构再基线](audits/2026-07-31-next-runtime-architecture-rebaseline.md)：固定机械拆分完成后的 exact `next`，还原运行拓扑、状态/补偿边界、逻辑耦合、目标候选与有序迁移切片。
 - [v0.8.3 测试系统审计](audits/v083-test-system-audit.md)：记录当时的 BLOCK、入口清单与证据分层，不代表当前 gate 结果。
 - [v0.8.2 变更审计](audits/v082-change-audit.md)、[v0.8.1](audits/v081-change-audit.md)、[v0.8.0](audits/v080-change-audit.md)：回答各版本候选的日期化变更审查。
 - [发布证据](evidence/releases/README.md)：按版本记录最终 artifact 与分发结果。
