@@ -154,11 +154,13 @@ EXPECTED_SURFACE_CONTRACT = {
 EXPECTED_IMPLICIT_OPERATION_CONTRACT = {
     "codex_auth_status": {"op.startup-config-migration"},
     "codex_downgrade_preview": {"op.startup-config-migration"},
+    "create_profile": {"op.startup-config-migration"},
     "get_config": {"op.startup-config-migration"},
     "list_templates": {"op.startup-config-migration"},
     "preview_profile_preset_sync": {"op.startup-config-migration"},
     "science_runtime_preflight": {"op.startup-config-migration"},
     "status": {"op.startup-config-migration"},
+    "update_profile_metadata": {"op.startup-config-migration"},
     "validate_profile_catalog_model": {"op.startup-config-migration"},
 }
 EXPECTED_NATIVE_CONTRACT = {
@@ -434,6 +436,15 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 ("desktop/src-tauri/src/config.rs", "fn commit_migrated_config("),
             }.issubset(config_writers)
         )
+        self.assertTrue(
+            {
+                "pub(crate) fn commit_package(",
+                "fn read_and_validate_marker(",
+                "fn scan_installed_payload(",
+            }.issubset(
+                {item["symbol"] for item in records["record.skill-package-v1"]["readers"]}
+            )
+        )
 
         cache_record = records["record.codex-model-cache-v3"]
         self.assertEqual(cache_record["authority_owner"], "codex.catalog-cache")
@@ -561,6 +572,14 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         self.assertIn(
             "record.operon-skill-attachment-v1",
             operations["op.install-local-skill"]["durable_records"]["writes"],
+        )
+        self.assertIn(
+            "record.skill-package-v1",
+            operations["op.install-local-skill"]["durable_records"]["reads"],
+        )
+        self.assertEqual(
+            gateway_bridge["durable_records"]["clears"],
+            ["record.skill-bridge-mailbox-v1"],
         )
 
         self.assertEqual(
