@@ -8,9 +8,9 @@
 
 ## 本页回答什么
 
-本页只回答“哪些机械拆分已经合入 `next`、当时保持了什么边界、验证到哪一层、下一刀是什么”。细粒度改动由 Git 保存；当前架构、功能合同和执行门禁仍分别以 [`docs/architecture/`](../../docs/architecture/README.md)、[`docs/features/`](../../docs/features/README.md) 和 [`docs/operations/`](../../docs/operations/README.md) 为准。
+本页只回答“哪些机械拆分已经合入 `next`、当前唯一已审查待合入候选是什么、当时保持了什么边界、验证到哪一层、下一刀是什么”。细粒度改动由 Git 保存；当前架构、功能合同和执行门禁仍分别以 [`docs/architecture/`](../../docs/architecture/README.md)、[`docs/features/`](../../docs/features/README.md) 和 [`docs/operations/`](../../docs/operations/README.md) 为准。
 
-只在一个拆分切片已经合入 `next` 后更新本页。未合入候选、临时 worktree、逐次失败日志和未冻结计划不进入完成表。
+只有拆分切片已经合入 `next` 才进入完成表。经 clean-context 独立审查、完整 source gate 和本地提交冻结，但尚未获授权合入 `next` 的切片，只能进入下方唯一的“已审查待合入”表；临时 worktree、逐次失败日志和未冻结计划不进入本页。
 
 ## 当前工程线
 
@@ -20,6 +20,12 @@
 - 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开；`authority_snapshot.rs` 按 test seams、filesystem/copy、capture 与 restore 的独立维护原因完成第二层拆分；Gateway `server.rs` 收口为 listener / method-dispatch facade，并按 HTTP codec、inference dispatch、Skill bridge host 与测试夹具拆分；前端 `main.js` 收口为 bootstrap / shell，并拆出 preview adapter、IPC client、Codex、runtime 与 profile controller
 - 下一阶段：前端机械拆分已经闭合；转入逻辑重构合同评估，统一界定受管 Skill/MCP/Plugin 扩展控制面、前后端职责、故障 envelope、operation correlation、脱敏日志和只读 diagnostics，再决定后续实现切片
 - 当前证据边界：source-test 与独立源码审查；没有因此新增 artifact、installed、live、真实 provider、Science、SSH、签名、公证或公开发布结论。
+
+## 已审查待合入切片
+
+| 日期 | 切片 | 目标基线 → 候选提交 | 结构结果 | 行为边界与验证 |
+|---|---|---|---|---|
+| 2026-07-31 | `desktop/src-tauri/src/commands/runtime.rs` 职责拆分 | `next@e0115cb` → `dcff27b` | 根文件从 7,546 行收口为 168 行 Tauri command façade；生产实现按本地动作、Gateway / model discovery、lifecycle / settings、one-click / history recovery、status / diagnostics 拆为五个私有子模块；跨 command 隔离测试迁入显式 `runtime/tests.rs`，保留原模块 identity | 15 个 `commands::runtime::*` command 名称、泛型、参数、DTO 与返回类型保持；crate-facing `FetchModelsReq`、`UiSettings`、`stop_sandbox_state`、`one_click_login_cmd` 保持原路径；锁序、journal / 补偿、Gateway 恢复、Runtime/Gateway allowlist 与 typed failure projection 未改。27 个 `commands::runtime::tests::*` identity 完全一致；默认 Desktop lib 429 PASS / 29 个既有 ignored；21 个显式 ignored 隔离 Acceptance 为 17 PASS / 4 FAIL，四项在 exact 基线逐项同值复现，不归因于候选。metadata、`impact-pr --target-ref next`、源码合同与格式检查 PASS；clean-context 独立审查 PASS、无 findings；完整 source gate run `75b2cd0473529b084772b1a41418783e` 为 15/15 PASS，completion seal 精确绑定 `dcff27b164e7e8ebdab7edf58b4740561764fed9`。该提交尚未合入 `next`，不得写入下方完成表。 |
 
 ## 已合入切片
 
@@ -75,7 +81,7 @@
 
 ## 下一阶段边界
 
-`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分、Gateway `server.rs` 职责拆分与前端 `main.js` 职责拆分已经闭合。已拆出的 runtime、Gateway 与前端 controller 默认保持稳定；没有新的独立维护原因时不继续按行数细分。下一阶段另立逻辑重构合同，评估受管 Skill/MCP/Plugin 扩展控制面，并同时冻结前后端职责、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
+`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分、Gateway `server.rs` 职责拆分与前端 `main.js` 职责拆分已经闭合；`commands/runtime.rs` 候选也已完成独立审查和完整 source gate，但仍须获得单独授权后合入 `next`，合入时再移入完成表并更新工程 HEAD。已拆出的 runtime、Gateway 与前端 controller 默认保持稳定；没有新的独立维护原因时不继续按行数细分。下一阶段另立逻辑重构合同，评估受管 Skill/MCP/Plugin 扩展控制面，并同时冻结前后端职责、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
 
 - 先冻结现有对外 surface、测试身份、Runtime/Gateway allowlist 与 typed failure 边界；
 - 子模块按单一维护原因拆分，不借机改变 provider、transport 或协议语义；
