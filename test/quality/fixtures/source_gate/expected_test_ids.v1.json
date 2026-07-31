@@ -497,6 +497,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_post_spawn_failure_cleans_candidate",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_start_gateway_only_secret_effect",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
@@ -513,7 +514,8 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::skill_install_bridge::real_science_e2e::isolated_science_accepts_many_csswitch_aliases_and_refreshes_after_restart",
         "desktop/src-tauri/Cargo.toml::lib::runtime::skill_install_bridge::real_science_e2e::isolated_science_installs_attaches_and_persists_external_skill",
         "desktop/src-tauri/Cargo.toml::lib::runtime::skill_install_bridge::real_science_e2e::isolated_science_memory_classifier_writes_a_real_row",
-        "desktop/src-tauri/Cargo.toml::lib::runtime::skill_install_bridge::real_science_e2e::isolated_science_registers_csswitch_managed_ssh_hosts_and_revoke_restores_toml"
+        "desktop/src-tauri/Cargo.toml::lib::runtime::skill_install_bridge::real_science_e2e::isolated_science_registers_csswitch_managed_ssh_hosts_and_revoke_restores_toml",
+        "desktop/src-tauri/Cargo.toml::lib::tests::isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup"
       ],
       "approved_ignored_tests": {
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent": {
@@ -575,6 +577,10 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary profile-switch snapshot rollback; temp HOME, managed fake Science, real local Gateway, and loopback only"
+        },
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_d_lifecycle_command_contract": {
+          "boundary": "acceptance",
+          "reason": "source-gate parents execute exact isolated R0-D lifecycle cases with temp HOME, fake processes, and dynamic loopback ports"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract": {
           "boundary": "acceptance",
@@ -643,6 +649,10 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::skill_install_bridge::real_science_e2e::isolated_science_registers_csswitch_managed_ssh_hosts_and_revoke_restores_toml": {
           "boundary": "installed",
           "reason": "explicit installed Science SSH preflight E2E; temp outer HOME/data-dir and fixture aliases only"
+        },
+        "desktop/src-tauri/Cargo.toml::lib::tests::isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup": {
+          "boundary": "acceptance",
+          "reason": "source-gate parent executes exact isolated native-exit cleanup with temp HOME, fake process identity, and a dynamic loopback port"
         }
       },
       "approved_skipped_test_ids": [],
@@ -712,6 +722,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_post_spawn_failure_cleans_candidate",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_start_gateway_only_secret_effect",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
@@ -733,8 +744,12 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_capture_failure_restarts_prior_runtime",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_to_journal_boundary_is_frozen",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_quit_command_does_not_exit_after_science_stop_error",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_mode_config_failure_leaves_runtime_stopped",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::science_operation_failures_have_stable_structured_stages",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::status_response_for_config_error_is_fail_closed",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::status_runtime_identity_prefers_launched_identity_and_fail_closes_partial_launch",
@@ -1117,10 +1132,12 @@
         "desktop/src-tauri/Cargo.toml::lib::templates::tests::table_has_sixteen_templates_including_v081_providers_and_experimental_codex",
         "desktop/src-tauri/Cargo.toml::lib::templates::tests::thinking_policy_per_provider",
         "desktop/src-tauri/Cargo.toml::lib::tests::app_state_clear_proxy_identity_removes_runtime_credentials",
-        "desktop/src-tauri/Cargo.toml::lib::tests::app_state_drop_reaps_owned_proxy_child",
         "desktop/src-tauri/Cargo.toml::lib::tests::auto_boot_rejects_structured_runtime_failure",
         "desktop/src-tauri/Cargo.toml::lib::tests::decide_launch_auto_boot_uses_current_mode_and_active_profile_key",
         "desktop/src-tauri/Cargo.toml::lib::tests::decide_launch_defaults_to_showing_panel",
+        "desktop/src-tauri/Cargo.toml::lib::tests::isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup",
+        "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway",
+        "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup",
         "desktop/src-tauri/Cargo.toml::lib::tests::redact_scrubs_secret_and_is_noop_when_empty",
         "desktop/src-tauri/Cargo.toml::lib::tests::should_begin_boot_only_from_idle_or_failed"
       ]

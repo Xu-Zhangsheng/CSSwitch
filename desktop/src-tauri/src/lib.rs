@@ -482,13 +482,21 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use std::{
+        env, fs,
+        net::{TcpListener, TcpStream},
+        os::unix::fs::PermissionsExt,
+        process::Command,
+        sync::{Arc, Mutex},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
-    use crate::config::{Config, Profile};
+    use crate::config::{self, Config, Profile};
     use crate::runtime::system::redact;
     use crate::{
-        boot_result_error, boot_result_needs_attention, decide_launch_with_auto_boot,
-        should_begin_boot, AppState, BootState, LaunchPath,
+        boot_result_error, boot_result_needs_attention, cleanup_for_exit,
+        decide_launch_with_auto_boot, lock, should_begin_boot, AppState, BootState, LaunchPath,
+        SharedAppState, SharedLifecycle,
     };
 
     #[test]
@@ -534,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn app_state_drop_reaps_owned_proxy_child() {
+    fn r0_app_state_drop_stops_tracked_gateway() {
         let child = Command::new("/bin/sleep")
             .arg("30")
             .spawn()
@@ -552,6 +560,104 @@ mod tests {
             String::from_utf8_lossy(&status.stdout).trim().is_empty(),
             "AppState drop left owned proxy child {pid} alive"
         );
+    }
+
+    #[test]
+    fn r0_native_exit_events_share_repeatable_best_effort_cleanup() {
+        let child_name =
+            "tests::isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup";
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(child_name)
+            .arg("--ignored")
+            .arg("--nocapture")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success()
+                && stdout.lines().any(|line| line == "running 1 test")
+                && stdout
+                    .lines()
+                    .any(|line| line == format!("test {child_name} ... ok")),
+            "isolated native-exit characterization failed:\nstdout={}\nstderr={}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "source-gate parent executes exact isolated native-exit cleanup with temp HOME, fake process identity, and a dynamic port"]
+    fn isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "csswitch-r0-d-native-exit-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        env::set_var("HOME", &home);
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let sandbox_port = listener.local_addr().unwrap().port();
+        assert_ne!(sandbox_port, 8765);
+        let proxy_port = TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        assert_ne!(proxy_port, 8765);
+        let config_dir = config::default_dir();
+        fs::create_dir_all(&config_dir).unwrap();
+        let mut cfg = Config::default();
+        cfg.sandbox_port = sandbox_port;
+        cfg.proxy_port = proxy_port;
+        config::save_to(&config_dir, &cfg).unwrap();
+
+        let fake_science = root.join("fake-science");
+        fs::write(&fake_science, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&fake_science, fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = crate::runtime::science::test_runtime_identity(fake_science);
+        let first_proxy = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let first_pid = first_proxy.id();
+        let mut authority = AppState::default();
+        authority.proxy = Some(first_proxy);
+        authority.science_runtime = Some(runtime.clone());
+        let state: SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let supervisor = Arc::new(crate::codex_auth_supervisor::CodexAuthSupervisor::default());
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .manage(lifecycle.clone())
+            .manage(supervisor)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let generation = lifecycle.current_generation();
+
+        cleanup_for_exit(app.handle());
+        assert!(lock(&state).proxy.is_none());
+        assert!(unsafe { libc::kill(first_pid as i32, 0) } != 0);
+        assert_eq!(lock(&state).science_runtime.as_ref(), Some(&runtime));
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert!(TcpStream::connect(("127.0.0.1", sandbox_port)).is_ok());
+
+        let second_proxy = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let second_pid = second_proxy.id();
+        lock(&state).proxy = Some(second_proxy);
+        cleanup_for_exit(app.handle());
+        assert!(lock(&state).proxy.is_none());
+        assert!(unsafe { libc::kill(second_pid as i32, 0) } != 0);
+        assert_eq!(lock(&state).science_runtime.as_ref(), Some(&runtime));
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert!(TcpStream::connect(("127.0.0.1", sandbox_port)).is_ok());
+
+        drop(app);
+        drop(listener);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

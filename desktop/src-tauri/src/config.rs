@@ -171,6 +171,31 @@ static PENDING_CLEANUP_LIFECYCLE_SEAM: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[cfg(test)]
+static CONFIG_UPDATE_COMMIT_FAILURE: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
+pub(crate) struct ConfigUpdateCommitFailureGuard;
+
+#[cfg(test)]
+impl Drop for ConfigUpdateCommitFailureGuard {
+    fn drop(&mut self) {
+        *CONFIG_UPDATE_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_update_commit_failure(dir: PathBuf) -> ConfigUpdateCommitFailureGuard {
+    *CONFIG_UPDATE_COMMIT_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some((std::thread::current().id(), dir));
+    ConfigUpdateCommitFailureGuard
+}
+
+#[cfg(test)]
 pub(crate) struct PendingCleanupLifecycleGuard;
 
 #[cfg(test)]
@@ -2394,6 +2419,17 @@ pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     ensure_config_access_open(&access)?;
     let mut cfg = load_from_unlocked(dir)?;
     f(&mut cfg);
+    #[cfg(test)]
+    if CONFIG_UPDATE_COMMIT_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|(thread, armed_dir)| {
+            *thread == std::thread::current().id() && armed_dir == dir
+        })
+    {
+        return Err(io::Error::other("test-only config update commit failure"));
+    }
     save_to_unlocked(dir, &cfg)?;
     Ok(cfg)
 }

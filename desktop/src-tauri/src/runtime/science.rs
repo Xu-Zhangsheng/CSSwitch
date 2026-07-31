@@ -78,5 +78,16 @@ include!("science/managed_launch.rs");
 include!("science/lifecycle.rs");
 
 #[cfg(test)]
+pub(crate) fn test_runtime_identity(path: PathBuf) -> ScienceRuntimeIdentity {
+    ScienceRuntimeIdentity {
+        fingerprint: science_executable_fingerprint(&path)
+            .expect("test Science runtime must be a stable executable file"),
+        path,
+        source: ScienceRuntimeSource::Explicit,
+        version: Some("test-only".into()),
+    }
+}
+
+#[cfg(test)]
 #[path = "science/tests.rs"]
 mod tests;

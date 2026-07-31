@@ -496,7 +496,7 @@
         {"id": "set-mode.config-commit", "after_effects": ["Science and Gateway stopped"], "observed_outcome": "Commit failure leaves prior mode durable but runtime stopped.", "compensation": "no prior runtime restart"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "contract": "Stop-before-commit ordering is preserved; no journal or restart compensation."},
-      "characterization_tests": ["runtime::tests::r0_set_mode_config_failure_leaves_runtime_stopped"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_mode_config_failure_leaves_runtime_stopped"],
       "known_gaps": ["No durable operation receipt."]
     },
     {
@@ -514,7 +514,7 @@
         {"id": "set-settings.config-commit", "after_effects": ["runtime stopped", "SSH bridge/stub may be removed"], "observed_outcome": "Prior settings remain durable but runtime stays stopped.", "compensation": "none"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "contract": "Stop/revoke/remove-before-commit behavior is preserved without journal or prior restart."},
-      "characterization_tests": ["runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit"],
       "known_gaps": ["No durable receipt for teardown or SSH bridge changes."]
     },
     {
@@ -527,7 +527,7 @@
       "ordered_effects": ["bump generation", "attempt exact Science stop", "always stop tracked Gateway", "return Science stop result"],
       "failure_points": [{"id": "stop-all.science", "after_effects": ["generation bumped", "Science stop attempted", "Gateway stopped"], "observed_outcome": "Return error stating Gateway stopped while Science stop failed.", "compensation": "none; explicit stop intentionally retains stopped components"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "stop_all_inner_cmd"}, "contract": "Gateway is stopped even when Science stop fails; no restart is attempted."},
-      "characterization_tests": ["runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails"],
       "known_gaps": ["Long external Science stop occurs while AppState is locked."]
     },
     {
@@ -540,7 +540,7 @@
       "ordered_effects": ["run stop_all contract", "exit app with code zero only after success"],
       "failure_points": [{"id": "quit-command.stop", "after_effects": ["Gateway stopped", "Science stop may have failed"], "observed_outcome": "Return error and do not request app exit.", "compensation": "none"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "quit_app_command"}, "contract": "Unlike native exit, a Science stop failure prevents the explicit command from exiting."},
-      "characterization_tests": ["runtime::tests::r0_quit_command_does_not_exit_after_science_stop_error"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_quit_command_does_not_exit_after_science_stop_error"],
       "known_gaps": ["Semantics differ intentionally from native exit cleanup."]
     },
     {
@@ -557,7 +557,7 @@
       "ordered_effects": ["cancel/wait/TERM/KILL registered Codex auth child", "attempt Science stop and ignore error", "stop tracked Gateway", "allow native exit", "Drop repeats Gateway safety stop"],
       "failure_points": [{"id": "native-exit.cleanup", "after_effects": ["one or both Tauri exit events may already have run cleanup", "Science stop may have failed"], "observed_outcome": "Cleanup remains repeatable best effort and cannot prevent native exit.", "compensation": "second event can retry; no generation bump or restart"}],
       "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "cleanup_for_exit"}, "contract": "Both ExitRequested and Exit call cleanup; errors do not block native termination, and AppState Drop stops any still-tracked Gateway."},
-      "characterization_tests": ["lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "lib::tests::r0_app_state_drop_stops_tracked_gateway"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway"],
       "known_gaps": ["Two Tauri events can repeat terminal side effects.", "No generation bump."]
     },
     {

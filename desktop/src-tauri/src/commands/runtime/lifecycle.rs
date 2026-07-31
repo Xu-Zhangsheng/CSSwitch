@@ -25,8 +25,8 @@ pub(super) async fn set_mode_command(
     run_blocking(move || set_mode_inner(app, state, lifecycle, mode)).await
 }
 
-fn set_mode_inner(
-    app: tauri::AppHandle,
+pub(super) fn set_mode_inner<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: SharedLifecycle,
     mode: String,
@@ -63,10 +63,10 @@ fn set_mode_inner(
 
 #[derive(Deserialize)]
 pub(crate) struct UiSettings {
-    proxy_port: u16,
-    sandbox_port: u16,
+    pub(super) proxy_port: u16,
+    pub(super) sandbox_port: u16,
     #[serde(default)]
-    reuse_system_ssh: bool,
+    pub(super) reuse_system_ssh: bool,
 }
 
 /// 运行设置（端口 + 系统 SSH 配置授权；provider/连接改走 profile CRUD + set_active_profile）。
@@ -84,8 +84,8 @@ pub(super) async fn set_settings_command(
     run_blocking(move || set_settings_inner(app, state, lifecycle, cfg)).await
 }
 
-fn set_settings_inner(
-    app: tauri::AppHandle,
+pub(super) fn set_settings_inner<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: SharedLifecycle,
     cfg: UiSettings,
@@ -147,8 +147,8 @@ pub(super) async fn stop_all_command(
     run_blocking(move || stop_all_inner_cmd(app, state, lifecycle)).await
 }
 
-fn stop_all_inner_cmd(
-    app: tauri::AppHandle,
+pub(super) fn stop_all_inner_cmd<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: SharedLifecycle,
 ) -> Result<(), String> {
@@ -169,7 +169,15 @@ pub(super) async fn quit_app_command(
     let exit_app = app.clone();
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
-    run_blocking(move || stop_all_inner_cmd(app, state, lifecycle)).await?;
-    exit_app.exit(0);
+    let stopped = run_blocking(move || stop_all_inner_cmd(app, state, lifecycle)).await;
+    exit_after_stop_success(stopped, || exit_app.exit(0))
+}
+
+pub(super) fn exit_after_stop_success(
+    stopped: Result<(), String>,
+    exit: impl FnOnce(),
+) -> Result<(), String> {
+    stopped?;
+    exit();
     Ok(())
 }

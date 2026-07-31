@@ -7484,3 +7484,252 @@ fn isolated_late_failure_preserves_preexisting_managed_stub_when_science_stopped
             "with prior Science explicitly stopped and an exact valid private V2 CSSwitch-managed SSH stub plus a foreign neighbor already present, a post-OAuth real Science late failure must preserve the exact stub bytes/mode/tree and neighbor, restore every profile/OAuth/Gateway/Science/journal authority, and allow one idempotent retry: prior_explicitly_stopped={prior_explicitly_stopped}, late_edge_reached={late_edge_reached}, all_authorities_restored={all_authorities_restored}, exact_stub_preserved={exact_stub_preserved}, retry_idempotent={retry_idempotent}, sinks_credential_free={sinks_credential_free}"
         );
 }
+
+#[test]
+fn r0_set_mode_config_failure_leaves_runtime_stopped() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
+        &[("CSSWITCH_TEST_R0_D_CASE", "set-mode")],
+    );
+}
+
+#[test]
+fn r0_set_settings_failure_points_preserve_stop_before_commit() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
+        &[("CSSWITCH_TEST_R0_D_CASE", "set-settings")],
+    );
+}
+
+#[test]
+fn r0_stop_all_stops_gateway_even_when_science_stop_fails() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
+        &[("CSSWITCH_TEST_R0_D_CASE", "stop-all")],
+    );
+}
+
+#[test]
+fn r0_quit_command_does_not_exit_after_science_stop_error() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
+        &[("CSSWITCH_TEST_R0_D_CASE", "quit")],
+    );
+}
+
+fn r0_d_process_is_running(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+fn r0_d_proxy_state() -> (SharedAppState, u32) {
+    let child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn isolated tracked Gateway fixture");
+    let pid = child.id();
+    let mut app_state = AppState::default();
+    app_state.proxy = Some(child);
+    (Arc::new(Mutex::new(app_state)), pid)
+}
+
+fn r0_d_config(home: &Path, sandbox_port: u16, proxy_port: u16) -> PathBuf {
+    env::set_var("HOME", home);
+    let config_dir = config::default_dir();
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut cfg = Config::default();
+    cfg.mode = "proxy".into();
+    cfg.sandbox_port = sandbox_port;
+    cfg.proxy_port = proxy_port;
+    cfg.reuse_system_ssh = false;
+    config::save_to(&config_dir, &cfg).unwrap();
+    config_dir
+}
+
+#[test]
+#[ignore = "source-gate parent executes exact isolated R0-D lifecycle cases with temp HOME, fake processes, and dynamic ports"]
+fn isolated_r0_d_lifecycle_command_contract() {
+    let requested = env::var("CSSWITCH_TEST_R0_D_CASE").unwrap_or_default();
+    assert!(
+        matches!(
+            requested.as_str(),
+            "set-mode" | "set-settings" | "stop-all" | "quit"
+        ),
+        "unknown isolated R0-D case"
+    );
+    let root = tmpdir(&format!("r0-d-{requested}"));
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    let fake_science = root.join("fake-science-status");
+    write_executable(
+        &fake_science,
+        "#!/bin/sh\nif [ \"${1:-}\" = status ]; then echo '{\"running\":false}'; exit 1; fi\nexit 0\n",
+    );
+    env_guard.set("SCIENCE_BIN", &fake_science);
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let handle = app.handle().clone();
+
+    if requested == "set-mode" {
+        let stop_home = root.join("mode-stop-home");
+        fs::create_dir_all(&stop_home).unwrap();
+        let sandbox_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let sandbox_port = sandbox_listener.local_addr().unwrap().port();
+        assert_ne!(sandbox_port, 8765);
+        let config_dir = r0_d_config(&stop_home, sandbox_port, free_port());
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let failed = super::lifecycle::set_mode_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle.clone(),
+            "official".into(),
+        )
+        .unwrap_err();
+        assert!(failed.contains("停止沙箱失败"), "{failed}");
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_eq!(lifecycle.current_generation(), generation + 1);
+        assert!(lock(&state).proxy.is_some());
+        assert!(r0_d_process_is_running(proxy_pid));
+        lock(&state).stop_proxy();
+
+        let commit_home = root.join("mode-commit-home");
+        fs::create_dir_all(&commit_home).unwrap();
+        let config_dir = r0_d_config(&commit_home, free_port(), free_port());
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let fault = config::test_arm_update_commit_failure(config_dir.clone());
+        let failed = super::lifecycle::set_mode_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle,
+            "official".into(),
+        )
+        .unwrap_err();
+        drop(fault);
+        assert!(failed.contains("test-only config update commit failure"));
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert!(lock(&state).proxy.is_none());
+        assert!(!r0_d_process_is_running(proxy_pid));
+    }
+
+    if requested == "set-settings" {
+        let stop_home = root.join("settings-stop-home");
+        fs::create_dir_all(&stop_home).unwrap();
+        let sandbox_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let sandbox_port = sandbox_listener.local_addr().unwrap().port();
+        assert_ne!(sandbox_port, 8765);
+        let config_dir = r0_d_config(&stop_home, sandbox_port, free_port());
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let failed = super::lifecycle::set_settings_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle.clone(),
+            super::lifecycle::UiSettings {
+                proxy_port: free_port(),
+                sandbox_port: free_port(),
+                reuse_system_ssh: false,
+            },
+        )
+        .unwrap_err();
+        assert!(failed.contains("设置未更改"), "{failed}");
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert!(lock(&state).proxy.is_some());
+        assert!(r0_d_process_is_running(proxy_pid));
+        lock(&state).stop_proxy();
+
+        let revoke_home = root.join("settings-revoke-home");
+        fs::create_dir_all(&revoke_home).unwrap();
+        let config_dir = r0_d_config(&revoke_home, free_port(), free_port());
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let science_data = science::sandbox_home().join(".claude-science");
+        fs::create_dir_all(&science_data).unwrap();
+        let foreign = root.join("foreign-config.toml");
+        fs::write(&foreign, b"quiet_logs = true\n").unwrap();
+        symlink(&foreign, science_data.join("config.toml")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let failed = super::lifecycle::set_settings_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle.clone(),
+            super::lifecycle::UiSettings {
+                proxy_port: free_port(),
+                sandbox_port: free_port(),
+                reuse_system_ssh: false,
+            },
+        )
+        .unwrap_err();
+        assert!(failed.contains("符号链接"), "{failed}");
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_eq!(lifecycle.current_generation(), generation + 1);
+        assert!(lock(&state).proxy.is_none());
+        assert!(!r0_d_process_is_running(proxy_pid));
+
+        let commit_home = root.join("settings-commit-home");
+        fs::create_dir_all(&commit_home).unwrap();
+        let config_dir = r0_d_config(&commit_home, free_port(), free_port());
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let fault = config::test_arm_update_commit_failure(config_dir.clone());
+        let failed = super::lifecycle::set_settings_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle,
+            super::lifecycle::UiSettings {
+                proxy_port: free_port(),
+                sandbox_port: free_port(),
+                reuse_system_ssh: false,
+            },
+        )
+        .unwrap_err();
+        drop(fault);
+        assert!(failed.contains("test-only config update commit failure"));
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert!(lock(&state).proxy.is_none());
+        assert!(!r0_d_process_is_running(proxy_pid));
+    }
+
+    if requested == "stop-all" || requested == "quit" {
+        let home = root.join("terminal-home");
+        fs::create_dir_all(&home).unwrap();
+        let sandbox_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let sandbox_port = sandbox_listener.local_addr().unwrap().port();
+        assert_ne!(sandbox_port, 8765);
+        r0_d_config(&home, sandbox_port, free_port());
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let stopped =
+            super::lifecycle::stop_all_inner_cmd(handle, state.clone(), lifecycle.clone());
+        assert!(
+            stopped
+                .as_ref()
+                .is_err_and(|error| error.contains("代理已停")),
+            "{stopped:?}"
+        );
+        assert_eq!(lifecycle.current_generation(), generation + 1);
+        assert!(lock(&state).proxy.is_none());
+        assert!(!r0_d_process_is_running(proxy_pid));
+        if requested == "quit" {
+            let exited = AtomicBool::new(false);
+            let result = super::lifecycle::exit_after_stop_success(stopped, || {
+                exited.store(true, Ordering::SeqCst)
+            });
+            assert!(result.is_err());
+            assert!(!exited.load(Ordering::SeqCst));
+        }
+    }
+
+    fs::remove_dir_all(&root).unwrap();
+}
