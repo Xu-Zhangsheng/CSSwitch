@@ -18,7 +18,7 @@
 - 最后复核工程 HEAD：`653ecbeb6dc8e0ea4532d3c33851ee8ae4c14557`
 - 相对前一工程基线：`9b809b39dc81a55f4596e9aae7ff64161d00b6e1`
 - 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开；`authority_snapshot.rs` 按 test seams、filesystem/copy、capture 与 restore 的独立维护原因完成第二层拆分；Gateway `server.rs` 收口为 listener / method-dispatch facade，并按 HTTP codec、inference dispatch、Skill bridge host 与测试夹具拆分
-- 下一阶段：只读评估前端 `desktop/src/main.js` 的 preview adapter、IPC client 与 feature controller 边界，再决定是否继续拆分
+- 下一阶段：只读评估前端 `desktop/src/main.js` 的 preview adapter、IPC client 与 feature controller 边界，再决定是否继续机械拆分；机械拆分闭合后转入逻辑重构，届时统一评估受管 Skill/MCP/Plugin 扩展控制面、前后端职责与故障/日志合同
 - 当前证据边界：source-test 与独立源码审查；没有因此新增 artifact、installed、live、真实 provider、Science、SSH、签名、公证或公开发布结论。
 
 ## 已合入切片
@@ -66,7 +66,7 @@
 
 ## 下一阶段边界
 
-`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分与 Gateway `server.rs` 职责拆分已经闭合。已拆出的 runtime 与 Gateway 子模块默认保持稳定；没有新的独立维护原因时不继续细分。下一阶段从前端 `desktop/src/main.js` 的 preview adapter、IPC client 与 feature controller 做只读评估，行数仍不是拆分理由，只有独立职责、维护触发器或失效条件成立时才继续拆。后续结构切片继续遵守：
+`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分与 Gateway `server.rs` 职责拆分已经闭合。已拆出的 runtime 与 Gateway 子模块默认保持稳定；没有新的独立维护原因时不继续细分。下一阶段从前端 `desktop/src/main.js` 的 preview adapter、IPC client 与 feature controller 做只读评估，行数仍不是拆分理由，只有独立职责、维护触发器或失效条件成立时才继续拆。前端机械拆分闭合后，另立逻辑重构合同评估受管 Skill/MCP/Plugin 扩展控制面，并同时冻结前后端职责、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
 
 - 先冻结现有对外 surface、测试身份、Runtime/Gateway allowlist 与 typed failure 边界；
 - 子模块按单一维护原因拆分，不借机改变 provider、transport 或协议语义；

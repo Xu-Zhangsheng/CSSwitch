@@ -14,6 +14,9 @@
 exact HEAD、版本、package、URL、hash、route 与日期化调查只留在
 [2026-07-30 架构调研](../audits/2026-07-30-v084-architecture-reconnaissance.md)。
 本表不是 release PASS，也不把 source、test、package-static 或 fixture 写成 live。
+本表中的 `non-target` 是当前第三方模式托管决策，不是永久产品禁令。受管
+Skill/MCP/Plugin 扩展控制面已经进入逻辑重构的设计输入，但在独立合同冻结并建立
+对应实现与证据前，仍按下表的当前结论报告；规划意图不是能力证据。
 
 ## 判定词
 
@@ -130,7 +133,9 @@ load/trigger、Reviewer/Specialist 等能力继续由 Science 原生管理；CSS
 仍须保证 `SCIENCE-NATIVE` 包络不破坏它们，并验证第三方模型路径所需的底层协议
 能力。官方账号、
 entitlement、catalog/hosted connectors、通用 MCP/Plugin 管理、云服务、组织管理
-和真实付费计算不是 CSSwitch 第三方模式的托管目标。
+和真实付费计算当前不是 CSSwitch 第三方模式的托管目标。其中 Skill/MCP/Plugin
+的未来受管子集将在机械拆分完成后的逻辑重构中单独确定；不得由这项规划反推当前
+支持，也不得提前改写表中的 production ownership、可达性或证据层。
 
 ## 维护规则
 
@@ -142,5 +147,7 @@ entitlement、catalog/hosted connectors、通用 MCP/Plugin 管理、云服务�
 - mock、fake、fixture、source、test、package-static、artifact 与 installed-live
   必须保持分层；
 - 不因能力存在于 Science UI、route 或字符串中，就承诺第三方模式 current live；
+- 规划中的 Skill/MCP/Plugin 扩展必须先冻结支持类型、来源、权限、生命周期、
+  故障/日志合同与 Science ownership，再按实际证据更新本表；
 - 不为本表新增 handoff 流水线、探针执行、GATE-SOURCE、schema、lint 或 lifecycle
   合同。
