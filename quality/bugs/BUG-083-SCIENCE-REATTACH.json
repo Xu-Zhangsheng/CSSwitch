@@ -15,6 +15,7 @@
       "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/science.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
+      "desktop/src-tauri/src/commands/runtime/",
       "desktop/src-tauri/src/runtime/process_ownership.rs",
       "test/test_process_ownership_policy.py",
       "test/test_scripts.sh"
@@ -78,7 +79,7 @@
       },
       {
         "statement": "False-to-true final port observations and missing data-dir with a live listener now fail closed without clearing runtime state or the managed receipt.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
         "verification_status": "confirmed"
       },
       {

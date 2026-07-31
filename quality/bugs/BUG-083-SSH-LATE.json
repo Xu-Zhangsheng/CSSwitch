@@ -13,6 +13,7 @@
     "resolution_state": "source-fixed-product-pending",
     "affected_paths": [
       "desktop/src-tauri/src/commands/runtime.rs",
+      "desktop/src-tauri/src/commands/runtime/",
       "desktop/src-tauri/src/config.rs",
       "desktop/src-tauri/src/lib.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/",
@@ -73,27 +74,27 @@
     "confirmed_facts": [
       {
         "statement": "One operation-scoped Codex proof covers both the candidate and any alive owned prior Gateway rollback context; the serialized section rechecks the prior child, launch identity, key fingerprint, full launch context, and the exact candidate authority.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_real_ipc_rechecks_union_proof_after_serializer_wait",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_real_ipc_rechecks_union_proof_after_serializer_wait",
         "verification_status": "confirmed"
       },
       {
         "statement": "The private serialized non-Codex path rechecks the exact candidate Config and credential and rejects drift before Gateway, Science, OAuth, journal, or stub mutation.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
         "verification_status": "confirmed"
       },
       {
         "statement": "All SSH config, wrapper, sandbox authority, and managed-stub checks that can be completed early now run before OAuth mutation.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_ssh_prevalidation_precedes_oauth_mutation",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_ssh_prevalidation_precedes_oauth_mutation",
         "verification_status": "confirmed"
       },
       {
         "statement": "A true late failure restores or exactly compensates OAuth, active profile, Gateway, Science, journal, managed stub including a pre-existing managed V2 file, and durable cleanup state; retry is idempotent and foreign SSH state remains unchanged.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent",
         "verification_status": "confirmed"
       },
       {
         "statement": "Failure diagnostics expose typed safe codes without raw credentials, key material, private paths, or nested rollback errors.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_compensation_diagnostics_are_credential_free",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_compensation_diagnostics_are_credential_free",
         "verification_status": "confirmed"
       }
     ],

@@ -15,7 +15,8 @@
       "desktop/src-tauri/src/runtime/science.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/profile_switch.rs",
-      "desktop/src-tauri/src/commands/runtime.rs"
+      "desktop/src-tauri/src/commands/runtime.rs",
+      "desktop/src-tauri/src/commands/runtime/"
     ],
     "requirement_ids": ["REQ-083-SCIENCE-UPDATER", "REQ-083-EVIDENCE"],
     "change_ids": ["CHG-SCIENCE-UPDATER"],
@@ -84,7 +85,7 @@
       },
       {
         "statement": "Profile-switch recovery skips the second capture only for a typed prior-Science-restored outcome after exact runtime, fresh managed receipt, and live-health revalidation; every other failure retains the forced-restart fallback.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "verification_status": "confirmed"
       },
       {
