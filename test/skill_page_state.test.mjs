@@ -124,7 +124,7 @@ test("生产页面没有假 MCP 操作、原型文案或 CS 字块", async () =>
   assert.match(page, /MCP 暂未开放/);
   assert.match(page, /disabled>MCP 暂未开放<\/button>/);
   assert.doesNotMatch(page, /新建外部 MCP|mcp-attach|mcp-detach|fixture|模拟 load/);
-  assert.match(main, /list_installed_skills/);
+  assert.match(page, /list_installed_skills/);
 });
 
 test("展示文本通过 HTML 转义函数进入模板", async () => {

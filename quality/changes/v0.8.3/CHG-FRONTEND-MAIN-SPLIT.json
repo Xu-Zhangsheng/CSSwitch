@@ -1,0 +1,78 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-FRONTEND-MAIN-SPLIT",
+    "version": "v0.8.3",
+    "title": "Split desktop frontend responsibilities without behavior changes",
+    "summary": "Records the behavior-preserving split of the desktop frontend main module into preview, IPC, Codex, runtime, and profile controllers while retaining one bootstrap and updating source-contract tests for the new ownership boundaries.",
+    "status": "active",
+    "owner": "desktop",
+    "changed_paths": [
+      "desktop/src/main.js",
+      "desktop/src/preview-adapter.js",
+      "desktop/src/ipc-client.js",
+      "desktop/src/codex-controller.js",
+      "desktop/src/runtime-controller.js",
+      "desktop/src/profile-controller.js",
+      "test/run-frontend.sh",
+      "test/model_catalog_state.test.mjs",
+      "test/profile_preview_mock.test.mjs",
+      "test/runtime_status_state.test.mjs",
+      "test/skill_page_state.test.mjs",
+      "test/test_codex_browser_auth_contract.py",
+      "test/test_profile_pin_contract.py",
+      "test/test_skill_runtime_boundary.py",
+      "quality/changes/v0.8.3/CHG-FRONTEND-MAIN-SPLIT.json"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-PY-OFFLINE",
+        "SUITE-MJS-FRONTEND"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P1",
+        "migration",
+        "source-only"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "Tauri command and event identity comparison against the pre-split main module",
+        "frontend and Python source-contract tests",
+        "browser preview smoke",
+        "clean-context independent source review"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

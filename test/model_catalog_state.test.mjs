@@ -346,12 +346,13 @@ test("provider forms expose four free model inputs plus read-only scratch discov
 });
 
 test("Codex profile action aligns with providers as a permanently disabled edit button", () => {
-  const js = readFileSync(new URL("../desktop/src/main.js", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../desktop/src/profile-controller.js", import.meta.url), "utf8");
+  const bootstrap = readFileSync(new URL("../desktop/src/main.js", import.meta.url), "utf8");
   const renderList = js.slice(js.indexOf("function renderList()"), js.indexOf("// ── 模式（第三方 / 官方）──"));
-  const busyState = js.slice(js.indexOf("function syncProfileBusyState()"), js.indexOf("function sameOp("));
+  const busyState = js.slice(js.indexOf("function syncProfileBusyState()"), js.indexOf("function tplById("));
   assert.doesNotMatch(renderList, /查看模型/);
   assert.match(renderList, /data-permanently-disabled="true" disabled aria-disabled="true"[^>]*>编辑<\/button>/);
   assert.match(renderList, /'<button class="abtn" data-act="editconn">编辑<\/button>'/);
-  assert.match(busyState, /permanentlyDisabled \|\| busy/);
-  assert.match(js, /btn\.disabled \|\| btn\.dataset\.permanentlyDisabled === "true"/);
+  assert.match(busyState, /permanentlyDisabled \|\| isBusy\(\)/);
+  assert.match(bootstrap, /btn\.disabled \|\| btn\.dataset\.permanentlyDisabled === "true"/);
 });

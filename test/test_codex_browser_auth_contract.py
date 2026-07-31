@@ -5,10 +5,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def frontend_source():
+    return "\n".join(
+        (ROOT / path).read_text()
+        for path in (
+            "desktop/src/main.js",
+            "desktop/src/codex-controller.js",
+            "desktop/src/profile-controller.js",
+            "desktop/src/runtime-controller.js",
+            "desktop/src/preview-adapter.js",
+            "desktop/src/ipc-client.js",
+        )
+    )
+
+
 class CodexBrowserAuthContractTest(unittest.TestCase):
     def test_packaged_ui_has_one_browser_login_entry(self):
         html = (ROOT / "desktop/src/index.html").read_text()
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = frontend_source()
 
         self.assertIn('id="codexLoginBtn"', html)
         self.assertIn("浏览器登录 Codex", html)
@@ -30,7 +44,8 @@ class CodexBrowserAuthContractTest(unittest.TestCase):
 
     def test_profile_repair_is_explicit_and_does_not_restart_oauth(self):
         html = (ROOT / "desktop/src/index.html").read_text()
-        js = (ROOT / "desktop/src/main.js").read_text()
+        main = (ROOT / "desktop/src/main.js").read_text()
+        js = frontend_source()
         tauri = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
 
         self.assertIn('id="codexRepairProfileBtn"', html)
@@ -38,12 +53,12 @@ class CodexBrowserAuthContractTest(unittest.TestCase):
         self.assertIn('call("codex_ensure_profile")', js)
         self.assertIn("profile_ensure_failed", js)
         self.assertIn("commands::codex::codex_ensure_profile", tauri)
-        dom_ready = js.split('window.addEventListener("DOMContentLoaded"', 1)[1]
+        dom_ready = main.split('window.addEventListener("DOMContentLoaded"', 1)[1]
         self.assertNotIn("refreshCodexAuthStatus", dom_ready)
         self.assertIn("refreshCodexAuthStatus({ quiet: true })", js)
 
     def test_preview_and_ui_use_the_three_account_catalog_display_names(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = frontend_source()
         for slug, display_name in (
             ("gpt-5.6-sol", "Codex / GPT-5.6-Sol"),
             ("gpt-5.6-terra", "Codex / GPT-5.6-Terra"),
@@ -54,7 +69,7 @@ class CodexBrowserAuthContractTest(unittest.TestCase):
         self.assertNotIn("claude-csswitch-codex-gpt-5.6-codex", js)
 
     def test_model_labels_preserve_gateway_contract_and_escape_html(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = frontend_source()
 
         self.assertIn('new TextEncoder().encode(value).length <= 512', js)
         self.assertIn(r'/[\u0000-\u001f\u007f-\u009f]/', js)
@@ -64,14 +79,15 @@ class CodexBrowserAuthContractTest(unittest.TestCase):
         self.assertIn('escapeHtml(codexModelLabel(m))', js)
 
     def test_relogin_message_matches_active_codex_runtime_state(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = frontend_source()
 
         self.assertIn('active && isCodexSource(active)', js)
         self.assertIn('受管 Science/Gateway 已停止且未自动重启；请点击“一键开始”', js)
         self.assertIn('下一步可在“模型连接 > 配置方案”中设为当前', js)
 
     def test_ui_defers_codex_preflight_to_one_typed_backend_operation(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        main = (ROOT / "desktop/src/main.js").read_text()
+        js = frontend_source()
         protocol = (ROOT / "desktop/src/codex-auth-protocol.js").read_text()
         diagnostics = (ROOT / "desktop/src-tauri/src/commands/diagnostics.rs").read_text()
 
@@ -80,7 +96,7 @@ class CodexBrowserAuthContractTest(unittest.TestCase):
         self.assertIn("parseCodexAuthCommandError", js + protocol)
         for code in ("codex_login_required", "codex_auth_unavailable", "codex_auth_busy"):
             self.assertIn(code, protocol)
-        dom_ready = js.split('window.addEventListener("DOMContentLoaded"', 1)[1]
+        dom_ready = main.split('window.addEventListener("DOMContentLoaded"', 1)[1]
         self.assertNotIn("refreshCodexAuthStatus", dom_ready)
         self.assertNotIn("codex_auth_status", diagnostics)
 

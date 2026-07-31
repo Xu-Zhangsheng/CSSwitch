@@ -143,7 +143,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
 
     def test_ui_cache_authorization_is_explicit_and_not_persisted(self):
         html = (ROOT / "desktop/src/index.html").read_text()
-        js = (ROOT / "desktop/src/main.js").read_text()
+        main = (ROOT / "desktop/src/main.js").read_text()
+        js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
         science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
 
@@ -162,10 +163,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
             one_click.index('call("science_runtime_preflight")'),
             one_click.index("runOneClick(null)"),
         )
-        self.assertIn('runOneClick("cached_once")', js)
+        self.assertIn('runOneClick("cached_once")', main)
         self.assertIn("此选择不会保存", js)
         self.assertNotIn("localStorage", one_click)
-        self.assertIn('THEME_STORAGE_KEY = "csswitch-theme"', js)
+        self.assertIn('THEME_STORAGE_KEY = "csswitch-theme"', main)
         self.assertIn("runtime_choice: Option<String>", runtime)
         self.assertIn("choice == Some(CACHED_ONCE_CHOICE)", science)
         self.assertIn("fn safe_science_version(path: &Path)", science)
@@ -178,14 +179,15 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn('"cached_choice_required"', science)
 
     def test_manual_science_open_refreshes_url_and_has_visible_feedback(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        main = (ROOT / "desktop/src/main.js").read_text()
+        js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
         system = (ROOT / "desktop/src-tauri/src/runtime/system.rs").read_text()
 
         handler = js.split("async function openBrowser()", 1)[1].split(
             "async function runDoctor", 1
         )[0]
-        self.assertIn("if (busy || browserOpenInFlight) return", handler)
+        self.assertIn("if (isBusy() || browserOpenInFlight) return", handler)
         self.assertIn("browserOpenInFlight = true", handler)
         self.assertIn("browserOpenInFlight = false", handler)
         self.assertIn("syncOpenBrowserControl()", handler)
@@ -195,11 +197,11 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("setBrowserFallback(result.fallback_url)", handler)
         self.assertIn('setMsg("打开浏览器失败："', handler)
 
-        control = js.split("function syncOpenBrowserControl()", 1)[1].split(
+        control = main.split("function syncOpenBrowserControl()", 1)[1].split(
             "function syncActivationControls", 1
         )[0]
-        self.assertIn("busy || browserOpenInFlight", control)
-        self.assertIn('browserOpenInFlight ? "打开中…" : "浏览器打开"', control)
+        self.assertIn("busy || runtimeController.isBrowserOpenInFlight()", control)
+        self.assertIn('runtimeController.isBrowserOpenInFlight() ? "打开中…" : "浏览器打开"', control)
 
         command = runtime.split("fn open_url_inner", 1)[1].split(
             "pub(crate) async fn quit_app", 1
@@ -218,7 +220,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn('"CSSWITCH_ACCEPTANCE_OPEN_BIN": str(self.bin_dir / "open")', matrix)
 
     def test_simple_model_inputs_and_one_click_failures_are_visible_and_structured(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = (ROOT / "desktop/src/profile-controller.js").read_text()
+        runtime_js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         session = sandbox_session_source()
         runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
         lifecycle = (ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle.rs").read_text()
@@ -240,10 +243,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertNotIn("async function applyPresetSync", js)
         self.assertNotIn("function applyFetchResult", js)
         self.assertIn("function catalogRolesChanged(kind)", js)
-        self.assertIn('catalogRolesChanged("wizard")', js)
-        self.assertIn('catalogRolesChanged("connection")', js)
+        self.assertNotIn("codex.runtimeCommandErrorText", js)
+        self.assertIn("codexController.runtimeCommandErrorText", js)
+        bootstrap_js = (ROOT / "desktop/src/main.js").read_text()
+        self.assertIn('profileController.catalogRolesChanged("wizard")', bootstrap_js)
+        self.assertIn('profileController.catalogRolesChanged("connection")', bootstrap_js)
 
-        one_click = js.split("async function runOneClick", 1)[1].split(
+        one_click = runtime_js.split("async function runOneClick", 1)[1].split(
             "async function importLocalSkill", 1
         )[0]
         self.assertLess(
@@ -293,7 +299,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn('"source": runtime.source.code()', runtime)
 
     def test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = (ROOT / "desktop/src/profile-controller.js").read_text()
         html = (ROOT / "desktop/src/index.html").read_text()
         launch = (ROOT / "scripts/launch-virtual-sandbox.sh").read_text()
         wrapper = (ROOT / "scripts/ssh-bridge/ssh").read_text()

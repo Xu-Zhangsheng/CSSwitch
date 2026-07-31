@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-const source = readFileSync(new URL("../desktop/src/main.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../desktop/src/preview-adapter.js", import.meta.url), "utf8");
 const mockInvokeSource = source
-  .split("function mockInvoke(cmd, args) {", 2)[1]
-  .split("\nconst $ =", 1)[0];
+  .split("export function mockInvoke(cmd, args) {", 2)[1]
+  .split("\nexport function getMockCodexOperation", 1)[0];
 
 function makeMock() {
   const context = {

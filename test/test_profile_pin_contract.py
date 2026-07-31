@@ -59,11 +59,13 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertIn("config::require_no_runtime_transaction(cfg)?", profiles)
 
     def test_ui_activation_has_no_skip_path_and_reports_pending_selection(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
-        activate = js.split("async function activate(id)", 1)[1].split(
-            "\nfunction hideRuntimeChoice", 1
+        main = (ROOT / "desktop/src/profile-controller.js").read_text()
+        runtime = (ROOT / "desktop/src/runtime-controller.js").read_text()
+        js = main + runtime
+        activate = main.split("async function activate(id)", 1)[1].split(
+            "\n  return {", 1
         )[0]
-        boundary = js.split("async function checkOneClickBoundary()", 1)[1].split(
+        boundary = runtime.split("async function checkOneClickBoundary()", 1)[1].split(
             "\nasync function runOneClick", 1
         )[0]
 
@@ -84,7 +86,7 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertNotIn("skipActivateBtn", html)
 
     def test_success_keeps_single_finally_busy_ownership_through_refresh(self):
-        js = (ROOT / "desktop/src/main.js").read_text()
+        js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         run_one_click = js.split("async function runOneClick(runtimeChoice)", 1)[1].split(
             "\nasync function importLocalSkill", 1
         )[0]
@@ -95,7 +97,7 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertNotIn("setBusy(false)", success)
         finally_block = run_one_click.split("} finally {", 1)[1]
         self.assertLess(finally_block.index("setBusy(false)"), finally_block.index("refreshIfLoaded"))
-        self.assertIn("await skillPage?.refreshIfLoaded()", run_one_click)
+        self.assertIn("await getSkillPage()?.refreshIfLoaded()", run_one_click)
 
     def test_skill_and_browser_warnings_preserve_runtime_success(self):
         session = sandbox_session_source()
