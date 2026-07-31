@@ -45,6 +45,7 @@ EXPECTED_STATE_OWNERS = {
     "config.access-gate",
     "config.binding",
     "config.desired",
+    "config.migration-backups",
     "config.transaction",
     "gateway.bridge-key",
     "lifecycle.global",
@@ -61,9 +62,11 @@ EXPECTED_DURABLE_RECORDS = {
     "record.codex-oauth-v1",
     "record.codex-thinking-v1",
     "record.config-v4",
+    "record.config-migration-backups-v1",
     "record.gateway-bridge-key-v1",
     "record.history-marker-v1",
     "record.pending-cleanup-v1",
+    "record.operon-skill-attachment-v1",
     "record.route-configuration-v1",
     "record.runtime-binding-v1",
     "record.runtime-transaction-v1",
@@ -147,6 +150,16 @@ EXPECTED_SURFACE_CONTRACT = {
     "update_profile_connection": ("intent-mutation", "op.update-connection"),
     "update_profile_metadata": ("config-nonruntime", "none"),
     "validate_profile_catalog_model": ("transient-probe", "none"),
+}
+EXPECTED_IMPLICIT_OPERATION_CONTRACT = {
+    "codex_auth_status": {"op.startup-config-migration"},
+    "codex_downgrade_preview": {"op.startup-config-migration"},
+    "get_config": {"op.startup-config-migration"},
+    "list_templates": {"op.startup-config-migration"},
+    "preview_profile_preset_sync": {"op.startup-config-migration"},
+    "science_runtime_preflight": {"op.startup-config-migration"},
+    "status": {"op.startup-config-migration"},
+    "validate_profile_catalog_model": {"op.startup-config-migration"},
 }
 EXPECTED_NATIVE_CONTRACT = {
     "app_state_drop": ("terminal-mutation", "op.native-exit"),
@@ -323,6 +336,13 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 self.assertIn(entry["operation_id"], operation_ids, entry["name"])
             else:
                 self.assertEqual(entry["operation_id"], "none", entry["name"])
+            implicit_operation_ids = set(entry.get("implicit_operation_ids", []))
+            self.assertEqual(
+                implicit_operation_ids,
+                EXPECTED_IMPLICIT_OPERATION_CONTRACT.get(entry["name"], set()),
+                entry["name"],
+            )
+            self.assertTrue(implicit_operation_ids.issubset(operation_ids), entry["name"])
             unresolved_callers = [
                 caller
                 for caller in entry["bundled_callers"]
@@ -345,6 +365,11 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             for entry in inventory["registered_surface"] + inventory["native_hooks"]
             if entry["operation_id"] != "none"
         }
+        exposed_operation_ids.update(
+            operation_id
+            for entry in inventory["registered_surface"]
+            for operation_id in entry.get("implicit_operation_ids", [])
+        )
         internal_only = {
             "op.codex-auth-refresh",
             "op.gateway-skill-bridge",
@@ -418,6 +443,19 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 "pub(super) fn write_bridge_status(",
                 "pub(super) fn finalize_bridge_processing(",
             }.issubset({item["symbol"] for item in bridge_record["writers"]})
+        )
+        backup_record = records["record.config-migration-backups-v1"]
+        self.assertEqual(backup_record["authority_owner"], "config.migration-backups")
+        self.assertEqual(
+            {item["symbol"] for item in backup_record["writers"]},
+            {"fn write_versioned_backup_bytes_in("},
+        )
+
+        operon_record = records["record.operon-skill-attachment-v1"]
+        self.assertEqual(operon_record["authority_owner"], "skill.host")
+        self.assertEqual(
+            {item["symbol"] for item in operon_record["writers"]},
+            {"pub fn attach_skill(", "pub fn update_agent_skills("},
         )
         self.assertTrue(
             {
@@ -494,7 +532,24 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             set(gateway_bridge["durable_records"]["writes"]),
-            {"record.skill-bridge-mailbox-v1", "record.skill-package-v1"},
+            {
+                "record.operon-skill-attachment-v1",
+                "record.skill-bridge-mailbox-v1",
+                "record.skill-package-v1",
+            },
+        )
+        self.assertIn(
+            "record.operon-skill-attachment-v1",
+            operations["op.install-local-skill"]["durable_records"]["writes"],
+        )
+
+        self.assertEqual(
+            {item["name"] for item in operations["op.codex-auth-refresh"]["entrypoints"]},
+            {
+                "codex_auth_refresh",
+                "inference_401_auth_refresh",
+                "models_401_auth_refresh",
+            },
         )
 
         downgrade = operations["op.codex-downgrade"]
@@ -523,10 +578,15 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         self.assertEqual(
             {item["name"] for item in migration["entrypoints"]},
             {
+                "config_load_migration",
                 "startup_config_load",
                 "boot_coordinator_config_load",
                 "single_instance_boot_reentry",
             },
+        )
+        self.assertEqual(
+            set(migration["durable_records"]["writes"]),
+            {"record.config-migration-backups-v1", "record.config-v4"},
         )
         backup_index = migration["ordered_effects"].index(
             "publish one or more non-overwriting version backups for legacy input"

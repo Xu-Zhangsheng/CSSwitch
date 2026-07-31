@@ -220,6 +220,7 @@
           "enum": ["runtime-mutation", "intent-mutation", "terminal-mutation", "host-bridge-mutation", "config-mutation", "config-nonruntime", "ui-one-shot", "transient-probe", "read-only", "external-side-effect"]
         },
         "operation_id": { "$ref": "#/$defs/Identifier" },
+        "implicit_operation_ids": { "$ref": "#/$defs/StringList" },
         "source_anchor": { "$ref": "#/$defs/SourceAnchor" },
         "bundled_callers": { "$ref": "#/$defs/StringList" },
         "reason": { "$ref": "#/$defs/NonEmptyString" }
