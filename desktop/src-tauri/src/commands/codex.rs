@@ -3584,7 +3584,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "source-gate parents execute exact isolated R0-F Codex mutation cases with temp HOME, fake processes, fake sidecar, and dynamic ports"]
+    #[ignore = "source-gate parents execute exact isolated R0-F Codex mutation cases with temp HOME, fake processes, fake sidecar, and dynamic loopback ports"]
     fn isolated_r0_codex_mutation_command_contract() {
         let requested = env::var("CSSWITCH_TEST_R0_F_CASE").unwrap_or_default();
         assert!(
