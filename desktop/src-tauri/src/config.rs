@@ -181,6 +181,11 @@ static DOWNGRADE_COMMIT_FAILURE: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[cfg(test)]
+static MIGRATION_COMMIT_FAILURE: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
 pub(crate) struct ConfigUpdateCommitFailureGuard;
 
 #[cfg(test)]
@@ -222,6 +227,26 @@ pub(crate) fn test_arm_downgrade_commit_failure(
         .unwrap_or_else(|error| error.into_inner()) =
         Some((std::thread::current().id(), dir, exit_required));
     DowngradeCommitFailureGuard
+}
+
+#[cfg(test)]
+struct MigrationCommitFailureGuard;
+
+#[cfg(test)]
+impl Drop for MigrationCommitFailureGuard {
+    fn drop(&mut self) {
+        *MIGRATION_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+fn test_arm_migration_commit_failure(dir: PathBuf) -> MigrationCommitFailureGuard {
+    *MIGRATION_COMMIT_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some((std::thread::current().id(), dir));
+    MigrationCommitFailureGuard
 }
 
 #[cfg(test)]
@@ -1681,6 +1706,19 @@ fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
 }
 
 fn commit_migrated_config(secure: &SecureDir, original: &[u8], cfg: &Config) -> io::Result<()> {
+    #[cfg(test)]
+    {
+        let failure = MIGRATION_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if failure.as_ref().is_some_and(|(thread, dir)| {
+            *thread == std::thread::current().id() && dir == &secure.path
+        }) {
+            return Err(io::Error::other(
+                "test-only migration failure after backup before v4 commit",
+            ));
+        }
+    }
     let json = serde_json::to_vec_pretty(cfg).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -2961,6 +2999,36 @@ mod tests {
         let again = load_from(&d).unwrap();
         assert_eq!(again, cfg);
         assert_eq!(again.schema_version, 4);
+    }
+
+    #[test]
+    fn r0_startup_migration_is_single_commit_with_backup() {
+        let d = tmpdir().join(".csswitch-r0-g-migration");
+        fs::create_dir_all(&d).unwrap();
+        let original = br#"{"schema_version":2,"profiles":[],"active_id":"","proxy_port":18991,"sandbox_port":8990,"reuse_system_ssh":false,"secret":"","mode":"proxy","pending_notice":null}"#;
+        fs::write(config_path(&d), original).unwrap();
+
+        let guard = test_arm_migration_commit_failure(d.clone());
+        let error = load_from(&d).unwrap_err();
+        assert!(error.to_string().contains("after backup before v4 commit"));
+        assert_eq!(fs::read(config_path(&d)).unwrap(), original);
+        let backup = fs::read(d.join("config.json.v2.bak")).unwrap();
+        assert!(!backup.is_empty());
+        assert!(!fs::read_dir(&d).unwrap().flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".config.json.tmp-")
+        }));
+
+        drop(guard);
+        let migrated = load_from(&d).unwrap();
+        assert_eq!(migrated.schema_version, 4);
+        assert_eq!(fs::read(d.join("config.json.v2.bak")).unwrap(), backup);
+        let published: serde_json::Value =
+            serde_json::from_slice(&fs::read(config_path(&d)).unwrap()).unwrap();
+        assert_eq!(published["schema_version"], 4);
+        assert_eq!(load_from(&d).unwrap(), migrated);
     }
     #[test]
     fn load_too_new_errors() {

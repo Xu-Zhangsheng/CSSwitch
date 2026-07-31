@@ -519,3 +519,72 @@ fn bridge_request_internal_failed() -> Value {
 pub(super) fn start_skill_install_bridge(_cfg: &GatewayConfig) -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_bridge(label: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "CSSwitch-Skill-Bridge-r0-g-{label}-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn r0_interrupted_processing_publishes_terminal_response() {
+        let bridge = temp_bridge("recover");
+        let id = "a".repeat(32);
+        fs::write(bridge.join(format!("{id}.processing")), b"claimed-request").unwrap();
+        fs::write(bridge.join(format!("{id}.status.json")), b"advisory-status").unwrap();
+
+        recover_orphaned_bridge_processing(&bridge).unwrap();
+
+        let response: Value =
+            serde_json::from_slice(&fs::read(bridge.join(format!("{id}.response.json"))).unwrap())
+                .unwrap();
+        assert_eq!(response["status"], "REQUEST_INTERRUPTED");
+        assert_eq!(response["request_id"], id);
+        assert_eq!(response["request_terminal"], true);
+        assert_eq!(response["automatic_retry_allowed"], false);
+        assert_eq!(response["directory_commit"], Value::Null);
+        assert!(!bridge.join(format!("{id}.processing")).exists());
+        assert!(!bridge.join(format!("{id}.status.json")).exists());
+        fs::remove_dir_all(bridge).unwrap();
+    }
+
+    #[test]
+    fn r0_finalization_failure_retains_processing_for_recovery() {
+        let bridge = temp_bridge("finalize");
+        let id = "b".repeat(32);
+        let processing = bridge.join(format!("{id}.processing"));
+        let response = bridge.join(format!("{id}.response.json"));
+        fs::write(&processing, b"claimed-request").unwrap();
+        fs::create_dir(&response).unwrap();
+
+        let error =
+            finalize_bridge_processing(&bridge, &id, &json!({"status":"MUTATION_COMPLETED"}))
+                .unwrap_err();
+        assert!(error.contains("invalid existing Skill bridge response"));
+        assert!(
+            processing.is_file(),
+            "uncertain request must remain claimed"
+        );
+
+        fs::remove_dir(&response).unwrap();
+        recover_orphaned_bridge_processing(&bridge).unwrap();
+        let recovered: Value = serde_json::from_slice(&fs::read(&response).unwrap()).unwrap();
+        assert_eq!(recovered["status"], "REQUEST_INTERRUPTED");
+        assert!(!processing.exists());
+        fs::remove_dir_all(bridge).unwrap();
+    }
+}

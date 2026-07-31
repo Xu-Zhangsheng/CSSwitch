@@ -1671,6 +1671,65 @@ mod tests {
     }
 
     #[test]
+    fn r0_bridge_install_and_uninstall_freeze_file_and_attachment_outcomes() {
+        let (root, data) = standard_data_dir("r0-file-attachment-outcomes");
+        let installed = imported_skill(&data, "install-retained");
+        let context = ScienceHostContext {
+            binary: root.join("missing-science"),
+            version: "test-version".into(),
+            fingerprint: csswitch_skill_install_core::ScienceExecutableFingerprint {
+                device: 0,
+                inode: 0,
+                size: 0,
+                modified_seconds: 0,
+                modified_nanoseconds: 0,
+                mode: 0,
+                sha256: "0".repeat(64),
+            },
+            home: root.join("sandbox/home"),
+            data_dir: data.clone(),
+            sandbox_port: 19_941,
+        };
+        let install = attach_install_commit(
+            &context,
+            InstallCommit {
+                skill_name: "install-retained".into(),
+                source_kind: csswitch_skill_install_core::SourceKind::Github,
+                active_org: "org-test".into(),
+                content_sha256: "a".repeat(64),
+                source_digest_sha256: Some("b".repeat(64)),
+                resolved_commit_sha: Some("c".repeat(40)),
+                source_repo: "owner/repo".into(),
+                source_path: "skills/install-retained".into(),
+                dependency_scan: "BEST_EFFORT",
+                action: csswitch_skill_install_core::InstallAction::Committed,
+                directory_commit: true,
+            },
+        );
+        assert_eq!(install["status"], "FILES_COMMITTED_ATTACH_REQUIRED");
+        assert_eq!(install["directory_commit"], true);
+        assert_eq!(install["attach_required"], true);
+        assert!(installed.is_dir());
+
+        let removed = imported_skill(&data, "uninstall-quarantined");
+        let uninstall = uninstall_from_arguments_with_context(
+            &data,
+            None,
+            &json!({"skill_name":"uninstall-quarantined"}),
+        );
+        assert_eq!(uninstall["status"], "QUARANTINED_DETACH_REQUIRED");
+        assert_eq!(uninstall["directory_removed"], true);
+        assert_eq!(uninstall["quarantine_commit"], true);
+        assert_eq!(uninstall["detach_required"], true);
+        assert!(!removed.exists());
+        let quarantine = root
+            .join("sandbox/skill-trash")
+            .join(uninstall["quarantine_name"].as_str().unwrap());
+        assert!(quarantine.join("SKILL.md").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn uninstall_refuses_unmarked_foreign_and_invalid_names() {
         let (root, data) = standard_data_dir("uninstall-refuse");
         let skills = data.join("orgs/org-test/skills");

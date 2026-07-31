@@ -56,15 +56,31 @@ pub(crate) async fn install_local_skill_package(
         Ok(path) => path,
         Err(_) => return Ok(local_error("INVALID_ARCHIVE_PATH", "选择结果不是本地文件")),
     };
-    let after = match current_science_context(&state) {
-        Ok(context) if context == before => context,
-        Ok(_) => return Ok(not_ready("选择文件期间 Science runtime 已变化")),
-        Err(message) => return Ok(not_ready(&message)),
+    let after =
+        match validate_after_picker(&before, current_science_context(&state), |context| context) {
+            Ok(context) => context,
+            Err(value) => return Ok(value),
+        };
+    run_blocking(move || install_selected_path(&path, &after)).await
+}
+
+fn validate_after_picker<T, F>(
+    before: &ScienceHostContext,
+    after: Result<ScienceHostContext, String>,
+    ready: F,
+) -> Result<T, Value>
+where
+    F: FnOnce(ScienceHostContext) -> T,
+{
+    let after = match after {
+        Ok(context) if context == *before => context,
+        Ok(_) => return Err(not_ready("选择文件期间 Science runtime 已变化")),
+        Err(message) => return Err(not_ready(&message)),
     };
     if let Err(error) = verify_attach_control_ready(&after) {
-        return Ok(not_ready(&error.message));
+        return Err(not_ready(&error.message));
     }
-    run_blocking(move || install_selected_path(&path, &after)).await
+    Ok(ready(after))
 }
 
 fn current_science_context(state: &SharedAppState) -> Result<ScienceHostContext, String> {
@@ -329,11 +345,122 @@ fn local_error(code: &str, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use csswitch_skill_install_core::{
+        InstallAction, ScienceExecutableFingerprint, SourceKind, IMPORT_ORIGIN_FILE,
+    };
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "csswitch-r0-g-local-skill-{label}-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    fn fingerprint(path: &Path) -> ScienceExecutableFingerprint {
+        let metadata = fs::metadata(path).unwrap();
+        let bytes = fs::read(path).unwrap();
+        ScienceExecutableFingerprint {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.size(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            mode: metadata.mode(),
+            sha256: Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        }
+    }
+
+    fn context(root: &Path, label: &str) -> ScienceHostContext {
+        let binary = root.join(format!("fake-science-{label}"));
+        fs::write(&binary, b"#!/bin/sh\nexit 7\n").unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let home = root.join(format!("home-{label}"));
+        let data_dir = home.join(".claude-science");
+        fs::create_dir_all(&data_dir).unwrap();
+        ScienceHostContext {
+            fingerprint: fingerprint(&binary),
+            binary,
+            version: "test-version".into(),
+            home,
+            data_dir,
+            sandbox_port: 19_931,
+        }
+    }
 
     #[test]
     fn not_ready_is_non_committing() {
         let value = not_ready("not running");
         assert_eq!(value["status"], "SCIENCE_NOT_READY");
         assert_eq!(value["directory_commit"], false);
+    }
+
+    #[test]
+    fn r0_picker_context_change_prevents_package_commit() {
+        let root = temp_root("context-race");
+        let before = context(&root, "before");
+        let after = context(&root, "after");
+        let commit_sentinel = root.join("package-commit-must-not-run");
+        let result = validate_after_picker(&before, Ok(after), |_| {
+            fs::write(&commit_sentinel, b"committed").unwrap();
+            panic!("changed context must reject before package commit")
+        })
+        .unwrap_err();
+        assert_eq!(result["status"], "SCIENCE_NOT_READY");
+        assert_eq!(result["directory_commit"], false);
+        assert!(!commit_sentinel.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn r0_attach_failure_retains_committed_files_and_reports_separate_outcomes() {
+        let root = temp_root("attach-failure");
+        let context = context(&root, "runtime");
+        fs::write(
+            context.data_dir.join("active-org.json"),
+            br#"{"org_uuid":"org-test"}"#,
+        )
+        .unwrap();
+        let skill = context.data_dir.join("orgs/org-test/skills/demo");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), b"---\nname: demo\n---\n").unwrap();
+        fs::write(skill.join(IMPORT_ORIGIN_FILE), b"committed-marker").unwrap();
+        let value = attach_result_payload(
+            &context,
+            InstallCommit {
+                skill_name: "demo".into(),
+                source_kind: SourceKind::LocalZip,
+                active_org: "org-test".into(),
+                content_sha256: "a".repeat(64),
+                source_digest_sha256: Some("b".repeat(64)),
+                resolved_commit_sha: None,
+                source_repo: "csswitch/local-archive".into(),
+                source_path: "demo".into(),
+                dependency_scan: "BEST_EFFORT",
+                action: InstallAction::Committed,
+                directory_commit: true,
+            },
+        );
+        assert_eq!(value["status"], "FILES_COMMITTED_ATTACH_REQUIRED");
+        assert_eq!(value["directory_commit"], true);
+        assert_eq!(value["attach_attempted"], true);
+        assert_eq!(value["attach_required"], true);
+        assert_eq!(value["attach_verified"], false);
+        assert!(skill.join("SKILL.md").is_file());
+        assert!(skill.join(IMPORT_ORIGIN_FILE).is_file());
+        fs::remove_dir_all(root).unwrap();
     }
 }

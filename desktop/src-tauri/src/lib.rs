@@ -323,6 +323,10 @@ fn boot_prepare_failure(message: impl Into<String>) -> serde_json::Value {
     .project_dto()
 }
 
+fn load_boot_config(dir: &std::path::Path) -> Result<config::Config, serde_json::Value> {
+    config::load_from(dir).map_err(|error| boot_prepare_failure(format!("读取配置失败：{error}")))
+}
+
 fn boot_result_needs_attention(value: &serde_json::Value) -> bool {
     value.get("status").and_then(serde_json::Value::as_str) == Some("attention")
 }
@@ -339,10 +343,10 @@ fn run_boot_coordinator(app: tauri::AppHandle) {
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cfg = match config::load_from(&config::default_dir()) {
+        let cfg = match load_boot_config(&config::default_dir()) {
             Ok(cfg) => cfg,
-            Err(e) => {
-                mark_boot_failed(&app, boot_prepare_failure(format!("读取配置失败：{e}")));
+            Err(failure) => {
+                mark_boot_failed(&app, failure);
                 return;
             }
         };
@@ -495,8 +499,8 @@ mod tests {
     use crate::runtime::system::redact;
     use crate::{
         boot_result_error, boot_result_needs_attention, cleanup_for_exit,
-        decide_launch_with_auto_boot, lock, should_begin_boot, AppState, BootState, LaunchPath,
-        SharedAppState, SharedLifecycle,
+        decide_launch_with_auto_boot, load_boot_config, lock, should_begin_boot, AppState,
+        BootState, LaunchPath, SharedAppState, SharedLifecycle,
     };
 
     #[test]
@@ -521,6 +525,34 @@ mod tests {
         assert!(!boot_result_needs_attention(
             &serde_json::json!({"status": "ok"})
         ));
+    }
+
+    #[test]
+    fn r0_boot_surfaces_prepare_failure_after_setup_load_error() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "csswitch-r0-g-startup-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.json"), b"{invalid-config").unwrap();
+
+        let setup_load = config::load_from(&dir);
+        assert!(
+            setup_load.is_err(),
+            "setup intentionally ignores this result"
+        );
+        let failure = load_boot_config(&dir).unwrap_err();
+        assert_eq!(failure["status"], "error");
+        assert_eq!(failure["stage"], "prepare");
+        assert!(failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("读取配置失败"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

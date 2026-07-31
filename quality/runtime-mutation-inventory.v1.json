@@ -18,8 +18,9 @@
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
       "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
     ],
-    "test_identity_semantics": "characterization_tests lists required stable identities for R0 completion, not evidence that every identity already exists. R0 may be declared complete only when every listed value is an exact discovered source-gate identity and is neither ignored nor skipped; planned names remain an explicit incomplete state until their tests are implemented.",
-    "characterization_status": "requirements-open"
+    "test_identity_semantics": "characterization_tests lists required stable identities for R0 completion, not evidence that every identity already exists. R0 may be declared complete only when every listed value is an exact discovered source-gate identity and is neither ignored nor skipped, and the separate completion review is complete; planned names remain incomplete until implemented, while a fully discovered set remains requirements-open until the R0-H review closes.",
+    "characterization_status": "requirements-open",
+    "completion_review_status": "pending"
   },
   "state_owners": [
     {
@@ -778,7 +779,7 @@
         {"id": "skill-install.attach", "after_effects": ["package directory and import origin committed"], "observed_outcome": "Attach failure/uncertainty retains committed files and returns ATTACH_REQUIRED or UNCERTAIN.", "compensation": "retry same package; no automatic file rollback"}
       ],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "attach_result_payload"}, "contract": "Context is double-checked, but no shared runtime mutation lease is held; committed package files survive attachment failure."},
-      "characterization_tests": ["skill_install::tests::r0_picker_context_change_prevents_package_commit", "skill_install::tests::r0_attach_failure_retains_committed_files_and_reports_separate_outcomes"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_picker_context_change_prevents_package_commit", "desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_attach_failure_retains_committed_files_and_reports_separate_outcomes"],
       "known_gaps": ["Double-check does not close the race between final context check and package commit/attach."]
     },
     {
@@ -795,7 +796,7 @@
         {"id": "gateway-skill-bridge.finalize", "after_effects": ["request claimed and host mutation may have completed", "final response not proven"], "observed_outcome": "Retain .processing and publish best-effort finalization_failed status so the next Gateway startup converts it to REQUEST_INTERRUPTED.", "compensation": "startup recovery publishes a terminal response without replaying the host mutation"}
       ],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn recover_orphaned_bridge_processing("}, "contract": "Mailbox recovery never replays an uncertain request; package/attachment compensation is operation-specific and final responses preserve separate outcomes."},
-      "characterization_tests": ["skill_bridge_host::tests::r0_interrupted_processing_publishes_terminal_response", "skill_bridge_host::tests::r0_finalization_failure_retains_processing_for_recovery", "gateway_skill_install::tests::r0_bridge_install_and_uninstall_freeze_file_and_attachment_outcomes"],
+      "characterization_tests": ["desktop/gateway/Cargo.toml::lib::server::skill_bridge_host::tests::r0_interrupted_processing_publishes_terminal_response", "desktop/gateway/Cargo.toml::lib::server::skill_bridge_host::tests::r0_finalization_failure_retains_processing_for_recovery", "desktop/gateway/Cargo.toml::lib::skill_install::tests::r0_bridge_install_and_uninstall_freeze_file_and_attachment_outcomes"],
       "known_gaps": ["Bridge status is advisory and best effort.", "No shared transaction spans mailbox claim, package commit/quarantine, OPERON mutation, and final-response publication."]
     },
     {
@@ -813,7 +814,7 @@
         {"id": "doctor.configure", "after_effects": ["one or more Science host route components may be changed"], "observed_outcome": "Best-effort status or warning is appended and the command still returns the diagnostic report.", "compensation": "no uniform host-state rollback"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "force_third_party_reconcile"}, "contract": "Doctor is a real host reconcile mutation: marker invalidation and healthy-host configuration are retained, reported, and not rolled back as a unit."},
-      "characterization_tests": ["diagnostics::tests::r0_doctor_diagnostic_failure_skips_reconcile", "runtime::tests::r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::r0_doctor_diagnostic_failure_skips_reconcile", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::route_reconcile::tests::r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes"],
       "known_gaps": ["Inspect and reconcile are combined in one user action.", "Host route mutations lack a typed receipt and uniform inverse."]
     },
     {
@@ -826,7 +827,7 @@
       "ordered_effects": ["load and validate legacy/current config", "publish one or more non-overwriting version backups for legacy input", "atomically publish the normalized current v4 config", "ignore setup load error and continue to boot coordinator"],
       "failure_points": [{"id": "startup-config-migration.backup-or-commit", "after_effects": ["zero or more immutable version backups may have been published", "v4 publication may not have committed"], "observed_outcome": "Backup or v4 publication failure returns an error; setup ignores it, while the boot coordinator reloads and surfaces a typed prepare failure if the source remains unreadable.", "compensation": "published version backups are retained; config publication owns its atomic rollback"}],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "load_from"}, "contract": "Config migration owns its atomic publication and backup; setup does not add a runtime transaction."},
-      "characterization_tests": ["config::tests::r0_startup_migration_is_single_commit_with_backup", "lib::tests::r0_boot_surfaces_prepare_failure_after_setup_load_error"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::config::tests::r0_startup_migration_is_single_commit_with_backup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_boot_surfaces_prepare_failure_after_setup_load_error"],
       "known_gaps": ["Setup intentionally ignores the first load result."]
     }
   ],

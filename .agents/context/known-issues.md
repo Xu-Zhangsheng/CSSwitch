@@ -60,6 +60,15 @@ stop → export → backup → v2 publication/latch → direct exit 顺序和安
 测试边界为临时 HOME、fake sidecar、fake managed children、私有 auth/catalog 状态与动态
 loopback 端口；结论不扩展到 installed/live provider、artifact 或产品行为修复。
 
+`R0-G` 已收口（source）：九个精确 source gate 身份冻结本地 Skill picker 期间
+runtime context 变化的提交前拒绝、文件提交后的 attach 失败保留，Gateway bridge 的
+interrupted/finalization recovery 与 install/uninstall 文件和绑定分离结果，doctor 的
+diagnostics-before-reconcile、marker invalidation/host partial mutation，以及 startup config
+migration 的 backup-before-single-v4-commit 与 setup 忽略首次错误后 boot prepare 失败。
+测试只使用临时目录、fake Science executable/context、私有 bridge mailbox 与 mock host
+mutation；结论不扩展到 installed/live provider、artifact、Science Skill runtime 或产品
+行为修复。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
@@ -68,8 +77,8 @@ loopback 端口；结论不扩展到 installed/live provider、artifact 或产�
 | `R0-D` | DONE | mode/settings/stop/quit/native exit |
 | `R0-E` | DONE | profile select/update/sync/revoke |
 | `R0-F` | DONE | Codex mutation |
-| `R0-G` | **NEXT** | Skill/bridge/doctor/startup migration |
-| `R0-H` | PENDING | 整体 inventory、source gate 与最终独立审查收口 |
+| `R0-G` | DONE | Skill/bridge/doctor/startup migration |
+| `R0-H` | **NEXT** | 整体 inventory、source gate 与最终独立审查收口 |
 
 每个窗口只完成表中一个阶段；阶段结束时更新本表、完成该分片的
 验证/审查/提交和临时内容清理，并留下干净工作树再进入下一阶段。

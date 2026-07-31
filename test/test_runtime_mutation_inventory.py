@@ -635,13 +635,15 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         executable, ignored, skipped = source_test_identities()
         missing = sorted(required - executable)
         status = inventory["scope"]["characterization_status"]
+        review_status = inventory["scope"]["completion_review_status"]
         if status == "complete":
             self.assertEqual(missing, [])
             self.assertEqual(sorted(required & ignored), [])
             self.assertEqual(sorted(required & skipped), [])
+            self.assertEqual(review_status, "complete")
         else:
             self.assertEqual(status, "requirements-open")
-            self.assertTrue(missing, "open status must not hide a fully resolved inventory")
+            self.assertEqual(review_status, "pending")
 
     def test_integrity_checks_reject_representative_bad_inventory(self):
         inventory = load_inventory()

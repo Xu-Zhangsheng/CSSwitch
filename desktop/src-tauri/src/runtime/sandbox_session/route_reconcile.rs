@@ -21,6 +21,26 @@ pub(super) fn configure_third_party_best_effort<R: Runtime>(
     runtime: &ScienceRuntimeIdentity,
     force: bool,
 ) -> RegistrationStatus {
+    let control_url = sandbox_url(port, runtime);
+    configure_third_party_best_effort_with(
+        status,
+        data_dir,
+        runtime.version.as_deref(),
+        force,
+        || configure_third_party_after_science_start(app, &control_url),
+    )
+}
+
+fn configure_third_party_best_effort_with<F>(
+    status: RegistrationStatus,
+    data_dir: &std::path::Path,
+    science_version: Option<&str>,
+    force: bool,
+    configure_host: F,
+) -> RegistrationStatus
+where
+    F: FnOnce() -> Result<(), String>,
+{
     if !matches!(
         status,
         RegistrationStatus::Registered | RegistrationStatus::AlreadyRegistered
@@ -28,7 +48,7 @@ pub(super) fn configure_third_party_best_effort<R: Runtime>(
         let _ = invalidate_route_configuration(data_dir);
         return status;
     }
-    let Some(science_version) = runtime.version.as_deref() else {
+    let Some(science_version) = science_version else {
         let _ = invalidate_route_configuration(data_dir);
         return RegistrationStatus::Warning(
             "Science 版本无法确认，未记录第三方能力配置状态".into(),
@@ -46,13 +66,74 @@ pub(super) fn configure_third_party_best_effort<R: Runtime>(
     if let Err(error) = invalidate_route_configuration(data_dir) {
         return RegistrationStatus::Warning(error);
     }
-    let control_url = sandbox_url(port, runtime);
-    if let Err(error) = configure_third_party_after_science_start(app, &control_url) {
+    if let Err(error) = configure_host() {
         return RegistrationStatus::Warning(error);
     }
     match mark_route_configuration_current(data_dir, science_version) {
         Ok(()) => status,
         Err(error) => RegistrationStatus::Warning(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::path::PathBuf::from("/private/tmp").join(format!(
+            "csswitch-r0-g-doctor-reconcile-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes() {
+        let data_dir = temp_dir();
+        mark_route_configuration_current(&data_dir, "science-v1").unwrap();
+        let skipped = configure_third_party_best_effort_with(
+            RegistrationStatus::Warning("inspect failed".into()),
+            &data_dir,
+            Some("science-v1"),
+            true,
+            || panic!("untrusted inspect result must not mutate the host"),
+        );
+        assert!(matches!(skipped, RegistrationStatus::Warning(_)));
+        assert!(!route_configuration_is_current(&data_dir, "science-v1").unwrap());
+
+        mark_route_configuration_current(&data_dir, "science-v1").unwrap();
+        let retained_host_effect = data_dir.join("host-effect-retained");
+        let failed = configure_third_party_best_effort_with(
+            RegistrationStatus::Registered,
+            &data_dir,
+            Some("science-v1"),
+            true,
+            || {
+                fs::write(&retained_host_effect, b"partial host mutation").unwrap();
+                Err("host configure failed after mutation".into())
+            },
+        );
+        assert!(matches!(failed, RegistrationStatus::Warning(_)));
+        assert!(retained_host_effect.is_file());
+        assert!(!route_configuration_is_current(&data_dir, "science-v1").unwrap());
+
+        let succeeded = configure_third_party_best_effort_with(
+            RegistrationStatus::AlreadyRegistered,
+            &data_dir,
+            Some("science-v1"),
+            true,
+            || Ok(()),
+        );
+        assert_eq!(succeeded, RegistrationStatus::AlreadyRegistered);
+        assert!(route_configuration_is_current(&data_dir, "science-v1").unwrap());
+        fs::remove_dir_all(data_dir).unwrap();
     }
 }
 

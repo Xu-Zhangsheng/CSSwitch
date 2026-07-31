@@ -14,18 +14,31 @@ pub(crate) async fn run_doctor(
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
     run_blocking(move || {
-        let mut output = run_doctor_inner_cmd(&app)?;
-        let route = lifecycle.with_serialized(|| {
-            crate::runtime::sandbox_session::force_third_party_reconcile(&app, &state)
-        });
-        output.push_str("\n[Skill 路由] ");
-        match route {
-            Ok(message) => output.push_str(&message),
-            Err(error) => output.push_str(&format!("核验失败：{error}")),
-        }
-        Ok(output)
+        run_doctor_workflow(
+            || run_doctor_inner_cmd(&app),
+            || {
+                lifecycle.with_serialized(|| {
+                    crate::runtime::sandbox_session::force_third_party_reconcile(&app, &state)
+                })
+            },
+        )
     })
     .await
+}
+
+fn run_doctor_workflow<D, R>(diagnostics: D, reconcile: R) -> Result<String, String>
+where
+    D: FnOnce() -> Result<String, String>,
+    R: FnOnce() -> Result<String, String>,
+{
+    let mut output = diagnostics()?;
+    let route = reconcile();
+    output.push_str("\n[Skill 路由] ");
+    match route {
+        Ok(message) => output.push_str(&message),
+        Err(error) => output.push_str(&format!("核验失败：{error}")),
+    }
+    Ok(output)
 }
 
 fn run_doctor_inner_cmd(app: &tauri::AppHandle) -> Result<String, String> {
@@ -149,7 +162,8 @@ pub(crate) fn open_logs() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::doctor_config_from;
+    use super::{doctor_config_from, run_doctor_workflow};
+    use std::cell::Cell;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -174,5 +188,19 @@ mod tests {
         let err = doctor_config_from(&dir).unwrap_err();
         assert!(err.contains("读取配置失败"));
         assert!(err.contains("8765"));
+    }
+
+    #[test]
+    fn r0_doctor_diagnostic_failure_skips_reconcile() {
+        let reconcile_called = Cell::new(false);
+        let result = run_doctor_workflow(
+            || Err("doctor subprocess failed".into()),
+            || {
+                reconcile_called.set(true);
+                Ok("must not run".into())
+            },
+        );
+        assert_eq!(result.unwrap_err(), "doctor subprocess failed");
+        assert!(!reconcile_called.get());
     }
 }

@@ -79,14 +79,15 @@
     "Scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["authority", "production_registration", "bundled_callers", "exclusions", "test_identity_semantics", "characterization_status"],
+      "required": ["authority", "production_registration", "bundled_callers", "exclusions", "test_identity_semantics", "characterization_status", "completion_review_status"],
       "properties": {
         "authority": { "$ref": "#/$defs/NonEmptyString" },
         "production_registration": { "$ref": "#/$defs/NonEmptyString" },
         "bundled_callers": { "$ref": "#/$defs/NonEmptyStringList" },
         "exclusions": { "$ref": "#/$defs/NonEmptyStringList" },
         "test_identity_semantics": { "$ref": "#/$defs/NonEmptyString" },
-        "characterization_status": { "enum": ["requirements-open", "complete"] }
+        "characterization_status": { "enum": ["requirements-open", "complete"] },
+        "completion_review_status": { "enum": ["pending", "complete"] }
       }
     },
     "SourceAnchor": {
