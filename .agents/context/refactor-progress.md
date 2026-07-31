@@ -8,9 +8,9 @@
 
 ## 本页回答什么
 
-本页只回答“哪些机械拆分已经合入 `next`、当时保持了什么边界、验证到哪一层、下一刀是什么”。细粒度改动由 Git 保存；当前架构、功能合同和执行门禁仍分别以 [`docs/architecture/`](../../docs/architecture/README.md)、[`docs/features/`](../../docs/features/README.md) 和 [`docs/operations/`](../../docs/operations/README.md) 为准。
+本页只回答“哪些机械拆分已经合入 `next`、当前唯一已审查待合入候选是什么、当时保持了什么边界、验证到哪一层、下一刀是什么”。细粒度改动由 Git 保存；当前架构、功能合同和执行门禁仍分别以 [`docs/architecture/`](../../docs/architecture/README.md)、[`docs/features/`](../../docs/features/README.md) 和 [`docs/operations/`](../../docs/operations/README.md) 为准。
 
-只在一个拆分切片已经合入 `next` 后更新本页。未合入候选、临时 worktree、逐次失败日志和未冻结计划不进入完成表。
+只有拆分切片已经合入 `next` 才进入完成表。经 clean-context 独立审查、完整 source gate 和本地提交冻结，但尚未获授权合入 `next` 的切片，只能进入下方唯一的“已审查待合入”表；临时 worktree、逐次失败日志和未冻结计划不进入本页。
 
 ## 当前工程线
 
@@ -18,8 +18,22 @@
 - 最后复核工程 HEAD：`ef51c358c2c80a6015c864ebb6642fcb1ee9757b`
 - 相对前一工程基线：`653ecbeb6dc8e0ea4532d3c33851ee8ae4c14557`
 - 当前已完成切片：`sandbox_session` 第一层目录化拆分；`transaction_tests` 按测试场景完成第二层拆分；`mod.rs` 收口为 facade，并把一键事务与 healthy reopen 按补偿边界拆开；`authority_snapshot.rs` 按 test seams、filesystem/copy、capture 与 restore 的独立维护原因完成第二层拆分；Gateway `server.rs` 收口为 listener / method-dispatch facade，并按 HTTP codec、inference dispatch、Skill bridge host 与测试夹具拆分；前端 `main.js` 收口为 bootstrap / shell，并拆出 preview adapter、IPC client、Codex、runtime 与 profile controller
-- 下一阶段：前端机械拆分已经闭合；转入逻辑重构合同评估，统一界定受管 Skill/MCP/Plugin 扩展控制面、前后端职责、故障 envelope、operation correlation、脱敏日志和只读 diagnostics，再决定后续实现切片
+- 下一阶段：当前待合入累积候选已经完成 `commands/runtime.rs`、`runtime/science.rs` 与 `runtime/proxy_lifecycle.rs` 职责拆分。`proxy_lifecycle` 现在是同模块 façade；没有新的独立维护原因时保持稳定，不继续按行数细分。下一刀先重新清点剩余 runtime owner、调用面和测试合同，再选择单一维护原因最明确的候选。受管 Skill/MCP/Plugin 扩展控制面、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics 仍属于后续逻辑重构合同，不夹入机械拆分。
 - 当前证据边界：source-test 与独立源码审查；没有因此新增 artifact、installed、live、真实 provider、Science、SSH、签名、公证或公开发布结论。
+
+## 已审查待合入切片
+
+| 日期 | 切片 | 目标基线 → 候选提交 | 结构结果 | 行为边界与验证 |
+|---|---|---|---|---|
+| 2026-07-31 | `commands/runtime.rs`、`runtime/science.rs` 与 `runtime/proxy_lifecycle.rs` 累积职责拆分 | `next@e0115cb` → `b8c1fb1` | command 根文件从 7,546 行收口为 168 行 Tauri façade，生产实现按 actions、Gateway/model discovery、lifecycle/settings、one-click/history recovery、status/diagnostics 拆分，测试迁入显式 `runtime/tests.rs`。Science 根文件从 3,416 行收口为 54 行同模块 façade，按基础合同、executable 选择与 snapshot、runtime state/process identity、managed launch receipt、lifecycle/probe/stop 拆为五个 include 片段，测试迁入显式 `science/tests.rs`。proxy lifecycle 根文件从 1,589 行收口为 57 行同模块 façade，按中断恢复、launch contract / allowlist、可选 Science Skill bridge、sidecar binary lookup、受管 Gateway lifecycle 编排拆为五个 include 片段，测试迁入显式 `proxy_lifecycle/tests.rs` | 三刀都只做机械搬迁。15 个 command 名称、泛型、参数、DTO、crate-facing helper 与 27 个 `commands::runtime::tests::*` identity 保持；Science 原 2,233 行生产声明按原顺序拼接仅差片段空行，visibility、`cfg`、failure 文本、identity/stop 安全合同与 29 个 `runtime::science::tests::*` identity 保持；proxy lifecycle 的 20 个 production 函数与 9 个 production `pub(crate)` 声明保持，另有 1 个 `#[cfg(test)] pub(crate)` seam 同样迁移；104 个字符串 literal、声明顺序与 production token 序列保持，18 个 `runtime::proxy_lifecycle::tests::*` identity 不变。AppState、Lifecycle 与 config owner、Gateway recovery/reuse/spawn/stop、legacy Python fail-closed、Science bridge context、Runtime/Gateway allowlist、typed failure、协议、权限与凭证来源未改；active quality 与源码合同路径已闭合。proxy lifecycle 最终 clean-context reviewer `PASS`、无 findings；首个 tester 因普通 sandbox 禁止动态 loopback 给出环境 BLOCK，换全新 clean-context tester 在仅放行 `127.0.0.1:0` 的隔离环境重跑为 `TEST PASS`，18/18 PASS、无 findings。格式、production check、候选 delta clippy、源码合同 11/11、quality kernel 14/14、metadata 与 `impact-pr --target-ref next` PASS；strict clippy 的四个 `runtime/failure.rs` dead-code 在 untouched `f842cbd` 基线可同样复现，不归因本切片。完整 source gate run `660032997c6694fba0261950ef1bb64b` 为 15/15 PASS，completion seal 精确绑定 `b8c1fb173490053c2f24560c5aa812032b55441f`。该累积候选尚未合入 `next`，不得写入下方完成表。 |
+
+### 已审查待合入累积候选提交
+
+| Commit | 作用 |
+|---|---|
+| `dcff27b` | 把 `commands/runtime.rs` 收口为稳定 command façade，并按独立 command 维护原因拆出五个生产子模块与显式测试模块 |
+| `5c074ff` | 把 `runtime/science.rs` 收口为同模块 façade，按 runtime 合同边界拆出五个生产片段与显式测试模块，并闭合 active quality 路径 |
+| `b8c1fb1` | 把 `runtime/proxy_lifecycle.rs` 收口为同模块 façade，按中断恢复、launch contract、Skill bridge、binary lookup 与 lifecycle 编排拆出五个生产片段和显式测试模块，并闭合源码合同与 active ChangeRecord |
 
 ## 已合入切片
 
@@ -72,10 +86,11 @@
 - 动态测试入口发现只枚举 Git 已跟踪及未忽略的未跟踪路径，不再递归扫描 `.sandbox/` 等 ignored runtime 数据；已跟踪路径即使匹配 ignore 仍 fail-closed 纳入。不得为门禁删除用户数据，正式 metadata / impact / source gate 仍应在 clean exact-HEAD worktree 执行。
 - JavaScript factory 注入的协作者名不能与函数内布尔或 DTO 局部变量同名；机械搬迁后要专门覆盖错误路径，避免正常路径通过但 catch 分支调用到被遮蔽值。
 - 源码文本合同迁移到新 owner 后，切片的开始与结束锚点必须同在目标文件，并验证 `indexOf` 没有返回 `-1`；不能只改读取路径后继续用旧文件锚点。
+- strict clippy 若在候选外文件失败，必须先在 untouched exact baseline 复现再分类；可另跑只屏蔽已复现 baseline lint 的候选 delta clippy，但不得把它写成完整 strict clippy PASS。
 
 ## 下一阶段边界
 
-`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分、Gateway `server.rs` 职责拆分与前端 `main.js` 职责拆分已经闭合。已拆出的 runtime、Gateway 与前端 controller 默认保持稳定；没有新的独立维护原因时不继续按行数细分。下一阶段另立逻辑重构合同，评估受管 Skill/MCP/Plugin 扩展控制面，并同时冻结前后端职责、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
+`sandbox_session` 的 `mod.rs`、`transaction_tests`、`authority_snapshot` 第二层拆分、Gateway `server.rs` 职责拆分与前端 `main.js` 职责拆分已经闭合；当前累积候选中的 `commands/runtime.rs`、`runtime/science.rs` 与 `runtime/proxy_lifecycle.rs` 也已完成独立审查和完整 source gate，但仍须获得单独授权后合入 `next`，合入时再移入完成表并更新工程 HEAD。已拆出的 runtime、Gateway 与前端 controller 默认保持稳定；没有新的独立维护原因时不继续按行数细分。下一刀先实时清点剩余 runtime owner、调用面与测试合同，再选择单一维护原因最明确的候选；不预设必须拆某个文件。受管 Skill/MCP/Plugin 扩展控制面、统一故障 envelope、operation correlation、脱敏日志和只读 diagnostics 继续留在后续逻辑重构合同；这些规划不改变当前 capability map 的支持结论。后续结构切片继续遵守：
 
 - 先冻结现有对外 surface、测试身份、Runtime/Gateway allowlist 与 typed failure 边界；
 - 子模块按单一维护原因拆分，不借机改变 provider、transport 或协议语义；

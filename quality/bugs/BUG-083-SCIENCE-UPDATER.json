@@ -13,9 +13,11 @@
     "resolution_state": "source-fixed-product-pending",
     "affected_paths": [
       "desktop/src-tauri/src/runtime/science.rs",
+      "desktop/src-tauri/src/runtime/science/",
       "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/profile_switch.rs",
-      "desktop/src-tauri/src/commands/runtime.rs"
+      "desktop/src-tauri/src/commands/runtime.rs",
+      "desktop/src-tauri/src/commands/runtime/"
     ],
     "requirement_ids": ["REQ-083-SCIENCE-UPDATER", "REQ-083-EVIDENCE"],
     "change_ids": ["CHG-SCIENCE-UPDATER"],
@@ -59,12 +61,12 @@
       },
       {
         "statement": "The repaired updater path accepts both manifest-matched standalone versions, commits an exact SHA-256 content-addressed snapshot, and the installed_app path separately accepts both DMG seeds without mutating the temporary data-dir.",
-        "evidence_ref": "desktop/src-tauri/src/runtime/science.rs::runtime::science::tests::real_updated_runtime_candidate_is_eligible_without_reading_real_science_data",
+        "evidence_ref": "desktop/src-tauri/src/runtime/science/tests.rs::runtime::science::tests::real_updated_runtime_candidate_is_eligible_without_reading_real_science_data",
         "verification_status": "confirmed"
       },
       {
         "statement": "Unsafe or mismatched updater candidates remain fail-closed and do not silently fall back to the installed App.",
-        "evidence_ref": "desktop/src-tauri/src/runtime/science.rs::runtime::science::tests::locally_validated_updated_runtime_wins_over_app_and_is_fingerprint_bound",
+        "evidence_ref": "desktop/src-tauri/src/runtime/science/tests.rs::runtime::science::tests::locally_validated_updated_runtime_wins_over_app_and_is_fingerprint_bound",
         "verification_status": "confirmed"
       },
       {
@@ -84,7 +86,7 @@
       },
       {
         "statement": "Profile-switch recovery skips the second capture only for a typed prior-Science-restored outcome after exact runtime, fresh managed receipt, and live-health revalidation; every other failure retains the forced-restart fallback.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime.rs::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
+        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "verification_status": "confirmed"
       },
       {

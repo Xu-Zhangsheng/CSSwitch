@@ -23,6 +23,36 @@ def sandbox_session_one_click_source():
     return "\n".join(path.read_text() for path in sources)
 
 
+def runtime_command_source():
+    root = ROOT / "desktop/src-tauri/src/commands/runtime.rs"
+    module_dir = ROOT / "desktop/src-tauri/src/commands/runtime"
+    sources = [root]
+    sources.extend(sorted(module_dir.rglob("*.rs")))
+    return "\n".join(path.read_text() for path in sources)
+
+
+def runtime_command_module(name):
+    return (
+        ROOT / "desktop/src-tauri/src/commands/runtime" / f"{name}.rs"
+    ).read_text()
+
+
+def science_runtime_source():
+    root = ROOT / "desktop/src-tauri/src/runtime/science.rs"
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/science"
+    sources = [root]
+    sources.extend(sorted(module_dir.rglob("*.rs")))
+    return "\n".join(path.read_text() for path in sources)
+
+
+def proxy_lifecycle_source():
+    root = ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle.rs"
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle"
+    sources = [root]
+    sources.extend(sorted(module_dir.rglob("*.rs")))
+    return "\n".join(path.read_text() for path in sources)
+
+
 class SkillRuntimeBoundary(unittest.TestCase):
     def test_production_startup_has_no_skill_manager_dependency(self):
         session = sandbox_session_source()
@@ -145,8 +175,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
         html = (ROOT / "desktop/src/index.html").read_text()
         main = (ROOT / "desktop/src/main.js").read_text()
         js = (ROOT / "desktop/src/runtime-controller.js").read_text()
-        runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
-        science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
+        runtime = runtime_command_source()
+        science = science_runtime_source()
 
         for element_id in (
             "runtimeChoiceSec",
@@ -181,7 +211,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
     def test_manual_science_open_refreshes_url_and_has_visible_feedback(self):
         main = (ROOT / "desktop/src/main.js").read_text()
         js = (ROOT / "desktop/src/runtime-controller.js").read_text()
-        runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
+        runtime = runtime_command_source()
+        actions = runtime_command_module("actions")
+        runtime_tests = runtime_command_module("tests")
         system = (ROOT / "desktop/src-tauri/src/runtime/system.rs").read_text()
 
         handler = js.split("async function openBrowser()", 1)[1].split(
@@ -203,15 +235,15 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("busy || runtimeController.isBrowserOpenInFlight()", control)
         self.assertIn('runtimeController.isBrowserOpenInFlight() ? "打开中…" : "浏览器打开"', control)
 
-        command = runtime.split("fn open_url_inner", 1)[1].split(
-            "pub(crate) async fn quit_app", 1
+        command = actions.split("fn open_url_inner", 1)[1].split(
+            "pub(super) async fn open_url_command", 1
         )[0]
         self.assertIn("sandbox_listener_matches_runtime", command)
         self.assertIn("sandbox_url(sandbox_port, &runtime)", command)
         self.assertNotIn("st.sandbox_url.clone()", command)
         self.assertIn("manual_open_result(url.clone(), open_in_browser(&url))", command)
-        self.assertIn("CSSWITCH_FAKE_OPEN_FAIL_ONCE_FILE", runtime)
-        self.assertIn('failed_open["fallback_url"]', runtime)
+        self.assertIn("CSSWITCH_FAKE_OPEN_FAIL_ONCE_FILE", runtime_tests)
+        self.assertIn('failed_open["fallback_url"]', runtime_tests)
         self.assertIn('ACCEPTANCE_OPEN_BIN_ENV: &str = "CSSWITCH_ACCEPTANCE_OPEN_BIN"', system)
         self.assertIn('TEST_OPEN_BIN_ENV: &str = "CSSWITCH_TEST_OPEN_BIN"', system)
         self.assertIn('return Ok(PathBuf::from("/usr/bin/open"))', system)
@@ -223,8 +255,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
         js = (ROOT / "desktop/src/profile-controller.js").read_text()
         runtime_js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         session = sandbox_session_source()
-        runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
-        lifecycle = (ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle.rs").read_text()
+        runtime = runtime_command_source()
+        lifecycle = proxy_lifecycle_source()
         lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
         one_click_runtime = session.split(
             "fn one_click_login_with_options", 1
@@ -278,9 +310,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
 
     def test_science_runtime_identity_is_reused_for_serve_status_url_and_stop(self):
         session = sandbox_session_source()
-        science = (ROOT / "desktop/src-tauri/src/runtime/science.rs").read_text()
+        science = science_runtime_source()
         launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
-        runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
+        runtime = runtime_command_source()
         one_click = sandbox_session_one_click_source().split(
             "fn one_click_login_with_options", 1
         )[1]
@@ -304,7 +336,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         launch = (ROOT / "scripts/launch-virtual-sandbox.sh").read_text()
         wrapper = (ROOT / "scripts/ssh-bridge/ssh").read_text()
         session = sandbox_session_source()
-        runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
+        runtime = runtime_command_source()
 
         self.assertNotIn("ssh_tunnel_info", js + runtime)
         self.assertNotIn("生成 SSH 访问命令", html)
@@ -318,16 +350,14 @@ class SkillRuntimeBoundary(unittest.TestCase):
 
     def test_explicit_exit_revokes_the_managed_science_target(self):
         lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
-        runtime = (ROOT / "desktop/src-tauri/src/commands/runtime.rs").read_text()
+        lifecycle = runtime_command_module("lifecycle")
         js = (ROOT / "desktop/src/main.js").read_text()
 
         cleanup = lib.split("fn cleanup_for_exit", 1)[1].split(
             "fn mark_boot_failed", 1
         )[0]
         self.assertLess(cleanup.index("stop_sandbox("), cleanup.index("st.stop_proxy()"))
-        quit_command = runtime.split("pub(crate) async fn quit_app", 1)[1].split(
-            "#[cfg(test)]", 1
-        )[0]
+        quit_command = lifecycle.split("pub(super) async fn quit_app_command", 1)[1]
         self.assertLess(
             quit_command.index("stop_all_inner_cmd"), quit_command.index("exit_app.exit(0)")
         )
