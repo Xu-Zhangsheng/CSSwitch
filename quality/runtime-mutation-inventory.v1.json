@@ -2,7 +2,7 @@
   "schema": "runtime-mutation-inventory.v1",
   "scope": {
     "authority": "Current production registration and source behavior on the next integration line. This inventory freezes observed behavior; it does not authorize R1-R11 implementation or claim artifact/live evidence.",
-    "production_registration": "desktop/src-tauri/src/lib.rs::run generate_handler plus setup, boot, run-event, and Drop hooks",
+    "production_registration": "desktop/src-tauri/src/lib.rs::run generate_handler plus setup, boot, run-event, and Drop hooks, including durable Gateway services and scratch paths reached from those registered surfaces",
     "bundled_callers": [
       "desktop/src/main.js",
       "desktop/src/codex-controller.js",
@@ -12,7 +12,7 @@
     ],
     "exclusions": [
       "Unregistered commands in desktop/src-tauri/src/commands/skills.rs are not production surface.",
-      "Scratch probes are classified but are not durable runtime mutations.",
+      "Scratch probes without durable side effects remain transient; Codex scratch model discovery is a durable mutation because it publishes shared catalog cache/invalidation state and may refresh OAuth after upstream 401.",
       "Pure UI one-shot consumption, including pending_notice and boot_attention, is classified but excluded from runtime operation plans.",
       "Migration backups, rolling config backups, and user-selected downgrade exports are frozen as ordered effects and failure outcomes where R0 requires them; they are not generalized into a repository-wide artifact ontology.",
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
@@ -130,9 +130,9 @@
       "id": "skill.host",
       "kind": "external-host-state",
       "durability": "external",
-      "authority": "Committed local Skill package files and OPERON attachment state inside the exact healthy Science host context.",
-      "fields": ["active_org", "installed_package", "operon_attachment"],
-      "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "install_selected_path"}
+      "authority": "Committed local or GitHub Skill/bundle files, CSSwitch quarantine, and OPERON attachment state inside the exact healthy Science host context.",
+      "fields": ["active_org", "installed_package", "operon_attachment", "quarantined_package"],
+      "source_anchor": {"path": "desktop/skill-package/src/install.rs", "symbol": "pub struct InstallCommit"}
     },
     {
       "id": "science.route",
@@ -157,6 +157,22 @@
       "authority": "Gateway-owned Codex authentication state, OAuth record, thinking-key record, and mutation lock under the configured private state root.",
       "fields": ["auth_epoch", "auth_generation", "auth_state", "mutation_lock", "oauth_record", "thinking_record"],
       "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "pub struct AuthRepository<"}
+    },
+    {
+      "id": "codex.catalog-cache",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Gateway-owned Codex model catalog cache and invalidation epoch shared by formal and scratch-models Gateway processes under the configured private auth state root.",
+      "fields": ["account_hash", "auth_epoch", "auth_generation", "cache", "etag", "fetched_at", "invalidated", "nonce"],
+      "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "pub(crate) struct CodexModelCatalog"}
+    },
+    {
+      "id": "skill.bridge-mailbox",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Authenticated per-Gateway Skill bridge mailbox and host lock that claim requests, publish progress/final responses, and recover interrupted processing.",
+      "fields": ["host_lock", "processing", "request", "response", "status"],
+      "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("}
     },
     {
       "id": "config.access-gate",
@@ -240,13 +256,23 @@
     },
     {
       "id": "record.skill-package-v1",
-      "format": "Atomic installed Skill or bundle plus import origin",
+      "format": "Atomic installed or quarantined Skill/bundle plus import origin",
       "authority_owner": "skill.host",
-      "fields": ["content_sha256", "directory_commit", "import_origin", "source_digest_sha256"],
-      "writers": [{"path": "desktop/skill-package/src/install.rs", "symbol": "pub fn install_local_package("}],
-      "readers": [{"path": "desktop/skill-package/src/listing.rs", "symbol": "pub fn inspect_active_org_skills("}, {"path": "desktop/src-tauri/src/commands/skill_listing.rs", "symbol": "list_installed_skills"}],
-      "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "install_selected_path"},
-      "known_gap": "File commit and OPERON attachment are separate outcomes; attachment failure does not roll back committed files."
+      "fields": ["content_sha256", "directory_commit", "import_origin", "quarantine_commit", "source_digest_sha256"],
+      "writers": [{"path": "desktop/skill-package/src/install.rs", "symbol": "pub fn install_local_package("}, {"path": "desktop/skill-package/src/github.rs", "symbol": "pub fn install_github_package_with_progress("}, {"path": "desktop/skill-package/src/bundle.rs", "symbol": "pub(crate) fn install_validated_bundle("}, {"path": "desktop/skill-package/src/bundle.rs", "symbol": "pub fn quarantine_bundle("}, {"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn uninstall_external_skill("}],
+      "readers": [{"path": "desktop/skill-package/src/listing.rs", "symbol": "pub fn inspect_active_org_skills("}, {"path": "desktop/src-tauri/src/commands/skill_listing.rs", "symbol": "list_installed_skills"}, {"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn uninstall_external_skill("}],
+      "source_anchor": {"path": "desktop/skill-package/src/install.rs", "symbol": "pub struct InstallCommit"},
+      "known_gap": "File/quarantine commit and OPERON attachment or detachment are separate outcomes; attachment failure retains committed files and some single-Skill quarantine outcomes require later detach verification."
+    },
+    {
+      "id": "record.skill-bridge-mailbox-v1",
+      "format": "0600 bridge request claim, progress status, final response, and host lock files",
+      "authority_owner": "skill.bridge-mailbox",
+      "fields": ["host_lock", "processing_request", "progress_status", "terminal_response"],
+      "writers": [{"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn host_access_request("}, {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("}, {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn write_bridge_status("}, {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn finalize_bridge_processing("}],
+      "readers": [{"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("}, {"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn poll_bridge_request("}],
+      "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("},
+      "known_gap": "Status writes are best effort; final-response failure deliberately retains .processing for startup recovery, while a completed response outlives processing/status cleanup."
     },
     {
       "id": "record.route-configuration-v1",
@@ -297,6 +323,16 @@
       "readers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "inference_snapshot"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "refresh_snapshot_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "pub fn status("}],
       "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "const THINKING_SECRET_FILE: &str = \"codex-thinking.v1.json\";"},
       "known_gap": "Logout commits the disabled auth state before attempting both secret deletions, so a delete failure may retain a disabled stale record."
+    },
+    {
+      "id": "record.codex-model-cache-v3",
+      "format": "0600 codex-models-cache.v3.json plus codex-models-cache-epoch.v3.json",
+      "authority_owner": "codex.catalog-cache",
+      "fields": ["account_hash", "auth_epoch", "auth_generation", "etag", "fetched_at", "invalidated", "models", "nonce"],
+      "writers": [{"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn commit_cache("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn commit_cache_epoch("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn persist_invalidation("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn remove_cache("}],
+      "readers": [{"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn load_cache("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn load_cache_epoch("}],
+      "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "const CACHE_FILE: &str = \"codex-models-cache.v3.json\";"},
+      "known_gap": "Epoch publication precedes cache publication; a later cache write failure retains the new epoch and may leave prior cache bytes, which subsequent identity/epoch checks must reject or refresh."
     },
     {
       "id": "record.science-credential-v1",
@@ -623,6 +659,23 @@
       "known_gaps": ["Refresh is serialized by the private auth file lock rather than the desktop Lifecycle lock."]
     },
     {
+      "id": "op.fetch-models",
+      "mutation_kind": "runtime",
+      "serialization": "none",
+      "entrypoints": [{"kind": "tauri-command", "name": "fetch_models", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "pub(crate) async fn fetch_models("}, "bundled_callers": ["desktop/src/profile-controller.js"]}],
+      "state_owners": ["codex.auth", "codex.catalog-cache", "config.desired", "process.gateway"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-model-cache-v3", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4"], "writes": ["record.codex-auth-state-v1", "record.codex-model-cache-v3", "record.codex-oauth-v1", "record.codex-thinking-v1"], "clears": []},
+      "ordered_effects": ["load and validate candidate profile plus exact Codex auth proof when required", "spawn an isolated scratch-models Gateway that inherits the shared CSSwitch private HOME", "fetch and validate the upstream model catalog", "for Codex live or 304 success atomically publish cache epoch before cache bytes", "for Codex 401 or 403 atomically publish an invalidation epoch then remove prior cache bytes", "after Codex 401 attempt guarded OAuth refresh only for the observed auth generation", "stop and reap the scratch Gateway"],
+      "failure_points": [
+        {"id": "fetch-models.pre-cache", "after_effects": ["scratch Gateway may have contacted upstream", "no catalog publication is required"], "observed_outcome": "Spawn, transport, protocol, or non-Codex discovery failure returns/falls back without config or formal runtime mutation.", "compensation": "scratch child is stopped and reaped"},
+        {"id": "fetch-models.cache-publication", "after_effects": ["new cache epoch may be committed", "matching cache bytes may not be committed"], "observed_outcome": "Return a cache error; retained prior bytes remain subject to epoch/identity validation rather than being claimed current.", "compensation": "no epoch rollback"},
+        {"id": "fetch-models.auth-invalidation", "after_effects": ["invalidated epoch committed", "old cache deletion attempted", "guarded OAuth refresh may have run after upstream 401"], "observed_outcome": "Cache deletion failure or OAuth refresh failure is retained as separate state; the previous OAuth generation remains authoritative unless guarded refresh fully commits.", "compensation": "AuthRepository restores partial refresh publication; catalog invalidation has no rollback"}
+      ],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn persist_invalidation("}, "contract": "Scratch process cleanup is independent from shared catalog/auth publications; auth refresh has record rollback, while cache epoch/invalidation effects are retained."},
+      "characterization_tests": ["model_discovery::tests::r0_codex_fetch_models_mutates_shared_catalog_cache", "codex_models::tests::r0_cache_epoch_precedes_cache_and_invalidation_removes_cache", "codex_auth::lifecycle_tests::r0_scratch_401_refresh_is_generation_guarded"],
+      "known_gaps": ["The command is described as scratch in source comments even though Codex intentionally shares durable catalog/auth state with formal Gateway processes.", "Cache and auth mutations use separate domain locks with no cross-record operation receipt."]
+    },
+    {
       "id": "op.codex-enable",
       "mutation_kind": "runtime",
       "serialization": "lifecycle-plus-domain-lease",
@@ -682,6 +735,23 @@
       "known_gaps": ["Double-check does not close the race between final context check and package commit/attach."]
     },
     {
+      "id": "op.gateway-skill-bridge",
+      "mutation_kind": "host-bridge",
+      "serialization": "none",
+      "entrypoints": [{"kind": "startup-hook", "name": "gateway_skill_bridge_host", "source_anchor": {"path": "desktop/gateway/src/server.rs", "symbol": "start_skill_install_bridge(&cfg)"}, "bundled_callers": ["desktop/gateway/src/server.rs::start_skill_install_bridge(&cfg)"]}, {"kind": "internal-recovery", "name": "skill_bridge_mcp_tool", "source_anchor": {"path": "desktop/gateway/src/skill_install.rs", "symbol": "pub fn run_mcp("}, "bundled_callers": ["desktop/gateway/src/skill_install.rs::fn handle_mcp_request("]}],
+      "state_owners": ["process.gateway", "skill.bridge-mailbox", "skill.host"],
+      "durable_records": {"reads": ["record.skill-bridge-mailbox-v1", "record.skill-package-v1"], "writes": ["record.skill-bridge-mailbox-v1", "record.skill-package-v1"], "clears": []},
+      "ordered_effects": ["MCP tool returns an authenticated host-access request contract for one external request.json publication", "during Gateway startup validate the private bridge directory/token/context and acquire the nonblocking host lock", "recover every valid orphan .processing file into a terminal interrupted response", "atomically claim one authenticated non-replayed request by renaming request.json to .processing", "publish best-effort accepted and heartbeat status", "for install atomically commit GitHub Skill or bundle files then attempt OPERON attachment", "for uninstall confirm bundle scope or detach then quarantine the exact CSSwitch-owned package", "publish one immutable final response then clear processing and transient status"],
+      "failure_points": [
+        {"id": "gateway-skill-bridge.startup", "after_effects": ["Gateway listener is bound", "bridge host may not be available"], "observed_outcome": "Unsafe path, lock, or recovery failure is logged and Gateway continues serving without the Skill host.", "compensation": "none"},
+        {"id": "gateway-skill-bridge.package-commit", "after_effects": ["package files or quarantine may be committed", "OPERON attach/detach may be incomplete or uncertain"], "observed_outcome": "Return the exact separate directory/quarantine and attachment outcome; committed files are not silently rolled back.", "compensation": "bundle quarantine failure attempts binding restoration; other committed package outcomes are retained"},
+        {"id": "gateway-skill-bridge.finalize", "after_effects": ["request claimed and host mutation may have completed", "final response not proven"], "observed_outcome": "Retain .processing and publish best-effort finalization_failed status so the next Gateway startup converts it to REQUEST_INTERRUPTED.", "compensation": "startup recovery publishes a terminal response without replaying the host mutation"}
+      ],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn recover_orphaned_bridge_processing("}, "contract": "Mailbox recovery never replays an uncertain request; package/attachment compensation is operation-specific and final responses preserve separate outcomes."},
+      "characterization_tests": ["skill_bridge_host::tests::r0_interrupted_processing_publishes_terminal_response", "skill_bridge_host::tests::r0_finalization_failure_retains_processing_for_recovery", "gateway_skill_install::tests::r0_bridge_install_and_uninstall_freeze_file_and_attachment_outcomes"],
+      "known_gaps": ["Bridge status is advisory and best effort.", "No shared transaction spans mailbox claim, package commit/quarantine, OPERON mutation, and final-response publication."]
+    },
+    {
       "id": "op.doctor-reconcile",
       "mutation_kind": "host-bridge",
       "serialization": "lifecycle",
@@ -738,7 +808,7 @@
     {"name": "delete_profile", "classification": "runtime-mutation", "operation_id": "op.revoke-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Config-first delete stops Gateway when runtime_binding marks the profile applied."},
     {"name": "set_active_profile", "classification": "intent-mutation", "operation_id": "op.select-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "set_active_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Commits selected intent while preserving applied/live state."},
     {"name": "start_proxy", "classification": "runtime-mutation", "operation_id": "op.start-gateway-only", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "start_proxy"}, "bundled_callers": [], "reason": "Starts/replaces formal Gateway without a binding/journal commit."},
-    {"name": "fetch_models", "classification": "transient-probe", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "fetch_models"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Runs isolated model discovery without formal runtime/config mutation."},
+    {"name": "fetch_models", "classification": "runtime-mutation", "operation_id": "op.fetch-models", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "fetch_models"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Uses an isolated scratch Gateway, but Codex discovery mutates the shared durable catalog cache/invalidation epoch and may perform a generation-guarded OAuth refresh after upstream 401."},
     {"name": "stop_all", "classification": "runtime-mutation", "operation_id": "op.stop-all", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "stop_all"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Stops managed Science and Gateway and bumps generation."},
     {"name": "one_click_login", "classification": "runtime-mutation", "operation_id": "op.one-click", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "one_click_login"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Primary cross-owner runtime transaction."},
     {"name": "restore_history_choice", "classification": "runtime-mutation", "operation_id": "op.history-restore", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "restore_history_choice"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Stops managed Science and mutates history identity outside the main journal."},

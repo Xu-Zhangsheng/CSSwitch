@@ -40,6 +40,7 @@ EXPECTED_STATE_OWNERS = {
     "app.science",
     "authority.private",
     "codex.auth",
+    "codex.catalog-cache",
     "codex.supervisor",
     "config.access-gate",
     "config.binding",
@@ -50,11 +51,13 @@ EXPECTED_STATE_OWNERS = {
     "process.gateway",
     "process.science",
     "science.route",
+    "skill.bridge-mailbox",
     "skill.host",
 }
 EXPECTED_DURABLE_RECORDS = {
     "record.authority-snapshot-v1",
     "record.codex-auth-state-v1",
+    "record.codex-model-cache-v3",
     "record.codex-oauth-v1",
     "record.codex-thinking-v1",
     "record.config-v4",
@@ -69,6 +72,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.science-receipt-v1",
     "record.science-ssh-bridge-v1",
     "record.skill-package-v1",
+    "record.skill-bridge-mailbox-v1",
 }
 EXPECTED_OPERATIONS = {
     "op.codex-auth-cancel",
@@ -77,12 +81,14 @@ EXPECTED_OPERATIONS = {
     "op.codex-downgrade",
     "op.codex-enable",
     "op.codex-ensure-profile",
+    "op.fetch-models",
     "op.codex-logout",
     "op.codex-network",
     "op.doctor-reconcile",
     "op.healthy-reopen",
     "op.history-restore",
     "op.install-local-skill",
+    "op.gateway-skill-bridge",
     "op.interrupted-gateway-recovery",
     "op.native-exit",
     "op.one-click",
@@ -113,7 +119,7 @@ EXPECTED_SURFACE_CONTRACT = {
     "codex_ensure_profile": ("intent-mutation", "op.codex-ensure-profile"),
     "create_profile": ("config-nonruntime", "none"),
     "delete_profile": ("runtime-mutation", "op.revoke-profile"),
-    "fetch_models": ("transient-probe", "none"),
+    "fetch_models": ("runtime-mutation", "op.fetch-models"),
     "get_config": ("config-nonruntime", "none"),
     "install_local_skill_package": ("host-bridge-mutation", "op.install-local-skill"),
     "list_installed_skills": ("read-only", "none"),
@@ -160,6 +166,10 @@ TEST_MODULE_SOURCES = {
     "config::tests": [ROOT / "desktop/src-tauri/src/config.rs"],
     "diagnostics::tests": [ROOT / "desktop/src-tauri/src/commands/diagnostics.rs"],
     "lib::tests": [ROOT / "desktop/src-tauri/src/lib.rs"],
+    "model_discovery::tests": [ROOT / "desktop/src-tauri/src/runtime/model_discovery.rs"],
+    "codex_models::tests": [ROOT / "desktop/gateway/src/codex_models.rs"],
+    "gateway_skill_install::tests": [ROOT / "desktop/gateway/src/skill_install.rs"],
+    "skill_bridge_host::tests": [ROOT / "desktop/gateway/src/server/skill_bridge_host.rs"],
     "profile::tests": [ROOT / "desktop/src-tauri/src/runtime/profile.rs"],
     "profiles::tests": [ROOT / "desktop/src-tauri/src/commands/profiles.rs"],
     "proxy_lifecycle::tests": [ROOT / "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs"],
@@ -337,6 +347,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         }
         internal_only = {
             "op.codex-auth-refresh",
+            "op.gateway-skill-bridge",
             "op.healthy-reopen",
             "op.interrupted-gateway-recovery",
         }
@@ -387,6 +398,38 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             }.issubset(config_writers)
         )
 
+        cache_record = records["record.codex-model-cache-v3"]
+        self.assertEqual(cache_record["authority_owner"], "codex.catalog-cache")
+        self.assertTrue(
+            {
+                "fn commit_cache(",
+                "fn commit_cache_epoch(",
+                "fn persist_invalidation(",
+                "fn remove_cache(",
+            }.issubset({item["symbol"] for item in cache_record["writers"]})
+        )
+
+        bridge_record = records["record.skill-bridge-mailbox-v1"]
+        self.assertEqual(bridge_record["authority_owner"], "skill.bridge-mailbox")
+        self.assertTrue(
+            {
+                "fn host_access_request(",
+                "pub(super) fn start_skill_install_bridge(",
+                "pub(super) fn write_bridge_status(",
+                "pub(super) fn finalize_bridge_processing(",
+            }.issubset({item["symbol"] for item in bridge_record["writers"]})
+        )
+        self.assertTrue(
+            {
+                "pub fn install_github_package_with_progress(",
+                "pub(crate) fn install_validated_bundle(",
+                "pub fn quarantine_bundle(",
+                "fn uninstall_external_skill(",
+            }.issubset(
+                {item["symbol"] for item in records["record.skill-package-v1"]["writers"]}
+            )
+        )
+
         self.assertEqual(
             {
                 name: (surface[name]["classification"], surface[name]["operation_id"])
@@ -425,6 +468,33 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         self.assertEqual(
             operations["op.revoke-profile"]["durable_records"]["clears"],
             ["record.runtime-binding-v1"],
+        )
+
+        fetch_models = operations["op.fetch-models"]
+        self.assertEqual(
+            set(fetch_models["state_owners"]),
+            {"codex.auth", "codex.catalog-cache", "config.desired", "process.gateway"},
+        )
+        self.assertIn(
+            "record.codex-model-cache-v3",
+            fetch_models["durable_records"]["writes"],
+        )
+        self.assertTrue(
+            {
+                "record.codex-auth-state-v1",
+                "record.codex-oauth-v1",
+                "record.codex-thinking-v1",
+            }.issubset(fetch_models["durable_records"]["writes"])
+        )
+
+        gateway_bridge = operations["op.gateway-skill-bridge"]
+        self.assertEqual(
+            {item["name"] for item in gateway_bridge["entrypoints"]},
+            {"gateway_skill_bridge_host", "skill_bridge_mcp_tool"},
+        )
+        self.assertEqual(
+            set(gateway_bridge["durable_records"]["writes"]),
+            {"record.skill-bridge-mailbox-v1", "record.skill-package-v1"},
         )
 
         downgrade = operations["op.codex-downgrade"]
