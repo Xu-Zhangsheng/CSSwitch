@@ -84,7 +84,7 @@ EXPECTED_OPERATIONS = {
     "op.codex-downgrade",
     "op.codex-enable",
     "op.codex-ensure-profile",
-    "op.fetch-models",
+    "op.codex-catalog-mutation",
     "op.codex-logout",
     "op.codex-network",
     "op.doctor-reconcile",
@@ -122,7 +122,7 @@ EXPECTED_SURFACE_CONTRACT = {
     "codex_ensure_profile": ("intent-mutation", "op.codex-ensure-profile"),
     "create_profile": ("config-nonruntime", "none"),
     "delete_profile": ("runtime-mutation", "op.revoke-profile"),
-    "fetch_models": ("runtime-mutation", "op.fetch-models"),
+    "fetch_models": ("runtime-mutation", "op.codex-catalog-mutation"),
     "get_config": ("config-nonruntime", "none"),
     "install_local_skill_package": ("host-bridge-mutation", "op.install-local-skill"),
     "list_installed_skills": ("read-only", "none"),
@@ -318,6 +318,18 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 required_owners.issubset(operation["state_owners"]),
                 operation["id"],
             )
+            expected_implicit = (
+                {"op.startup-config-migration"}
+                if operation["id"] != "op.startup-config-migration"
+                and "record.config-v4" in access["reads"]
+                else set()
+            )
+            self.assertEqual(
+                set(operation.get("implicit_operation_ids", [])),
+                expected_implicit,
+                operation["id"],
+            )
+            self.assertTrue(expected_implicit.issubset(operation_ids), operation["id"])
         for entry in inventory["registered_surface"]:
             self.assertEqual(
                 (entry["classification"], entry["operation_id"]),
@@ -508,7 +520,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             ["record.runtime-binding-v1"],
         )
 
-        fetch_models = operations["op.fetch-models"]
+        fetch_models = operations["op.codex-catalog-mutation"]
         self.assertEqual(
             set(fetch_models["state_owners"]),
             {"codex.auth", "codex.catalog-cache", "config.desired", "process.gateway"},
@@ -523,6 +535,14 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 "record.codex-oauth-v1",
                 "record.codex-thinking-v1",
             }.issubset(fetch_models["durable_records"]["writes"])
+        )
+        self.assertEqual(
+            {item["name"] for item in fetch_models["entrypoints"]},
+            {
+                "fetch_models",
+                "formal_gateway_models_route",
+                "formal_inference_catalog_invalidation",
+            },
         )
 
         gateway_bridge = operations["op.gateway-skill-bridge"]
@@ -547,6 +567,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             {item["name"] for item in operations["op.codex-auth-refresh"]["entrypoints"]},
             {
                 "codex_auth_refresh",
+                "expired_token_auth_refresh",
                 "inference_401_auth_refresh",
                 "models_401_auth_refresh",
             },
