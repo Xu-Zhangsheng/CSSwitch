@@ -148,7 +148,7 @@ npm run tauri dev
 完整检查：
 
 ```bash
-GATE_ROOT="$(mktemp -d /private/tmp/csswitch-source-gate.XXXXXX)"
+GATE_ROOT="$(mktemp -d /private/tmp/csg.XXXXXX)"
 chmod 700 "$GATE_ROOT"
 bash test/run_all.sh --output-root "$GATE_ROOT"
 ```

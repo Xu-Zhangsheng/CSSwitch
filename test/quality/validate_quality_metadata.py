@@ -1033,12 +1033,51 @@ class Validator:
             self.error("lineage.audit_baseline_sha", "audit baseline object is missing")
 
     def discover_catalog_paths(self) -> set:
+        candidates: Optional[List[Path]] = None
+        try:
+            result = subprocess.run(
+                [
+                    "git", "-C", str(self.repo), "ls-files", "-z",
+                    "--cached", "--others", "--exclude-standard",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        except OSError:
+            if (self.repo / ".git").exists():
+                self.error(
+                    "git ls-files",
+                    "cannot enumerate tracked and unignored paths",
+                )
+                return set()
+        else:
+            if result.returncode == 0:
+                candidates = [
+                    self.repo / Path(item)
+                    for item in result.stdout.decode(
+                        sys.getfilesystemencoding(), "surrogateescape",
+                    ).split("\0")
+                    if item
+                ]
+            elif (self.repo / ".git").exists():
+                self.error(
+                    "git ls-files",
+                    "cannot enumerate tracked and unignored paths",
+                )
+                return set()
+
         discovered = set()
-        for path in sorted(self.repo.rglob("*")):
+        paths = candidates if candidates is not None else self.repo.rglob("*")
+        for path in sorted(paths):
             if not path.is_file():
                 continue
             relative = path.relative_to(self.repo)
-            if any(part in {".git", "target"} for part in relative.parts):
+            if (
+                candidates is None
+                and any(part in {".git", "target"} for part in relative.parts)
+            ):
                 continue
             name = path.name
             if (name.startswith("test_") and path.suffix in {".py", ".sh"}) or name.endswith(".test.mjs"):

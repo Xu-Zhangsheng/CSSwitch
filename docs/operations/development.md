@@ -21,7 +21,7 @@ npm run tauri dev
 完整 source/unit gate 只在准备好 clean exact-HEAD 候选后从仓库根目录运行：
 
 ```bash
-GATE_ROOT="$(mktemp -d /private/tmp/csswitch-source-gate.XXXXXX)"
+GATE_ROOT="$(mktemp -d /private/tmp/csg.XXXXXX)"
 chmod 700 "$GATE_ROOT"
 bash test/run_all.sh --output-root "$GATE_ROOT"
 ```

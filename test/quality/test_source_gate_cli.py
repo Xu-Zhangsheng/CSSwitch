@@ -94,6 +94,24 @@ class SourceGateCliTests(unittest.TestCase):
         self.assertEqual(calls[0][0], str(output))
         self.assertEqual(list(output.iterdir()), [])
 
+        def path_too_long(root, root_fd):
+            raise RuntimeError("source temp socket capacity")
+
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            self.assertEqual(
+                cli._main(
+                    ["run", "--output-root", str(output)],
+                    path_too_long,
+                ),
+                12,
+            )
+        self.assertEqual(
+            captured.getvalue(),
+            '{"error":"source-gate","reason":"output-root-path-too-long",'
+            '"runner_exit":12}\n',
+        )
+
     def test_04_run_all_rejects_legacy_and_forwards_only_exact_cli(self):
         legacy = subprocess.run(
             ["/bin/bash", "test/run_all.sh", "--require-release-ready"],
@@ -211,7 +229,11 @@ class SourceGateCliTests(unittest.TestCase):
         class Stdout:
             buffer = captured
 
-        with contextlib.redirect_stdout(io.StringIO()):
+        diagnostic = io.StringIO()
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(diagnostic),
+        ):
             # _main must reject before touching stdout.buffer.  The redirect is
             # intentionally ordinary text stdout; any attempted binary claim
             # would itself fail the test.
@@ -220,6 +242,11 @@ class SourceGateCliTests(unittest.TestCase):
                 12,
             )
         self.assertEqual(captured.getvalue(), b"")
+        self.assertEqual(
+            diagnostic.getvalue(),
+            '{"error":"source-gate","reason":"output-root-binding-lost",'
+            '"runner_exit":12}\n',
+        )
 
 
 if __name__ == "__main__":

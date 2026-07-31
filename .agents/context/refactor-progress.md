@@ -69,7 +69,7 @@
 - Git 的 rename/delete/copy 状态受 quality policy fail-closed 约束；结构切片必须在候选冻结前检查最终 `name-status`。
 - compile-time 或 runtime 装载的 `catalog/` 不是纯叙事文件；其变更必须进入 production path policy，并由真实 active ChangeRecord 覆盖。
 - 拆出测试文件但需要保持 Rust test identity 时，可用显式 `#[path]` 保留原模块层级；仍须比较完整 discovered identity，不能只比较函数名。
-- 主工作树中的 ignored runtime 数据可能被动态测试发现机制纳入扫描；不得为门禁删除用户数据，正式 metadata / impact / source gate 应在 clean exact-HEAD worktree 执行。
+- 动态测试入口发现只枚举 Git 已跟踪及未忽略的未跟踪路径，不再递归扫描 `.sandbox/` 等 ignored runtime 数据；已跟踪路径即使匹配 ignore 仍 fail-closed 纳入。不得为门禁删除用户数据，正式 metadata / impact / source gate 仍应在 clean exact-HEAD worktree 执行。
 - JavaScript factory 注入的协作者名不能与函数内布尔或 DTO 局部变量同名；机械搬迁后要专门覆盖错误路径，避免正常路径通过但 catch 分支调用到被遮蔽值。
 - 源码文本合同迁移到新 owner 后，切片的开始与结束锚点必须同在目标文件，并验证 `indexOf` 没有返回 `-1`；不能只改读取路径后继续用旧文件锚点。
 

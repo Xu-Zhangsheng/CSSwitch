@@ -15,7 +15,7 @@
 ## 2. 源码门禁
 
 ```bash
-GATE_ROOT="$(mktemp -d /private/tmp/csswitch-source-gate.XXXXXX)"
+GATE_ROOT="$(mktemp -d /private/tmp/csg.XXXXXX)"
 chmod 700 "$GATE_ROOT"
 bash test/run_all.sh --output-root "$GATE_ROOT"
 git diff --check

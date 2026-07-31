@@ -8,6 +8,7 @@ network, installed apps, or the existing run_all gate.
 
 import copy
 import pathlib
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -389,6 +390,92 @@ class QualityKernelFocused(unittest.TestCase):
             fixture.parent.mkdir()
             fixture.write_text("# temporary discovery fixture\n", encoding="utf-8")
             self.assertIn("test/test_new_fixture.py", Validator(fixture_root).discover_catalog_paths())
+            subprocess.run(
+                ["git", "init", "-q"],
+                cwd=fixture_root,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            ignored = fixture_root / ".sandbox" / "test_runtime_fixture.py"
+            ignored.parent.mkdir()
+            ignored.write_text("# ignored runtime fixture\n", encoding="utf-8")
+            (fixture_root / ".gitignore").write_text(
+                ".sandbox/\n",
+                encoding="utf-8",
+            )
+            discovered = Validator(fixture_root).discover_catalog_paths()
+            self.assertIn("test/test_new_fixture.py", discovered)
+            self.assertNotIn(".sandbox/test_runtime_fixture.py", discovered)
+            target_test = fixture_root / "target" / "test_unignored.py"
+            target_test.parent.mkdir()
+            target_test.write_text("# unignored target fixture\n", encoding="utf-8")
+            self.assertIn(
+                "target/test_unignored.py",
+                Validator(fixture_root).discover_catalog_paths(),
+            )
+            (fixture_root / ".gitignore").write_text(
+                ".sandbox/\ntarget/\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    "git", "add", "-f",
+                    ".sandbox/test_runtime_fixture.py",
+                    "target/test_unignored.py",
+                ],
+                cwd=fixture_root,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.assertIn(
+                ".sandbox/test_runtime_fixture.py",
+                Validator(fixture_root).discover_catalog_paths(),
+            )
+            self.assertIn(
+                "target/test_unignored.py",
+                Validator(fixture_root).discover_catalog_paths(),
+            )
+            secret = "/private/tmp/user-private-path-secret"
+            failed = subprocess.CompletedProcess(
+                args=["git"],
+                returncode=128,
+                stdout=b"",
+                stderr=secret.encode("utf-8"),
+            )
+            failed_validator = Validator(fixture_root)
+            with mock.patch.object(subprocess, "run", return_value=failed):
+                self.assertEqual(
+                    failed_validator.discover_catalog_paths(),
+                    set(),
+                )
+            self.assertEqual(
+                failed_validator.errors,
+                [
+                    "git ls-files: cannot enumerate tracked and "
+                    "unignored paths",
+                ],
+            )
+            self.assertNotIn(secret, "\n".join(failed_validator.errors))
+            raised_validator = Validator(fixture_root)
+            with mock.patch.object(
+                subprocess,
+                "run",
+                side_effect=OSError(secret),
+            ):
+                self.assertEqual(
+                    raised_validator.discover_catalog_paths(),
+                    set(),
+                )
+            self.assertEqual(
+                raised_validator.errors,
+                [
+                    "git ls-files: cannot enumerate tracked and "
+                    "unignored paths",
+                ],
+            )
+            self.assertNotIn(secret, "\n".join(raised_validator.errors))
         errors = self.errors_after(
             validator,
             lambda: validator.check_discovery_set(set(validator.catalog["discovery_paths"]), set(validator.catalog["discovery_paths"]) | {"test/test_new_fixture.py"}),
