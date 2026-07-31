@@ -268,7 +268,12 @@
         "test.quality.test_quality_kernel.QualityKernelFocused.test_test_result_pass_marker_exit7_fails",
         "test.quality.test_quality_kernel.QualityKernelFocused.test_test_result_three_dimensions_reject_contradictions_and_bind_downstream",
         "test.quality.test_quality_kernel.QualityKernelFocused.test_trusted_source_gate_exact_selection_and_identity_inventory_fail_closed",
-        "test.quality.test_quality_kernel.QualityKernelFocused.test_unknown_field_and_foreign_key_fail"
+        "test.quality.test_quality_kernel.QualityKernelFocused.test_unknown_field_and_foreign_key_fail",
+        "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_completion_state_cannot_claim_missing_characterization_tests",
+        "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_every_machine_anchor_resolves_in_current_source",
+        "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_integrity_checks_reject_representative_bad_inventory",
+        "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_r0_scope_and_critical_failure_boundaries_are_explicit",
+        "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_schema_and_fail_closed_references"
       ]
     },
     "QUALITY-METADATA": {
