@@ -195,7 +195,12 @@ fn tmpdir(label: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
+static IGNORED_RUNTIME_CHARACTERIZATION_LOCK: Mutex<()> = Mutex::new(());
+
 fn run_exact_ignored_runtime_characterization(test_name: &str, environment: &[(&str, &str)]) {
+    let _characterization_guard = IGNORED_RUNTIME_CHARACTERIZATION_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .arg("--exact")
@@ -232,7 +237,7 @@ fn free_port() -> u16 {
     port
 }
 
-fn ssh_fixture_ports() -> (u16, u16) {
+fn ssh_fixture_ports_with_reserved_preview() -> (u16, u16, TcpListener) {
     for _ in 0..128 {
         let proxy_port = free_port();
         let sandbox_port = free_port();
@@ -243,9 +248,17 @@ fn ssh_fixture_ports() -> (u16, u16) {
         if preview_port == 8765 || proxy_port == sandbox_port || proxy_port == preview_port {
             continue;
         }
-        return (proxy_port, sandbox_port);
+        if let Ok(preview_reservation) = TcpListener::bind(("127.0.0.1", preview_port)) {
+            return (proxy_port, sandbox_port, preview_reservation);
+        }
     }
     panic!("could not allocate a safe pairwise-distinct proxy/sandbox/preview port set");
+}
+
+fn ssh_fixture_ports() -> (u16, u16) {
+    let (proxy_port, sandbox_port, preview_reservation) = ssh_fixture_ports_with_reserved_preview();
+    drop(preview_reservation);
+    (proxy_port, sandbox_port)
 }
 
 fn write_executable(path: &Path, body: &str) {
@@ -1287,7 +1300,7 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
     let open_log = tmp.join("open.log");
     let science_call_log = tmp.join("science-call.log");
     let mock_upstream = start_mock_upstream();
-    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let (proxy_port, sandbox_port, preview_reservation) = ssh_fixture_ports_with_reserved_preview();
 
     let mut env_guard = EnvGuard::new();
     env_guard.set("HOME", &home);
@@ -1639,6 +1652,7 @@ exec '{}' "$@"
     if failure_edge == "spawn-error" {
         env::set_var("PATH", bin_dir.as_os_str());
     }
+    drop(preview_reservation);
     let operation_started = Instant::now();
     let failed: Result<serde_json::Value, String> = if codex_gateway_oracle {
         invoke_json(
@@ -2960,7 +2974,7 @@ fn isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt() {
     fs::create_dir_all(&home).unwrap();
     let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
     let mock_upstream = start_mock_upstream();
-    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let (proxy_port, sandbox_port, preview_reservation) = ssh_fixture_ports_with_reserved_preview();
     let candidate_pid_log = tmp.join("candidate-science.pid");
     let snapshot_observation = tmp.join("snapshot-observation.log");
 
@@ -3036,6 +3050,7 @@ fn isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt() {
         prior_pid,
         receipt_path.clone(),
     );
+    drop(preview_reservation);
     let failed = sandbox_session::one_click_login(
         handle.clone(),
         state.clone(),
@@ -3431,7 +3446,7 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
     fs::create_dir_all(&home).unwrap();
     let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
     let mock_upstream = start_mock_upstream();
-    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let (proxy_port, sandbox_port, preview_reservation) = ssh_fixture_ports_with_reserved_preview();
     let snapshot_observation = tmp.join("snapshot-observation.log");
 
     let mut env_guard = EnvGuard::new();
@@ -3511,6 +3526,7 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
         receipt_path.clone(),
     );
 
+    drop(preview_reservation);
     let failed = sandbox_session::one_click_login(
         handle.clone(),
         state.clone(),
