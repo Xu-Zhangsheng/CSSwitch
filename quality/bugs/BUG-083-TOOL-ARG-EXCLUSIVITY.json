@@ -15,7 +15,7 @@
       "desktop/gateway/src/anthropic.rs",
       "desktop/gateway/src/openai_chat.rs",
       "desktop/gateway/src/openai_responses.rs",
-      "desktop/gateway/src/server.rs",
+      "desktop/gateway/src/server/inference_dispatch.rs",
       "test/test_gateway_rust.py"
     ],
     "requirement_ids": [

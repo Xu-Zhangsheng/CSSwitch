@@ -11,7 +11,7 @@
     "claim_state": "confirmed",
     "reproduction_state": "historical-observed",
     "resolution_state": "open-not-fixed",
-    "affected_paths": ["desktop/gateway/src/openai_responses.rs", "desktop/gateway/src/server.rs", "test/test_gateway_rust.py"],
+    "affected_paths": ["desktop/gateway/src/openai_responses.rs", "desktop/gateway/src/server/inference_dispatch.rs", "test/test_gateway_rust.py"],
     "requirement_ids": ["REQ-083-DEEPSEEK-THINKING", "REQ-083-EVIDENCE"],
     "change_ids": ["CHG-DEEPSEEK-THINKING"],
     "expected_suite_ids": ["SUITE-PRODUCT-DEEPSEEK", "SUITE-QUALITY-FOCUSED"],

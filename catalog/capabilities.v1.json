@@ -12,10 +12,10 @@
       "action": "normalize",
       "reason": "DeepSeek uses the native Anthropic path; CSSwitch maps Science shell model ids, clamps known token caps, and normalizes thinking/tool_choice quirks.",
       "evidence": [
-        "desktop/gateway/src/server.rs",
+        "desktop/gateway/src/server/inference_dispatch.rs",
         "desktop/gateway/src/policy.rs",
         "desktop/gateway/src/policy.rs",
-        "desktop/gateway/src/server.rs"
+        "desktop/gateway/src/server/inference_dispatch.rs"
       ],
       "tests": [
         "desktop/gateway/src/policy.rs::tests::resolves_deepseek_shell_models",
@@ -35,7 +35,7 @@
       "action": "normalize",
       "reason": "Formal relay/custom proxies return one Science-visible claude-opus shell model with the real model name in display_name; outbound requests are force-overridden to the selected real model.",
       "evidence": [
-        "desktop/gateway/src/server.rs",
+        "desktop/gateway/src/server/inference_dispatch.rs",
         "desktop/gateway/src/models.rs",
         "desktop/gateway/src/anthropic_compat.rs",
         "desktop/gateway/src/models.rs"
@@ -231,7 +231,7 @@
       "evidence": [
         "desktop/gateway/src/dsml_shim.rs",
         "desktop/gateway/src/dsml_shim.rs",
-        "desktop/gateway/src/server.rs"
+        "desktop/gateway/src/server/inference_dispatch.rs"
       ],
       "tests": [
         "desktop/gateway/src/dsml_shim.rs::tests::stream_dsml_becomes_tool_use_across_chunk_sizes",
