@@ -21,13 +21,15 @@ pub(super) fn configure_third_party_best_effort<R: Runtime>(
     runtime: &ScienceRuntimeIdentity,
     force: bool,
 ) -> RegistrationStatus {
-    let control_url = sandbox_url(port, runtime);
     configure_third_party_best_effort_with(
         status,
         data_dir,
         runtime.version.as_deref(),
         force,
-        || configure_third_party_after_science_start(app, &control_url),
+        || {
+            let control_url = sandbox_url(port, runtime);
+            configure_third_party_after_science_start(app, &control_url)
+        },
     )
 }
 
@@ -99,7 +101,15 @@ mod tests {
     fn r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes() {
         let data_dir = temp_dir();
         let fake_science = data_dir.join("fake-science");
-        fs::write(&fake_science, b"#!/bin/sh\nexit 0\n").unwrap();
+        let url_call = data_dir.join("url-command-called");
+        fs::write(
+            &fake_science,
+            format!(
+                "#!/bin/sh\nprintf called > '{}'\nexit 0\n",
+                url_call.display()
+            ),
+        )
+        .unwrap();
         fs::set_permissions(&fake_science, fs::Permissions::from_mode(0o700)).unwrap();
         let runtime = crate::runtime::science::test_runtime_identity(fake_science);
         let app = tauri::test::mock_builder()
@@ -116,6 +126,10 @@ mod tests {
         );
         assert!(matches!(skipped, RegistrationStatus::Warning(_)));
         assert!(!route_configuration_is_current(&data_dir, "test-only").unwrap());
+        assert!(
+            !url_call.exists(),
+            "early status return must not execute Science url command"
+        );
 
         mark_route_configuration_current(&data_dir, "test-only").unwrap();
         let retained_host_effect = data_dir.join("host-effect-retained");
@@ -133,6 +147,7 @@ mod tests {
         );
         assert!(matches!(failed, RegistrationStatus::Warning(_)));
         assert!(retained_host_effect.is_file());
+        assert!(url_call.is_file());
         assert!(!route_configuration_is_current(&data_dir, "test-only").unwrap());
         drop(partial_guard);
 
