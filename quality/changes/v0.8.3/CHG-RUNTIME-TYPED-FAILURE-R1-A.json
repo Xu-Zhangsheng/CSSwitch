@@ -45,7 +45,7 @@
         "metadata"
       ]
     },
-    "claim_state": "inferred",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -63,7 +63,8 @@
         "complete Rust library regression: 482 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
         "frontend DTO compatibility assertions and internal cause projection exclusion",
         "clean-context candidate review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings",
-        "exact-SHA GATE-SOURCE completion seal and exact-SHA completion review remain pending before R1-A closure"
+        "source implementation exact SHA 7e3d9db6db089fa7a143bc742bc11162aa6b42ae received a 15-suite GATE-SOURCE PASS seal with run id 4b7c5c8ba0c06a55d0c3fc3d1e33a5e7 and runner exit zero",
+        "the same exact SHA received a clean-context completion review with zero BLOCK, HIGH, MEDIUM, or LOW findings"
       ]
     },
     "does_not_claim_fix": true,

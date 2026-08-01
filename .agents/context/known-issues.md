@@ -93,7 +93,7 @@ R0 已全部收口。不得把本次 source closure 外推为产品修复或更�
 
 ## R1 typed failure/recovery envelope 进度
 
-`R1-A` 已形成未提交 source candidate：`runtime/failure.rs` 建立 crate-internal
+`R1-A` 已收口（source）：`runtime/failure.rs` 建立 crate-internal
 `RuntimeError<K>` envelope，将 domain、phase、recovery disposition、environment
 exposure 与 sanitized cause chain 变成 typed field；既有 `TypedOneClickFailure` 作为
 one-click specialization 保留，frontend DTO keys、stage/recovery/environment 字符串与
@@ -106,21 +106,27 @@ focused source/unit 已实际执行并 PASS：`failure::` 8 tests、
 482 passed / 0 failed / 41 explicitly ignored。相同完整 lib 命令在受限沙箱内因动态
 loopback / process inspection 权限产生 53 个 `Operation not permitted`，不计为产品失败。
 clean-context candidate review 已 PASS，零 BLOCK/HIGH/MEDIUM/LOW，并明确不包含完整 gate。
-当前 candidate 尚未取得 commit 授权，因此 clean exact-SHA 15-suite `GATE-SOURCE`
-completion seal 与 exact-SHA 独立完成审查仍为 `NOT-RUN`；不得将 `R1-A` 写成 DONE。
+随后 source implementation exact SHA `7e3d9db6db089fa7a143bc742bc11162aa6b42ae`
+取得十五 suite `GATE-SOURCE` completion seal PASS：run id
+`4b7c5c8ba0c06a55d0c3fc3d1e33a5e7`、runner exit 0，manifest 含十五个 test
+result 与十五个 source observation；desktop 身份为 523 discovered / 523 executed /
+41 approved ignored / 0 skipped。该 exact SHA 的 clean-context 独立完成审查亦 PASS，
+零 BLOCK/HIGH/MEDIUM/LOW，并核验 DTO、typed control-flow、safe cause、范围边界、gate
+identity 与全部 evidence 引用哈希。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
-| `R1-A` | IMPLEMENTED / UNSEALED | typed envelope 底座与冻结 DTO 投影；待 commit、exact-SHA gate、独立审查收口 |
+| `R1-A` | DONE | typed envelope 底座、冻结 DTO 投影、exact-SHA source gate 与独立审查收口 |
 | `R1-B` | NOT-STARTED | authority snapshot / pending cleanup typed outcome |
 | `R1-C` | NOT-STARTED | one-click compensation typed aggregate |
 | `R1-D` | NOT-STARTED | interrupted Gateway recovery typed outcome |
 | `R1-E` | NOT-STARTED | production message semantic parsing 清零 |
 | `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
 
-唯一 `NEXT` 仍是收口 `R1-A`：取得单独 commit 授权后绑定 clean exact SHA，执行完整
-source gate 与 clean-context 独立审查，修复后重新 seal。完成前不得进入 `R1-B`，也不得
-触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
+唯一 `NEXT` 是 `R1-B` authority snapshot / pending cleanup typed outcome。`R1-A` 的
+source 结论不得外推到 artifact、installed/live provider、Science、SSH、签名、公证或
+公开发布；进入 `R1-B` 仍须单独窗口与明确实施指令，不得触碰 R2 journal schema、R3
+state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 
