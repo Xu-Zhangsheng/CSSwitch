@@ -400,9 +400,18 @@ enum ManagedScienceCandidateStopProof {
     Unproven,
 }
 
-struct ManagedScienceRestartError {
+#[derive(Debug)]
+pub(super) struct ManagedScienceRestartError {
     message: String,
     candidate_stop_proof: ManagedScienceCandidateStopProof,
+    diagnostic: PriorScienceRestartDiagnostic,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PriorScienceRestartDiagnostic {
+    Failed,
+    #[cfg(test)]
+    TestPostSpawnValidationFailed,
 }
 
 impl ManagedScienceRestartError {
@@ -410,6 +419,7 @@ impl ManagedScienceRestartError {
         Self {
             message: message.into(),
             candidate_stop_proof: ManagedScienceCandidateStopProof::NotRequired,
+            diagnostic: PriorScienceRestartDiagnostic::Failed,
         }
     }
 
@@ -417,6 +427,7 @@ impl ManagedScienceRestartError {
         Self {
             message: format!("{}；code=science_candidate_stop_unproven", message.into()),
             candidate_stop_proof: ManagedScienceCandidateStopProof::Unproven,
+            diagnostic: PriorScienceRestartDiagnostic::Failed,
         }
     }
 
@@ -425,11 +436,22 @@ impl ManagedScienceRestartError {
             Ok(()) => Self {
                 message: message.into(),
                 candidate_stop_proof: ManagedScienceCandidateStopProof::ConfirmedStopped,
+                diagnostic: PriorScienceRestartDiagnostic::Failed,
             },
             Err(error) => {
                 Self::after_spawn_unproven(format!("{}；candidate_cleanup={error}", message.into()))
             }
         }
+    }
+
+    #[cfg(test)]
+    fn test_post_spawn_validation(cleanup: Result<(), String>) -> Self {
+        let mut failure = Self::after_exact_cleanup(
+            "test-only prior Science post-spawn validation failure",
+            cleanup,
+        );
+        failure.diagnostic = PriorScienceRestartDiagnostic::TestPostSpawnValidationFailed;
+        failure
     }
 }
 
@@ -658,7 +680,7 @@ fn restart_prior_science<R: Runtime>(
     lifecycle: &lifecycle::Lifecycle,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     prior: &PriorScienceContext,
-) -> Result<(), String> {
+) -> Result<(), ManagedScienceRestartError> {
     restart_managed_science_with_budget(
         app,
         state,
@@ -667,7 +689,6 @@ fn restart_prior_science<R: Runtime>(
         prior,
         operation::SANDBOX_HEALTH_BUDGET_MS,
     )
-    .map_err(|error| error.to_string())
 }
 
 fn restart_managed_science_with_budget<R: Runtime>(
@@ -828,8 +849,7 @@ fn restart_managed_science_with_budget<R: Runtime>(
                 Some(&prior.runtime),
                 Some(&_candidate_token),
             );
-            return Err(ManagedScienceRestartError::after_exact_cleanup(
-                "test-only prior Science post-spawn validation failure",
+            return Err(ManagedScienceRestartError::test_post_spawn_validation(
                 cleanup,
             ));
         }
@@ -981,6 +1001,208 @@ fn history_recovery_choices(
     Ok((choices, visible))
 }
 
+#[derive(Debug)]
+pub(super) enum CompensationCause {
+    ScienceCleanup { safe_detail: String },
+    SshCleanup,
+    AuthorityRestore,
+    PriorScienceRestart(ManagedScienceRestartError),
+    SnapshotCleanup(AuthorityCleanupFailure),
+}
+
+impl CompensationCause {
+    fn render_diagnostic(&self) -> String {
+        match self {
+            Self::ScienceCleanup { safe_detail } => format!(
+                "compensation_science_cleanup_failed；compensation_restore_blocked_science_candidate；{safe_detail}"
+            ),
+            Self::SshCleanup => "compensation_ssh_cleanup_failed".into(),
+            Self::AuthorityRestore => "compensation_restore_failed".into(),
+            Self::PriorScienceRestart(error) => match error.diagnostic {
+                #[cfg(test)]
+                PriorScienceRestartDiagnostic::TestPostSpawnValidationFailed => {
+                    "test-only prior Science post-spawn validation failure".into()
+                }
+                PriorScienceRestartDiagnostic::Failed => {
+                    "compensation_prior_science_restart_failed".into()
+                }
+            },
+            Self::SnapshotCleanup(error) if error.cleanup_requirement().is_some() => {
+                error.to_string()
+            }
+            Self::SnapshotCleanup(_) => "compensation_snapshot_register_failed".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CompensationSkipCause {
+    NoScienceCandidate,
+    NoPriorScience,
+    CrossRuntimeEnvironment,
+    BlockedByScienceCleanup,
+    BlockedByAuthorityRestore,
+    SnapshotPreserved,
+}
+
+#[derive(Debug)]
+pub(super) enum CompensationStepOutcome {
+    Succeeded,
+    Skipped(CompensationSkipCause),
+    Failed(CompensationCause),
+}
+
+impl CompensationStepOutcome {
+    fn succeeded(&self) -> bool {
+        matches!(self, Self::Succeeded)
+    }
+
+    fn completed_or_not_required(&self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded
+                | Self::Skipped(CompensationSkipCause::NoScienceCandidate)
+                | Self::Skipped(CompensationSkipCause::NoPriorScience)
+                | Self::Skipped(CompensationSkipCause::CrossRuntimeEnvironment)
+        )
+    }
+
+    fn cause(&self) -> Option<&CompensationCause> {
+        match self {
+            Self::Failed(cause) => Some(cause),
+            Self::Succeeded | Self::Skipped(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CompensationEnvironment {
+    NotExposed,
+    CandidateExposed,
+    CrossRuntimeExposed,
+}
+
+impl CompensationEnvironment {
+    fn from_launch(launch_attempted: bool, cross_runtime: bool) -> Self {
+        if cross_runtime {
+            Self::CrossRuntimeExposed
+        } else if launch_attempted {
+            Self::CandidateExposed
+        } else {
+            Self::NotExposed
+        }
+    }
+
+    fn is_uncertain(self) -> bool {
+        self != Self::NotExposed
+    }
+
+    fn append_diagnostics(self, diagnostics: &mut Vec<String>) {
+        if self.is_uncertain() {
+            diagnostics.push("environment_uncertain".into());
+        }
+        if self == Self::CrossRuntimeExposed {
+            diagnostics.push("newer_runtime_required".into());
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct CompensationOutcome {
+    pub(super) science_cleanup: CompensationStepOutcome,
+    pub(super) ssh_cleanup: CompensationStepOutcome,
+    pub(super) authority_restore: CompensationStepOutcome,
+    pub(super) prior_science_restart: CompensationStepOutcome,
+    pub(super) snapshot_cleanup: CompensationStepOutcome,
+    pub(super) environment: CompensationEnvironment,
+}
+
+impl CompensationOutcome {
+    fn blocked_by_science_cleanup(
+        safe_detail: String,
+        environment: CompensationEnvironment,
+    ) -> Self {
+        Self {
+            science_cleanup: CompensationStepOutcome::Failed(CompensationCause::ScienceCleanup {
+                safe_detail,
+            }),
+            ssh_cleanup: CompensationStepOutcome::Skipped(
+                CompensationSkipCause::BlockedByScienceCleanup,
+            ),
+            authority_restore: CompensationStepOutcome::Skipped(
+                CompensationSkipCause::BlockedByScienceCleanup,
+            ),
+            prior_science_restart: CompensationStepOutcome::Skipped(
+                CompensationSkipCause::BlockedByScienceCleanup,
+            ),
+            snapshot_cleanup: CompensationStepOutcome::Skipped(
+                CompensationSkipCause::SnapshotPreserved,
+            ),
+            environment,
+        }
+    }
+
+    pub(super) fn authorities_restored(&self) -> bool {
+        self.science_cleanup.completed_or_not_required()
+            && self.ssh_cleanup.succeeded()
+            && self.authority_restore.succeeded()
+            && self.prior_science_restart.completed_or_not_required()
+    }
+
+    pub(super) fn prior_science_restored(&self) -> bool {
+        self.authorities_restored() && self.prior_science_restart.succeeded()
+    }
+
+    fn cleanup_required(&self) -> bool {
+        matches!(
+            &self.snapshot_cleanup,
+            CompensationStepOutcome::Failed(CompensationCause::SnapshotCleanup(error))
+                if error.cleanup_requirement().is_some()
+        ) || matches!(
+            self.science_cleanup,
+            CompensationStepOutcome::Failed(CompensationCause::ScienceCleanup { .. })
+        )
+    }
+
+    pub(super) fn projected_recovery(&self) -> ProjectedRecovery {
+        if self.cleanup_required() && self.environment.is_uncertain() {
+            ProjectedRecovery::cleanup_required_uncertain()
+        } else if self.cleanup_required() {
+            ProjectedRecovery::CLEANUP_REQUIRED
+        } else if self.environment.is_uncertain() {
+            ProjectedRecovery::ENVIRONMENT_UNCERTAIN
+        } else if self.authorities_restored() {
+            ProjectedRecovery::NOT_NEEDED
+        } else {
+            ProjectedRecovery::DEGRADED
+        }
+    }
+
+    fn render_failure_message(&self, primary: &str) -> String {
+        let mut diagnostics = [
+            &self.science_cleanup,
+            &self.ssh_cleanup,
+            &self.authority_restore,
+        ]
+        .into_iter()
+        .filter_map(CompensationStepOutcome::cause)
+        .map(CompensationCause::render_diagnostic)
+        .collect::<Vec<_>>();
+        self.environment.append_diagnostics(&mut diagnostics);
+        diagnostics.extend(
+            [&self.prior_science_restart, &self.snapshot_cleanup]
+                .into_iter()
+                .filter_map(CompensationStepOutcome::cause)
+                .map(CompensationCause::render_diagnostic),
+        );
+        if diagnostics.is_empty() {
+            primary.to_string()
+        } else {
+            format!("{primary}；{}", diagnostics.join("; "))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compensate_one_click_failure<R: Runtime>(
     app: &tauri::AppHandle<R>,
@@ -995,9 +1217,14 @@ fn compensate_one_click_failure<R: Runtime>(
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
 ) -> Result<Value, TypedOneClickFailure> {
     let original_kind = failure.typed.kind();
-    let environment_uncertain = failure.rollback.launch_attempted;
-    let cross_runtime_environment = environment_uncertain
+    let cross_runtime_environment = failure.rollback.launch_attempted
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
+    let environment = CompensationEnvironment::from_launch(
+        failure.rollback.launch_attempted,
+        cross_runtime_environment,
+    );
+    let science_cleanup_required =
+        failure.rollback.launch_attempted || failure.rollback.launch_token.is_some();
     let cleanup = if failure.rollback.candidate_stop_proof
         == ManagedScienceCandidateStopProof::Unproven
     {
@@ -1041,34 +1268,27 @@ fn compensate_one_click_failure<R: Runtime>(
         result
     };
     if let Err(cleanup_error) = cleanup.as_ref() {
-        if environment_uncertain {
+        let outcome =
+            CompensationOutcome::blocked_by_science_cleanup(cleanup_error.to_string(), environment);
+        if outcome.environment.is_uncertain() {
             if let Some(disposition) = reconcile_disposition.as_deref_mut() {
                 *disposition = PriorScienceDisposition::EnvironmentUncertain;
             }
         }
         authority_snapshot.preserve_recovery = true;
         trace.finish("error=compensation_restore_blocked_science_cleanup_unproven");
-        let environment_codes = if cross_runtime_environment {
-            "；environment_uncertain；newer_runtime_required"
-        } else if environment_uncertain {
-            "；environment_uncertain"
-        } else {
-            ""
-        };
         let cleanup_failure = cleanup_required_error(
             AuthorityCleanupPhase::Cleanup,
-            &format!(
-                "{}；compensation_science_cleanup_failed；compensation_restore_blocked_science_candidate；{cleanup_error}{environment_codes}",
-                failure.message(),
-            ),
+            &outcome.render_failure_message(failure.message()),
             &authority_snapshot.backup_root,
             "science_candidate_stop_unproven",
         );
-        return Err(typed_authority_cleanup_err(
-            original_kind,
-            cleanup_failure,
-            environment_uncertain,
-        ));
+        let phase = cleanup_failure.phase();
+        return Err(
+            TypedOneClickFailure::new(original_kind, cleanup_failure.to_string())
+                .with_recovery(outcome.projected_recovery())
+                .with_safe_cause(phase.cause_code(), "authority cleanup typed failure"),
+        );
     }
     let ssh_cleanup = match failure.rollback.ssh_stub_transaction.as_ref() {
         Some(transaction) => transaction.compensate(&sandbox_home()),
@@ -1083,90 +1303,71 @@ fn compensate_one_click_failure<R: Runtime>(
         failure.rollback.proxy_action,
     );
     let prior_restart = if rollback.is_ok() && !cross_runtime_environment {
-        prior_science.map(|prior| restart_prior_science(app, state, lifecycle, auth_proof, prior))
+        match prior_science {
+            Some(prior) => match restart_prior_science(app, state, lifecycle, auth_proof, prior) {
+                Ok(()) => CompensationStepOutcome::Succeeded,
+                Err(error) => {
+                    CompensationStepOutcome::Failed(CompensationCause::PriorScienceRestart(error))
+                }
+            },
+            None => CompensationStepOutcome::Skipped(CompensationSkipCause::NoPriorScience),
+        }
+    } else if cross_runtime_environment {
+        CompensationStepOutcome::Skipped(CompensationSkipCause::CrossRuntimeEnvironment)
     } else {
-        None
+        CompensationStepOutcome::Skipped(CompensationSkipCause::BlockedByAuthorityRestore)
     };
-    let authorities_restored = cleanup.is_ok()
-        && ssh_cleanup.is_ok()
-        && rollback.is_ok()
-        && prior_restart.as_ref().is_none_or(Result::is_ok);
-    let prior_science_restored = authorities_restored
-        && prior_science.is_some()
-        && prior_restart.as_ref().is_some_and(Result::is_ok);
+    let mut outcome = CompensationOutcome {
+        science_cleanup: if science_cleanup_required {
+            CompensationStepOutcome::Succeeded
+        } else {
+            CompensationStepOutcome::Skipped(CompensationSkipCause::NoScienceCandidate)
+        },
+        ssh_cleanup: match ssh_cleanup {
+            Ok(_) => CompensationStepOutcome::Succeeded,
+            Err(_) => CompensationStepOutcome::Failed(CompensationCause::SshCleanup),
+        },
+        authority_restore: match rollback {
+            Ok(()) => CompensationStepOutcome::Succeeded,
+            Err(_) => CompensationStepOutcome::Failed(CompensationCause::AuthorityRestore),
+        },
+        prior_science_restart: prior_restart,
+        snapshot_cleanup: CompensationStepOutcome::Skipped(
+            CompensationSkipCause::SnapshotPreserved,
+        ),
+        environment,
+    };
+    let authorities_restored = outcome.authorities_restored();
+    let prior_science_restored = outcome.prior_science_restored();
     if let Some(disposition) = reconcile_disposition {
-        if environment_uncertain {
+        if outcome.environment.is_uncertain() {
             *disposition = PriorScienceDisposition::EnvironmentUncertain;
         } else if prior_science_restored {
             *disposition = PriorScienceDisposition::Restored;
         }
     }
-    let snapshot_cleanup = if authorities_restored {
-        Some(authority_snapshot.cleanup_when_expendable())
+    outcome.snapshot_cleanup = if authorities_restored {
+        match authority_snapshot.cleanup_when_expendable() {
+            Ok(_) => CompensationStepOutcome::Succeeded,
+            Err(error) => {
+                CompensationStepOutcome::Failed(CompensationCause::SnapshotCleanup(error))
+            }
+        }
     } else {
         authority_snapshot.preserve_recovery = true;
-        None
+        CompensationStepOutcome::Skipped(CompensationSkipCause::SnapshotPreserved)
     };
-    trace.finish(if authorities_restored && environment_uncertain {
-        "error=one_click_transaction_compensated environment=uncertain"
-    } else if authorities_restored {
-        "error=one_click_transaction_compensated environment=not_exposed"
-    } else {
-        "error=one_click_compensation_incomplete"
-    });
-    let mut codes = Vec::new();
-    if cleanup.is_err() {
-        codes.push("compensation_science_cleanup_failed".to_string());
-    }
-    if ssh_cleanup.is_err() {
-        codes.push("compensation_ssh_cleanup_failed".to_string());
-    }
-    if rollback.is_err() {
-        codes.push("compensation_restore_failed".to_string());
-    }
-    if environment_uncertain {
-        codes.push("environment_uncertain".to_string());
-    }
-    if cross_runtime_environment {
-        codes.push("newer_runtime_required".to_string());
-    }
-    if let Some(Err(error)) = prior_restart {
-        #[cfg(test)]
-        if error.contains("test-only prior Science post-spawn validation failure") {
-            codes.push("test-only prior Science post-spawn validation failure".to_string());
+    trace.finish(
+        if authorities_restored && outcome.environment.is_uncertain() {
+            "error=one_click_transaction_compensated environment=uncertain"
+        } else if authorities_restored {
+            "error=one_click_transaction_compensated environment=not_exposed"
         } else {
-            codes.push("compensation_prior_science_restart_failed".to_string());
-        }
-        #[cfg(not(test))]
-        {
-            let _ = error;
-            codes.push("compensation_prior_science_restart_failed".to_string());
-        }
-    }
-    let mut snapshot_cleanup_required = false;
-    if let Some(Err(error)) = snapshot_cleanup {
-        if error.cleanup_requirement().is_some() {
-            snapshot_cleanup_required = true;
-            codes.push(error.to_string());
-        } else {
-            codes.push("compensation_snapshot_register_failed".to_string());
-        }
-    }
-    let suffix = (!codes.is_empty()).then(|| format!("；{}", codes.join("; ")));
-    let message = format!("{}{}", failure.message(), suffix.unwrap_or_default());
-    let recovery = if snapshot_cleanup_required && environment_uncertain {
-        ProjectedRecovery::cleanup_required_uncertain()
-    } else if snapshot_cleanup_required {
-        ProjectedRecovery::CLEANUP_REQUIRED
-    } else if let Some(recovery) = recovery_from_diagnostic_codes(&message) {
-        recovery
-    } else if environment_uncertain {
-        ProjectedRecovery::ENVIRONMENT_UNCERTAIN
-    } else if authorities_restored {
-        ProjectedRecovery::NOT_NEEDED
-    } else {
-        ProjectedRecovery::DEGRADED
-    };
+            "error=one_click_compensation_incomplete"
+        },
+    );
+    let message = outcome.render_failure_message(failure.message());
+    let recovery = outcome.projected_recovery();
     Err(TypedOneClickFailure::new(original_kind, message).with_recovery(recovery))
 }
 

@@ -1,5 +1,10 @@
 #[test]
 fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
+    use super::super::one_click::{
+        CompensationCause, CompensationEnvironment, CompensationOutcome, CompensationSkipCause,
+        CompensationStepOutcome,
+    };
+    use crate::runtime::failure::ProjectedRecovery;
     use syn::visit::{self, Visit};
     use syn::{Expr, ExprCall, ExprMethodCall, Item, ItemFn, Pat, Stmt};
 
@@ -171,6 +176,56 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         !source.contains("contains(\"recovery_status=cleanup_required\")")
             && !recovery_source.contains("contains(\"recovery_status=cleanup_required\")"),
         "authority cleanup recovery must be classified from typed results, not DTO text"
+    );
+    for field in [
+        "science_cleanup: CompensationStepOutcome",
+        "ssh_cleanup: CompensationStepOutcome",
+        "authority_restore: CompensationStepOutcome",
+        "prior_science_restart: CompensationStepOutcome",
+        "snapshot_cleanup: CompensationStepOutcome",
+        "environment: CompensationEnvironment",
+    ] {
+        assert!(
+            source.contains(field),
+            "CompensationOutcome must retain a typed result for {field}"
+        );
+    }
+    let compensation_source = source
+        .split("fn compensate_one_click_failure")
+        .nth(1)
+        .and_then(|tail| tail.split("fn one_click_login_with_options").next())
+        .expect("one-click compensation source boundary must remain discoverable");
+    assert!(
+        compensation_source.contains("outcome.projected_recovery()")
+            && compensation_source.contains("outcome.render_failure_message"),
+        "one-click compensation must derive recovery and diagnostics from CompensationOutcome"
+    );
+    assert!(
+        !compensation_source.contains("recovery_from_diagnostic_codes")
+            && !compensation_source.contains("message.contains"),
+        "one-click compensation control flow must never parse rendered diagnostics"
+    );
+    let incomplete_after_prior_restart = CompensationOutcome {
+        science_cleanup: CompensationStepOutcome::Skipped(
+            CompensationSkipCause::NoScienceCandidate,
+        ),
+        ssh_cleanup: CompensationStepOutcome::Failed(CompensationCause::SshCleanup),
+        authority_restore: CompensationStepOutcome::Succeeded,
+        prior_science_restart: CompensationStepOutcome::Succeeded,
+        snapshot_cleanup: CompensationStepOutcome::Skipped(
+            CompensationSkipCause::SnapshotPreserved,
+        ),
+        environment: CompensationEnvironment::NotExposed,
+    };
+    assert!(
+        !incomplete_after_prior_restart.authorities_restored()
+            && !incomplete_after_prior_restart.prior_science_restored(),
+        "a successful prior Science restart must not publish Restored when SSH cleanup failed"
+    );
+    assert_eq!(
+        incomplete_after_prior_restart.projected_recovery(),
+        ProjectedRecovery::DEGRADED,
+        "incomplete pre-launch compensation must remain typed degraded"
     );
     let file = syn::parse_file(source).expect("one-click product Rust source must parse");
     let one_click = top_level(&file, "one_click_login_with_options")

@@ -6815,10 +6815,14 @@ fn isolated_compensation_diagnostics_are_credential_free() {
     let diagnostic_credential_free = !surface.contains(&canary);
     let valuable_snapshot = sandbox_session::test_rollback_diagnostic_snapshot();
     let cleanup_observation = config::test_pending_cleanup_lifecycle_observation();
-    let failed_restore_preserved_unregistered_snapshot =
-        valuable_snapshot.as_ref().is_some_and(|path| path.is_dir())
-            && cleanup_observation.events.is_empty()
-            && cleanup_observation.attempted_register.is_none()
+    let failed_restore_preserved_registered_snapshot =
+        valuable_snapshot.as_ref().is_some_and(|path| {
+            path.is_dir()
+                && cleanup_observation
+                    .attempted_register
+                    .as_ref()
+                    .is_some_and(|identity| identity.path == *path)
+        }) && cleanup_observation.events.is_empty()
             && cleanup_observation.initial_ticket_count == 0
             && cleanup_observation.completion_count == 0;
     cleanup
@@ -6827,11 +6831,16 @@ fn isolated_compensation_diagnostics_are_credential_free() {
     assert!(
             target_failure_reached
                 && diagnostic_credential_free
-                && failed_restore_preserved_unregistered_snapshot,
-            "compensation diagnostics may expose only a typed safe rollback code, never a raw nested error; a failed restore whose snapshot remains valuable must reach no durable cleanup boundary and emit no REGISTER/REMOVE/CLEAR: target_failure_reached={target_failure_reached}, diagnostic_credential_free={diagnostic_credential_free}, valuable_snapshot_present={}, cleanup_events={}, attempted_register={}, initial_ticket_count={}, completion_count={}",
+                && failed_restore_preserved_registered_snapshot,
+            "compensation diagnostics may expose only a typed safe rollback code, never a raw nested error; a failed restore must preserve the initial ActiveRecovery snapshot without entering REMOVE/CLEAR or completion: target_failure_reached={target_failure_reached}, diagnostic_credential_free={diagnostic_credential_free}, valuable_snapshot_present={}, cleanup_events={}, initial_registration_matches_snapshot={}, initial_ticket_count={}, completion_count={}",
             valuable_snapshot.is_some(),
             cleanup_observation.events.len(),
-            cleanup_observation.attempted_register.is_some(),
+            valuable_snapshot.as_ref().is_some_and(|path| {
+                cleanup_observation
+                    .attempted_register
+                    .as_ref()
+                    .is_some_and(|identity| identity.path == *path)
+            }),
             cleanup_observation.initial_ticket_count,
             cleanup_observation.completion_count
         );
