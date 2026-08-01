@@ -526,7 +526,7 @@
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile": {
           "boundary": "acceptance",
-          "reason": "source-gate parent executes the complete R0-G doctor command body with temp HOME, fake doctor assets, mock AppHandle, and no live Science or provider"
+          "reason": "source-gate parent runs the complete run_doctor command body in an isolated HOME"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent": {
           "boundary": "acceptance",
