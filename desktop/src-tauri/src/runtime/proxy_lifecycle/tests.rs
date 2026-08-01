@@ -11,7 +11,7 @@ use crate::runtime::provider::{FormalCredential, FormalGatewayPlan};
 use std::fs;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -99,6 +99,7 @@ fn spawn_r0_recovery_listener(
             .env("CSSWITCH_TEST_R0_RECOVERY_READY", &ready)
             .env("CSSWITCH_TEST_R0_RECOVERY_MODE", mode)
             .env("CSSWITCH_TEST_R0_RECOVERY_ALLOW_EXIT", &allow_exit)
+            .stdout(Stdio::null())
             .spawn()
             .unwrap(),
     );
@@ -296,6 +297,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         .arg("--nocapture")
         .env("CSSWITCH_TEST_R0_RECOVERY_PORT", port.to_string())
         .env("CSSWITCH_TEST_R0_RECOVERY_READY", &ready)
+        .stdout(Stdio::null())
         .spawn()
         .unwrap(),
     );

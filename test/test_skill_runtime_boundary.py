@@ -353,10 +353,19 @@ class SkillRuntimeBoundary(unittest.TestCase):
         lifecycle = runtime_command_module("lifecycle")
         js = (ROOT / "desktop/src/main.js").read_text()
 
-        cleanup = lib.split("fn cleanup_for_exit", 1)[1].split(
-            "fn mark_boot_failed", 1
+        cleanup_flow = lib.split("fn cleanup_for_exit_with", 1)[1].split(
+            "fn cleanup_for_exit", 1
         )[0]
-        self.assertLess(cleanup.index("stop_sandbox("), cleanup.index("st.stop_proxy()"))
+        production_cleanup = lib.split("fn cleanup_for_exit<R", 1)[1].split(
+            "#[derive", 1
+        )[0]
+        self.assertLess(
+            cleanup_flow.index("stop_science("), cleanup_flow.index("stop_gateway(")
+        )
+        self.assertLess(
+            production_cleanup.index("stop_sandbox("),
+            production_cleanup.index("AppState::stop_proxy"),
+        )
         quit_command = lifecycle.split("pub(super) async fn quit_app_command", 1)[1]
         self.assertLess(
             quit_command.index("stop_all_inner_cmd"), quit_command.index("exit_app.exit(0)")

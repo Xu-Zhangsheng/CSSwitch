@@ -48,14 +48,28 @@ class ProfilePinContractTests(unittest.TestCase):
         connection = profiles.split("fn update_profile_connection_inner_cmd", 1)[1].split(
             "/// 只把 profile", 1
         )[0]
+        connection_flow = profiles.split("fn update_profile_connection_with", 1)[1].split(
+            "fn commit_profile_connection_in_dir", 1
+        )[0]
+        connection_commit = profiles.split("fn commit_profile_connection_in_dir", 1)[
+            1
+        ].split("/// 只把 profile", 1)[0]
         self.assertNotIn("set_active_profile_txn", preset + connection)
         self.assertNotIn("cfg.active_id == id", preset + connection)
         self.assertGreaterEqual(preset.count("load_without_runtime_transaction"), 2)
         self.assertLess(
-            connection.index("load_without_runtime_transaction"),
-            connection.index("prepare_provider_auth"),
+            connection_flow.index("load_without_runtime_transaction(dir)"),
+            connection_flow.index("let prepared = prepare("),
         )
-        self.assertGreaterEqual(connection.count("load_without_runtime_transaction"), 2)
+        self.assertLess(
+            connection_flow.index("let prepared = prepare("),
+            connection_flow.index(".with_serialized("),
+        )
+        self.assertIn("verify(&prepared, dir)?", connection_flow)
+        self.assertLess(
+            connection_commit.index("load_without_runtime_transaction(dir)"),
+            connection_commit.index("let validated = validate(&candidate)?"),
+        )
         self.assertIn("config::require_no_runtime_transaction(cfg)?", profiles)
 
     def test_ui_activation_has_no_skip_path_and_reports_pending_selection(self):
