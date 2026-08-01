@@ -6,14 +6,24 @@ use super::{
 use crate::provider_contracts::{
     CachePolicy, EndpointPolicy, ModelPolicy, TimeoutPolicy, Transport,
 };
+use crate::runtime::legacy_proxy::stop_managed_gateway_on_port_with;
 use crate::runtime::provider::{FormalCredential, FormalGatewayPlan};
 use std::fs;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static R0_RECOVERY_TERM_OBSERVED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn observe_r0_recovery_term(_signal: libc::c_int) {
+    R0_RECOVERY_TERM_OBSERVED.store(true, Ordering::SeqCst);
+}
 
 struct TestOwnedChild(std::process::Child);
 
@@ -35,6 +45,84 @@ impl Drop for TestOwnedChild {
     fn drop(&mut self) {
         let _ = self.stop();
     }
+}
+
+fn r0_interrupted_recovery_fixture(
+    label: &str,
+) -> (std::path::PathBuf, crate::config::RuntimeTransactionJournal) {
+    let dir = std::env::temp_dir().join(format!(
+        "csswitch-r0-interrupted-recovery-real-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let journal = crate::config::RuntimeTransactionJournal {
+        transaction_id: format!("tx-real-{label}"),
+        target_profile_id: String::new(),
+        stage: "start_formal_gateway".into(),
+        previous_binding: None,
+        previous_gateway: None,
+    };
+    crate::config::save_to(
+        &dir,
+        &crate::config::Config {
+            runtime_transaction: Some(journal.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    (dir, journal)
+}
+
+fn spawn_r0_recovery_listener(
+    dir: &std::path::Path,
+    label: &str,
+    mode: &str,
+) -> (TestOwnedChild, u16, std::path::PathBuf) {
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    assert_ne!(port, 8765);
+    drop(reservation);
+    let ready = dir.join(format!("{label}-ready"));
+    let allow_exit = dir.join(format!("{label}-allow-exit"));
+    let current_exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+    let mut listener_child = TestOwnedChild(
+        Command::new(&current_exe)
+            .arg("--exact")
+            .arg("runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env("CSSWITCH_TEST_R0_RECOVERY_PORT", port.to_string())
+            .env("CSSWITCH_TEST_R0_RECOVERY_READY", &ready)
+            .env("CSSWITCH_TEST_R0_RECOVERY_MODE", mode)
+            .env("CSSWITCH_TEST_R0_RECOVERY_ALLOW_EXIT", &allow_exit)
+            .spawn()
+            .unwrap(),
+    );
+    for _ in 0..200 {
+        if ready.is_file() {
+            return (listener_child, port, allow_exit);
+        }
+        assert!(
+            listener_child.try_wait().unwrap().is_none(),
+            "{label} recovery listener exited before readiness"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("{label} recovery listener did not become ready");
+}
+
+fn assert_r0_recovery_stage(
+    dir: &std::path::Path,
+    journal: &crate::config::RuntimeTransactionJournal,
+) {
+    let current = crate::config::load_from(dir).unwrap();
+    let current_journal = current.runtime_transaction.unwrap();
+    assert_eq!(current_journal.transaction_id, journal.transaction_id);
+    assert_eq!(current_journal.stage, "recover_interrupted_gateway");
 }
 
 fn health(provider: &str, launch_id: &str, catalog_fp: &str) -> crate::proc::GatewayHealth {
@@ -285,6 +373,171 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
 }
 
 #[test]
+fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_matrix() {
+    let expected_binary = std::env::current_exe().unwrap().canonicalize().unwrap();
+
+    let (signal_dir, signal_journal) = r0_interrupted_recovery_fixture("signal-failure");
+    let (mut signal_child, signal_port, _) =
+        spawn_r0_recovery_listener(&signal_dir, "signal-failure", "retry");
+    let signal_pid = signal_child.0.id();
+    let signal_rechecks = std::cell::Cell::new(0);
+    let signal_attempts = std::cell::Cell::new(0);
+    let signal_outcome = std::cell::Cell::new(None);
+    let signal_result = finish_interrupted_gateway_recovery(&signal_dir, &signal_journal, || {
+        let outcome = stop_managed_gateway_on_port_with(
+            signal_port,
+            &expected_binary,
+            || {
+                signal_rechecks.set(signal_rechecks.get() + 1);
+                true
+            },
+            |pid| {
+                signal_attempts.set(signal_attempts.get() + 1);
+                assert_eq!(pid, signal_pid);
+                assert_r0_recovery_stage(&signal_dir, &signal_journal);
+                Err(())
+            },
+        );
+        signal_outcome.set(Some(outcome));
+        outcome
+    });
+    assert_eq!(signal_rechecks.get(), 1);
+    assert_eq!(signal_attempts.get(), 1);
+    assert_eq!(
+        signal_outcome.get(),
+        Some(ManagedGatewayCleanup::StopFailed(signal_pid))
+    );
+    assert!(signal_result
+        .as_ref()
+        .is_err_and(|error| error.contains("安全停止失败")));
+    assert_r0_recovery_stage(&signal_dir, &signal_journal);
+    assert!(
+        signal_child.try_wait().unwrap().is_none(),
+        "injected signal failure must leave the exact controlled listener alive"
+    );
+    signal_child.stop().unwrap();
+    fs::remove_dir_all(signal_dir).unwrap();
+
+    let (retry_dir, retry_journal) = r0_interrupted_recovery_fixture("wait-retry");
+    let (mut retry_child, retry_port, allow_retry_exit) =
+        spawn_r0_recovery_listener(&retry_dir, "wait-retry", "retry");
+    let retry_pid = retry_child.0.id();
+    let first_rechecks = std::cell::Cell::new(0);
+    let first_outcome = std::cell::Cell::new(None);
+    let first_result = finish_interrupted_gateway_recovery(&retry_dir, &retry_journal, || {
+        let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
+            first_rechecks.set(first_rechecks.get() + 1);
+            true
+        });
+        first_outcome.set(Some(outcome));
+        outcome
+    });
+    assert_eq!(first_rechecks.get(), 1);
+    assert_eq!(
+        first_outcome.get(),
+        Some(ManagedGatewayCleanup::StopFailed(retry_pid)),
+        "a listener that ignores the first TERM must exhaust the production wait budget"
+    );
+    assert!(first_result.is_err());
+    assert_r0_recovery_stage(&retry_dir, &retry_journal);
+    assert!(retry_child.try_wait().unwrap().is_none());
+
+    let refused_rechecks = std::cell::Cell::new(0);
+    let refused_outcome = std::cell::Cell::new(None);
+    let refused_result = finish_interrupted_gateway_recovery(&retry_dir, &retry_journal, || {
+        let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
+            refused_rechecks.set(refused_rechecks.get() + 1);
+            false
+        });
+        refused_outcome.set(Some(outcome));
+        outcome
+    });
+    assert_eq!(refused_rechecks.get(), 1);
+    assert_eq!(
+        refused_outcome.get(),
+        Some(ManagedGatewayCleanup::NotManaged)
+    );
+    assert!(refused_result
+        .as_ref()
+        .is_err_and(|error| error.contains("未通过精确 Gateway binary/uid/PID 复核")));
+    assert!(retry_child.try_wait().unwrap().is_none());
+    assert_r0_recovery_stage(&retry_dir, &retry_journal);
+
+    fs::write(&allow_retry_exit, b"allow\n").unwrap();
+    let accepted_rechecks = std::cell::Cell::new(0);
+    let accepted_outcome = std::cell::Cell::new(None);
+    let accepted_result = finish_interrupted_gateway_recovery(&retry_dir, &retry_journal, || {
+        let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
+            accepted_rechecks.set(accepted_rechecks.get() + 1);
+            true
+        });
+        accepted_outcome.set(Some(outcome));
+        outcome
+    });
+    assert_eq!(accepted_rechecks.get(), 1);
+    assert_eq!(
+        accepted_outcome.get(),
+        Some(ManagedGatewayCleanup::Stopped(retry_pid))
+    );
+    assert!(accepted_result.is_ok());
+    assert_r0_recovery_stage(&retry_dir, &retry_journal);
+    retry_child.stop().unwrap();
+    fs::remove_dir_all(retry_dir).unwrap();
+
+    let (late_dir, late_journal) = r0_interrupted_recovery_fixture("late-exit");
+    let (mut late_child, late_port, allow_late_exit) =
+        spawn_r0_recovery_listener(&late_dir, "late-exit", "late");
+    let late_pid = late_child.0.id();
+    let late_outcome = std::cell::Cell::new(None);
+    let late_result = finish_interrupted_gateway_recovery(&late_dir, &late_journal, || {
+        let outcome = super::stop_managed_gateway_on_port(late_port, &expected_binary, || true);
+        late_outcome.set(Some(outcome));
+        outcome
+    });
+    assert_eq!(
+        late_outcome.get(),
+        Some(ManagedGatewayCleanup::StopFailed(late_pid)),
+        "the controlled late exit must occur after the production wait budget"
+    );
+    assert!(late_result.is_err());
+    assert_r0_recovery_stage(&late_dir, &late_journal);
+
+    fs::write(&allow_late_exit, b"allow\n").unwrap();
+    let mut late_exit_observed = false;
+    for _ in 0..100 {
+        if late_child.try_wait().unwrap().is_some() {
+            late_exit_observed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        late_exit_observed,
+        "the controlled Gateway must exit shortly after the timeout result"
+    );
+
+    let late_retry_rechecks = std::cell::Cell::new(0);
+    let late_retry_outcome = std::cell::Cell::new(None);
+    let late_retry_result = finish_interrupted_gateway_recovery(&late_dir, &late_journal, || {
+        let outcome = super::stop_managed_gateway_on_port(late_port, &expected_binary, || {
+            late_retry_rechecks.set(late_retry_rechecks.get() + 1);
+            true
+        });
+        late_retry_outcome.set(Some(outcome));
+        outcome
+    });
+    assert_eq!(late_retry_rechecks.get(), 0);
+    assert_eq!(
+        late_retry_outcome.get(),
+        Some(ManagedGatewayCleanup::NotManaged),
+        "retry after late exit must rediscover the absent listener instead of reusing StopFailed"
+    );
+    assert!(late_retry_result.is_err());
+    assert_r0_recovery_stage(&late_dir, &late_journal);
+    fs::remove_dir_all(late_dir).unwrap();
+}
+
+#[test]
 #[ignore = "explicit Acceptance-boundary interrupted-recovery identity recheck listener; test binary, temp state, and dynamic loopback only"]
 fn isolated_r0_interrupted_recovery_identity_recheck_listener() {
     let port = std::env::var("CSSWITCH_TEST_R0_RECOVERY_PORT")
@@ -294,8 +547,32 @@ fn isolated_r0_interrupted_recovery_identity_recheck_listener() {
     let ready = std::env::var_os("CSSWITCH_TEST_R0_RECOVERY_READY").unwrap();
     let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
     fs::write(ready, b"ready\n").unwrap();
+    let mode = std::env::var("CSSWITCH_TEST_R0_RECOVERY_MODE").unwrap_or_default();
+    let allow_exit =
+        std::env::var_os("CSSWITCH_TEST_R0_RECOVERY_ALLOW_EXIT").map(std::path::PathBuf::from);
+    if !mode.is_empty() {
+        R0_RECOVERY_TERM_OBSERVED.store(false, Ordering::SeqCst);
+        unsafe {
+            libc::signal(
+                libc::SIGTERM,
+                observe_r0_recovery_term as *const () as libc::sighandler_t,
+            );
+        }
+    }
+    let mut late_exit_armed = false;
     loop {
-        thread::sleep(std::time::Duration::from_secs(60));
+        if R0_RECOVERY_TERM_OBSERVED.swap(false, Ordering::SeqCst) {
+            match mode.as_str() {
+                "retry" if allow_exit.as_ref().is_some_and(|path| path.is_file()) => return,
+                "late" => late_exit_armed = true,
+                "retry" => {}
+                other => panic!("unexpected recovery listener mode: {other}"),
+            }
+        }
+        if late_exit_armed && allow_exit.as_ref().is_some_and(|path| path.is_file()) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }
 

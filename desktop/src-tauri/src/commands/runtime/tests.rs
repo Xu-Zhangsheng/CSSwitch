@@ -3002,6 +3002,14 @@ fn r0_one_click_post_receipt_failure_restores_prior_runtime() {
 }
 
 #[test]
+fn r0_one_click_cold_start_commits_runtime_and_receipts() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
+        &[("CSSWITCH_TEST_R0_COLD_START_ONLY", "1")],
+    );
+}
+
+#[test]
 #[ignore = "explicit Acceptance-boundary prior Science rollback; temp HOME, managed fake Science, and loopback only"]
 fn isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3834,6 +3842,142 @@ fn r0_history_restore_rotates_all_references_only_after_success() {
 }
 
 #[test]
+fn r0_one_click_history_attention_commits_choice_session_without_starting_science() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_one_click_history_attention",
+        &[],
+    );
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary one-click history attention; temp HOME, production one-click IPC, fake Science identity, and dynamic loopback only"]
+fn isolated_r0_one_click_history_attention() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let tmp = tmpdir("r0-one-click-history-attention");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
+    let mock_upstream = start_mock_upstream();
+    let mut port_reservations = reserve_ssh_fixture_ports();
+    let proxy_port = port_reservations.proxy_port;
+    let sandbox_port = port_reservations.sandbox_port;
+    let science_call_log = tmp.join("science-call.log");
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("SCIENCE_BIN", &fake_science);
+    env_guard.set("CSSWITCH_FAKE_SCIENCE_CALL_LOG", &science_call_log);
+    env_guard.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set(
+        "PATH",
+        format!(
+            "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            bin_dir.to_string_lossy()
+        ),
+    );
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    cfg.runtime_binding = None;
+    cfg.runtime_transaction = None;
+    config::save_to(&config_dir, &cfg).unwrap();
+    let sandbox_home = config_dir.join("sandbox").join("home");
+    let science_data = sandbox_home.join(".claude-science");
+    fs::create_dir_all(&science_data).unwrap();
+    let (forged, _) = crate::oauth_forge::ensure_virtual_login(
+        &science_data,
+        "virtual@localhost.invalid",
+        &sandbox_home,
+    )
+    .unwrap();
+    for org in [
+        "33333333-3333-4333-8333-333333333333",
+        "44444444-4444-4444-8444-444444444444",
+    ] {
+        fs::create_dir_all(science_data.join("orgs").join(org)).unwrap();
+    }
+    fs::remove_file(&forged.enc_file).unwrap();
+    fs::remove_file(science_data.join("active-org.json")).unwrap();
+    let marker = config_dir
+        .join("sandbox")
+        .join("state")
+        .join("virtual-org.v1.json");
+    fs::remove_file(&marker).unwrap();
+
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle)
+        .invoke_handler(tauri::generate_handler![super::one_click_login])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    port_reservations.release_one_click_ports();
+    let attention = invoke_json(
+        &webview,
+        "one_click_login",
+        serde_json::json!({"runtimeChoice": null}),
+    )
+    .unwrap();
+    let returned_references = attention["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|choice| choice["reference"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let (session_references, stopped_runtime, runtime_absent, child_absent) = {
+        let authority = lock(&state);
+        (
+            authority
+                .history_recovery
+                .as_ref()
+                .expect("production one-click must commit the history choice session")
+                .choices
+                .iter()
+                .map(|choice| choice.reference.clone())
+                .collect::<Vec<_>>(),
+            authority.science_confirmed_stopped.clone(),
+            authority.science_runtime.is_none(),
+            authority.sandbox.is_none(),
+        )
+    };
+    let after = config::load_from(&config_dir).unwrap();
+    assert_eq!(attention["status"], "attention");
+    assert_eq!(attention["action"], "history_choice_required");
+    assert_eq!(attention["stage"], "history_recovery");
+    assert_eq!(returned_references.len(), 2);
+    assert_eq!(session_references, returned_references);
+    assert!(stopped_runtime.is_some());
+    assert!(runtime_absent && child_absent);
+    assert!(lock(&state).proxy.is_none());
+    assert!(listener_pid_if_unique(sandbox_port).is_none());
+    assert!(!config_dir.join("science-managed-launch.v1.json").exists());
+    assert!(after.runtime_binding.is_none());
+    assert!(after.runtime_transaction.is_none());
+    assert!(
+        !fs::read_to_string(&science_call_log)
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line == "serve"),
+        "history attention must stop before Science launch"
+    );
+    assert!(!marker.exists());
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
 #[ignore = "explicit Acceptance-boundary history restore command contract; temp HOME, managed fake Science, and loopback only"]
 fn isolated_r0_history_restore_command_contract() {
     let oracle =
@@ -4133,6 +4277,14 @@ fn r0_healthy_reopen_existing_marker_is_read_only() {
 }
 
 #[test]
+fn r0_healthy_reopen_missing_marker_bootstraps_without_credential_mutation() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
+        &[("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE", "marker-bootstrap-success")],
+    );
+}
+
+#[test]
 fn r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
@@ -4160,6 +4312,40 @@ fn r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect() {
 fn r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait",
+        &[],
+    );
+}
+
+#[test]
+fn r0_start_gateway_only_success_matrix_freezes_role_science_and_action() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_start_gateway_only_success_matrix",
+        &[],
+    );
+}
+
+#[test]
+fn r0_start_gateway_only_failure_matrix_preserves_current_partial_effects() {
+    for oracle in ["spawn-error", "health-failure"] {
+        run_exact_ignored_runtime_characterization(
+            "commands::runtime::tests::isolated_r0_start_gateway_only_failure_matrix",
+            &[("CSSWITCH_TEST_R0_START_GATEWAY_FAILURE", oracle)],
+        );
+    }
+}
+
+#[test]
+fn r0_start_gateway_only_reloads_selected_profile_after_serializer_wait() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_start_gateway_only_serializer_recheck",
+        &[],
+    );
+}
+
+#[test]
+fn r0_start_gateway_only_remembered_science_context_is_lost_on_cold_restore() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_start_gateway_only_remembered_context_loss",
         &[],
     );
 }
@@ -4255,13 +4441,733 @@ exit 23
 }
 
 #[test]
+#[ignore = "explicit Acceptance-boundary registered start_proxy success matrix; temp HOME, managed fake Science, real local Gateway, and dynamic loopback only"]
+fn isolated_r0_start_gateway_only_success_matrix() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let tmp = tmpdir("r0-start-gateway-success-matrix");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
+    let mock_upstream = start_mock_upstream();
+    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let publish_log = tmp.join("gateway-publish.log");
+    fs::write(&publish_log, b"").unwrap();
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("SCIENCE_BIN", &fake_science);
+    env_guard.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set("CSSWITCH_TEST_GATEWAY_PUBLISH_LOG", &publish_log);
+    env_guard.set(
+        "PATH",
+        format!(
+            "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            bin_dir.to_string_lossy()
+        ),
+    );
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    cfg.secret = config::new_id();
+    let applied_profile_id = cfg.active_id.clone();
+    let mut selected_profile = cfg.active_profile().unwrap().clone();
+    selected_profile.id = "r0-selected-profile".into();
+    selected_profile.name = "R0 selected profile".into();
+    selected_profile.api_key = "r0-selected-profile-fake-key-never-log".into();
+    cfg.profiles.push(selected_profile.clone());
+    let binding = config::RuntimeBindingCommit {
+        profile_id: applied_profile_id.clone(),
+        route_fp: "r0-applied-route".into(),
+        catalog_fp: "r0-applied-catalog".into(),
+        binding_fp: "r0-applied-binding".into(),
+    };
+    let journal = config::RuntimeTransactionJournal {
+        transaction_id: "r0-start-gateway-success-prior-journal".into(),
+        target_profile_id: applied_profile_id.clone(),
+        stage: "r0-prior-stage".into(),
+        previous_binding: Some(binding.clone()),
+        previous_gateway: None,
+    };
+    cfg.runtime_binding = Some(binding.clone());
+    cfg.runtime_transaction = Some(journal.clone());
+    config::save_to(&config_dir, &cfg).unwrap();
+
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle.clone())
+        .invoke_handler(tauri::generate_handler![super::start_proxy])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let handle = app.handle().clone();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let cleanup = RuntimeSmokeCleanup::new(
+        handle.clone(),
+        state.clone(),
+        tmp.clone(),
+        sandbox_port,
+        proxy_port,
+    );
+
+    let first = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+    assert_eq!(first["port"], proxy_port);
+    wait_http_health(proxy_port);
+    let first_pid = lock(&state).proxy.as_ref().unwrap().id();
+    let first_launch_id = lock(&state).launch_id.clone();
+    let first_bridge_key = fs::read(config_dir.join("runtime/skill-install-bridge.key")).unwrap();
+    let first_publish_count = fs::read_to_string(&publish_log).unwrap().lines().count();
+    let after_first = config::load_from(&config_dir).unwrap();
+    assert_eq!(after_first.runtime_binding, Some(binding.clone()));
+    assert_eq!(after_first.runtime_transaction, Some(journal.clone()));
+
+    let reused = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+    assert_eq!(reused["port"], proxy_port);
+    let reused_pid = lock(&state).proxy.as_ref().unwrap().id();
+    assert_eq!(
+        reused_pid, first_pid,
+        "healthy matching Gateway must be reused"
+    );
+    assert_eq!(lock(&state).launch_id, first_launch_id);
+    assert_eq!(
+        fs::read(config_dir.join("runtime/skill-install-bridge.key")).unwrap(),
+        first_bridge_key,
+        "reuse must not rotate the bridge key"
+    );
+    assert_eq!(
+        fs::read_to_string(&publish_log).unwrap().lines().count(),
+        first_publish_count,
+        "reuse must not publish a second child"
+    );
+
+    let sandbox_home = home
+        .join(config::CONFIG_DIR_NAME)
+        .join("sandbox")
+        .join("home");
+    let science_data = sandbox_home.join(".claude-science");
+    fs::create_dir_all(&science_data).unwrap();
+    let prior_runtime =
+        science::select_science_runtime_cached(None, &science::ScienceVersionCache::default())
+            .unwrap();
+    let science_pid = start_managed_fake_science(
+        &fake_science,
+        &sandbox_home,
+        &science_data,
+        sandbox_port,
+        &prior_runtime,
+    );
+    wait_http_health(sandbox_port);
+    {
+        let mut authority = lock(&state);
+        authority.sandbox_port = sandbox_port;
+        authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}/prior"));
+        authority.science_runtime = Some(prior_runtime.clone());
+        authority.science_confirmed_stopped = None;
+    }
+
+    let restarted = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+    assert_eq!(restarted["port"], proxy_port);
+    wait_http_health(proxy_port);
+    let running_science_pid = listener_pid_if_unique(sandbox_port);
+    let restarted_pid = lock(&state).proxy.as_ref().unwrap().id();
+    let restarted_bridge_key =
+        fs::read(config_dir.join("runtime/skill-install-bridge.key")).unwrap();
+    assert_ne!(
+        restarted_pid, first_pid,
+        "effective Science context must restart Gateway"
+    );
+    assert_ne!(
+        restarted_bridge_key, first_bridge_key,
+        "restart must rotate bridge key"
+    );
+    assert_eq!(running_science_pid, Some(science_pid));
+    assert_eq!(lock(&state).science_runtime, Some(prior_runtime.clone()));
+    assert!(
+        lock(&state)
+            .gateway_launch_context
+            .as_ref()
+            .is_some_and(|context| context.profile.id == applied_profile_id
+                && context.science_runtime.is_none()),
+        "registered start_proxy must retain the selected profile but persist recipe science_runtime=None"
+    );
+
+    config::update(&config_dir, |current| {
+        current.active_id = selected_profile.id.clone();
+    })
+    .unwrap();
+    let before_selected_mismatch = config::load_from(&config_dir).unwrap();
+    let mismatch = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+    assert_eq!(mismatch["port"], proxy_port);
+    wait_http_health(proxy_port);
+    let mismatch_pid = lock(&state).proxy.as_ref().unwrap().id();
+    let after_selected_mismatch = config::load_from(&config_dir).unwrap();
+    assert_ne!(
+        mismatch_pid, restarted_pid,
+        "selected!=applied must replace the live Gateway"
+    );
+    assert_eq!(after_selected_mismatch.active_id, selected_profile.id);
+    assert_eq!(
+        after_selected_mismatch.runtime_binding,
+        before_selected_mismatch.runtime_binding
+    );
+    assert_eq!(
+        after_selected_mismatch.runtime_transaction,
+        before_selected_mismatch.runtime_transaction
+    );
+    assert_eq!(listener_pid_if_unique(sandbox_port), Some(science_pid));
+    assert_eq!(lock(&state).science_runtime, Some(prior_runtime));
+    assert!(lock(&state)
+        .gateway_launch_context
+        .as_ref()
+        .is_some_and(|context| context.profile.id == "r0-selected-profile"
+            && context.science_runtime.is_none()));
+    assert_eq!(
+        fs::read_to_string(&publish_log).unwrap().lines().count(),
+        first_publish_count + 2,
+        "matrix must publish initial spawn plus Science-context and selected-profile restarts"
+    );
+
+    cleanup
+        .finish()
+        .expect("success matrix fixtures must cleanly stop");
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary registered start_proxy failure matrix; temp HOME, controlled fake Gateway, retained fake Science child, and dynamic loopback only"]
+fn isolated_r0_start_gateway_only_failure_matrix() {
+    let oracle = env::var("CSSWITCH_TEST_R0_START_GATEWAY_FAILURE").unwrap();
+    assert!(matches!(oracle.as_str(), "spawn-error" | "health-failure"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let tmp = tmpdir(&format!("r0-start-gateway-{oracle}"));
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    let failing_gateway = bin_dir.join(format!("csswitch-gateway-{oracle}"));
+    if oracle == "spawn-error" {
+        fs::write(&failing_gateway, b"not an executable image\n").unwrap();
+        fs::set_permissions(&failing_gateway, fs::Permissions::from_mode(0o700)).unwrap();
+    } else {
+        write_executable(
+            &failing_gateway,
+            r#"#!/bin/sh
+exit 23
+"#,
+        );
+    }
+    let mock_upstream = start_mock_upstream();
+    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let publish_log = tmp.join("gateway-publish.log");
+    fs::write(&publish_log, b"").unwrap();
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set("CSSWITCH_TEST_GATEWAY_PUBLISH_LOG", &publish_log);
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    let applied_profile_id = cfg.active_id.clone();
+    let mut selected_profile = cfg.active_profile().unwrap().clone();
+    selected_profile.id = "r0-failure-selected".into();
+    selected_profile.name = "R0 failure selected".into();
+    selected_profile.api_key = "r0-failure-selected-fake-key-never-log".into();
+    cfg.profiles.push(selected_profile.clone());
+    let binding = config::RuntimeBindingCommit {
+        profile_id: applied_profile_id.clone(),
+        route_fp: "failure-applied-route".into(),
+        catalog_fp: "failure-applied-catalog".into(),
+        binding_fp: "failure-applied-binding".into(),
+    };
+    let journal = config::RuntimeTransactionJournal {
+        transaction_id: format!("r0-start-gateway-{oracle}-journal"),
+        target_profile_id: applied_profile_id,
+        stage: "failure-prior-stage".into(),
+        previous_binding: Some(binding.clone()),
+        previous_gateway: None,
+    };
+    cfg.runtime_binding = Some(binding.clone());
+    cfg.runtime_transaction = Some(journal.clone());
+    if oracle == "spawn-error" {
+        cfg.secret.clear();
+    } else {
+        cfg.secret = config::new_id();
+    }
+    config::save_to(&config_dir, &cfg).unwrap();
+
+    let science_child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let science_pid = science_child.id();
+    let mut authority = AppState::default();
+    authority.sandbox = Some(science_child);
+    authority.sandbox_port = sandbox_port;
+    authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}"));
+    let state: SharedAppState = Arc::new(Mutex::new(authority));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle.clone())
+        .invoke_handler(tauri::generate_handler![super::start_proxy])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let mut prior_pid = None;
+    let mut prior_key = None;
+    if oracle == "health-failure" {
+        let real_gateway = proxy_lifecycle::gateway_bin_path(app.handle()).unwrap();
+        env_guard.set("CSSWITCH_GATEWAY_BIN", &real_gateway);
+        invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+        wait_http_health(proxy_port);
+        prior_pid = lock(&state).proxy.as_ref().map(std::process::Child::id);
+        prior_key = Some(fs::read(config_dir.join("runtime/skill-install-bridge.key")).unwrap());
+        config::update(&config_dir, |current| {
+            current.active_id = selected_profile.id.clone();
+        })
+        .unwrap();
+    }
+    env_guard.set("CSSWITCH_GATEWAY_BIN", &failing_gateway);
+    let before_failure = config::load_from(&config_dir).unwrap();
+    let failure = invoke_json(&webview, "start_proxy", serde_json::json!({}));
+    assert!(
+        failure.is_err(),
+        "{oracle} must surface a command error: {failure:?}"
+    );
+
+    let after_failure = config::load_from(&config_dir).unwrap();
+    let bridge_key = fs::read(config_dir.join("runtime/skill-install-bridge.key")).unwrap();
+    assert_eq!(
+        after_failure.runtime_binding,
+        before_failure.runtime_binding
+    );
+    assert_eq!(
+        after_failure.runtime_transaction,
+        before_failure.runtime_transaction
+    );
+    assert!(lock(&state).proxy.is_none());
+    {
+        let mut current = lock(&state);
+        let child = current
+            .sandbox
+            .as_mut()
+            .expect("Science child must be retained");
+        assert_eq!(child.id(), science_pid);
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        current.sandbox = None;
+    }
+    if oracle == "spawn-error" {
+        assert!(before_failure.secret.is_empty());
+        assert!(
+            !after_failure.secret.is_empty(),
+            "empty secret must remain durably generated"
+        );
+        assert!(
+            !bridge_key.is_empty(),
+            "bridge key first write must precede spawn error"
+        );
+        assert_eq!(fs::read_to_string(&publish_log).unwrap().lines().count(), 0);
+    } else {
+        assert_eq!(after_failure.secret, before_failure.secret);
+        assert_ne!(
+            Some(bridge_key),
+            prior_key,
+            "failed replacement must leave rotated bridge key"
+        );
+        assert!(prior_pid.is_some_and(|pid| process_start_identity_if_alive(pid).is_none()));
+        assert_eq!(
+            fs::read_to_string(&publish_log).unwrap().lines().count(),
+            1,
+            "only the prior healthy Gateway may have been published"
+        );
+    }
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary registered start_proxy serializer recheck; temp HOME, fake Codex auth, and dynamic loopback only"]
+fn isolated_r0_start_gateway_only_serializer_recheck() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let tmp = tmpdir("r0-start-gateway-serializer-recheck");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    let mock_upstream = start_mock_upstream();
+    let (proxy_port, sandbox_port) = ssh_fixture_ports();
+    let auth_log = tmp.join("codex-auth.log");
+    let publish_log = tmp.join("gateway-publish.log");
+    fs::write(&auth_log, b"").unwrap();
+    fs::write(&publish_log, b"").unwrap();
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set("CSSWITCH_TEST_GATEWAY_PUBLISH_LOG", &publish_log);
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    let selected_after_wait = cfg.active_id.clone();
+    cfg.experimental_codex_enabled = true;
+    cfg.secret = config::new_id();
+    cfg.profiles.push(Profile {
+        id: "r0-serializer-codex".into(),
+        name: "R0 serializer Codex".into(),
+        template_id: "codex".into(),
+        category: "experimental".into(),
+        api_format: "openai_responses".into(),
+        credential_source: crate::provider_contracts::CredentialSource::CsswitchOauth,
+        credential_ref: Some("csswitch:codex:default".into()),
+        model_policy: crate::provider_contracts::ModelPolicy::DynamicCatalog,
+        ..Default::default()
+    });
+    cfg.active_id = "r0-serializer-codex".into();
+    let binding = config::RuntimeBindingCommit {
+        profile_id: "r0-applied-before-serializer".into(),
+        route_fp: "serializer-route".into(),
+        catalog_fp: "serializer-catalog".into(),
+        binding_fp: "serializer-binding".into(),
+    };
+    let journal = config::RuntimeTransactionJournal {
+        transaction_id: "r0-start-gateway-serializer-journal".into(),
+        target_profile_id: binding.profile_id.clone(),
+        stage: "serializer-prior-stage".into(),
+        previous_binding: Some(binding.clone()),
+        previous_gateway: None,
+    };
+    cfg.runtime_binding = Some(binding.clone());
+    cfg.runtime_transaction = Some(journal.clone());
+    config::save_to(&config_dir, &cfg).unwrap();
+
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let supervisor = Arc::new(crate::codex_auth_supervisor::CodexAuthSupervisor::default());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle.clone())
+        .manage(supervisor)
+        .invoke_handler(tauri::generate_handler![super::start_proxy])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let handle = app.handle().clone();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let real_gateway = proxy_lifecycle::gateway_bin_path(&handle).unwrap();
+    let gateway_wrapper = bin_dir.join("csswitch-gateway-r0-serializer-wrapper");
+    write_executable(
+        &gateway_wrapper,
+        &format!(
+            r#"#!/bin/sh
+printf '%s %s\n' "$1" "$2" >> '{}'
+if [ "$1" = "codex-auth" ] && [ "$2" = "status" ]; then
+  printf '%s\n' '{{"schema_version":3,"ok":true,"command":"status","status":{{"authenticated":true,"reason":"ready","account_hash":"abababababababababababababababab","expiry_state":"valid","expires_at":2000000000,"auth_epoch":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","auth_generation":1}}}}'
+  exit 0
+fi
+exec '{}' "$@"
+"#,
+            auth_log.display(),
+            real_gateway.display()
+        ),
+    );
+    env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway_wrapper);
+
+    let worker_webview = webview.clone();
+    let auth_log_wait = auth_log.clone();
+    let config_dir_drift = config_dir.clone();
+    let (worker, preflight_seen) = lifecycle.with_serialized(|| {
+        let worker = thread::spawn(move || {
+            invoke_json(&worker_webview, "start_proxy", serde_json::json!({}))
+        });
+        let mut seen = false;
+        for _ in 0..200 {
+            if fs::read_to_string(&auth_log_wait)
+                .unwrap_or_default()
+                .lines()
+                .any(|line| line == "codex-auth status")
+            {
+                seen = true;
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let mut drifted = config::load_from(&config_dir_drift).unwrap();
+        drifted.active_id = selected_after_wait.clone();
+        config::save_to(&config_dir_drift, &drifted).unwrap();
+        (worker, seen)
+    });
+    let response = worker.join().unwrap();
+    let surface = response
+        .as_ref()
+        .map(serde_json::Value::to_string)
+        .unwrap_or_else(|error| error.clone());
+    let after = config::load_from(&config_dir).unwrap();
+    assert!(
+        preflight_seen,
+        "Codex proof must be prepared before the serializer wait"
+    );
+    assert!(
+        response.is_err() && surface.contains("config_changed_retry"),
+        "selected profile drift must be rejected before ensure_proxy: {response:?}"
+    );
+    assert_eq!(after.active_id, selected_after_wait);
+    assert_eq!(after.runtime_binding, Some(binding));
+    assert_eq!(after.runtime_transaction, Some(journal));
+    assert!(lock(&state).proxy.is_none());
+    assert!(fs::read_to_string(&publish_log).unwrap().is_empty());
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+#[ignore = "explicit Acceptance-boundary registered start_proxy remembered Science context rollback; temp HOME, managed fake Science, real local Gateway, and dynamic loopback only"]
+fn isolated_r0_start_gateway_only_remembered_context_loss() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let tmp = tmpdir("r0-start-gateway-remembered-context-loss");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    let fake_science = write_test_bins(&bin_dir).canonicalize().unwrap();
+    let mock_upstream = start_mock_upstream();
+    let mut port_reservations = reserve_ssh_fixture_ports();
+    let proxy_port = port_reservations.proxy_port;
+    let sandbox_port = port_reservations.sandbox_port;
+    let gateway_context_log = tmp.join("gateway-science-context.log");
+    let candidate_pid_log = tmp.join("candidate-science.pid");
+    fs::write(&gateway_context_log, b"").unwrap();
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("SCIENCE_BIN", &fake_science);
+    env_guard.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    env_guard.set(
+        "PATH",
+        format!(
+            "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            bin_dir.to_string_lossy()
+        ),
+    );
+
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    cfg.secret = config::new_id();
+    cfg.runtime_binding = None;
+    cfg.runtime_transaction = None;
+    config::save_to(&config_dir, &cfg).unwrap();
+    let config_before = config::load_from(&config_dir).unwrap();
+    let sandbox_home = home
+        .join(config::CONFIG_DIR_NAME)
+        .join("sandbox")
+        .join("home");
+    let science_data = sandbox_home.join(".claude-science");
+    fs::create_dir_all(&science_data).unwrap();
+    crate::oauth_forge::ensure_virtual_login(
+        &science_data,
+        "virtual@localhost.invalid",
+        &sandbox_home,
+    )
+    .unwrap();
+    let prior_runtime =
+        science::select_science_runtime_cached(None, &science::ScienceVersionCache::default())
+            .unwrap();
+    port_reservations.release_sandbox();
+    let prior_science_pid = start_managed_fake_science(
+        &fake_science,
+        &sandbox_home,
+        &science_data,
+        sandbox_port,
+        &prior_runtime,
+    );
+    wait_http_health(sandbox_port);
+
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    {
+        let mut authority = lock(&state);
+        authority.sandbox_port = sandbox_port;
+        authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}/prior"));
+        authority.science_runtime = Some(prior_runtime.clone());
+        authority.science_confirmed_stopped = None;
+    }
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle.clone())
+        .invoke_handler(tauri::generate_handler![
+            super::start_proxy,
+            super::one_click_login
+        ])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let handle = app.handle().clone();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let real_gateway = proxy_lifecycle::gateway_bin_path(&handle).unwrap();
+    let gateway_wrapper = bin_dir.join("csswitch-gateway-context-wrapper");
+    write_executable(
+        &gateway_wrapper,
+        &format!(
+            r#"#!/bin/sh
+if [ -n "${{CSSWITCH_SCIENCE_HOST_CONTEXT:-}}" ]; then
+  printf '%s\n' present >> '{}'
+else
+  printf '%s\n' absent >> '{}'
+fi
+exec '{}' "$@"
+"#,
+            gateway_context_log.display(),
+            gateway_context_log.display(),
+            real_gateway.display()
+        ),
+    );
+    env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway_wrapper);
+    port_reservations.release_proxy();
+
+    let started = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+    assert_eq!(started["port"], proxy_port);
+    wait_http_health(proxy_port);
+    let prior_gateway_pid = lock(&state).proxy.as_ref().unwrap().id();
+    let prior_gateway_health = crate::proc::http_gateway_health(
+        proxy_port,
+        Some(&lock(&state).secret),
+        crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(&gateway_context_log)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["present"],
+        "registered start_proxy must derive host context from healthy remembered Science"
+    );
+    assert!(
+        lock(&state)
+            .gateway_launch_context
+            .as_ref()
+            .is_some_and(|context| context.science_runtime.is_none()),
+        "registered start_proxy must persist recipe science_runtime=None"
+    );
+
+    science::test_reset_managed_launch_commit_failure_once();
+    env_guard.set("CSSWITCH_TEST_MANAGED_LAUNCH_COMMIT_FAILURE_ONCE", "1");
+    env_guard.set(
+        "CSSWITCH_TEST_MANAGED_LAUNCH_FAILURE_PID_LOG",
+        &candidate_pid_log,
+    );
+    port_reservations.release_one_click_ports();
+    let failed = invoke_json(
+        &webview,
+        "one_click_login",
+        serde_json::json!({"runtimeChoice": null}),
+    )
+    .unwrap();
+    let candidate_science_pid = fs::read_to_string(&candidate_pid_log)
+        .ok()
+        .and_then(|pid| pid.trim().parse::<u32>().ok());
+    let contexts = fs::read_to_string(&gateway_context_log)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let restored_gateway_pid = lock(&state).proxy.as_ref().map(std::process::Child::id);
+    let restored_health = crate::proc::http_gateway_health(
+        proxy_port,
+        Some(&lock(&state).secret),
+        crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+    );
+    let config_after = config::load_from(&config_dir).unwrap();
+    assert_eq!(
+        failed["status"], "error",
+        "cold one-click must reach the injected failure"
+    );
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("test-only managed launch commit failure")),
+        "fixture must fail after candidate Science listener identity: {failed:?}"
+    );
+    assert!(process_start_identity_if_alive(prior_science_pid).is_none());
+    assert!(candidate_science_pid.is_some_and(|pid| process_start_identity_if_alive(pid).is_none()));
+    assert!(restored_gateway_pid.is_some_and(|pid| pid != prior_gateway_pid));
+    // The cold candidate already has the prior profile but no Science context.
+    // Current compensation may therefore reuse that healthy child while restoring
+    // the prior route instead of spawning a third Gateway. In both cases the
+    // final tracked Gateway is the context-free child observed after `present`.
+    assert!(
+        contexts.len() >= 2
+            && contexts.first().is_some_and(|value| value == "present")
+            && contexts[1..].iter().all(|value| value == "absent"),
+        "the final compensated Gateway must be the child that lost remembered host context: {contexts:?}"
+    );
+    assert!(lock(&state)
+        .gateway_launch_context
+        .as_ref()
+        .is_some_and(|context| context.science_runtime.is_none()));
+    assert!(restored_health.as_ref().is_some_and(|health| {
+        health.provider == prior_gateway_health.provider
+            && health.provider_contract_id == prior_gateway_health.provider_contract_id
+            && health.provider_contract_digest == prior_gateway_health.provider_contract_digest
+            && health.catalog_fp == prior_gateway_health.catalog_fp
+            && health.intent == prior_gateway_health.intent
+    }));
+    assert_eq!(config_after.runtime_binding, config_before.runtime_binding);
+    assert_eq!(
+        config_after.runtime_transaction,
+        config_before.runtime_transaction
+    );
+    assert_eq!(lock(&state).science_runtime, Some(prior_runtime));
+
+    force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
+}
+
+#[test]
 #[ignore = "explicit Acceptance-boundary healthy reopen Gateway rollback; temp HOME, managed fake Science, real local Gateway, and loopback only"]
 fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
     let oracle = env::var("CSSWITCH_TEST_R0_HEALTHY_REOPEN_ORACLE")
         .unwrap_or_else(|_| "marker-late-failure".into());
     assert!(matches!(
         oracle.as_str(),
-        "existing-marker-success" | "marker-bootstrap-failure" | "marker-late-failure"
+        "existing-marker-success"
+            | "marker-bootstrap-success"
+            | "marker-bootstrap-failure"
+            | "marker-late-failure"
     ));
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -4534,6 +5440,25 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
                     && science_untouched
                     && safe_science_stop.is_ok(),
                 "existing-marker healthy reopen must reuse marker and credentials byte-for-byte without restarting Science: marker_present={}, credentials_unchanged={credentials_unchanged}, science_pid={prior_science_pid}, result={result:?}",
+                marker_after.is_some()
+            );
+        }
+        "marker-bootstrap-success" => {
+            assert!(
+                result.as_ref().is_ok_and(|value| {
+                    value["status"] == "ok" && value["action"] == "reopened"
+                }),
+                "healthy reopen must succeed after bootstrapping a missing marker: {result:?}"
+            );
+            assert!(
+                credentials_unchanged
+                    && marker_after.is_some()
+                    && tracked_gateway_running
+                    && tracked_gateway_pid != prior_gateway_pid
+                    && restored_gateway_health.is_some()
+                    && science_untouched
+                    && safe_science_stop.is_ok(),
+                "missing-marker healthy reopen must bootstrap a new marker, preserve credential bytes and Science, and publish the selected healthy Gateway: marker_present={}, credentials_unchanged={credentials_unchanged}, prior_gateway_pid={prior_gateway_pid:?}, tracked_gateway_pid={tracked_gateway_pid:?}, health={restored_gateway_health:?}, science_pid={prior_science_pid}, result={result:?}",
                 marker_after.is_some()
             );
         }
@@ -6074,6 +6999,69 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         fs::read_to_string(fake_state_dir.join("serve-count")).unwrap(),
         "1"
     );
+    let committed = config::load_from(&config_dir).unwrap();
+    let running_runtime = lock(&state)
+        .science_runtime
+        .clone()
+        .expect("cold start must publish the selected Science runtime");
+    let expected_binding = crate::runtime::provider::desired_runtime_binding(
+        &committed,
+        committed.active_profile().unwrap(),
+        &running_runtime,
+    )
+    .unwrap();
+    assert_eq!(committed.runtime_binding, Some(expected_binding));
+    assert!(
+        committed.runtime_transaction.is_none(),
+        "successful cold start must clear its transaction journal"
+    );
+    let (gateway_pid, gateway_secret, gateway_launch_id, gateway_context_committed) = {
+        let mut authority = lock(&state);
+        let gateway = authority
+            .proxy
+            .as_mut()
+            .expect("cold start must publish an owned Gateway child");
+        assert!(gateway.try_wait().unwrap().is_none());
+        (
+            gateway.id(),
+            authority.secret.clone(),
+            authority.launch_id.clone(),
+            authority
+                .gateway_launch_context
+                .as_ref()
+                .is_some_and(|context| {
+                    context.profile.id == "mock-relay"
+                        && context.science_runtime.as_ref() == Some(&running_runtime)
+                }),
+        )
+    };
+    assert!(gateway_context_committed);
+    let gateway_health = crate::proc::http_gateway_health(
+        proxy_port,
+        Some(&gateway_secret),
+        crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+    )
+    .expect("cold start Gateway receipt must resolve to managed health");
+    assert_eq!(gateway_health.launch_id, gateway_launch_id);
+    assert_eq!(listener_pid_if_unique(proxy_port), Some(gateway_pid));
+    assert!(config_dir
+        .join("runtime/skill-install-bridge.key")
+        .is_file());
+
+    let managed_launch_path = config_dir.join("science-managed-launch.v1.json");
+    let managed_launch: serde_json::Value =
+        serde_json::from_slice(&fs::read(&managed_launch_path).unwrap()).unwrap();
+    assert_eq!(managed_launch["port"], sandbox_port);
+    assert_eq!(
+        managed_launch["listener_pid"],
+        first_pid.trim().parse::<u32>().unwrap()
+    );
+    if env::var_os("CSSWITCH_TEST_R0_COLD_START_ONLY").is_some() {
+        cleanup
+            .finish()
+            .expect("focused cold-start fixture must cleanly stop");
+        return;
+    }
     assert_eq!(call_count(&science_call_log, "--version"), 1);
     assert_eq!(call_count(&science_call_log, "status"), 1);
     assert_eq!(call_count(&science_call_log, "url"), 2);
@@ -6105,7 +7093,6 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
     assert_eq!(call_count(&science_call_log, "url"), 3);
     assert_eq!(call_count(&route_config_log, "configure-third-party"), 1);
 
-    let managed_launch_path = config_dir.join("science-managed-launch.v1.json");
     let managed_launch_metadata = managed_launch_path
         .symlink_metadata()
         .expect("managed launch receipt should be committed after a verified start");
@@ -7502,6 +8489,14 @@ fn r0_set_settings_failure_points_preserve_stop_before_commit() {
 }
 
 #[test]
+fn r0_set_settings_stub_remove_failure_preserves_stop_before_commit() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
+        &[("CSSWITCH_TEST_R0_D_CASE", "set-settings-stub-remove")],
+    );
+}
+
+#[test]
 fn r0_stop_all_stops_gateway_even_when_science_stop_fails() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
@@ -7553,7 +8548,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
     assert!(
         matches!(
             requested.as_str(),
-            "set-mode" | "set-settings" | "stop-all" | "quit"
+            "set-mode" | "set-settings" | "set-settings-stub-remove" | "stop-all" | "quit"
         ),
         "unknown isolated R0-D case"
     );
@@ -7698,6 +8693,66 @@ fn isolated_r0_d_lifecycle_command_contract() {
         assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
         assert!(lock(&state).proxy.is_none());
         assert!(!r0_d_process_is_running(proxy_pid));
+    }
+
+    if requested == "set-settings-stub-remove" {
+        let home = root.join("settings-stub-remove-home");
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        let system_config = home.join(".ssh/config");
+        fs::write(&system_config, b"Host isolated-managed-host\n").unwrap();
+        fs::set_permissions(&system_config, fs::Permissions::from_mode(0o600)).unwrap();
+        let config_dir = r0_d_config(&home, free_port(), free_port());
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let sandbox_home = science::sandbox_home();
+        let science_data = sandbox_home.join(".claude-science");
+        fs::create_dir_all(&science_data).unwrap();
+        let science_config = science_data.join("config.toml");
+        let science_config_before = b"quiet_logs = true\n";
+        fs::write(&science_config, science_config_before).unwrap();
+        fs::set_permissions(&science_config, fs::Permissions::from_mode(0o600)).unwrap();
+        crate::runtime::ssh_bridge::prepare_science_ssh_bridge_for(&sandbox_home, &home).unwrap();
+        let bridge_state = science_data.join("csswitch-ssh-bridge.v1.json");
+        assert!(bridge_state.is_file());
+
+        let sandbox_ssh = sandbox_home.join(".ssh");
+        fs::create_dir_all(&sandbox_ssh).unwrap();
+        let sandbox_stub = sandbox_ssh.join("config");
+        let stub_bytes = format!(
+            "# CSSwitch managed system SSH config bridge v1\nInclude \"{}\"\n",
+            system_config.display()
+        )
+        .into_bytes();
+        fs::write(&sandbox_stub, &stub_bytes).unwrap();
+        fs::set_permissions(&sandbox_stub, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&sandbox_ssh, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let failed = super::lifecycle::set_settings_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle.clone(),
+            super::lifecycle::UiSettings {
+                proxy_port: free_port(),
+                sandbox_port: free_port(),
+                reuse_system_ssh: false,
+            },
+        )
+        .unwrap_err();
+        fs::set_permissions(&sandbox_ssh, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(failed.contains("撤销隔离 SSH config 失败"), "{failed}");
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_eq!(lifecycle.current_generation(), generation + 1);
+        assert!(lock(&state).proxy.is_none());
+        assert!(!r0_d_process_is_running(proxy_pid));
+        assert!(
+            !bridge_state.exists(),
+            "SSH bridge revoke must complete first"
+        );
+        assert_eq!(fs::read(&science_config).unwrap(), science_config_before);
+        assert_eq!(fs::read(&sandbox_stub).unwrap(), stub_bytes);
     }
 
     if requested == "stop-all" || requested == "quit" {

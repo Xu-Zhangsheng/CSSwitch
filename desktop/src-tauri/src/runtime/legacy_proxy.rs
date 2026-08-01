@@ -217,6 +217,26 @@ pub(crate) fn stop_managed_gateway_on_port<F>(
 where
     F: Fn() -> bool,
 {
+    stop_managed_gateway_on_port_with(port, expected_binary, health_still_matches, |pid| {
+        let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+}
+
+pub(crate) fn stop_managed_gateway_on_port_with<F, Signal>(
+    port: u16,
+    expected_binary: &Path,
+    health_still_matches: F,
+    signal_term: Signal,
+) -> ManagedGatewayCleanup
+where
+    F: Fn() -> bool,
+    Signal: FnOnce(u32) -> Result<(), ()>,
+{
     let Some(uid) = current_uid() else {
         return ManagedGatewayCleanup::NotManaged;
     };
@@ -244,10 +264,7 @@ where
     {
         return ManagedGatewayCleanup::NotManaged;
     }
-    let status = Command::new(system_tool("/bin/kill", "kill"))
-        .args(["-TERM", &pid.to_string()])
-        .status();
-    if !matches!(status, Ok(status) if status.success()) {
+    if signal_term(pid).is_err() {
         return ManagedGatewayCleanup::StopFailed(pid);
     }
     for _ in 0..40 {

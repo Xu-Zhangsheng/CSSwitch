@@ -246,42 +246,105 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let supervisor = app.state::<SharedCodexAuthSupervisor>().inner().clone();
+fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
+    app: &tauri::AppHandle<R>,
+    mut cancel_codex: Cancel,
+    mut wait_codex: Wait,
+    mut term_codex: Term,
+    mut kill_codex: Kill,
+    mut stop_science: StopScience,
+    mut stop_gateway: StopGateway,
+) where
+    R: tauri::Runtime,
+    Cancel: FnMut(),
+    Wait: FnMut(std::time::Duration) -> Vec<u32>,
+    Term: FnMut(u32),
+    Kill: FnMut(u32),
+    StopScience: FnMut(
+        &tauri::AppHandle<R>,
+        &mut AppState,
+        &runtime::science::ScienceRuntimeIdentity,
+    ) -> Result<(), String>,
+    StopGateway: FnMut(&mut AppState),
+{
     // First give login its protocol-level cancel path and read-only preflight
     // its cancellation token. Do not signal a possibly committing login child
     // until the bounded waiter has had a chance to reap it normally.
-    let _ = supervisor.cancel_for_exit();
-    let remaining = supervisor.wait_for_auth_children_exit(std::time::Duration::from_secs(2));
+    cancel_codex();
+    let remaining = wait_codex(std::time::Duration::from_secs(2));
     for pid in remaining {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        term_codex(pid);
     }
-    let remaining = supervisor.wait_for_auth_children_exit(std::time::Duration::from_millis(500));
+    let remaining = wait_codex(std::time::Duration::from_millis(500));
     for pid in remaining {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(pid as i32, libc::SIGKILL);
-        }
+        kill_codex(pid);
     }
-    let _ = supervisor.wait_for_auth_children_exit(std::time::Duration::from_millis(500));
+    let _ = wait_codex(std::time::Duration::from_millis(500));
     let state = app.state::<SharedAppState>().inner().clone();
     let lifecycle = app.state::<SharedLifecycle>().inner().clone();
     lifecycle.with_serialized(|| {
         let mut st = lock(&state);
         if let Some(runtime) = st.science_runtime.clone() {
-            let stop_result = {
-                let st = &mut *st;
-                stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, Some(&runtime))
-            };
+            let stop_result = stop_science(app, &mut st, &runtime);
             if stop_result.is_ok() {
                 st.science_runtime = None;
             }
         }
-        st.stop_proxy();
+        stop_gateway(&mut st);
     });
+}
+
+fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let supervisor = app.state::<SharedCodexAuthSupervisor>().inner().clone();
+    cleanup_for_exit_with(
+        app,
+        || {
+            let _ = supervisor.cancel_for_exit();
+        },
+        |timeout| supervisor.wait_for_auth_children_exit(timeout),
+        |pid| {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+        },
+        |pid| {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        },
+        |app, st, runtime| stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, Some(runtime)),
+        AppState::stop_proxy,
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeExitEvent {
+    ExitRequested,
+    Exit,
+}
+
+type NativeExitCleanup<R> = fn(&tauri::AppHandle<R>);
+
+fn production_native_exit_cleanup<R: tauri::Runtime>() -> NativeExitCleanup<R> {
+    cleanup_for_exit::<R>
+}
+
+fn run_native_exit_event_with<R, Cleanup>(
+    app: &tauri::AppHandle<R>,
+    event: NativeExitEvent,
+    cleanup: Cleanup,
+) where
+    R: tauri::Runtime,
+    Cleanup: FnOnce(&tauri::AppHandle<R>, NativeExitEvent),
+{
+    cleanup(app, event);
+}
+
+fn run_native_exit_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: NativeExitEvent) {
+    let cleanup = production_native_exit_cleanup();
+    run_native_exit_event_with(app, event, |app, _| cleanup(app));
 }
 
 fn mark_boot_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, failure: serde_json::Value) {
@@ -343,69 +406,148 @@ fn boot_result_needs_attention(value: &serde_json::Value) -> bool {
     value.get("status").and_then(serde_json::Value::as_str) == Some("attention")
 }
 
-fn run_boot_coordinator(app: tauri::AppHandle) {
+type BootScienceCommand<R> =
+    fn(
+        tauri::AppHandle<R>,
+        SharedAppState,
+        SharedLifecycle,
+        Option<String>,
+    ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError>;
+
+fn production_boot_science_command<R: tauri::Runtime>() -> BootScienceCommand<R> {
+    commands::runtime::one_click_login_cmd::<R>
+}
+
+fn run_boot_decision_with<R, Load, Decide, Open, Boot, Show>(
+    app: tauri::AppHandle<R>,
+    load_config: Load,
+    decide: Decide,
+    open_official: Open,
+    boot_science: Boot,
+    show: Show,
+) where
+    R: tauri::Runtime,
+    Load: FnOnce() -> Result<config::Config, serde_json::Value>,
+    Decide: FnOnce(&config::Config) -> LaunchPath,
+    Open: FnOnce() -> Result<(), String>,
+    Boot: FnOnce(
+        tauri::AppHandle<R>,
+        SharedAppState,
+        SharedLifecycle,
+        Option<String>,
+    ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError>,
+    Show: Fn(&tauri::AppHandle<R>),
+{
+    let cfg = match load_config() {
+        Ok(cfg) => cfg,
+        Err(failure) => {
+            mark_boot_failed(&app, failure);
+            return;
+        }
+    };
+    let state = app.state::<SharedAppState>();
+    match decide(&cfg) {
+        LaunchPath::ShowPanel => {
+            let mut st = lock(state.inner());
+            st.boot = BootState::Idle;
+            st.boot_error = None;
+            st.boot_attention = None;
+            show(&app);
+        }
+        LaunchPath::OpenOfficial => match open_official() {
+            Ok(()) => {
+                let mut st = lock(state.inner());
+                st.boot = BootState::Idle;
+                st.boot_error = None;
+                st.boot_attention = None;
+            }
+            Err(e) => mark_boot_failed(&app, boot_prepare_failure(e)),
+        },
+        LaunchPath::BootScience => {
+            let state_inner = state.inner().clone();
+            let lifecycle = app.state::<SharedLifecycle>().inner().clone();
+            match boot_science(app.clone(), state_inner, lifecycle, None) {
+                Ok(value) => {
+                    if boot_result_needs_attention(&value) {
+                        mark_boot_attention(&app, value);
+                    } else if let Some(failure) = boot_result_error(&value) {
+                        mark_boot_failed(&app, failure);
+                    } else {
+                        let mut st = lock(state.inner());
+                        st.boot = BootState::Ready;
+                        st.boot_error = None;
+                        st.boot_attention = None;
+                    }
+                }
+                Err(e) => mark_boot_failed(&app, boot_prepare_failure(e.to_string())),
+            }
+        }
+    }
+}
+
+fn run_boot_decision(app: tauri::AppHandle) {
+    run_boot_decision_with(
+        app,
+        || load_boot_config(&config::default_dir()),
+        decide_launch,
+        commands::runtime::open_official,
+        production_boot_science_command(),
+        show_main_window,
+    );
+}
+
+fn run_boot_coordinator_with<R, Execute, Show>(
+    app: tauri::AppHandle<R>,
+    execute: Execute,
+    show: Show,
+) where
+    R: tauri::Runtime,
+    Execute: FnOnce(tauri::AppHandle<R>),
+    Show: FnOnce(&tauri::AppHandle<R>),
+{
     {
         let state = app.state::<SharedAppState>();
         let mut st = lock(state.inner());
         if !should_begin_boot(st.boot) {
-            show_main_window(&app);
+            show(&app);
             return;
         }
         st.boot = BootState::Starting;
     }
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let cfg = match load_boot_config(&config::default_dir()) {
-            Ok(cfg) => cfg,
-            Err(failure) => {
-                mark_boot_failed(&app, failure);
-                return;
-            }
-        };
-        let state = app.state::<SharedAppState>();
-        match decide_launch(&cfg) {
-            LaunchPath::ShowPanel => {
-                let mut st = lock(state.inner());
-                st.boot = BootState::Idle;
-                st.boot_error = None;
-                st.boot_attention = None;
-                show_main_window(&app);
-            }
-            LaunchPath::OpenOfficial => match commands::runtime::open_official() {
-                Ok(()) => {
-                    let mut st = lock(state.inner());
-                    st.boot = BootState::Idle;
-                    st.boot_error = None;
-                    st.boot_attention = None;
-                }
-                Err(e) => mark_boot_failed(&app, boot_prepare_failure(e)),
-            },
-            LaunchPath::BootScience => {
-                let state_inner = state.inner().clone();
-                let lifecycle = app.state::<SharedLifecycle>().inner().clone();
-                match commands::runtime::one_click_login_cmd(
-                    app.clone(),
-                    state_inner,
-                    lifecycle,
-                    None,
-                ) {
-                    Ok(value) => {
-                        if boot_result_needs_attention(&value) {
-                            mark_boot_attention(&app, value);
-                        } else if let Some(failure) = boot_result_error(&value) {
-                            mark_boot_failed(&app, failure);
-                        } else {
-                            let mut st = lock(state.inner());
-                            st.boot = BootState::Ready;
-                            st.boot_error = None;
-                            st.boot_attention = None;
-                        }
-                    }
-                    Err(e) => mark_boot_failed(&app, boot_prepare_failure(e.to_string())),
-                }
-            }
-        }
-    });
+    execute(app);
+}
+
+fn run_boot_coordinator(app: tauri::AppHandle) {
+    run_boot_coordinator_with(
+        app,
+        |app| {
+            tauri::async_runtime::spawn_blocking(move || run_boot_decision(app));
+        },
+        show_main_window,
+    );
+}
+
+fn run_second_instance_callback_with<R, Execute, Show>(
+    app: &tauri::AppHandle<R>,
+    execute: Execute,
+    show: Show,
+) where
+    R: tauri::Runtime,
+    Execute: FnOnce(tauri::AppHandle<R>),
+    Show: FnOnce(&tauri::AppHandle<R>),
+{
+    run_boot_coordinator_with(app.clone(), execute, show);
+}
+
+fn run_second_instance_callback(app: &tauri::AppHandle) {
+    run_second_instance_callback_with(
+        app,
+        |app| {
+            tauri::async_runtime::spawn_blocking(move || run_boot_decision(app));
+        },
+        show_main_window,
+    );
 }
 
 // ---------- 入口 ----------
@@ -415,7 +557,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            run_boot_coordinator(app.clone());
+            run_second_instance_callback(app);
         }))
         .manage(Arc::new(Mutex::new(AppState::default())))
         .manage(Arc::new(lifecycle::Lifecycle::new()))
@@ -492,7 +634,10 @@ pub fn run() {
 
     app.run(|app, event| match event {
         tauri::RunEvent::Reopen { .. } => show_main_window(app),
-        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => cleanup_for_exit(app),
+        tauri::RunEvent::ExitRequested { .. } => {
+            run_native_exit_event(app, NativeExitEvent::ExitRequested)
+        }
+        tauri::RunEvent::Exit => run_native_exit_event(app, NativeExitEvent::Exit),
         _ => {}
     });
 }
@@ -500,6 +645,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::{Cell, RefCell},
         env, fs,
         net::{TcpListener, TcpStream},
         os::unix::fs::PermissionsExt,
@@ -511,9 +657,12 @@ mod tests {
     use crate::config::{self, Config, Profile};
     use crate::runtime::system::redact;
     use crate::{
-        boot_result_error, boot_result_needs_attention, cleanup_for_exit,
-        decide_launch_with_auto_boot, load_boot_config, lock, run_startup_config_sequence,
-        should_begin_boot, AppState, BootState, LaunchPath, SharedAppState, SharedLifecycle,
+        boot_result_error, boot_result_needs_attention, cleanup_for_exit, cleanup_for_exit_with,
+        decide_launch_with_auto_boot, load_boot_config, lock, production_boot_science_command,
+        production_native_exit_cleanup, run_boot_decision_with, run_native_exit_event_with,
+        run_second_instance_callback_with, run_startup_config_sequence, should_begin_boot,
+        AppState, BootScienceCommand, BootState, LaunchPath, NativeExitCleanup, NativeExitEvent,
+        SharedAppState, SharedLifecycle,
     };
 
     #[test]
@@ -634,6 +783,136 @@ mod tests {
             "isolated native-exit characterization failed:\nstdout={}\nstderr={}",
             stdout,
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup() {
+        type MockNativeExitCleanup = NativeExitCleanup<tauri::test::MockRuntime>;
+        let production: MockNativeExitCleanup = production_native_exit_cleanup();
+        let expected: MockNativeExitCleanup = cleanup_for_exit::<tauri::test::MockRuntime>;
+        assert_eq!(
+            production as usize, expected as usize,
+            "native exit events must remain bound to cleanup_for_exit"
+        );
+
+        let gateway = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let gateway_pid = gateway.id();
+        let runtime = crate::runtime::science::test_runtime_identity(env::current_exe().unwrap());
+        let mut authority = AppState::default();
+        authority.proxy = Some(gateway);
+        authority.science_runtime = Some(runtime.clone());
+        let state: SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .manage(lifecycle.clone())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let actions = RefCell::new(Vec::new());
+        let science_attempts = Cell::new(0);
+        for event in [NativeExitEvent::ExitRequested, NativeExitEvent::Exit] {
+            let term_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+            let term_pid = term_child.id();
+            let kill_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+            let kill_pid = kill_child.id();
+            let children = RefCell::new(vec![term_child, kill_child]);
+            let wait_index = Cell::new(0);
+
+            run_native_exit_event_with(app.handle(), event, |app, observed_event| {
+                assert_eq!(observed_event, event);
+                actions.borrow_mut().push(format!("event:{event:?}"));
+                cleanup_for_exit_with(
+                    app,
+                    || actions.borrow_mut().push("codex:cancel".into()),
+                    |timeout| {
+                        actions
+                            .borrow_mut()
+                            .push(format!("codex:wait:{}", timeout.as_millis()));
+                        let index = wait_index.get();
+                        wait_index.set(index + 1);
+                        match index {
+                            0 => vec![term_pid],
+                            1 => vec![kill_pid],
+                            2 => {
+                                for child in children.borrow_mut().iter_mut() {
+                                    child.wait().unwrap();
+                                }
+                                Vec::new()
+                            }
+                            _ => panic!("unexpected Codex wait round: {index}"),
+                        }
+                    },
+                    |pid| {
+                        actions.borrow_mut().push("codex:term".into());
+                        assert_eq!(pid, term_pid);
+                        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
+                    },
+                    |pid| {
+                        actions.borrow_mut().push("codex:kill".into());
+                        assert_eq!(pid, kill_pid);
+                        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+                    },
+                    |_, _, observed_runtime| {
+                        assert_eq!(observed_runtime, &runtime);
+                        let attempt = science_attempts.get() + 1;
+                        science_attempts.set(attempt);
+                        if attempt == 1 {
+                            actions.borrow_mut().push("science:error".into());
+                            Err("controlled first Science stop failure".into())
+                        } else {
+                            actions.borrow_mut().push("science:stopped".into());
+                            Ok(())
+                        }
+                    },
+                    |app_state| {
+                        actions.borrow_mut().push("gateway:stop".into());
+                        app_state.stop_proxy();
+                    },
+                );
+                actions.borrow_mut().push(format!("completed:{event:?}"));
+            });
+
+            assert_eq!(wait_index.get(), 3);
+            assert_eq!(lifecycle.current_generation(), generation);
+            let current = lock(&state);
+            assert!(current.proxy.is_none());
+            if event == NativeExitEvent::ExitRequested {
+                assert_eq!(current.science_runtime.as_ref(), Some(&runtime));
+            } else {
+                assert!(current.science_runtime.is_none());
+            }
+        }
+
+        assert!(unsafe { libc::kill(gateway_pid as i32, 0) } != 0);
+        assert_eq!(science_attempts.get(), 2);
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert_eq!(
+            *actions.borrow(),
+            vec![
+                "event:ExitRequested",
+                "codex:cancel",
+                "codex:wait:2000",
+                "codex:term",
+                "codex:wait:500",
+                "codex:kill",
+                "codex:wait:500",
+                "science:error",
+                "gateway:stop",
+                "completed:ExitRequested",
+                "event:Exit",
+                "codex:cancel",
+                "codex:wait:2000",
+                "codex:term",
+                "codex:wait:500",
+                "codex:kill",
+                "codex:wait:500",
+                "science:stopped",
+                "gateway:stop",
+                "completed:Exit",
+            ]
         );
     }
 
@@ -849,5 +1128,110 @@ mod tests {
         assert!(should_begin_boot(BootState::Failed));
         assert!(!should_begin_boot(BootState::Starting));
         assert!(!should_begin_boot(BootState::Ready));
+    }
+
+    #[test]
+    fn r0_second_instance_callback_boot_state_matrix_reuses_one_click_login_cmd() {
+        type MockBootScienceCommand = BootScienceCommand<tauri::test::MockRuntime>;
+        let production: MockBootScienceCommand = production_boot_science_command();
+        let expected: MockBootScienceCommand =
+            crate::commands::runtime::one_click_login_cmd::<tauri::test::MockRuntime>;
+        assert_eq!(
+            production as usize, expected as usize,
+            "the production BootScience binding must remain the manual one-click command"
+        );
+
+        let choices = RefCell::new(Vec::new());
+        for initial in [
+            BootState::Idle,
+            BootState::Failed,
+            BootState::Starting,
+            BootState::Ready,
+        ] {
+            let mut authority = AppState::default();
+            authority.boot = initial;
+            authority.boot_error = Some(serde_json::json!({"sentinel": "error"}));
+            authority.boot_attention = Some(serde_json::json!({"sentinel": "attention"}));
+            let state: SharedAppState = Arc::new(Mutex::new(authority));
+            let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let app = tauri::test::mock_builder()
+                .manage(state.clone())
+                .manage(lifecycle)
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+
+            let execute_count = Cell::new(0);
+            let load_count = Cell::new(0);
+            let decision_count = Cell::new(0);
+            let command_count = Cell::new(0);
+            let show_count = Cell::new(0);
+            run_second_instance_callback_with(
+                app.handle(),
+                |app| {
+                    execute_count.set(execute_count.get() + 1);
+                    assert_eq!(lock(&state).boot, BootState::Starting);
+                    run_boot_decision_with(
+                        app,
+                        || {
+                            load_count.set(load_count.get() + 1);
+                            Ok(Config::default())
+                        },
+                        |_| {
+                            decision_count.set(decision_count.get() + 1);
+                            LaunchPath::BootScience
+                        },
+                        || -> Result<(), String> {
+                            panic!("BootScience must not call the official launch action")
+                        },
+                        |_,
+                         _,
+                         _,
+                         runtime_choice|
+                         -> Result<
+                            serde_json::Value,
+                            crate::commands::codex::RuntimeCommandError,
+                        > {
+                            command_count.set(command_count.get() + 1);
+                            choices.borrow_mut().push(runtime_choice);
+                            Ok(serde_json::json!({"status": "ok"}))
+                        },
+                        |_| show_count.set(show_count.get() + 1),
+                    );
+                },
+                |_| show_count.set(show_count.get() + 1),
+            );
+
+            let authority = lock(&state);
+            if matches!(initial, BootState::Idle | BootState::Failed) {
+                assert_eq!(execute_count.get(), 1, "initial state: {initial:?}");
+                assert_eq!(load_count.get(), 1, "initial state: {initial:?}");
+                assert_eq!(decision_count.get(), 1, "initial state: {initial:?}");
+                assert_eq!(command_count.get(), 1, "initial state: {initial:?}");
+                assert_eq!(show_count.get(), 0, "initial state: {initial:?}");
+                assert_eq!(authority.boot, BootState::Ready);
+                assert!(authority.boot_error.is_none());
+                assert!(authority.boot_attention.is_none());
+            } else {
+                assert_eq!(execute_count.get(), 0, "initial state: {initial:?}");
+                assert_eq!(load_count.get(), 0, "initial state: {initial:?}");
+                assert_eq!(decision_count.get(), 0, "initial state: {initial:?}");
+                assert_eq!(command_count.get(), 0, "initial state: {initial:?}");
+                assert_eq!(show_count.get(), 1, "initial state: {initial:?}");
+                assert_eq!(authority.boot, initial);
+                assert_eq!(
+                    authority.boot_error,
+                    Some(serde_json::json!({"sentinel": "error"}))
+                );
+                assert_eq!(
+                    authority.boot_attention,
+                    Some(serde_json::json!({"sentinel": "attention"}))
+                );
+            }
+        }
+        assert_eq!(
+            *choices.borrow(),
+            vec![None, None],
+            "Idle and Failed callbacks must both pass no runtime choice"
+        );
     }
 }
