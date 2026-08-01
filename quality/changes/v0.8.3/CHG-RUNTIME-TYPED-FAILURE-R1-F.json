@@ -58,7 +58,10 @@
         "complete Rust library regression passed with 482 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
         "the compensation credential canary passed and the transaction matrix retained path, credential, and journal secret-free assertions",
         "two parallel isolated compensation tests were rejected as evidence after interference and both passed when rerun serially under their isolation contracts",
-        "complete 15-suite GATE-SOURCE and exact-SHA clean-context completion review remain pending"
+        "complete 15-suite GATE-SOURCE passed at exact SHA 0d2a4604bbcc4297555b9e45c99929b4abb7788c with run id 62f2b68b35f9243756afb30c5a694fab and runner exit zero",
+        "the completion seal contains 15 passing results and 15 passing observations with 33 verified reference hashes and a 489-entry clean source snapshot",
+        "desktop identity closed at 523 discovered, 482 passed, zero failed, 41 approved ignored, zero skipped, and zero not run",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings"
       ]
     },
     "does_not_claim_fix": true,

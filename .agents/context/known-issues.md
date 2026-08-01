@@ -211,7 +211,7 @@ tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/H
 复核三层 manifest、全部三十个 result/observation 引用哈希、snapshot 条目与 ignored identity。
 结论不得外推到 artifact、installed、live provider、Science、SSH、签名、公证或公开 release。
 
-`R1-F` 当前为 candidate / `UNSEALED`：已对 R1-A–E 的 typed envelope、authority
+`R1-F` 已收口（source）：已对 R1-A–E 的 typed envelope、authority
 cleanup、one-click compensation、interrupted Gateway recovery、command / auto-boot /
 profile projection 与 production source-contract 做整体 inventory。聚焦矩阵实际执行并
 PASS：`failure::` 8 passed、command structured-stage 1 passed、auto-boot 1 passed、
@@ -223,8 +223,16 @@ loopback / process identity 的环境为 482 passed / 0 failed / 41 explicitly i
 诊断表面；authority snapshot path / credential canary 与 runtime journal secret-free 回归亦在
 transaction matrix 中 PASS。两条 prior-Science compensation 隔离用例首次与其他测试进程
 并行执行时相互干扰失败，随后按各自 isolation contract 串行重跑均 PASS；该并行方式不作为
-有效证据。完整十五 suite `GATE-SOURCE` 与 exact-SHA clean-context 最终审查仍为
-`NOT-RUN` / pending，因此本阶段尚未建立 R1 source closure，也未进入 R2。
+有效证据。candidate exact SHA `0d2a4604bbcc4297555b9e45c99929b4abb7788c` 取得完整
+十五 suite `GATE-SOURCE` completion seal PASS：run id
+`62f2b68b35f9243756afb30c5a694fab`、runner exit 0；manifest 含十五个 test result 与
+十五个 source observation，三十三个引用哈希零不匹配，source snapshot 为 489 个 tracked
+entry。desktop 身份为 523 discovered / 523 executed / 482 passed / 0 failed / 41 approved
+ignored / 0 skipped / 0 not run，且 discovered / ignored / skipped identities 与冻结 fixture
+精确一致。exact-SHA clean-context 独立完成审查 PASS，零 BLOCK/HIGH/MEDIUM/LOW，并确认
+typed recovery、DTO、journal ordering、listener retention、compensation/retry 与脱敏边界未
+回归。R1 全部收口仅建立 source/unit 结论，不外推到 artifact、installed/runtime、live
+provider、Science、SSH、签名、公证或公开 release。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
@@ -233,10 +241,11 @@ transaction matrix 中 PASS。两条 prior-Science compensation 隔离用例首�
 | `R1-C` | DONE | one-click compensation typed aggregate、exact-SHA source gate 与独立审查收口 |
 | `R1-D` | DONE | interrupted Gateway recovery typed outcome、exact-SHA source gate 与独立审查收口 |
 | `R1-E` | DONE | production message semantic parsing 清零、typed projection、exact-SHA source gate 与独立审查收口 |
-| `R1-F` | IN-PROGRESS | 整体 inventory、矩阵与 canary 已完成；exact-SHA source gate 与最终审查 pending |
+| `R1-F` | DONE | 整体 inventory、矩阵、canary、exact-SHA source gate 与最终独立审查收口 |
 
-唯一 `NEXT` 仍是 `R1-F`：完成 exact-SHA source gate 与最终审查。尚未触碰 R2 journal
-schema、R3 state owner 或 R4 mutation lease。
+R1 已全部收口。唯一 `NEXT` 是 `R2`：按现有架构基线分片设计 versioned typed runtime
+journal；首个等价切片只 typed 化现有 checkpoint，不移动写入时机，也不新增 pre-stop durable
+intent。R2 尚未开始，R3 state owner 与 R4 mutation lease 亦未触碰。
 
 ## 下一轮重构的 P0 前置
 
