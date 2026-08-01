@@ -974,6 +974,7 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::external_skill_route::tests::migrates_only_exact_revision_two_managed_route",
         "desktop/src-tauri/Cargo.toml::lib::runtime::external_skill_route::tests::rejects_oversized_route_body_and_marker_without_unbounded_reads",
         "desktop/src-tauri/Cargo.toml::lib::runtime::external_skill_route::tests::rejects_symlinked_org_without_removing_target",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::failure::tests::cause_chain_is_internal_and_safe_detail_is_the_frozen_message",
         "desktop/src-tauri/Cargo.toml::lib::runtime::failure::tests::coarse_stage_table_is_stable",
         "desktop/src-tauri/Cargo.toml::lib::runtime::failure::tests::compensation_keeps_original_kind_when_message_gains_codes",
         "desktop/src-tauri/Cargo.toml::lib::runtime::failure::tests::deref_supports_legacy_error_contains_checks",

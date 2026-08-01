@@ -13,7 +13,11 @@
       "desktop/src-tauri/src/runtime/failure.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs",
-      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-FAILURE-R1-A.json"
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-FAILURE-R1-A.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py"
     ],
     "requirement_ids": [
       "REQ-083-PATHS",
