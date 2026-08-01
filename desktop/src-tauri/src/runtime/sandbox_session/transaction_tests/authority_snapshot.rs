@@ -678,7 +678,10 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
     let retry_error = retry_pending_authority_cleanup(&state)
         .expect_err("an active authority transaction must preserve its recovery snapshot");
     assert!(
-        retry_error.contains("code=authority_snapshot_recovery_required") && backup_root.is_dir(),
+        retry_error
+            .to_string()
+            .contains("code=authority_snapshot_recovery_required")
+            && backup_root.is_dir(),
         "active crash recovery must preserve the exact registered root: {retry_error}"
     );
     clear_runtime_transaction(&config_dir).unwrap();
@@ -722,8 +725,12 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
     let panic_retry = retry_pending_authority_cleanup(&state)
         .expect_err("panic unwind must not convert ActiveRecovery to cleanup-only");
     assert!(
-        panic_retry.contains("cleanup_code=authority_snapshot_recovery_required")
-            && panic_retry.contains(&panic_recovery_root.to_string_lossy().to_string())
+        panic_retry
+            .to_string()
+            .contains("cleanup_code=authority_snapshot_recovery_required")
+            && panic_retry
+                .to_string()
+                .contains(&panic_recovery_root.to_string_lossy().to_string())
             && panic_recovery_root.is_dir(),
         "panic unwind must preserve the exact registered recovery root: {panic_retry}"
     );

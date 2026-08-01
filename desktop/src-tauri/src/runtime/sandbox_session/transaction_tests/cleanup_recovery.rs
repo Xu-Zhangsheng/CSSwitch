@@ -31,7 +31,9 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
         .err()
         .expect("completion fsync failure must fail closed");
         assert!(
-            error.contains("code=authority_snapshot_completion_sync_failed"),
+            error
+                .to_string()
+                .contains("code=authority_snapshot_completion_sync_failed"),
             "unexpected completion-sync failure: {error}"
         );
     }
@@ -74,7 +76,9 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
             .expect("cleanup failure must carry typed recovery authority");
         assert_eq!(recovery_path, cleanup_sync_root);
         assert_eq!(cleanup_code, "cleanup_remove_failed");
-        assert!(error.contains("recovery_status=cleanup_required"));
+        assert!(error
+            .to_string()
+            .contains("recovery_status=cleanup_required"));
         let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
             .unwrap()
             .unwrap();
@@ -124,7 +128,9 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
     );
     assert!(rebound_error.cleanup_requirement().is_none());
     assert!(
-        rebound_error.contains("cleanup_manifest_identity_mismatch"),
+        rebound_error
+            .to_string()
+            .contains("cleanup_manifest_identity_mismatch"),
         "unexpected registered-ticket identity refusal: {rebound_error}"
     );
     assert!(
@@ -341,9 +347,10 @@ fn partial_capture_cleanup_failure_returns_tracked_degraded_recovery() {
             .nth(2)
             .expect("cleanup observation must track the exact root"),
     );
-    let degraded_and_tracked = (failure.contains("cleanup_required")
-        || failure.contains("degraded"))
-        && failure.contains(&backup_root.to_string_lossy().to_string())
+    let failure_detail = failure.to_string();
+    let degraded_and_tracked = (failure_detail.contains("cleanup_required")
+        || failure_detail.contains("degraded"))
+        && failure_detail.contains(&backup_root.to_string_lossy().to_string())
         && backup_root.exists();
     if backup_root.exists() {
         fs::remove_dir_all(&backup_root).unwrap();
@@ -479,6 +486,7 @@ fn rollback_refusal_restores_independent_authorities_and_preserves_recovery_snap
     assert_eq!(retry_path, backup_root);
     assert_eq!(retry_code, "authority_snapshot_recovery_required");
     let recovery_survives_retry = retry_error
+        .to_string()
         .contains("cleanup_code=authority_snapshot_recovery_required")
         && backup_root.is_dir();
     assert!(

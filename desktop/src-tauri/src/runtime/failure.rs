@@ -314,14 +314,6 @@ impl std::fmt::Display for RuntimeError<OneClickFailureKind> {
     }
 }
 
-impl std::ops::Deref for RuntimeError<OneClickFailureKind> {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.safe_detail
-    }
-}
-
 impl AsRef<str> for RuntimeError<OneClickFailureKind> {
     fn as_ref(&self) -> &str {
         &self.safe_detail
@@ -332,28 +324,6 @@ impl From<RuntimeError<OneClickFailureKind>> for String {
     fn from(value: RuntimeError<OneClickFailureKind>) -> Self {
         value.safe_detail
     }
-}
-
-/// Transitional: recovery flags still appear as operator diagnostic codes in
-/// `message` after compensation. Prefer setting [`ProjectedRecovery`] at the
-/// produce/compensate site. **Stage must never use this helper.**
-pub(crate) fn recovery_from_diagnostic_codes(message: &str) -> Option<ProjectedRecovery> {
-    if message.contains("recovery_status=cleanup_required") {
-        if message.contains("environment_uncertain") {
-            return Some(ProjectedRecovery::cleanup_required_uncertain());
-        }
-        return Some(ProjectedRecovery::CLEANUP_REQUIRED);
-    }
-    if message.contains("recovery_status=manual_recovery_required") {
-        if message.contains("environment_uncertain") {
-            return Some(ProjectedRecovery::environment_uncertain_manual());
-        }
-        return Some(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED);
-    }
-    if message.contains("environment_uncertain") {
-        return Some(ProjectedRecovery::ENVIRONMENT_UNCERTAIN);
-    }
-    None
 }
 
 #[cfg(test)]
@@ -516,37 +486,28 @@ mod tests {
     }
 
     #[test]
-    fn deref_supports_legacy_error_contains_checks() {
+    fn explicit_message_projection_replaces_legacy_error_deref() {
         let failure = TypedOneClickFailure::new(
             OneClickFailureKind::ScienceStart,
             "science_db_reverify_timeout",
         );
-        assert!(failure.contains("science_db_reverify"));
         assert_eq!(failure.as_ref(), "science_db_reverify_timeout");
         assert_eq!(failure.to_string(), "science_db_reverify_timeout");
     }
 
     #[test]
-    fn recovery_diagnostic_codes_prefer_stronger_recovery_status() {
-        let cleanup = recovery_from_diagnostic_codes(
+    fn diagnostic_text_cannot_change_recovery_or_environment() {
+        for message in [
             "x；recovery_status=cleanup_required；environment_uncertain",
-        )
-        .unwrap();
-        assert_eq!(cleanup.recovery, RecoveryDisposition::CleanupRequired);
-        assert_eq!(cleanup.environment, EnvironmentExposure::Uncertain);
-
-        let manual = recovery_from_diagnostic_codes(
             "x；environment_uncertain；recovery_status=manual_recovery_required",
-        )
-        .unwrap();
-        assert_eq!(manual.recovery, RecoveryDisposition::ManualRecoveryRequired);
-        assert_eq!(manual.environment, EnvironmentExposure::Uncertain);
-
-        let bare = recovery_from_diagnostic_codes("x；environment_uncertain").unwrap();
-        assert_eq!(bare.recovery, RecoveryDisposition::EnvironmentUncertain);
-        assert_eq!(bare.environment, EnvironmentExposure::Uncertain);
-
-        assert!(recovery_from_diagnostic_codes("plain failure").is_none());
+            "恢复失败，环境不确定，需要人工恢复",
+        ] {
+            let failure = TypedOneClickFailure::new(OneClickFailureKind::Prepare, message);
+            assert_eq!(failure.recovery, RecoveryDisposition::NotNeeded);
+            assert_eq!(failure.environment, EnvironmentExposure::NotExposed);
+            assert_eq!(failure.project_dto()["recovery_status"], "not_needed");
+            assert_eq!(failure.project_dto()["environment_status"], "not_exposed");
+        }
     }
 
     #[test]

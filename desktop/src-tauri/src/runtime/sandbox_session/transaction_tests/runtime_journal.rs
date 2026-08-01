@@ -65,10 +65,14 @@ fn runtime_journal_advances_in_place_and_retargets_without_secrets() {
     ] {
         let legacy = validate_interrupted_science_transaction_entry(Some("start_science"), None)
             .expect_err("legacy 0.8.3 start_science must never authorize an automatic spawn");
+        assert_eq!(
+            legacy.projected_recovery(),
+            crate::runtime::failure::ProjectedRecovery::environment_uncertain_manual()
+        );
         assert!(
-            legacy.contains("environment_uncertain")
-                && legacy.contains("newer_runtime_required")
-                && legacy.contains("manual_recovery_required"),
+            legacy.to_string().contains("environment_uncertain")
+                && legacy.to_string().contains("newer_runtime_required")
+                && legacy.to_string().contains("manual_recovery_required"),
             "legacy oracle {listener_state} must fail closed: {legacy}"
         );
     }
@@ -76,6 +80,13 @@ fn runtime_journal_advances_in_place_and_retargets_without_secrets() {
     assert_eq!(
         interrupted_science_environment_runtime_id(&authority_stage),
         Some(runtime_id.as_str())
+    );
+    let authority =
+        validate_interrupted_science_transaction_entry(Some(&authority_stage), Some(&runtime_id))
+            .expect_err("active authority snapshot must require explicit recovery");
+    assert_eq!(
+        authority.projected_recovery(),
+        crate::runtime::failure::ProjectedRecovery::MANUAL_RECOVERY_REQUIRED
     );
 
     advance_runtime_transaction(&dir, "newer", Some(previous), "start_gateway").unwrap();

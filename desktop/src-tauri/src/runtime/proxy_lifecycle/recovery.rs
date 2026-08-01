@@ -69,9 +69,16 @@ pub(crate) enum InterruptedGatewayRecoveryErrorKind {
     StopUnknown(InterruptedGatewayStopUnknownKind),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InterruptedGatewayRecoveryDisposition {
+    Degraded,
+    ManualRecoveryRequired,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InterruptedGatewayRecoveryError {
     kind: InterruptedGatewayRecoveryErrorKind,
+    recovery: InterruptedGatewayRecoveryDisposition,
     safe_detail: String,
 }
 
@@ -80,8 +87,19 @@ impl InterruptedGatewayRecoveryError {
         kind: InterruptedGatewayRecoveryErrorKind,
         safe_detail: impl Into<String>,
     ) -> Self {
+        let recovery = match kind {
+            InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot => {
+                InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired
+            }
+            InterruptedGatewayRecoveryErrorKind::GatewayStart
+            | InterruptedGatewayRecoveryErrorKind::NotManaged
+            | InterruptedGatewayRecoveryErrorKind::StopUnknown(_) => {
+                InterruptedGatewayRecoveryDisposition::Degraded
+            }
+        };
         Self {
             kind,
+            recovery,
             safe_detail: safe_detail.into(),
         }
     }
@@ -89,19 +107,15 @@ impl InterruptedGatewayRecoveryError {
     pub(crate) fn kind(&self) -> InterruptedGatewayRecoveryErrorKind {
         self.kind
     }
+
+    pub(crate) fn recovery(&self) -> InterruptedGatewayRecoveryDisposition {
+        self.recovery
+    }
 }
 
 impl std::fmt::Display for InterruptedGatewayRecoveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.safe_detail)
-    }
-}
-
-impl std::ops::Deref for InterruptedGatewayRecoveryError {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.safe_detail
     }
 }
 

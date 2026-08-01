@@ -183,17 +183,40 @@ tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/H
 复核三层 manifest、全部三十个 result/observation 引用哈希、snapshot 条目与 ignored identity。
 结论不得外推到 artifact、installed、live provider、Science、SSH、签名、公证或公开 release。
 
+`R1-E` source candidate 已实现但尚未 seal：production 已删除
+`recovery_from_diagnostic_codes`，`RuntimeError`、`AuthorityCleanupFailure` 与
+`InterruptedGatewayRecoveryError` 不再通过 `Deref<str>` 暴露兼容性 `contains`。普通
+one-click error 构造与 command DTO 投影不再读取 message；中断 Science 入口、authority
+cleanup、one-click compensation 与 interrupted Gateway recovery 均从 typed outcome / recovery
+disposition 显式投影。既有人读 message、frontend DTO keys、coarse stage、one-click、healthy
+reopen、profile reconcile 与 auto-boot 的投影边界保持不变。
+
+静态 source-contract 现绑定普通 one-click 构造、interrupted Science / Gateway typed recovery、
+command projection、healthy reopen、profile reconcile 与 auto-boot，并禁止三个 typed error
+恢复隐式字符串 `Deref`。focused failure 8 passed / 0 failed，command structured-stage、runtime
+journal 与 transaction contract 各 1 passed / 0 failed，profile-switch unit 3 passed / 0 failed；
+boundary module 11 passed / 0 failed，quality metadata PASS；完整 Rust lib 在允许隔离
+loopback/process 的环境为 482 passed / 0 failed / 41 explicitly ignored。受限沙箱内完整 lib
+因动态 loopback/process 权限出现 `Operation not permitted`，外部隔离重跑全绿，不计为产品
+失败。首轮 clean-context reviewer 发现 interrupted Gateway `AuthoritySnapshot` 在删除解析器后
+会从 `manual_recovery_required` 回退为 `degraded` HIGH，并指出 source-contract 未绑定该
+recovery mapping MEDIUM；已为 Gateway error 增加 typed recovery disposition、补齐 DTO
+recovery/environment 断言与双层 source-contract。修复后的新 clean-context 复审、implementation
+review 已 PASS，零 BLOCK/HIGH/MEDIUM/LOW；implementation commit 与 exact-SHA
+`GATE-SOURCE` completion seal 尚未完成，因此不得写成 `R1-E DONE`。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R1-A` | DONE | typed envelope 底座、冻结 DTO 投影、exact-SHA source gate 与独立审查收口 |
 | `R1-B` | DONE | authority snapshot / pending cleanup typed outcome、exact-SHA source gate 与独立审查收口 |
 | `R1-C` | DONE | one-click compensation typed aggregate、exact-SHA source gate 与独立审查收口 |
 | `R1-D` | DONE | interrupted Gateway recovery typed outcome、exact-SHA source gate 与独立审查收口 |
-| `R1-E` | NOT-STARTED | production message semantic parsing 清零 |
+| `R1-E` | IMPLEMENTED / UNSEALED | production message semantic parsing 已清零；修复后回归与独立复审 PASS，待 commit 与 exact-SHA source gate 收口 |
 | `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
 
-唯一 `NEXT` 是 `R1-E` production message semantic parsing 清零；本次 R1-D 收口不提前进入
-该阶段，不得触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
+唯一 `NEXT` 是收口 `R1-E`：提交已取得 clean-context PASS 的实现候选并绑定 clean exact SHA
+运行完整 source gate，随后补齐 closure metadata。完成前不得进入 `R1-F`，也不得
+触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 
@@ -205,8 +228,8 @@ tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/H
 - ~~Typed failure projection~~ **已闭合（source，stage）**：`runtime/failure.rs`
   的 `OneClickFailureKind` 在产生点标注；一键与 auto-boot 投影到冻结 coarse
   stage；生产路径不再用 `science_failure_stage` 扫文案。journal checkpoint 仍为
-  string。**过渡残留**：`recovery_status` 仍可从 message 内诊断码解析
-  （`recovery_from_diagnostic_codes`），应在后续补偿点完全 typed。验证：
+  string，但 domain/kind/phase/recovery/environment 已不再从 message、recovery token
+  或中文错误文本反向分类；人读 message 仅作展示。验证：
   `cargo test --lib failure::`、
   `science_operation_failures_have_stable_structured_stages`、
   `auto_boot_rejects_structured_runtime_failure`。

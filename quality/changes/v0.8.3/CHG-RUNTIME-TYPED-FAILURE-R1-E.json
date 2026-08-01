@@ -1,0 +1,83 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-FAILURE-R1-E",
+    "version": "v0.8.3",
+    "title": "Remove production message semantic recovery parsing",
+    "summary": "Removes recovery_from_diagnostic_codes and compatibility Deref-to-string implementations from typed runtime errors. One-click, interrupted Science and Gateway recovery, healthy reopen, profile reconcile, and auto-boot now preserve domain, kind, phase, recovery, and environment only from typed fields or explicit runtime state. Existing frontend DTO keys, visible text, coarse stages, and operation ordering remain unchanged.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/commands/runtime.rs",
+      "desktop/src-tauri/src/commands/runtime/one_click.rs",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "desktop/src-tauri/src/runtime/failure.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/authority_snapshot.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/cleanup_recovery.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-FAILURE-R1-E.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-ORPHAN-SKILL-BOUNDARY",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "inferred",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "focused typed failure tests passed with eight passed and zero failed",
+        "focused command projection, runtime journal, transaction source-contract, and profile-switch tests passed",
+        "boundary module passed with eleven passed and zero failed, and quality metadata validation passed",
+        "complete Rust library regression passed outside the restricted sandbox with 482 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
+        "source contracts bind ordinary one-click construction, typed interrupted Science and Gateway recovery, command projection, healthy reopen, profile reconcile, and auto-boot while forbidding implicit typed-error string dereference",
+        "the first clean-context review found a typed interrupted-Gateway recovery regression and a matching source-contract gap; both findings were repaired",
+        "the final clean-context candidate review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

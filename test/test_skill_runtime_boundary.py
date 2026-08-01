@@ -259,9 +259,12 @@ class SkillRuntimeBoundary(unittest.TestCase):
         command_one_click = runtime_command_module("one_click")
         lifecycle = proxy_lifecycle_source()
         lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
-        one_click_runtime = session.split(
+        one_click_source = (
+            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
+        ).read_text()
+        one_click_runtime = one_click_source.split(
             "fn one_click_login_with_options", 1
-        )[1].split("\n#[cfg(test)]\nmod transaction_tests", 1)[0]
+        )[1]
 
         submission = js.split("function catalogSubmission(kind)", 1)[1].split(
             "function catalogRolesChanged", 1
@@ -310,6 +313,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "fn typed_interrupted_gateway_recovery_error", 1
         )[1].split("impl OneClickGatewayPreflightSnapshot", 1)[0]
         self.assertIn("error.kind()", recovery_projection)
+        self.assertIn("error.recovery()", recovery_projection)
         self.assertRegex(
             recovery_projection,
             r"(?s)InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot\s*=>\s*\{\s*"
@@ -322,7 +326,33 @@ class SkillRuntimeBoundary(unittest.TestCase):
             r"InterruptedGatewayRecoveryErrorKind::StopUnknown\(_\)\s*=>\s*"
             r"OneClickFailureKind::GatewayStart",
         )
+        self.assertIn(
+            "InterruptedGatewayRecoveryDisposition::Degraded => ProjectedRecovery::DEGRADED",
+            recovery_projection,
+        )
+        self.assertIn(
+            "InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired",
+            recovery_projection,
+        )
+        self.assertIn("ProjectedRecovery::MANUAL_RECOVERY_REQUIRED", recovery_projection)
+        self.assertIn(".with_recovery(recovery)", recovery_projection)
         self.assertNotIn(".contains(", recovery_projection)
+        self.assertIn(
+            "recovery: InterruptedGatewayRecoveryDisposition", lifecycle
+        )
+        self.assertRegex(
+            lifecycle,
+            r"(?s)InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot\s*=>\s*\{\s*"
+            r"InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired\s*\}",
+        )
+        self.assertRegex(
+            lifecycle,
+            r"(?s)InterruptedGatewayRecoveryErrorKind::GatewayStart\s*\|\s*"
+            r"InterruptedGatewayRecoveryErrorKind::NotManaged\s*\|\s*"
+            r"InterruptedGatewayRecoveryErrorKind::StopUnknown\(_\)\s*=>\s*\{\s*"
+            r"InterruptedGatewayRecoveryDisposition::Degraded\s*\}",
+        )
+        self.assertNotIn("recovery_from_diagnostic_codes", one_click_runtime)
         self.assertIn("stop_managed_gateway_on_port", lifecycle)
         self.assertIn('health.intent == "formal"', lifecycle)
         self.assertIn("journal.previous_gateway.as_ref()", lifecycle)

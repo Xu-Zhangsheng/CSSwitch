@@ -172,6 +172,128 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
 
     let source = include_str!("../one_click.rs");
     let recovery_source = include_str!("../recovery.rs");
+    let failure_source = include_str!("../../failure.rs");
+    let command_projection_source = include_str!("../../../commands/runtime/one_click.rs");
+    let pending_cleanup_source = include_str!("../pending_cleanup.rs");
+    let gateway_recovery_source = include_str!("../../proxy_lifecycle/recovery.rs");
+    let healthy_reopen_source = include_str!("../one_click/healthy_reopen.rs");
+    let profile_reconcile_source = include_str!("../../profile_switch.rs");
+    let auto_boot_source = include_str!("../../../lib.rs");
+
+    let failure_production = failure_source
+        .split("#[cfg(test)]\nmod tests")
+        .next()
+        .expect("typed failure production boundary must remain discoverable");
+    assert!(
+        !failure_production.contains("recovery_from_diagnostic_codes")
+            && !failure_production.contains("impl std::ops::Deref"),
+        "typed runtime failure must not recover classification or string methods from message text"
+    );
+    for (name, typed_error_source, error_type) in [
+        (
+            "authority cleanup",
+            pending_cleanup_source,
+            "AuthorityCleanupFailure",
+        ),
+        (
+            "interrupted Gateway recovery",
+            gateway_recovery_source,
+            "InterruptedGatewayRecoveryError",
+        ),
+    ] {
+        assert!(
+            !typed_error_source.contains(&format!("impl std::ops::Deref for {error_type}")),
+            "{name} error must not expose implicit string contains compatibility"
+        );
+    }
+    let gateway_error_constructor = gateway_recovery_source
+        .split("impl InterruptedGatewayRecoveryError")
+        .nth(1)
+        .and_then(|tail| tail.split("impl std::fmt::Display").next())
+        .expect("interrupted Gateway error constructor must remain discoverable");
+    assert!(
+        gateway_recovery_source.contains("recovery: InterruptedGatewayRecoveryDisposition")
+            && gateway_error_constructor.contains(
+                "InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot => {\n                InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired\n            }"
+            )
+            && gateway_error_constructor.contains(
+                "InterruptedGatewayRecoveryErrorKind::GatewayStart\n            | InterruptedGatewayRecoveryErrorKind::NotManaged\n            | InterruptedGatewayRecoveryErrorKind::StopUnknown(_) => {\n                InterruptedGatewayRecoveryDisposition::Degraded\n            }"
+            ),
+        "interrupted Gateway error constructor must map AuthoritySnapshot to manual recovery and all other kinds to degraded"
+    );
+    let gateway_projection = command_projection_source
+        .split("fn typed_interrupted_gateway_recovery_error")
+        .nth(1)
+        .and_then(|tail| tail.split("impl OneClickGatewayPreflightSnapshot").next())
+        .expect("interrupted Gateway command projection must remain discoverable");
+    assert!(
+        gateway_projection.contains("error.kind()")
+            && gateway_projection.contains("error.recovery()")
+            && gateway_projection.contains(
+                "InterruptedGatewayRecoveryDisposition::Degraded => ProjectedRecovery::DEGRADED"
+            )
+            && gateway_projection
+                .contains("InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired")
+            && gateway_projection.contains("ProjectedRecovery::MANUAL_RECOVERY_REQUIRED")
+            && gateway_projection.contains(".with_recovery(recovery)")
+            && !gateway_projection.contains(".contains("),
+        "interrupted Gateway command projection must map kind and recovery from typed fields"
+    );
+    let ordinary_constructor = source
+        .split("fn typed_one_click_err")
+        .nth(1)
+        .and_then(|tail| tail.split("#[derive(Debug)]").next())
+        .expect("ordinary one-click error constructor must remain discoverable");
+    assert!(
+        ordinary_constructor.contains("TypedOneClickFailure::new(kind, message)")
+            && !ordinary_constructor.contains(".contains(")
+            && !ordinary_constructor.contains("recovery_status")
+            && !ordinary_constructor.contains("environment_uncertain"),
+        "ordinary one-click errors must never infer recovery or environment from message text"
+    );
+    let command_projection = command_projection_source
+        .split("pub(super) fn project_one_click_failure")
+        .nth(1)
+        .expect("one-click command projection must remain discoverable");
+    assert!(
+        command_projection.contains("apply_open_journal_degraded(journal_open)")
+            && command_projection.contains("project_dto()")
+            && !command_projection.contains("safe_detail")
+            && !command_projection.contains(".contains(")
+            && !command_projection.contains("recovery_from_diagnostic_codes"),
+        "command projection must use typed fields and journal state only"
+    );
+    assert!(
+        source.contains("typed_interrupted_science_err")
+            && source.contains(".with_recovery(error.recovery)")
+            && healthy_reopen_source.contains("primary.projected_recovery()"),
+        "one-click and healthy reopen must preserve explicit typed recovery"
+    );
+    let profile_reconcile = profile_reconcile_source
+        .split("if let Err(error) = crate::runtime::sandbox_session::reconcile_science_for_active")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("} else if let Err(error) = config::update")
+                .next()
+        })
+        .expect("profile reconcile projection must remain discoverable");
+    assert!(
+        profile_reconcile.contains("error.prior_science_restored()")
+            && profile_reconcile.contains("error.environment_uncertain()")
+            && !profile_reconcile.contains(".contains("),
+        "profile reconcile must derive recovery and environment from typed variants"
+    );
+    let auto_boot_projection = auto_boot_source
+        .split("fn boot_result_error")
+        .nth(1)
+        .and_then(|tail| tail.split("fn boot_prepare_failure").next())
+        .expect("auto-boot projection must remain discoverable");
+    assert!(
+        auto_boot_projection.contains("value.clone()")
+            && !auto_boot_projection.contains("message")
+            && !auto_boot_projection.contains(".contains("),
+        "auto-boot must preserve the structured one-click DTO without reclassification"
+    );
     assert!(
         !source.contains("contains(\"recovery_status=cleanup_required\")")
             && !recovery_source.contains("contains(\"recovery_status=cleanup_required\")"),

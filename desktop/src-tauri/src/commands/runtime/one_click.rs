@@ -27,7 +27,9 @@ struct OneClickGatewayPreflightSnapshot {
 pub(super) fn typed_interrupted_gateway_recovery_error(
     error: crate::runtime::proxy_lifecycle::InterruptedGatewayRecoveryError,
 ) -> TypedOneClickFailure {
-    use crate::runtime::proxy_lifecycle::InterruptedGatewayRecoveryErrorKind;
+    use crate::runtime::proxy_lifecycle::{
+        InterruptedGatewayRecoveryDisposition, InterruptedGatewayRecoveryErrorKind,
+    };
 
     let kind = match error.kind() {
         InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot => {
@@ -37,7 +39,13 @@ pub(super) fn typed_interrupted_gateway_recovery_error(
         | InterruptedGatewayRecoveryErrorKind::NotManaged
         | InterruptedGatewayRecoveryErrorKind::StopUnknown(_) => OneClickFailureKind::GatewayStart,
     };
-    TypedOneClickFailure::new(kind, error.to_string())
+    let recovery = match error.recovery() {
+        InterruptedGatewayRecoveryDisposition::Degraded => ProjectedRecovery::DEGRADED,
+        InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired => {
+            ProjectedRecovery::MANUAL_RECOVERY_REQUIRED
+        }
+    };
+    TypedOneClickFailure::new(kind, error.to_string()).with_recovery(recovery)
 }
 
 impl OneClickGatewayPreflightSnapshot {
@@ -399,14 +407,7 @@ pub(super) fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_
         .ok()
         .and_then(|cfg| cfg.runtime_transaction)
         .is_some();
-    let failure = if failure.projected_recovery() == ProjectedRecovery::NOT_NEEDED {
-        if let Some(recovery) = recovery_from_diagnostic_codes(&failure.safe_detail) {
-            failure.with_recovery(recovery)
-        } else {
-            failure.apply_open_journal_degraded(journal_open)
-        }
-    } else {
-        failure
-    };
-    failure.project_dto()
+    failure
+        .apply_open_journal_degraded(journal_open)
+        .project_dto()
 }

@@ -10,9 +10,7 @@ use crate::runtime::diagnostics::{
     build_status_response, proxy_status_last_error, science_diagnostics, status_lights,
     ScienceDiagnosticsInput, StatusProbeInput,
 };
-use crate::runtime::failure::{
-    recovery_from_diagnostic_codes, OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure,
-};
+use crate::runtime::failure::{OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure};
 use crate::runtime::operation::{self, OperationKind, OperationTrace};
 use crate::runtime::profile::profile_capabilities;
 use crate::runtime::provider::{

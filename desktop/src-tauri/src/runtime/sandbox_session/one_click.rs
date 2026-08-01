@@ -8,9 +8,7 @@ use csswitch_skill_install_core::{open_science_health_session_before, ScienceHea
 use serde_json::{json, Value};
 use tauri::{Manager, Runtime};
 
-use crate::runtime::failure::{
-    recovery_from_diagnostic_codes, OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure,
-};
+use crate::runtime::failure::{OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure};
 use crate::runtime::operation::{
     self, OperationKind, OperationStage, OperationTrace, POLL_INTERVAL_MS,
 };
@@ -261,12 +259,39 @@ fn typed_one_click_err(
     kind: OneClickFailureKind,
     message: impl Into<String>,
 ) -> TypedOneClickFailure {
-    let message = message.into();
-    let mut failure = TypedOneClickFailure::new(kind, message.clone());
-    if let Some(recovery) = recovery_from_diagnostic_codes(&message) {
-        failure = failure.with_recovery(recovery);
+    TypedOneClickFailure::new(kind, message)
+}
+
+#[derive(Debug)]
+pub(super) struct InterruptedScienceRecoveryError {
+    safe_detail: &'static str,
+    recovery: ProjectedRecovery,
+}
+
+impl InterruptedScienceRecoveryError {
+    fn new(safe_detail: &'static str, recovery: ProjectedRecovery) -> Self {
+        Self {
+            safe_detail,
+            recovery,
+        }
     }
-    failure
+
+    pub(super) fn projected_recovery(&self) -> ProjectedRecovery {
+        self.recovery
+    }
+}
+
+impl std::fmt::Display for InterruptedScienceRecoveryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.safe_detail)
+    }
+}
+
+fn typed_interrupted_science_err(
+    kind: OneClickFailureKind,
+    error: InterruptedScienceRecoveryError,
+) -> TypedOneClickFailure {
+    TypedOneClickFailure::new(kind, error.safe_detail).with_recovery(error.recovery)
 }
 
 fn typed_authority_cleanup_err(
@@ -342,19 +367,19 @@ pub(crate) fn runtime_transaction_requires_snapshot_preservation(stage: &str) ->
 pub(super) fn validate_interrupted_science_transaction_entry(
     stage: Option<&str>,
     runtime_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), InterruptedScienceRecoveryError> {
     if stage.is_some_and(runtime_transaction_requires_snapshot_preservation) && runtime_id.is_none()
     {
-        return Err(
-            "检测到旧版或无法识别的 Science 启动中断记录；无法证明当时使用的 runtime，已拒绝自动清理快照或再次启动；environment_uncertain；newer_runtime_required；recovery_status=manual_recovery_required"
-                .into(),
-        );
+        return Err(InterruptedScienceRecoveryError::new(
+            "检测到旧版或无法识别的 Science 启动中断记录；无法证明当时使用的 runtime，已拒绝自动清理快照或再次启动；environment_uncertain；newer_runtime_required；recovery_status=manual_recovery_required",
+            ProjectedRecovery::environment_uncertain_manual(),
+        ));
     }
     if stage.is_some_and(|stage| stage.starts_with(AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX)) {
-        return Err(
-            "检测到 authority 快照已登记但受保护状态写入未完成；已保留恢复快照并拒绝把部分写入态作为新基线；recovery_status=manual_recovery_required"
-                .into(),
-        );
+        return Err(InterruptedScienceRecoveryError::new(
+            "检测到 authority 快照已登记但受保护状态写入未完成；已保留恢复快照并拒绝把部分写入态作为新基线；recovery_status=manual_recovery_required",
+            ProjectedRecovery::MANUAL_RECOVERY_REQUIRED,
+        ));
     }
     Ok(())
 }
@@ -362,17 +387,17 @@ pub(super) fn validate_interrupted_science_transaction_entry(
 fn validate_interrupted_science_environment_runtime(
     expected_runtime_id: Option<&str>,
     runtime: &ScienceRuntimeIdentity,
-) -> Result<(), String> {
+) -> Result<(), InterruptedScienceRecoveryError> {
     let Some(expected_runtime_id) = expected_runtime_id else {
         return Ok(());
     };
     if runtime.environment_transaction_id() == expected_runtime_id {
         Ok(())
     } else {
-        Err(
-            "上次启动在 Science 环境暴露边界中断，当前 executable 与中断事务不一致；已拒绝自动启动旧版或其他 runtime；environment_uncertain；newer_runtime_required；recovery_status=manual_recovery_required"
-                .into(),
-        )
+        Err(InterruptedScienceRecoveryError::new(
+            "上次启动在 Science 环境暴露边界中断，当前 executable 与中断事务不一致；已拒绝自动启动旧版或其他 runtime；environment_uncertain；newer_runtime_required；recovery_status=manual_recovery_required",
+            ProjectedRecovery::environment_uncertain_manual(),
+        ))
     }
 }
 
@@ -1397,7 +1422,7 @@ fn one_click_login_with_options<R: Runtime>(
         interrupted_environment_stage,
         interrupted_environment_runtime_id,
     )
-    .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+    .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
     let active_profile = cfg.active_profile().ok_or_else(|| {
         typed_one_click_err(
             OneClickFailureKind::NoActiveProfile,
@@ -1471,7 +1496,7 @@ fn one_click_login_with_options<R: Runtime>(
                 interrupted_environment_runtime_id,
                 &running_runtime,
             )
-            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+            .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
             let desired_binding = crate::runtime::provider::desired_runtime_binding(
                 &cfg,
                 active_profile,
@@ -1540,10 +1565,11 @@ fn one_click_login_with_options<R: Runtime>(
         SandboxScienceState::Unknown => {
             trace.finish("error=sandbox_state_unknown_before_start");
             if interrupted_environment_runtime_id.is_some() {
-                return Err(typed_one_click_err(
+                return Err(TypedOneClickFailure::new(
                     OneClickFailureKind::ScienceStart,
                     "上次启动在 Science 环境暴露边界中断，且当前 listener/runtime 身份无法确认；已拒绝自动恢复；environment_uncertain；recovery_status=manual_recovery_required",
-                ));
+                )
+                .with_recovery(ProjectedRecovery::environment_uncertain_manual()));
             }
             return Err(typed_one_click_err(
                 OneClickFailureKind::ScienceStart,
@@ -1557,7 +1583,7 @@ fn one_click_login_with_options<R: Runtime>(
         interrupted_environment_runtime_id,
         &launch_runtime,
     )
-    .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+    .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
     let mut rollback_context = OneClickRollbackContext {
         proxy_action: ProxyAction::Reused,
         sandbox_port: sport,

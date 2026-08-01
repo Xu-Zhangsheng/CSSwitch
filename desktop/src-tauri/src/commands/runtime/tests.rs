@@ -160,10 +160,10 @@ fn science_operation_failures_have_stable_structured_stages() {
         authority_failure.kind(),
         OneClickFailureKind::AuthoritySnapshot
     );
-    assert_eq!(
-        project_one_click_failure(authority_failure)["stage"],
-        "science_start"
-    );
+    let authority_dto = project_one_click_failure(authority_failure);
+    assert_eq!(authority_dto["stage"], "science_start");
+    assert_eq!(authority_dto["recovery_status"], "manual_recovery_required");
+    assert_eq!(authority_dto["environment_status"], "not_exposed");
     let not_managed_failure = recovery_failure(
         InterruptedGatewayRecoveryErrorKind::NotManaged,
         "Science authority/environment authority 快照 Science 环境暴露",
@@ -172,10 +172,10 @@ fn science_operation_failures_have_stable_structured_stages() {
         not_managed_failure.kind(),
         OneClickFailureKind::GatewayStart
     );
-    assert_eq!(
-        project_one_click_failure(not_managed_failure)["stage"],
-        "gateway_start"
-    );
+    let not_managed_dto = project_one_click_failure(not_managed_failure);
+    assert_eq!(not_managed_dto["stage"], "gateway_start");
+    assert_eq!(not_managed_dto["recovery_status"], "degraded");
+    assert_eq!(not_managed_dto["environment_status"], "not_exposed");
     let stop_unknown_failure = recovery_failure(
         InterruptedGatewayRecoveryErrorKind::StopUnknown(
             InterruptedGatewayStopUnknownKind::SignalFailed,
@@ -186,10 +186,10 @@ fn science_operation_failures_have_stable_structured_stages() {
         stop_unknown_failure.kind(),
         OneClickFailureKind::GatewayStart
     );
-    assert_eq!(
-        project_one_click_failure(stop_unknown_failure)["stage"],
-        "gateway_start"
-    );
+    let stop_unknown_dto = project_one_click_failure(stop_unknown_failure);
+    assert_eq!(stop_unknown_dto["stage"], "gateway_start");
+    assert_eq!(stop_unknown_dto["recovery_status"], "degraded");
+    assert_eq!(stop_unknown_dto["environment_status"], "not_exposed");
 }
 
 #[test]
@@ -1281,7 +1281,7 @@ fn isolated_ssh_prevalidation_precedes_oauth_mutation() {
             sandbox_session::one_click_login(handle, state.clone(), lifecycle.as_ref(), None, None);
         let exact_error = result
             .as_ref()
-            .is_err_and(|error| error.contains(expected_error));
+            .is_err_and(|error| error.to_string().contains(expected_error));
         let authorities_unchanged = config::load_from(&config_dir).unwrap() == config_before
             && app_authority_projection(&state) == app_before
             && authority_tree(&home.join(".ssh")) == system_ssh_before
@@ -2890,6 +2890,7 @@ fn run_r0_pre_snapshot_child(oracle: &str, tmp: &Path) {
         force_cleanup_isolated_fixture(&state, tmp, sandbox_port, proxy_port);
         assert!(
             result.as_ref().is_err_and(|error| error
+                .to_string()
                 .contains("test-only post-stop failure after exact process and receipt cleanup")),
             "fixture must return the injected post-stop error: {result:?}"
         );
@@ -3211,9 +3212,11 @@ fn isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt() {
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
     assert!(
-        failed
-            .as_ref()
-            .is_err_and(|error| { error.contains("test-only managed launch commit failure") }),
+        failed.as_ref().is_err_and(|error| {
+            error
+                .to_string()
+                .contains("test-only managed launch commit failure")
+        }),
         "fixture must reach the post-status managed-receipt failure: {failed:?}"
     );
     assert!(
@@ -3461,9 +3464,11 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
     assert!(
-        failed
-            .as_ref()
-            .is_err_and(|error| { error.contains("test-only managed launch commit failure") }),
+        failed.as_ref().is_err_and(|error| {
+            error
+                .to_string()
+                .contains("test-only managed launch commit failure")
+        }),
         "fixture must reach the post-status managed-receipt failure: {failed:?}"
     );
     assert_eq!(
@@ -3508,7 +3513,9 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
             && app_after.science_confirmed_stopped.as_ref() == Some(&prior_runtime);
         assert!(
                 failed.as_ref().is_err_and(|error| {
-                    error.contains("test-only prior Science post-spawn validation failure")
+                    error
+                        .to_string()
+                        .contains("test-only prior Science post-spawn validation failure")
                 }) && verified_restart_identity_absent
                     && honest_stopped,
                 "a post-spawn prior restart validation failure must clean the exact verified candidate PID/process-start identity and port, leave no receipt, and keep AppState honestly stopped: result={failed:?}, verified_identity_recorded={}, verified_identity_absent={verified_restart_identity_absent}, listener_present={}, receipt_present={}, app_runtime_present={}, app_confirmed_stopped={}",
@@ -3683,9 +3690,11 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
     assert!(
-        failed.as_ref().is_err_and(
-            |error| error.contains("test-only one-click authority snapshot capture failure")
-        ),
+        failed.as_ref().is_err_and(|error| {
+            error
+                .to_string()
+                .contains("test-only one-click authority snapshot capture failure")
+        }),
         "fixture must reach the injected snapshot capture failure: {failed:?}"
     );
     assert!(
@@ -5515,7 +5524,7 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
             assert!(
                 result
                     .as_ref()
-                    .is_err_and(|error| error.contains("CSSwitch 私有状态目录")),
+                    .is_err_and(|error| error.to_string().contains("CSSwitch 私有状态目录")),
                 "fixture must fail while publishing the missing marker: {result:?}"
             );
             assert!(
@@ -5531,7 +5540,9 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
         "marker-late-failure" => {
             assert!(
                 result.as_ref().is_err_and(|error| {
-                    error.contains("test-only healthy reopen catalog failure")
+                    error
+                        .to_string()
+                        .contains("test-only healthy reopen catalog failure")
                 }),
                 "fixture must fail only after the active Gateway restart: {result:?}"
             );

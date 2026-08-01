@@ -289,7 +289,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
                 "安全停止失败"
             };
             assert!(
-                error.contains(expected),
+                error.to_string().contains(expected),
                 "{label} must keep its existing safe detail: {error}"
             );
         }
@@ -389,7 +389,9 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
     assert!(
         result.as_ref().is_err_and(|error| error.kind()
             == InterruptedGatewayRecoveryErrorKind::NotManaged
-            && error.contains("未通过精确 Gateway binary/uid/PID 复核")),
+            && error
+                .to_string()
+                .contains("未通过精确 Gateway binary/uid/PID 复核")),
         "failed final identity recheck must preserve the post-stage NotManaged result: {result:?}"
     );
     assert!(
@@ -446,7 +448,7 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         == InterruptedGatewayRecoveryErrorKind::StopUnknown(
             InterruptedGatewayStopUnknownKind::SignalFailed
         )
-        && error.contains("安全停止失败")));
+        && error.to_string().contains("安全停止失败")));
     assert_r0_recovery_stage(&signal_dir, &signal_journal);
     assert!(
         signal_child.try_wait().unwrap().is_none(),
@@ -502,7 +504,9 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
     );
     assert!(refused_result.as_ref().is_err_and(|error| error.kind()
         == InterruptedGatewayRecoveryErrorKind::NotManaged
-        && error.contains("未通过精确 Gateway binary/uid/PID 复核")));
+        && error
+            .to_string()
+            .contains("未通过精确 Gateway binary/uid/PID 复核")));
     assert!(retry_child.try_wait().unwrap().is_none());
     assert_r0_recovery_stage(&retry_dir, &retry_journal);
 
@@ -690,8 +694,10 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         error.kind(),
         InterruptedGatewayRecoveryErrorKind::GatewayStart
     );
-    assert!(error.contains("target profile 与当前 active profile 不一致"));
-    assert!(error.contains("已保留 listener 和事务 journal"));
+    assert!(error
+        .to_string()
+        .contains("target profile 与当前 active profile 不一致"));
+    assert!(error.to_string().contains("已保留 listener 和事务 journal"));
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), before);
     assert_eq!(
         crate::config::load_from(&dir).unwrap().runtime_transaction,
@@ -717,7 +723,9 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot
     );
     assert!(
-        legacy_error.contains("manual_recovery_required"),
+        legacy_error
+            .to_string()
+            .contains("manual_recovery_required"),
         "legacy Science exposure must fail before listener probing: {legacy_error}"
     );
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), legacy_before);

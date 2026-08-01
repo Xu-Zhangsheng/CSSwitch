@@ -155,14 +155,6 @@ impl std::fmt::Display for AuthorityCleanupFailure {
     }
 }
 
-impl std::ops::Deref for AuthorityCleanupFailure {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.safe_detail
-    }
-}
-
 impl From<AuthorityCleanupFailure> for String {
     fn from(failure: AuthorityCleanupFailure) -> Self {
         failure.safe_detail
