@@ -41,7 +41,7 @@
         "metadata"
       ]
     },
-    "claim_state": "inferred",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -60,7 +60,9 @@
         "complete Rust library regression passed outside the restricted sandbox with 482 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
         "transaction contract asserts five typed compensation step results and forbids recovery/message parsing inside the compensation helper",
         "existing one-click DTO keys, coarse stage projection, diagnostic codes, and compensation operation ordering remain behavior-preserving",
-        "clean-context independent rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after repairing the prior Science disposition completeness finding"
+        "clean-context independent rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after repairing the prior Science disposition completeness finding",
+        "complete 15-suite GATE-SOURCE completion seal passed at exact SHA 7d3427f34398a542a70af0c1c4a7649b7f6ed630 with run id 391f1c07b49911c7f371bc78b86e7c01 and runner exit zero",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after verifying all 15 results, all 15 source observations, referenced hashes, snapshot entries, and approved ignored identities"
       ]
     },
     "does_not_claim_fix": true,

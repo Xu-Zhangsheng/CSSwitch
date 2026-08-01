@@ -132,7 +132,7 @@ focused source/unit 已实际执行并 PASS：`cleanup_recovery` 4 tests 与 tra
 decision 与引用哈希。结论不得外推到 artifact、installed、live provider、Science、SSH、
 签名、公证或公开 release。
 
-`R1-C` 已形成未提交 source candidate：`one_click.rs` 用
+`R1-C` 已收口（source）：`one_click.rs` 用
 `CompensationOutcome` 逐项表达 Science cleanup、SSH cleanup、authority restore、prior
 Science restart 与 snapshot cleanup，并以 typed environment exposure 汇总 candidate /
 cross-runtime 风险。one-click compensation 的 recovery/environment 只从这些 typed outcome
@@ -146,22 +146,26 @@ focused source/unit 已实际执行并 PASS：transaction tests 沙箱外 24 pas
 受限沙箱中的 transaction tests 为 20 passed / 4 `Operation not permitted` / 2 ignored，失败
 集中于动态 loopback，不计为 R1-C 产品失败。质量 metadata、impact-pr 与文档治理均 PASS；
 首轮 clean-context 审查发现 prior Science disposition 联动遗漏 HIGH，修复并加入组合回归后，
-由新的 clean-context reviewer 复审 PASS，零 BLOCK/HIGH/MEDIUM/LOW。当前 candidate 的 commit
-与 exact-SHA 15-suite `GATE-SOURCE` completion seal 尚未完成，因此不得写成 `R1-C DONE`，
-也不得外推到 artifact、installed、live provider、Science、SSH、签名、公证或公开 release。
+由新的 clean-context reviewer 复审 PASS，零 BLOCK/HIGH/MEDIUM/LOW。source implementation
+exact SHA `7d3427f34398a542a70af0c1c4a7649b7f6ed630` 取得十五 suite
+`GATE-SOURCE` completion seal PASS：run id `391f1c07b49911c7f371bc78b86e7c01`、runner
+exit 0；manifest 含十五个 test result 与十五个 source observation，desktop 身份为 523
+discovered / 523 executed / 41 approved ignored / 0 skipped。exact-SHA clean-context 独立
+完成审查亦 PASS，零 BLOCK/HIGH/MEDIUM/LOW，并复核全部三十个 result/observation 引用哈希、
+seal 引用、486 个 tracked snapshot entry 与 ignored identity。结论不得外推到 artifact、
+installed、live provider、Science、SSH、签名、公证或公开 release。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R1-A` | DONE | typed envelope 底座、冻结 DTO 投影、exact-SHA source gate 与独立审查收口 |
 | `R1-B` | DONE | authority snapshot / pending cleanup typed outcome、exact-SHA source gate 与独立审查收口 |
-| `R1-C` | IMPLEMENTED / UNSEALED | one-click compensation typed aggregate；质量与独立审查 PASS，待 commit 与 exact-SHA gate 收口 |
+| `R1-C` | DONE | one-click compensation typed aggregate、exact-SHA source gate 与独立审查收口 |
 | `R1-D` | NOT-STARTED | interrupted Gateway recovery typed outcome |
 | `R1-E` | NOT-STARTED | production message semantic parsing 清零 |
 | `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
 
-唯一 `NEXT` 是收口 `R1-C`：提交已通过审查的 candidate，绑定 clean exact SHA 执行完整
-source gate，随后完成 closure metadata。完成前不得进入 `R1-D`；不得触碰 R2 journal
-schema、R3 state owner 或 R4 mutation lease。
+唯一 `NEXT` 是 `R1-D` interrupted Gateway recovery typed outcome；本次 R1-C 收口不提前
+进入该阶段，不得触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 
