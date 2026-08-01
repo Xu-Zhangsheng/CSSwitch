@@ -129,14 +129,14 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
                 Err(primary)
             } else {
                 Err(TypedOneClickFailure::new(
-                    primary.kind,
+                    primary.kind(),
                     format!(
                         "{}；healthy_reopen_recovery={}",
-                        primary.message,
+                        primary.safe_detail,
                         recovery_errors.join("; ")
                     ),
                 )
-                .with_recovery(primary.recovery))
+                .with_recovery(primary.projected_recovery()))
             }
         }
     }

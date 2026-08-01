@@ -183,7 +183,7 @@ pub(crate) fn reconcile_science_for_active<R: Runtime>(
         Some(&mut disposition),
     )
     .map_err(|failure| {
-        let cause = failure.message;
+        let cause = failure.safe_detail;
         match disposition {
             PriorScienceDisposition::Restored => {
                 ReconcileScienceError::PriorScienceRestored { cause }
@@ -433,7 +433,7 @@ struct OneClickFailure {
 
 impl OneClickFailure {
     fn message(&self) -> &str {
-        &self.typed.message
+        &self.typed.safe_detail
     }
 }
 
@@ -969,7 +969,7 @@ fn compensate_one_click_failure<R: Runtime>(
     failure: OneClickFailure,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
 ) -> Result<Value, TypedOneClickFailure> {
-    let original_kind = failure.typed.kind;
+    let original_kind = failure.typed.kind();
     let environment_uncertain = failure.rollback.launch_attempted;
     let cross_runtime_environment = environment_uncertain
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);

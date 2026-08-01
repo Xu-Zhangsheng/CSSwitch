@@ -1,4 +1,4 @@
-//! Typed one-click / auto-boot failure projection.
+//! Typed runtime failure and one-click / auto-boot projection.
 //!
 //! Failures carry a produce-site [`OneClickFailureKind`]; UI coarse `stage` and
 //! recovery fields are projected from that kind (and explicit recovery flags),
@@ -15,6 +15,76 @@ pub(crate) enum FailureDomain {
     RuntimeAdapter,
     #[allow(dead_code)] // reserved for Skill/SSH/Codex bridge-local failures
     Bridge,
+}
+
+/// Internal runtime phase. Product-facing stage strings are projected only at
+/// the command boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimePhase {
+    Prepare,
+    ScienceStop,
+    GatewayStart,
+    CatalogVerify,
+    ScienceStart,
+}
+
+impl RuntimePhase {
+    pub(crate) fn coarse_stage(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::ScienceStop => "science_stop",
+            Self::GatewayStart => "gateway_start",
+            Self::CatalogVerify => "catalog_verify",
+            Self::ScienceStart => "science_start",
+        }
+    }
+}
+
+/// Typed recovery disposition. Strings exist only in the frozen frontend DTO.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RecoveryDisposition {
+    NotNeeded,
+    Degraded,
+    EnvironmentUncertain,
+    CleanupRequired,
+    ManualRecoveryRequired,
+}
+
+impl RecoveryDisposition {
+    pub(crate) fn dto_status(self) -> &'static str {
+        match self {
+            Self::NotNeeded => "not_needed",
+            Self::Degraded => "degraded",
+            Self::EnvironmentUncertain => "environment_uncertain",
+            Self::CleanupRequired => "cleanup_required",
+            Self::ManualRecoveryRequired => "manual_recovery_required",
+        }
+    }
+}
+
+/// Whether a failed operation may have exposed the candidate Science
+/// environment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EnvironmentExposure {
+    NotExposed,
+    Uncertain,
+}
+
+impl EnvironmentExposure {
+    pub(crate) fn dto_status(self) -> &'static str {
+        match self {
+            Self::NotExposed => "not_exposed",
+            Self::Uncertain => "uncertain",
+        }
+    }
+}
+
+/// Sanitized internal cause. Causes are intentionally excluded from frontend
+/// projection; callers must never put credentials or private paths here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SafeCause {
+    pub code: &'static str,
+    pub safe_detail: String,
 }
 
 /// Fine-grained one-click failure kind. Maps 1:N to frozen UI coarse stages.
@@ -67,25 +137,24 @@ impl OneClickFailureKind {
         }
     }
 
-    /// Frozen product-facing coarse stage strings.
-    pub(crate) fn coarse_stage(self) -> &'static str {
+    pub(crate) fn phase(self) -> RuntimePhase {
         match self {
-            Self::ScienceStop => "science_stop",
-            Self::GatewayStart | Self::ProxySpawn | Self::ProxyHealth => "gateway_start",
-            Self::CatalogVerify => "catalog_verify",
+            Self::ScienceStop => RuntimePhase::ScienceStop,
+            Self::GatewayStart | Self::ProxySpawn | Self::ProxyHealth => RuntimePhase::GatewayStart,
+            Self::CatalogVerify => RuntimePhase::CatalogVerify,
             Self::AuthoritySnapshot
             | Self::SandboxLogin
             | Self::SandboxLaunch
             | Self::SandboxHealth
             | Self::ScienceDbReverify
             | Self::OpenSurface
-            | Self::ScienceStart => "science_start",
+            | Self::ScienceStart => RuntimePhase::ScienceStart,
             Self::ConfigLoad
             | Self::NoActiveProfile
             | Self::LaunchPlan
             | Self::AuthPreflight
             | Self::PreflightSnapshot
-            | Self::Prepare => "prepare",
+            | Self::Prepare => RuntimePhase::Prepare,
         }
     }
 }
@@ -93,90 +162,135 @@ impl OneClickFailureKind {
 /// Recovery / environment projection independent of message text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedRecovery {
-    pub recovery_status: &'static str,
-    pub environment_status: &'static str,
+    pub recovery: RecoveryDisposition,
+    pub environment: EnvironmentExposure,
 }
 
 impl ProjectedRecovery {
     pub(crate) const NOT_NEEDED: Self = Self {
-        recovery_status: "not_needed",
-        environment_status: "not_exposed",
+        recovery: RecoveryDisposition::NotNeeded,
+        environment: EnvironmentExposure::NotExposed,
     };
 
     pub(crate) const DEGRADED: Self = Self {
-        recovery_status: "degraded",
-        environment_status: "not_exposed",
+        recovery: RecoveryDisposition::Degraded,
+        environment: EnvironmentExposure::NotExposed,
     };
 
     pub(crate) const ENVIRONMENT_UNCERTAIN: Self = Self {
-        recovery_status: "environment_uncertain",
-        environment_status: "uncertain",
+        recovery: RecoveryDisposition::EnvironmentUncertain,
+        environment: EnvironmentExposure::Uncertain,
     };
 
     pub(crate) const CLEANUP_REQUIRED: Self = Self {
-        recovery_status: "cleanup_required",
-        environment_status: "not_exposed",
+        recovery: RecoveryDisposition::CleanupRequired,
+        environment: EnvironmentExposure::NotExposed,
     };
 
     pub(crate) const MANUAL_RECOVERY_REQUIRED: Self = Self {
-        recovery_status: "manual_recovery_required",
-        environment_status: "not_exposed",
+        recovery: RecoveryDisposition::ManualRecoveryRequired,
+        environment: EnvironmentExposure::NotExposed,
     };
 
     pub(crate) fn environment_uncertain_manual() -> Self {
         Self {
-            recovery_status: "manual_recovery_required",
-            environment_status: "uncertain",
+            recovery: RecoveryDisposition::ManualRecoveryRequired,
+            environment: EnvironmentExposure::Uncertain,
         }
     }
 
     pub(crate) fn cleanup_required_uncertain() -> Self {
         Self {
-            recovery_status: "cleanup_required",
-            environment_status: "uncertain",
+            recovery: RecoveryDisposition::CleanupRequired,
+            environment: EnvironmentExposure::Uncertain,
         }
     }
 }
 
-/// Typed one-click failure. Message is for humans/logs only and must not drive stage.
+/// Typed runtime failure envelope. `safe_detail` is for humans/logs only and
+/// must not drive domain, phase, recovery, or environment classification.
 #[derive(Clone, Debug)]
-pub(crate) struct TypedOneClickFailure {
-    pub kind: OneClickFailureKind,
-    pub message: String,
-    pub recovery: ProjectedRecovery,
+pub(crate) struct RuntimeError<K> {
+    domain: FailureDomain,
+    phase: RuntimePhase,
+    kind: K,
+    pub recovery: RecoveryDisposition,
+    pub environment: EnvironmentExposure,
+    pub cause_chain: Vec<SafeCause>,
+    pub safe_detail: String,
 }
 
-impl TypedOneClickFailure {
+pub(crate) type TypedOneClickFailure = RuntimeError<OneClickFailureKind>;
+
+impl RuntimeError<OneClickFailureKind> {
     pub(crate) fn new(kind: OneClickFailureKind, message: impl Into<String>) -> Self {
         Self {
+            domain: kind.domain(),
+            phase: kind.phase(),
             kind,
-            message: message.into(),
-            recovery: ProjectedRecovery::NOT_NEEDED,
+            recovery: RecoveryDisposition::NotNeeded,
+            environment: EnvironmentExposure::NotExposed,
+            cause_chain: Vec::new(),
+            safe_detail: message.into(),
         }
     }
 
     pub(crate) fn with_recovery(mut self, recovery: ProjectedRecovery) -> Self {
-        self.recovery = recovery;
+        self.recovery = recovery.recovery;
+        self.environment = recovery.environment;
+        self
+    }
+
+    #[allow(dead_code)] // R1-A envelope seam; R1-B/C populate production causes.
+    pub(crate) fn with_safe_cause(
+        mut self,
+        code: &'static str,
+        safe_detail: impl Into<String>,
+    ) -> Self {
+        self.cause_chain.push(SafeCause {
+            code,
+            safe_detail: safe_detail.into(),
+        });
         self
     }
 
     pub(crate) fn domain(&self) -> FailureDomain {
-        self.kind.domain()
+        self.domain
+    }
+
+    pub(crate) fn kind(&self) -> OneClickFailureKind {
+        self.kind
+    }
+
+    pub(crate) fn phase(&self) -> RuntimePhase {
+        self.phase
     }
 
     pub(crate) fn coarse_stage(&self) -> &'static str {
-        self.kind.coarse_stage()
+        self.phase().coarse_stage()
+    }
+
+    pub(crate) fn projected_recovery(&self) -> ProjectedRecovery {
+        ProjectedRecovery {
+            recovery: self.recovery,
+            environment: self.environment,
+        }
     }
 
     /// Project to the frozen one-click failure DTO (existing keys only).
     pub(crate) fn project_dto(&self) -> Value {
+        debug_assert_eq!(self.domain(), self.kind.domain());
+        debug_assert!(self
+            .cause_chain
+            .iter()
+            .all(|cause| !cause.code.is_empty() && !cause.safe_detail.is_empty()));
         json!({
             "action": "failed",
             "stage": self.coarse_stage(),
             "status": "error",
-            "recovery_status": self.recovery.recovery_status,
-            "environment_status": self.recovery.environment_status,
-            "message": self.message,
+            "recovery_status": self.recovery.dto_status(),
+            "environment_status": self.environment.dto_status(),
+            "message": self.safe_detail,
             "fallback_url": null,
         })
     }
@@ -185,38 +299,38 @@ impl TypedOneClickFailure {
     /// treat as degraded (matches prior command-layer journal presence check).
     pub(crate) fn apply_open_journal_degraded(mut self, journal_open: bool) -> Self {
         if journal_open
-            && self.recovery.recovery_status == ProjectedRecovery::NOT_NEEDED.recovery_status
-            && self.recovery.environment_status == ProjectedRecovery::NOT_NEEDED.environment_status
+            && self.recovery == RecoveryDisposition::NotNeeded
+            && self.environment == EnvironmentExposure::NotExposed
         {
-            self.recovery = ProjectedRecovery::DEGRADED;
+            self.recovery = RecoveryDisposition::Degraded;
         }
         self
     }
 }
 
-impl std::fmt::Display for TypedOneClickFailure {
+impl std::fmt::Display for RuntimeError<OneClickFailureKind> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&self.safe_detail)
     }
 }
 
-impl std::ops::Deref for TypedOneClickFailure {
+impl std::ops::Deref for RuntimeError<OneClickFailureKind> {
     type Target = str;
 
     fn deref(&self) -> &str {
-        &self.message
+        &self.safe_detail
     }
 }
 
-impl AsRef<str> for TypedOneClickFailure {
+impl AsRef<str> for RuntimeError<OneClickFailureKind> {
     fn as_ref(&self) -> &str {
-        &self.message
+        &self.safe_detail
     }
 }
 
-impl From<TypedOneClickFailure> for String {
-    fn from(value: TypedOneClickFailure) -> Self {
-        value.message
+impl From<RuntimeError<OneClickFailureKind>> for String {
+    fn from(value: RuntimeError<OneClickFailureKind>) -> Self {
+        value.safe_detail
     }
 }
 
@@ -248,48 +362,104 @@ mod tests {
 
     #[test]
     fn coarse_stage_table_is_stable() {
-        assert_eq!(
-            OneClickFailureKind::ScienceStop.coarse_stage(),
-            "science_stop"
-        );
-        assert_eq!(
-            OneClickFailureKind::ProxyHealth.coarse_stage(),
-            "gateway_start"
-        );
-        assert_eq!(
-            OneClickFailureKind::ProxySpawn.coarse_stage(),
-            "gateway_start"
-        );
-        assert_eq!(
-            OneClickFailureKind::GatewayStart.coarse_stage(),
-            "gateway_start"
-        );
-        assert_eq!(
-            OneClickFailureKind::CatalogVerify.coarse_stage(),
-            "catalog_verify"
-        );
-        assert_eq!(
-            OneClickFailureKind::SandboxLaunch.coarse_stage(),
-            "science_start"
-        );
-        assert_eq!(
-            OneClickFailureKind::SandboxHealth.coarse_stage(),
-            "science_start"
-        );
-        assert_eq!(
-            OneClickFailureKind::ScienceDbReverify.coarse_stage(),
-            "science_start"
-        );
-        assert_eq!(OneClickFailureKind::ConfigLoad.coarse_stage(), "prepare");
-        assert_eq!(OneClickFailureKind::AuthPreflight.coarse_stage(), "prepare");
-        assert_eq!(
-            OneClickFailureKind::CatalogVerify.domain(),
-            FailureDomain::GatewayProvider
-        );
-        assert_eq!(
-            TypedOneClickFailure::new(OneClickFailureKind::ScienceStop, "x").domain(),
-            FailureDomain::RuntimeTransaction
-        );
+        let cases = [
+            (
+                OneClickFailureKind::ConfigLoad,
+                FailureDomain::Desktop,
+                RuntimePhase::Prepare,
+            ),
+            (
+                OneClickFailureKind::NoActiveProfile,
+                FailureDomain::Desktop,
+                RuntimePhase::Prepare,
+            ),
+            (
+                OneClickFailureKind::LaunchPlan,
+                FailureDomain::Desktop,
+                RuntimePhase::Prepare,
+            ),
+            (
+                OneClickFailureKind::AuthPreflight,
+                FailureDomain::Desktop,
+                RuntimePhase::Prepare,
+            ),
+            (
+                OneClickFailureKind::PreflightSnapshot,
+                FailureDomain::Desktop,
+                RuntimePhase::Prepare,
+            ),
+            (
+                OneClickFailureKind::Prepare,
+                FailureDomain::Desktop,
+                RuntimePhase::Prepare,
+            ),
+            (
+                OneClickFailureKind::ScienceStop,
+                FailureDomain::RuntimeTransaction,
+                RuntimePhase::ScienceStop,
+            ),
+            (
+                OneClickFailureKind::GatewayStart,
+                FailureDomain::GatewayProvider,
+                RuntimePhase::GatewayStart,
+            ),
+            (
+                OneClickFailureKind::ProxySpawn,
+                FailureDomain::GatewayProvider,
+                RuntimePhase::GatewayStart,
+            ),
+            (
+                OneClickFailureKind::ProxyHealth,
+                FailureDomain::GatewayProvider,
+                RuntimePhase::GatewayStart,
+            ),
+            (
+                OneClickFailureKind::CatalogVerify,
+                FailureDomain::GatewayProvider,
+                RuntimePhase::CatalogVerify,
+            ),
+            (
+                OneClickFailureKind::AuthoritySnapshot,
+                FailureDomain::RuntimeTransaction,
+                RuntimePhase::ScienceStart,
+            ),
+            (
+                OneClickFailureKind::SandboxLogin,
+                FailureDomain::RuntimeAdapter,
+                RuntimePhase::ScienceStart,
+            ),
+            (
+                OneClickFailureKind::SandboxLaunch,
+                FailureDomain::RuntimeAdapter,
+                RuntimePhase::ScienceStart,
+            ),
+            (
+                OneClickFailureKind::SandboxHealth,
+                FailureDomain::RuntimeAdapter,
+                RuntimePhase::ScienceStart,
+            ),
+            (
+                OneClickFailureKind::ScienceDbReverify,
+                FailureDomain::RuntimeAdapter,
+                RuntimePhase::ScienceStart,
+            ),
+            (
+                OneClickFailureKind::OpenSurface,
+                FailureDomain::RuntimeAdapter,
+                RuntimePhase::ScienceStart,
+            ),
+            (
+                OneClickFailureKind::ScienceStart,
+                FailureDomain::RuntimeAdapter,
+                RuntimePhase::ScienceStart,
+            ),
+        ];
+        for (kind, domain, phase) in cases {
+            let failure = TypedOneClickFailure::new(kind, "x");
+            assert_eq!(failure.domain(), domain, "domain drift for {kind:?}");
+            assert_eq!(failure.phase(), phase, "phase drift for {kind:?}");
+            assert_eq!(failure.coarse_stage(), phase.coarse_stage());
+        }
     }
 
     #[test]
@@ -332,12 +502,17 @@ mod tests {
     fn open_journal_only_upgrades_not_needed() {
         let base = TypedOneClickFailure::new(OneClickFailureKind::Prepare, "配置不可用");
         let degraded = base.clone().apply_open_journal_degraded(true);
-        assert_eq!(degraded.recovery.recovery_status, "degraded");
+        assert_eq!(degraded.recovery, RecoveryDisposition::Degraded);
+        assert_eq!(degraded.environment, EnvironmentExposure::NotExposed);
 
         let uncertain = TypedOneClickFailure::new(OneClickFailureKind::ScienceStart, "x")
             .with_recovery(ProjectedRecovery::ENVIRONMENT_UNCERTAIN)
             .apply_open_journal_degraded(true);
-        assert_eq!(uncertain.recovery.recovery_status, "environment_uncertain");
+        assert_eq!(
+            uncertain.recovery,
+            RecoveryDisposition::EnvironmentUncertain
+        );
+        assert_eq!(uncertain.environment, EnvironmentExposure::Uncertain);
     }
 
     #[test]
@@ -357,19 +532,19 @@ mod tests {
             "x；recovery_status=cleanup_required；environment_uncertain",
         )
         .unwrap();
-        assert_eq!(cleanup.recovery_status, "cleanup_required");
-        assert_eq!(cleanup.environment_status, "uncertain");
+        assert_eq!(cleanup.recovery, RecoveryDisposition::CleanupRequired);
+        assert_eq!(cleanup.environment, EnvironmentExposure::Uncertain);
 
         let manual = recovery_from_diagnostic_codes(
             "x；environment_uncertain；recovery_status=manual_recovery_required",
         )
         .unwrap();
-        assert_eq!(manual.recovery_status, "manual_recovery_required");
-        assert_eq!(manual.environment_status, "uncertain");
+        assert_eq!(manual.recovery, RecoveryDisposition::ManualRecoveryRequired);
+        assert_eq!(manual.environment, EnvironmentExposure::Uncertain);
 
         let bare = recovery_from_diagnostic_codes("x；environment_uncertain").unwrap();
-        assert_eq!(bare.recovery_status, "environment_uncertain");
-        assert_eq!(bare.environment_status, "uncertain");
+        assert_eq!(bare.recovery, RecoveryDisposition::EnvironmentUncertain);
+        assert_eq!(bare.environment, EnvironmentExposure::Uncertain);
 
         assert!(recovery_from_diagnostic_codes("plain failure").is_none());
     }
@@ -382,7 +557,21 @@ mod tests {
         )
         .with_recovery(ProjectedRecovery::cleanup_required_uncertain());
         assert_eq!(failure.coarse_stage(), "catalog_verify");
-        assert_eq!(failure.recovery.recovery_status, "cleanup_required");
+        assert_eq!(failure.recovery, RecoveryDisposition::CleanupRequired);
         assert_eq!(failure.project_dto()["stage"], "catalog_verify");
+    }
+
+    #[test]
+    fn cause_chain_is_internal_and_safe_detail_is_the_frozen_message() {
+        let failure =
+            TypedOneClickFailure::new(OneClickFailureKind::GatewayStart, "现有用户可见文本")
+                .with_safe_cause("gateway_spawn_failed", "已脱敏的内部原因");
+        assert_eq!(failure.cause_chain.len(), 1);
+        assert_eq!(failure.cause_chain[0].code, "gateway_spawn_failed");
+        assert_eq!(failure.cause_chain[0].safe_detail, "已脱敏的内部原因");
+        let dto = failure.project_dto();
+        assert_eq!(dto["message"], "现有用户可见文本");
+        assert!(!dto.to_string().contains("gateway_spawn_failed"));
+        assert!(!dto.to_string().contains("已脱敏的内部原因"));
     }
 }

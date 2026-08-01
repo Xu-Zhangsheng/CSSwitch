@@ -396,8 +396,8 @@ pub(super) fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_
         .ok()
         .and_then(|cfg| cfg.runtime_transaction)
         .is_some();
-    let failure = if failure.recovery == ProjectedRecovery::NOT_NEEDED {
-        if let Some(recovery) = recovery_from_diagnostic_codes(&failure.message) {
+    let failure = if failure.projected_recovery() == ProjectedRecovery::NOT_NEEDED {
+        if let Some(recovery) = recovery_from_diagnostic_codes(&failure.safe_detail) {
             failure.with_recovery(recovery)
         } else {
             failure.apply_open_journal_degraded(journal_open)
