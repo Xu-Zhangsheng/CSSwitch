@@ -15,7 +15,8 @@
       "desktop/src-tauri/src/runtime/proxy_lifecycle.rs",
       "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs",
       "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs",
-      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-FAILURE-R1-D.json"
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-FAILURE-R1-D.json",
+      "test/test_skill_runtime_boundary.py"
     ],
     "requirement_ids": [
       "REQ-083-PATHS",
@@ -65,7 +66,9 @@
         "all three NotNeeded early returns assert the typed outcome and preserve config and journal bytes",
         "journal stage publication still precedes the final process identity callback, and refusal tests retain the listener and journal",
         "command projection assertions prove error kind overrides both missing and misleading Chinese message keywords",
-        "clean-context independent rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after repairing the initial NotNeeded coverage finding"
+        "the source boundary contract binds the production recovery call to the typed projection helper, requires the exact error-kind to OneClickFailureKind mapping, and forbids message contains classification in that helper",
+        "clean-context independent rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after repairing the initial NotNeeded coverage finding",
+        "a separate clean-context source-contract rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after binding the production recovery call to the typed helper"
       ]
     },
     "does_not_claim_fix": true,

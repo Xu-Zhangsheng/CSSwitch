@@ -155,7 +155,7 @@ discovered / 523 executed / 41 approved ignored / 0 skipped。exact-SHA clean-co
 seal 引用、486 个 tracked snapshot entry 与 ignored identity。结论不得外推到 artifact、
 installed、live provider、Science、SSH、签名、公证或公开 release。
 
-`R1-D` 已形成未提交 source candidate：`recover_interrupted_gateway` 返回 typed
+`R1-D` source implementation 已形成并提交：`recover_interrupted_gateway` 返回 typed
 `InterruptedGatewayRecoveryOutcome` / `InterruptedGatewayRecoveryError`。成功路径区分
 `NotNeeded` 与 `Stopped(pid)`；停止边界区分 `NotManaged` 与 `StopUnknown`，后者继续以
 `SignalFailed` / `ExitUnconfirmed` 表达“信号发送失败”和“信号已发送但退出未确认”。command
@@ -169,22 +169,27 @@ ignored，command structured-stage 1 passed / 0 failed；完整 Rust lib 沙箱�
 permitted`，随后按隔离 fixture 边界在沙箱外通过，不计为产品失败。clean-context candidate
 首轮审查发现三个 `NotNeeded` 早退缺少 typed 回归 LOW；已在原测试 identity 内补齐无
 journal、同进程已受管、端口无 listener 及 config/journal 不改写断言，随后由新的
-clean-context reviewer 复审 PASS，零 BLOCK/HIGH/MEDIUM/LOW。commit 与 exact-SHA 十五 suite
+clean-context reviewer 复审 PASS，零 BLOCK/HIGH/MEDIUM/LOW。R1-D closure 与 exact-SHA 十五 suite
 `GATE-SOURCE` completion seal 尚未完成，因此不得写成 `R1-D DONE`，也不得外推到 artifact、
-installed、live provider、Science、SSH、签名、公证或公开 release。
+installed、live provider、Science、SSH、签名、公证或公开 release。implementation commit 为
+`dc8bf969f76771eb3d8c7cd9188e9d27390b2d7e`；其首次 exact-SHA gate 的十四 suite PASS，唯一
+`SUITE-ORPHAN-SKILL-BOUNDARY` 因仍绑定旧 `.map_err(` 源码形状而 FAIL。该 source-contract
+已改为绑定 production recovery call 与 typed helper、检查 exact kind mapping 并禁止 helper
+内 message `contains`；修复后 boundary module 11 passed / 0 failed，新的 clean-context
+reviewer 复审 PASS，零 BLOCK/HIGH/MEDIUM/LOW。修复 commit 与完整 gate 重跑仍待完成。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R1-A` | DONE | typed envelope 底座、冻结 DTO 投影、exact-SHA source gate 与独立审查收口 |
 | `R1-B` | DONE | authority snapshot / pending cleanup typed outcome、exact-SHA source gate 与独立审查收口 |
 | `R1-C` | DONE | one-click compensation typed aggregate、exact-SHA source gate 与独立审查收口 |
-| `R1-D` | IMPLEMENTED / UNSEALED | interrupted Gateway recovery typed outcome；focused/full Rust 与独立审查 PASS，待 commit 与 exact-SHA gate 收口 |
+| `R1-D` | IMPLEMENTED / UNSEALED | interrupted Gateway recovery typed outcome；implementation 已提交，gate-contract 修复与独立审查 PASS，待修复 commit 与 exact-SHA gate 收口 |
 | `R1-E` | NOT-STARTED | production message semantic parsing 清零 |
 | `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
 
-唯一 `NEXT` 是收口 `R1-D`：提交已通过审查的 candidate，绑定 clean exact SHA 执行完整
-source gate，随后完成 closure metadata。完成前不得进入 `R1-E`；不得触碰 R2 journal
-schema、R3 state owner 或 R4 mutation lease。
+唯一 `NEXT` 是收口 `R1-D`：提交已通过审查的 gate-contract 修复，绑定新的 clean exact SHA
+重跑完整 source gate，随后完成 closure metadata。完成前不得进入 `R1-E`；不得触碰 R2
+journal schema、R3 state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 

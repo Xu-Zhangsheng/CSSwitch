@@ -256,6 +256,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         runtime_js = (ROOT / "desktop/src/runtime-controller.js").read_text()
         session = sandbox_session_source()
         runtime = runtime_command_source()
+        command_one_click = runtime_command_module("one_click")
         lifecycle = proxy_lifecycle_source()
         lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
         one_click_runtime = session.split(
@@ -297,7 +298,31 @@ class SkillRuntimeBoundary(unittest.TestCase):
         for stage in ("start_gateway", "start_science", "verify_science_catalog"):
             self.assertIn(f'"{stage}"', session)
 
-        self.assertIn("recover_interrupted_gateway(&app, &state).map_err(", runtime)
+        one_click_command = command_one_click.split(
+            "pub(crate) fn one_click_login_cmd", 1
+        )[1].split("pub(super) async fn restore_history_choice_command", 1)[0]
+        self.assertRegex(
+            one_click_command,
+            r"(?s)recover_interrupted_gateway\(&app, &state\)\s*"
+            r"\.map_err\(typed_interrupted_gateway_recovery_error\)\?;",
+        )
+        recovery_projection = command_one_click.split(
+            "fn typed_interrupted_gateway_recovery_error", 1
+        )[1].split("impl OneClickGatewayPreflightSnapshot", 1)[0]
+        self.assertIn("error.kind()", recovery_projection)
+        self.assertRegex(
+            recovery_projection,
+            r"(?s)InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot\s*=>\s*\{\s*"
+            r"OneClickFailureKind::AuthoritySnapshot\s*\}",
+        )
+        self.assertRegex(
+            recovery_projection,
+            r"(?s)InterruptedGatewayRecoveryErrorKind::GatewayStart\s*\|\s*"
+            r"InterruptedGatewayRecoveryErrorKind::NotManaged\s*\|\s*"
+            r"InterruptedGatewayRecoveryErrorKind::StopUnknown\(_\)\s*=>\s*"
+            r"OneClickFailureKind::GatewayStart",
+        )
+        self.assertNotIn(".contains(", recovery_projection)
         self.assertIn("stop_managed_gateway_on_port", lifecycle)
         self.assertIn('health.intent == "formal"', lifecycle)
         self.assertIn("journal.previous_gateway.as_ref()", lifecycle)
