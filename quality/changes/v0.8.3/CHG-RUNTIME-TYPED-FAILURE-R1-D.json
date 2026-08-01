@@ -68,7 +68,9 @@
         "command projection assertions prove error kind overrides both missing and misleading Chinese message keywords",
         "the source boundary contract binds the production recovery call to the typed projection helper, requires the exact error-kind to OneClickFailureKind mapping, and forbids message contains classification in that helper",
         "clean-context independent rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after repairing the initial NotNeeded coverage finding",
-        "a separate clean-context source-contract rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after binding the production recovery call to the typed helper"
+        "a separate clean-context source-contract rereview passed with zero BLOCK, HIGH, MEDIUM, or LOW findings after binding the production recovery call to the typed helper",
+        "complete 15-suite GATE-SOURCE completion seal passed at exact SHA b93002ae95fc88a89ac5e30addd9cea693113312 with run id 0ad26c3207407a43056bd981b378bb38 and runner exit zero",
+        "exact-SHA clean-context completion review passed with zero findings after verifying 15 results and observations, all manifest and evidence hashes, 487 snapshot entries, and approved ignored identities"
       ]
     },
     "does_not_claim_fix": true,
