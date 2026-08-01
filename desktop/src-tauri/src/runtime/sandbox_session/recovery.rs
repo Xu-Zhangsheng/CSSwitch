@@ -27,6 +27,7 @@ use super::authority_snapshot::{
 use super::pending_cleanup::{
     finalize_failed_authority_snapshot, finalize_registered_authority_cleanup,
     prepare_registered_authority_cleanup, register_authority_cleanup, AuthorityCleanupContext,
+    AuthorityCleanupFailure, AuthorityCleanupOutcome, AuthorityCleanupPhase,
     RegisteredAuthorityCleanup,
 };
 
@@ -455,11 +456,21 @@ impl OneClickAuthoritySnapshot {
             Ok(root)
         })() {
             Ok(root) => root,
-            Err(error) => return Err(finalize_failed_authority_snapshot(&cleanup_context, error)),
+            Err(error) => {
+                return Err(finalize_failed_authority_snapshot(
+                    &cleanup_context,
+                    error.to_string(),
+                ))
+            }
         };
         let cleanup_ticket = match register_authority_cleanup(&cleanup_context) {
             Ok(ticket) => ticket,
-            Err(error) => return Err(finalize_failed_authority_snapshot(&cleanup_context, error)),
+            Err(error) => {
+                return Err(finalize_failed_authority_snapshot(
+                    &cleanup_context,
+                    error.to_string(),
+                ))
+            }
         };
         let science_root = match Self::pin_science_root_and_validate_opaque_entries(auth_dir) {
             Ok(root) => root,
@@ -725,7 +736,10 @@ impl OneClickAuthoritySnapshot {
             errors.push(error);
         }
         if errors.is_empty() {
-            return self.cleanup_when_expendable();
+            return self
+                .cleanup_when_expendable()
+                .map(|_| ())
+                .map_err(String::from);
         }
         self.preserve_recovery = true;
         Err(errors.join("; "))
@@ -788,37 +802,50 @@ impl OneClickAuthoritySnapshot {
         }
     }
 
-    pub(super) fn cleanup_when_expendable(&mut self) -> Result<(), String> {
+    pub(super) fn cleanup_when_expendable(
+        &mut self,
+    ) -> Result<AuthorityCleanupOutcome, AuthorityCleanupFailure> {
         self.preserve_recovery = true;
         if self.cleanup_ticket.is_none() {
             self.cleanup_ticket = Some(register_authority_cleanup(&self.cleanup_context)?);
         }
-        let ticket = self
-            .cleanup_ticket
-            .as_ref()
-            .ok_or("cleanup_register_failed：事务快照清理票据缺失。")?;
+        let ticket = self.cleanup_ticket.as_ref().ok_or_else(|| {
+            AuthorityCleanupFailure::new(
+                AuthorityCleanupPhase::SnapshotRegistration,
+                "cleanup_register_failed：事务快照清理票据缺失。",
+            )
+        })?;
         let cleanup_ticket = prepare_registered_authority_cleanup(&self.cleanup_context, ticket)?;
         self.cleanup_ticket = Some(cleanup_ticket);
-        let ticket = self
-            .cleanup_ticket
-            .as_ref()
-            .ok_or("cleanup_register_failed：cleanup-only 票据缺失。")?;
+        let ticket = self.cleanup_ticket.as_ref().ok_or_else(|| {
+            AuthorityCleanupFailure::new(
+                AuthorityCleanupPhase::SnapshotRegistration,
+                "cleanup_register_failed：cleanup-only 票据缺失。",
+            )
+        })?;
         match finalize_registered_authority_cleanup(&self.cleanup_context, ticket) {
-            Ok(()) => {
+            Ok(outcome) => {
                 self.preserve_recovery = false;
                 self.cleanup_prepared = true;
-                Ok(())
+                Ok(outcome)
             }
             Err(error) => Err(error),
         }
     }
 
-    pub(super) fn prepare_success(&mut self, value: &mut Value) -> Result<(), String> {
+    pub(super) fn prepare_success(
+        &mut self,
+        value: &mut Value,
+    ) -> Result<(), AuthorityCleanupFailure> {
         match self.cleanup_when_expendable() {
-            Ok(()) => Ok(()),
-            Err(error) if error.contains("recovery_status=cleanup_required") => {
+            Ok(AuthorityCleanupOutcome::Cleared) => Ok(()),
+            Err(error) if error.cleanup_requirement().is_some() => {
                 self.preserve_recovery = true;
                 self.cleanup_prepared = true;
+                let recovery_path = error
+                    .cleanup_requirement()
+                    .map(|(path, _)| path)
+                    .unwrap_or(&self.backup_root);
                 if let Some(object) = value.as_object_mut() {
                     object.insert("status".into(), Value::String("degraded".into()));
                     object.insert(
@@ -827,7 +854,7 @@ impl OneClickAuthoritySnapshot {
                     );
                     object.insert(
                         "cleanup_recovery_path".into(),
-                        Value::String(self.backup_root.to_string_lossy().into_owned()),
+                        Value::String(recovery_path.to_string_lossy().into_owned()),
                     );
                     object.insert(
                         "cleanup_message".into(),

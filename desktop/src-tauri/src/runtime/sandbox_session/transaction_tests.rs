@@ -10,14 +10,14 @@ use super::{
     test_arm_authority_snapshot_directory_barrier,
     test_arm_authority_snapshot_fallback_create_failure,
     test_arm_authority_snapshot_parent_barrier, validate_interrupted_science_transaction_entry,
-    validate_system_ssh_wrapper_path, verify_gateway_model_catalog, AuthorityCopyBudget,
-    AuthoritySnapshotCategory, AuthoritySnapshotScope, AuthorityTreeSnapshot,
-    OneClickAuthoritySnapshot, PendingCleanupEntry, RegisteredAuthorityCleanup,
-    AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX, MAX_AUTHORITY_FULL_COPY_FILE_BYTES,
-    MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES, MAX_AUTHORITY_SNAPSHOT_ENTRIES,
-    MAX_AUTHORITY_SNAPSHOT_FILE_BYTES, MAX_AUTHORITY_SNAPSHOT_TOTAL_BYTES,
-    PENDING_CLEANUP_MARKER_FILE, SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX,
-    SCIENCE_OWNED_OPAQUE_ROOTS,
+    validate_system_ssh_wrapper_path, verify_gateway_model_catalog, AuthorityCleanupOutcome,
+    AuthorityCleanupPhase, AuthorityCopyBudget, AuthoritySnapshotCategory, AuthoritySnapshotScope,
+    AuthorityTreeSnapshot, OneClickAuthoritySnapshot, PendingCleanupEntry,
+    RegisteredAuthorityCleanup, AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX,
+    MAX_AUTHORITY_FULL_COPY_FILE_BYTES, MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES,
+    MAX_AUTHORITY_SNAPSHOT_ENTRIES, MAX_AUTHORITY_SNAPSHOT_FILE_BYTES,
+    MAX_AUTHORITY_SNAPSHOT_TOTAL_BYTES, PENDING_CLEANUP_MARKER_FILE,
+    SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX, SCIENCE_OWNED_OPAQUE_ROOTS,
 };
 use crate::config::{self, Config, RuntimeBindingCommit};
 use crate::provider_contracts::ModelPolicy;

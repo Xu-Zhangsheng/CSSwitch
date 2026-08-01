@@ -85,11 +85,128 @@ pub(super) enum PendingCleanupTargetState {
     Unsafe,
 }
 
-pub(super) fn cleanup_required_error(primary: &str, path: &Path, code: &str) -> String {
-    format!(
-        "{primary}；status=degraded；recovery_status=cleanup_required；recovery_path={}；cleanup_code={code}",
-        path.display()
-    )
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AuthorityCleanupPhase {
+    SnapshotRegistration,
+    IdentityValidation,
+    Cleanup,
+    Retry,
+    Clear,
+}
+
+impl AuthorityCleanupPhase {
+    pub(super) fn cause_code(self) -> &'static str {
+        match self {
+            Self::SnapshotRegistration => "authority_snapshot_registration_failed",
+            Self::IdentityValidation => "authority_cleanup_identity_invalid",
+            Self::Cleanup => "authority_cleanup_failed",
+            Self::Retry => "authority_cleanup_retry_failed",
+            Self::Clear => "authority_cleanup_clear_failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AuthorityCleanupFailure {
+    phase: AuthorityCleanupPhase,
+    safe_detail: String,
+    cleanup_required: Option<(PathBuf, &'static str)>,
+}
+
+impl AuthorityCleanupFailure {
+    pub(super) fn new(phase: AuthorityCleanupPhase, safe_detail: impl Into<String>) -> Self {
+        Self {
+            phase,
+            safe_detail: safe_detail.into(),
+            cleanup_required: None,
+        }
+    }
+
+    fn cleanup_required(
+        phase: AuthorityCleanupPhase,
+        primary: &str,
+        path: &Path,
+        code: &'static str,
+    ) -> Self {
+        Self {
+            phase,
+            safe_detail: format!(
+                "{primary}；status=degraded；recovery_status=cleanup_required；recovery_path={}；cleanup_code={code}",
+                path.display()
+            ),
+            cleanup_required: Some((path.to_path_buf(), code)),
+        }
+    }
+
+    pub(super) fn phase(&self) -> AuthorityCleanupPhase {
+        self.phase
+    }
+
+    pub(super) fn cleanup_requirement(&self) -> Option<(&Path, &'static str)> {
+        self.cleanup_required
+            .as_ref()
+            .map(|(path, code)| (path.as_path(), *code))
+    }
+}
+
+impl std::fmt::Display for AuthorityCleanupFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.safe_detail)
+    }
+}
+
+impl std::ops::Deref for AuthorityCleanupFailure {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.safe_detail
+    }
+}
+
+impl From<AuthorityCleanupFailure> for String {
+    fn from(failure: AuthorityCleanupFailure) -> Self {
+        failure.safe_detail
+    }
+}
+
+fn cleanup_failure(safe_detail: impl Into<String>) -> AuthorityCleanupFailure {
+    AuthorityCleanupFailure::new(AuthorityCleanupPhase::Cleanup, safe_detail)
+}
+
+fn retry_failure(safe_detail: impl Into<String>) -> AuthorityCleanupFailure {
+    AuthorityCleanupFailure::new(AuthorityCleanupPhase::Retry, safe_detail)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AuthorityCleanupOutcome {
+    Cleared,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PendingCleanupClearOutcome {
+    Published,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PendingCleanupClearRetryOutcome {
+    NotPending,
+    Invalidated,
+    Published,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PendingCleanupRetryOutcome {
+    NotNeeded,
+    Cleared,
+}
+
+pub(super) fn cleanup_required_error(
+    phase: AuthorityCleanupPhase,
+    primary: &str,
+    path: &Path,
+    code: &'static str,
+) -> AuthorityCleanupFailure {
+    AuthorityCleanupFailure::cleanup_required(phase, primary, path, code)
 }
 
 pub(super) fn pending_cleanup_name_is_valid(name: &str) -> bool {
@@ -139,9 +256,11 @@ pub(super) fn pending_cleanup_requires_recovery(manifest: &PendingCleanupManifes
     manifest.disposition == Some(PendingCleanupDisposition::ActiveRecovery)
 }
 
-pub(super) fn read_marker(path: &Path) -> Result<String, String> {
+pub(super) fn read_marker(path: &Path) -> Result<String, AuthorityCleanupFailure> {
+    let identity_error =
+        |detail| AuthorityCleanupFailure::new(AuthorityCleanupPhase::IdentityValidation, detail);
     let metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| "cleanup_identity_invalid：事务快照 marker 不可用。".to_string())?;
+        .map_err(|_| identity_error("cleanup_identity_invalid：事务快照 marker 不可用。"))?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.uid() != unsafe { libc::geteuid() }
@@ -149,28 +268,34 @@ pub(super) fn read_marker(path: &Path) -> Result<String, String> {
         || metadata.nlink() != 1
         || metadata.len() > 256
     {
-        return Err("cleanup_identity_invalid：事务快照 marker 身份不安全。".into());
+        return Err(identity_error(
+            "cleanup_identity_invalid：事务快照 marker 身份不安全。",
+        ));
     }
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
-        .map_err(|_| "cleanup_identity_invalid：无法安全打开事务快照 marker。")?;
+        .map_err(|_| identity_error("cleanup_identity_invalid：无法安全打开事务快照 marker。"))?;
     let opened = file
         .metadata()
-        .map_err(|_| "cleanup_identity_invalid：无法复核事务快照 marker。")?;
+        .map_err(|_| identity_error("cleanup_identity_invalid：无法复核事务快照 marker。"))?;
     if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
-        return Err("cleanup_identity_changed：事务快照 marker 在读取前发生变化。".into());
+        return Err(identity_error(
+            "cleanup_identity_changed：事务快照 marker 在读取前发生变化。",
+        ));
     }
     let mut bytes = Vec::new();
     std::io::Read::take(&mut file, 257)
         .read_to_end(&mut bytes)
-        .map_err(|_| "cleanup_identity_invalid：无法读取事务快照 marker。")?;
+        .map_err(|_| identity_error("cleanup_identity_invalid：无法读取事务快照 marker。"))?;
     if bytes.len() > 256 {
-        return Err("cleanup_identity_invalid：事务快照 marker 过大。".into());
+        return Err(identity_error(
+            "cleanup_identity_invalid：事务快照 marker 过大。",
+        ));
     }
     String::from_utf8(bytes)
-        .map_err(|_| "cleanup_identity_invalid：事务快照 marker 不是 UTF-8。".into())
+        .map_err(|_| identity_error("cleanup_identity_invalid：事务快照 marker 不是 UTF-8。"))
 }
 
 pub(super) fn inspect_pending_cleanup_target(
@@ -215,16 +340,17 @@ pub(super) fn inspect_pending_cleanup_target(
 pub(super) fn validate_pending_cleanup_entry(
     entry: &PendingCleanupEntry,
     expected_parent: &Path,
-) -> Result<PendingCleanupTargetState, String> {
+) -> Result<PendingCleanupTargetState, AuthorityCleanupFailure> {
+    let identity_error =
+        |detail| AuthorityCleanupFailure::new(AuthorityCleanupPhase::IdentityValidation, detail);
     if !pending_cleanup_name_is_valid(&entry.managed_id)
         || entry.marker != entry.managed_id
         || entry.path.parent() != Some(expected_parent)
         || entry.path.file_name().and_then(|name| name.to_str()) != Some(entry.managed_id.as_str())
     {
-        return Err(
-            "cleanup_manifest_invalid：待清理事务清单路径或 managed_id 非法，已在运行前拒绝。"
-                .into(),
-        );
+        return Err(identity_error(
+            "cleanup_manifest_invalid：待清理事务清单路径或 managed_id 非法，已在运行前拒绝。",
+        ));
     }
     match inspect_pending_cleanup_target(entry) {
         PendingCleanupTargetState::Missing => Ok(PendingCleanupTargetState::Missing),
@@ -235,9 +361,9 @@ pub(super) fn validate_pending_cleanup_entry(
         {
             Ok(PendingCleanupTargetState::Present(current))
         }
-        _ => Err(
-            "cleanup_manifest_identity_mismatch：待清理事务快照身份不一致，已在运行前拒绝。".into(),
-        ),
+        _ => Err(identity_error(
+            "cleanup_manifest_identity_mismatch：待清理事务快照身份不一致，已在运行前拒绝。",
+        )),
     }
 }
 
@@ -259,10 +385,15 @@ impl AuthorityCleanupContext {
         config_dir: &Path,
         sandbox_home: &Path,
         state: &SharedAppState,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthorityCleanupFailure> {
         let expected_snapshot_parent = sandbox_home
             .parent()
-            .ok_or("cleanup_register_failed：沙箱 HOME 无父目录。")?
+            .ok_or_else(|| {
+                AuthorityCleanupFailure::new(
+                    AuthorityCleanupPhase::SnapshotRegistration,
+                    "cleanup_register_failed：沙箱 HOME 无父目录。",
+                )
+            })?
             .to_path_buf();
         let managed_id = format!(".one-click-rollback-{}", config::new_id());
         let root = expected_snapshot_parent.join(&managed_id);
@@ -276,7 +407,10 @@ impl AuthorityCleanupContext {
         })
     }
 
-    pub(super) fn bind_root_identity(&mut self, entry: &libc::stat) -> Result<(), String> {
+    pub(super) fn bind_root_identity(
+        &mut self,
+        entry: &libc::stat,
+    ) -> Result<(), AuthorityCleanupFailure> {
         let device = u64::try_from(entry.st_dev)
             .map_err(|_| self.register_error("事务快照 device 非法。"))?;
         let inode =
@@ -288,17 +422,20 @@ impl AuthorityCleanupContext {
         Ok(())
     }
 
-    pub(super) fn register_error(&self, detail: &str) -> String {
-        format!(
-            "cleanup_register_failed：{detail}；recovery_path={}",
-            self.root.display()
+    pub(super) fn register_error(&self, detail: &str) -> AuthorityCleanupFailure {
+        AuthorityCleanupFailure::new(
+            AuthorityCleanupPhase::SnapshotRegistration,
+            format!(
+                "cleanup_register_failed：{detail}；recovery_path={}",
+                self.root.display()
+            ),
         )
     }
 }
 
 pub(super) fn register_authority_cleanup(
     context: &AuthorityCleanupContext,
-) -> Result<RegisteredAuthorityCleanup, String> {
+) -> Result<RegisteredAuthorityCleanup, AuthorityCleanupFailure> {
     if context.root.parent() != Some(context.expected_snapshot_parent.as_path())
         || context.root.file_name().and_then(|name| name.to_str())
             != Some(context.managed_id.as_str())
@@ -473,7 +610,7 @@ pub(super) fn finalize_failed_authority_snapshot(
         .and_then(|ticket| prepare_registered_authority_cleanup(context, &ticket))
         .and_then(|ticket| finalize_registered_authority_cleanup(context, &ticket));
     match cleanup {
-        Ok(()) => primary,
+        Ok(AuthorityCleanupOutcome::Cleared) => primary,
         Err(cleanup_error) => format!("{primary}；{cleanup_error}"),
     }
 }
@@ -484,13 +621,15 @@ pub(super) fn publish_pending_cleanup_clear(
     manifest_raw: &[u8],
     entry: &PendingCleanupEntry,
     observe_recovery: bool,
-) -> Result<(), String> {
+) -> Result<PendingCleanupClearOutcome, AuthorityCleanupFailure> {
     #[cfg(not(test))]
     let _ = observe_recovery;
-    let empty = pending_cleanup_manifest_bytes(Vec::new(), PendingCleanupDisposition::CleanupOnly)?;
+    let empty = pending_cleanup_manifest_bytes(Vec::new(), PendingCleanupDisposition::CleanupOnly)
+        .map_err(|error| AuthorityCleanupFailure::new(AuthorityCleanupPhase::Clear, error))?;
     config::write_pending_authority_cleanup_manifest(config_dir, &empty, Some(manifest_raw))
         .map_err(|_| {
             cleanup_required_error(
+                AuthorityCleanupPhase::Clear,
                 "待清理事务快照已移除，但清单 CLEAR 未提交",
                 &entry.path,
                 "cleanup_clear_failed",
@@ -506,21 +645,26 @@ pub(super) fn publish_pending_cleanup_clear(
     *PENDING_CLEANUP_CLEAR_RETRY
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = None;
-    Ok(())
+    Ok(PendingCleanupClearOutcome::Published)
 }
 
 pub(super) fn retry_completed_pending_cleanup_clear(
     state: &SharedAppState,
-) -> Result<bool, String> {
+) -> Result<PendingCleanupClearRetryOutcome, AuthorityCleanupFailure> {
     let retry = PENDING_CLEANUP_CLEAR_RETRY
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
     let Some(retry) = retry else {
-        return Ok(false);
+        return Ok(PendingCleanupClearRetryOutcome::NotPending);
     };
-    let current = config::read_pending_authority_cleanup_manifest(&retry.config_dir)
-        .map_err(|_| "cleanup_manifest_read_failed：无法读取待清理事务清单。")?;
+    let current =
+        config::read_pending_authority_cleanup_manifest(&retry.config_dir).map_err(|_| {
+            AuthorityCleanupFailure::new(
+                AuthorityCleanupPhase::Retry,
+                "cleanup_manifest_read_failed：无法读取待清理事务清单。",
+            )
+        })?;
     if current.as_deref() != Some(retry.manifest_raw.as_slice())
         || !matches!(
             inspect_pending_cleanup_target(&retry.entry),
@@ -530,7 +674,7 @@ pub(super) fn retry_completed_pending_cleanup_clear(
         *PENDING_CLEANUP_CLEAR_RETRY
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
-        return Ok(false);
+        return Ok(PendingCleanupClearRetryOutcome::Invalidated);
     }
     publish_pending_cleanup_clear(
         state,
@@ -539,45 +683,50 @@ pub(super) fn retry_completed_pending_cleanup_clear(
         &retry.entry,
         true,
     )?;
-    Ok(true)
+    Ok(PendingCleanupClearRetryOutcome::Published)
 }
 
 pub(super) fn finalize_registered_authority_cleanup(
     context: &AuthorityCleanupContext,
     ticket: &RegisteredAuthorityCleanup,
-) -> Result<(), String> {
+) -> Result<AuthorityCleanupOutcome, AuthorityCleanupFailure> {
     let manifest_raw = config::read_pending_authority_cleanup_manifest(&context.config_dir)
-        .map_err(|_| "cleanup_manifest_read_failed：无法安全读取刚注册的待清理事务清单。")?
-        .ok_or("cleanup_manifest_missing：刚注册的待清理事务清单不存在。")?;
+        .map_err(|_| {
+            cleanup_failure("cleanup_manifest_read_failed：无法安全读取刚注册的待清理事务清单。")
+        })?
+        .ok_or_else(|| {
+            cleanup_failure("cleanup_manifest_missing：刚注册的待清理事务清单不存在。")
+        })?;
     if manifest_raw != ticket.manifest_raw {
-        return Err(
-            "cleanup_manifest_causal_mismatch：刚注册的待清理事务清单字节票据不匹配。".into(),
-        );
+        return Err(cleanup_failure(
+            "cleanup_manifest_causal_mismatch：刚注册的待清理事务清单字节票据不匹配。",
+        ));
     }
-    let manifest = parse_pending_cleanup_manifest(&manifest_raw)?;
+    let manifest = parse_pending_cleanup_manifest(&manifest_raw).map_err(cleanup_failure)?;
     if manifest.entries.len() != 1 || manifest.entries.first() != Some(&ticket.entry) {
-        return Err(
-            "cleanup_manifest_causal_mismatch：刚注册的待清理事务清单因果票据不匹配。".into(),
-        );
+        return Err(cleanup_failure(
+            "cleanup_manifest_causal_mismatch：刚注册的待清理事务清单因果票据不匹配。",
+        ));
     }
     if pending_cleanup_requires_recovery(&manifest) {
-        return Err(
-            "cleanup_manifest_active_recovery：活动恢复快照未转换为 cleanup-only，拒绝删除。"
-                .into(),
-        );
+        return Err(cleanup_failure(
+            "cleanup_manifest_active_recovery：活动恢复快照未转换为 cleanup-only，拒绝删除。",
+        ));
     }
     match validate_pending_cleanup_entry(&ticket.entry, &context.expected_snapshot_parent)? {
         PendingCleanupTargetState::Present(actual) if actual == ticket.entry => {}
         _ => {
-            return Err(
-                "cleanup_identity_changed：刚注册的事务快照在删除前发生变化，已停止清理。".into(),
-            )
+            return Err(AuthorityCleanupFailure::new(
+                AuthorityCleanupPhase::IdentityValidation,
+                "cleanup_identity_changed：刚注册的事务快照在删除前发生变化，已停止清理。",
+            ))
         }
     }
     if remove_authority_snapshot_root_with_retry(&ticket.entry, &context.expected_snapshot_parent)
         .is_err()
     {
         return Err(cleanup_required_error(
+            AuthorityCleanupPhase::Cleanup,
             "one-click 事务快照仍无法清理",
             &ticket.entry.path,
             "cleanup_remove_failed",
@@ -587,7 +736,10 @@ pub(super) fn finalize_registered_authority_cleanup(
         inspect_pending_cleanup_target(&ticket.entry),
         PendingCleanupTargetState::Missing
     ) {
-        return Err("cleanup_identity_changed：刚注册的事务快照删除后仍存在，已停止清理。".into());
+        return Err(AuthorityCleanupFailure::new(
+            AuthorityCleanupPhase::IdentityValidation,
+            "cleanup_identity_changed：刚注册的事务快照删除后仍存在，已停止清理。",
+        ));
     }
     publish_pending_cleanup_clear(
         &context.state,
@@ -596,27 +748,32 @@ pub(super) fn finalize_registered_authority_cleanup(
         &ticket.entry,
         false,
     )?;
-    Ok(())
+    Ok(AuthorityCleanupOutcome::Cleared)
 }
 
 pub(super) fn prepare_registered_authority_cleanup(
     context: &AuthorityCleanupContext,
     ticket: &RegisteredAuthorityCleanup,
-) -> Result<RegisteredAuthorityCleanup, String> {
+) -> Result<RegisteredAuthorityCleanup, AuthorityCleanupFailure> {
     let current = config::read_pending_authority_cleanup_manifest(&context.config_dir)
-        .map_err(|_| "cleanup_manifest_read_failed：无法读取活动恢复快照清单。")?
-        .ok_or("cleanup_manifest_missing：活动恢复快照清单不存在。")?;
+        .map_err(|_| cleanup_failure("cleanup_manifest_read_failed：无法读取活动恢复快照清单。"))?
+        .ok_or_else(|| cleanup_failure("cleanup_manifest_missing：活动恢复快照清单不存在。"))?;
     if current != ticket.manifest_raw {
-        return Err("cleanup_manifest_causal_mismatch：活动恢复快照清单字节票据不匹配。".into());
+        return Err(cleanup_failure(
+            "cleanup_manifest_causal_mismatch：活动恢复快照清单字节票据不匹配。",
+        ));
     }
-    let manifest = parse_pending_cleanup_manifest(&current)?;
+    let manifest = parse_pending_cleanup_manifest(&current).map_err(cleanup_failure)?;
     if manifest.entries.len() != 1 || manifest.entries.first() != Some(&ticket.entry) {
-        return Err("cleanup_manifest_causal_mismatch：活动恢复快照清单因果票据不匹配。".into());
+        return Err(cleanup_failure(
+            "cleanup_manifest_causal_mismatch：活动恢复快照清单因果票据不匹配。",
+        ));
     }
     let cleanup_only = pending_cleanup_manifest_bytes(
         vec![ticket.entry.clone()],
         PendingCleanupDisposition::CleanupOnly,
-    )?;
+    )
+    .map_err(cleanup_failure)?;
     config::write_pending_authority_cleanup_manifest(
         &context.config_dir,
         &cleanup_only,
@@ -624,6 +781,7 @@ pub(super) fn prepare_registered_authority_cleanup(
     )
     .map_err(|_| {
         cleanup_required_error(
+            AuthorityCleanupPhase::Cleanup,
             "无法把活动恢复快照原子转换为 cleanup-only",
             &ticket.entry.path,
             "cleanup_prepare_failed",
@@ -635,31 +793,36 @@ pub(super) fn prepare_registered_authority_cleanup(
     })
 }
 
-pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<(), String> {
-    if retry_completed_pending_cleanup_clear(state)? {
-        return Ok(());
+pub(super) fn retry_pending_authority_cleanup(
+    state: &SharedAppState,
+) -> Result<PendingCleanupRetryOutcome, AuthorityCleanupFailure> {
+    if matches!(
+        retry_completed_pending_cleanup_clear(state)?,
+        PendingCleanupClearRetryOutcome::Published
+    ) {
+        return Ok(PendingCleanupRetryOutcome::Cleared);
     }
     let config_dir = config::default_dir();
     let Some(manifest_raw) = config::read_pending_authority_cleanup_manifest(&config_dir)
-        .map_err(|_| "cleanup_manifest_read_failed：无法安全读取待清理事务清单。")?
+        .map_err(|_| retry_failure("cleanup_manifest_read_failed：无法安全读取待清理事务清单。"))?
     else {
-        return Ok(());
+        return Ok(PendingCleanupRetryOutcome::NotNeeded);
     };
-    let manifest = parse_pending_cleanup_manifest(&manifest_raw)?;
+    let manifest = parse_pending_cleanup_manifest(&manifest_raw).map_err(retry_failure)?;
     if manifest.entries.is_empty() {
         lock(state).pending_authority_cleanup.clear();
-        return Ok(());
+        return Ok(PendingCleanupRetryOutcome::NotNeeded);
     }
     let recovery_snapshot = pending_cleanup_requires_recovery(&manifest);
     let sandbox_home_path = sandbox_home();
     let expected_parent = sandbox_home_path
         .parent()
-        .ok_or("cleanup_manifest_invalid：沙箱 HOME 无父目录。")?;
+        .ok_or_else(|| retry_failure("cleanup_manifest_invalid：沙箱 HOME 无父目录。"))?;
     let entry = manifest
         .entries
         .into_iter()
         .next()
-        .ok_or("cleanup_manifest_invalid：待清理事务清单缺少条目。")?;
+        .ok_or_else(|| retry_failure("cleanup_manifest_invalid：待清理事务清单缺少条目。"))?;
     let initial = validate_pending_cleanup_entry(&entry, expected_parent)?;
     #[cfg(test)]
     config::test_observe_pending_cleanup_manifest_validated(test_pending_cleanup_identity(&entry));
@@ -675,13 +838,18 @@ pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<
     }
     if recovery_snapshot {
         return Err(cleanup_required_error(
+            AuthorityCleanupPhase::Retry,
             "检测到中断的 one-click authority 事务；活动恢复快照尚未转换为 cleanup-only，已拒绝自动删除",
             &entry.path,
             "authority_snapshot_recovery_required",
         ));
     }
     let active_stage = config::load_from(&config_dir)
-        .map_err(|error| format!("cleanup_manifest_read_failed：无法读取运行事务：{error}"))?
+        .map_err(|error| {
+            retry_failure(format!(
+                "cleanup_manifest_read_failed：无法读取运行事务：{error}"
+            ))
+        })?
         .runtime_transaction
         .map(|journal| journal.stage);
     if active_stage
@@ -689,6 +857,7 @@ pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<
         .is_some_and(runtime_transaction_requires_snapshot_preservation)
     {
         return Err(cleanup_required_error(
+            AuthorityCleanupPhase::Retry,
             "检测到中断的 one-click authority 事务；已保留精确注册的私有快照，拒绝自动删除或把部分写入态当作新基线",
             &entry.path,
             "authority_snapshot_recovery_required",
@@ -706,7 +875,7 @@ pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<
     });
     #[cfg(test)]
     config::test_pending_cleanup_race_hook()
-        .map_err(|_| "cleanup_race_hook_failed：待清理事务快照复核失败。")?;
+        .map_err(|_| retry_failure("cleanup_race_hook_failed：待清理事务快照复核失败。"))?;
     let current = inspect_pending_cleanup_target(&entry);
     let completed = match (&initial, &current) {
         (PendingCleanupTargetState::Present(_), PendingCleanupTargetState::Present(actual))
@@ -723,6 +892,7 @@ pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<
                     )),
                 );
                 return Err(cleanup_required_error(
+                    AuthorityCleanupPhase::Retry,
                     "待清理 one-click 事务快照仍无法清理",
                     &entry.path,
                     "cleanup_remove_failed",
@@ -750,9 +920,10 @@ pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<
                 PendingCleanupTargetState::Unsafe => config::PendingCleanupFinalState::Error,
             },
         );
-        return Err(
-            "cleanup_identity_changed：待清理事务快照在删除前后发生变化，已停止运行。".into(),
-        );
+        return Err(AuthorityCleanupFailure::new(
+            AuthorityCleanupPhase::IdentityValidation,
+            "cleanup_identity_changed：待清理事务快照在删除前后发生变化，已停止运行。",
+        ));
     }
     #[cfg(test)]
     config::test_observe_pending_cleanup_completion(
@@ -773,7 +944,7 @@ pub(super) fn retry_pending_authority_cleanup(state: &SharedAppState) -> Result<
         entry: entry.clone(),
     });
     publish_pending_cleanup_clear(state, &config_dir, &manifest_raw, &entry, true)?;
-    Ok(())
+    Ok(PendingCleanupRetryOutcome::Cleared)
 }
 
 // Snapshot root removal (uses authority FS primitives; owned by cleanup lifecycle).

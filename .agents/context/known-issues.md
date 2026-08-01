@@ -114,19 +114,34 @@ result 与十五个 source observation；desktop 身份为 523 discovered / 523 
 零 BLOCK/HIGH/MEDIUM/LOW，并核验 DTO、typed control-flow、safe cause、范围边界、gate
 identity 与全部 evidence 引用哈希。
 
+`R1-B` 已形成未提交 source candidate：`pending_cleanup.rs` 为 authority snapshot
+registration、cleanup identity validation、cleanup、retry 与 manifest clear 建立 typed
+phase / failure / recovery authority / success outcome；`prepare_success` 与 one-click
+compensation 不再通过 `recovery_status=cleanup_required` 文本判断恢复语义。cleanup
+manifest schema/CAS、marker 与目录 identity 校验、mode/owner/inode/tombstone 和 bounded
+remove 边界未改变；现有 success / degraded DTO keys、值和 message 保持不变。
+
+focused source/unit 已实际执行并 PASS：`cleanup_recovery` 4 tests 与 transaction contract
+1 test；完整 Rust lib 在沙箱外为 482 passed / 0 failed / 41 explicitly ignored。相同命令
+在受限沙箱内仍是既有的 429 passed / 53 `Operation not permitted` / 41 ignored，失败集中于
+动态 loopback 与 process identity，不计为 R1-B 产品失败。质量 metadata 与文档治理测试
+均 PASS。当前 candidate 未取得 commit 授权，因此 clean exact-SHA 15-suite
+`GATE-SOURCE` completion seal 与 exact-SHA 独立完成审查为 `NOT-RUN`，不得写成
+`R1-B DONE`，也不得外推到 artifact、installed、live provider、Science、SSH、签名、
+公证或公开 release。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R1-A` | DONE | typed envelope 底座、冻结 DTO 投影、exact-SHA source gate 与独立审查收口 |
-| `R1-B` | NOT-STARTED | authority snapshot / pending cleanup typed outcome |
+| `R1-B` | IMPLEMENTED / UNSEALED | authority snapshot / pending cleanup typed outcome；待 commit、exact-SHA gate 与独立审查收口 |
 | `R1-C` | NOT-STARTED | one-click compensation typed aggregate |
 | `R1-D` | NOT-STARTED | interrupted Gateway recovery typed outcome |
 | `R1-E` | NOT-STARTED | production message semantic parsing 清零 |
 | `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
 
-唯一 `NEXT` 是 `R1-B` authority snapshot / pending cleanup typed outcome。`R1-A` 的
-source 结论不得外推到 artifact、installed/live provider、Science、SSH、签名、公证或
-公开发布；进入 `R1-B` 仍须单独窗口与明确实施指令，不得触碰 R2 journal schema、R3
-state owner 或 R4 mutation lease。
+唯一 `NEXT` 是收口 `R1-B`：取得单独 commit 授权后绑定 clean exact SHA，执行完整
+source gate 与 clean-context 独立完成审查，修复后重新 seal。完成前不得进入 `R1-C`；
+不得触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 

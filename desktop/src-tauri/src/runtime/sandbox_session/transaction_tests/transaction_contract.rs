@@ -166,6 +166,12 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     }
 
     let source = include_str!("../one_click.rs");
+    let recovery_source = include_str!("../recovery.rs");
+    assert!(
+        !source.contains("contains(\"recovery_status=cleanup_required\")")
+            && !recovery_source.contains("contains(\"recovery_status=cleanup_required\")"),
+        "authority cleanup recovery must be classified from typed results, not DTO text"
+    );
     let file = syn::parse_file(source).expect("one-click product Rust source must parse");
     let one_click = top_level(&file, "one_click_login_with_options")
         .expect("one-click product function must remain module-level");

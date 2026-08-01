@@ -68,6 +68,12 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
         let error = cleanup_sync_snapshot
             .cleanup_when_expendable()
             .expect_err("cleanup parent fsync failure must remain pending");
+        assert_eq!(error.phase(), AuthorityCleanupPhase::Cleanup);
+        let (recovery_path, cleanup_code) = error
+            .cleanup_requirement()
+            .expect("cleanup failure must carry typed recovery authority");
+        assert_eq!(recovery_path, cleanup_sync_root);
+        assert_eq!(cleanup_code, "cleanup_remove_failed");
         assert!(error.contains("recovery_status=cleanup_required"));
         let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
             .unwrap()
@@ -85,8 +91,14 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
         manifest_raw: pending_raw,
         entry: pending.entries.into_iter().next().unwrap(),
     };
-    finalize_registered_authority_cleanup(&cleanup_sync_snapshot.cleanup_context, &retry_ticket)
-        .unwrap();
+    assert_eq!(
+        finalize_registered_authority_cleanup(
+            &cleanup_sync_snapshot.cleanup_context,
+            &retry_ticket
+        )
+        .unwrap(),
+        AuthorityCleanupOutcome::Cleared
+    );
     let cleared = config::read_pending_authority_cleanup_manifest(&config_dir)
         .unwrap()
         .unwrap();
@@ -106,6 +118,11 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
     let rebound_error = rebound_cleanup_snapshot
         .cleanup_when_expendable()
         .expect_err("registered cleanup ticket must reject a replacement root");
+    assert_eq!(
+        rebound_error.phase(),
+        AuthorityCleanupPhase::IdentityValidation
+    );
+    assert!(rebound_error.cleanup_requirement().is_none());
     assert!(
         rebound_error.contains("cleanup_manifest_identity_mismatch"),
         "unexpected registered-ticket identity refusal: {rebound_error}"
@@ -151,6 +168,40 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
     if backup_root.exists() {
         fs::remove_dir_all(&backup_root).unwrap();
     }
+    drop(_seam);
+
+    let degraded_log = tmp.join("degraded-cleanup.log");
+    let _degraded_seam =
+        test_arm_authority_snapshot_cleanup_fault(tmp.clone(), "persistent", degraded_log);
+    let mut degraded_snapshot =
+        OneClickAuthoritySnapshot::capture(&config_dir, &sandbox_home, &auth_dir, &config, &state)
+            .unwrap();
+    let degraded_root = degraded_snapshot.backup_root.clone();
+    let mut success_dto = serde_json::json!({
+        "msg": "ready",
+        "action": "started",
+        "stage": "complete",
+        "status": "ok",
+        "recovery_status": "not_needed",
+        "fallback_url": null
+    });
+    degraded_snapshot
+        .prepare_success(&mut success_dto)
+        .expect("cleanup-required must remain a successful degraded DTO");
+    assert_eq!(success_dto["msg"], "ready");
+    assert_eq!(success_dto["action"], "started");
+    assert_eq!(success_dto["stage"], "complete");
+    assert_eq!(success_dto["status"], "degraded");
+    assert_eq!(success_dto["recovery_status"], "cleanup_required");
+    assert_eq!(
+        success_dto["cleanup_recovery_path"],
+        degraded_root.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        success_dto["cleanup_message"],
+        "one-click 已完成，但私有事务快照需要稍后安全清理。"
+    );
+    assert!(success_dto["fallback_url"].is_null());
     let _ = fs::remove_dir_all(&tmp);
 
     assert!(
@@ -421,6 +472,12 @@ fn rollback_refusal_restores_independent_authorities_and_preserves_recovery_snap
         .all(|entry| entry.kind != "symlink");
     let retry_error = retry_pending_authority_cleanup(&state)
         .expect_err("an incomplete compensation snapshot must never become cleanup-only");
+    assert_eq!(retry_error.phase(), AuthorityCleanupPhase::Retry);
+    let (retry_path, retry_code) = retry_error
+        .cleanup_requirement()
+        .expect("active recovery refusal must carry typed retry authority");
+    assert_eq!(retry_path, backup_root);
+    assert_eq!(retry_code, "authority_snapshot_recovery_required");
     let recovery_survives_retry = retry_error
         .contains("cleanup_code=authority_snapshot_recovery_required")
         && backup_root.is_dir();

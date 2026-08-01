@@ -37,7 +37,8 @@ use pending_cleanup::retry_pending_authority_cleanup;
 #[cfg(test)]
 use pending_cleanup::{
     cleanup_tombstone_path, finalize_registered_authority_cleanup, parse_pending_cleanup_manifest,
-    PendingCleanupEntry, RegisteredAuthorityCleanup, PENDING_CLEANUP_MARKER_FILE,
+    AuthorityCleanupOutcome, AuthorityCleanupPhase, PendingCleanupEntry,
+    RegisteredAuthorityCleanup, PENDING_CLEANUP_MARKER_FILE,
 };
 #[cfg(test)]
 use recovery::OneClickAuthoritySnapshot;

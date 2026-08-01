@@ -37,7 +37,10 @@ use crate::{
 #[cfg(test)]
 use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
 use super::catalog_verify::*;
-use super::pending_cleanup::{cleanup_required_error, retry_pending_authority_cleanup};
+use super::pending_cleanup::{
+    cleanup_required_error, retry_pending_authority_cleanup, AuthorityCleanupFailure,
+    AuthorityCleanupPhase,
+};
 use super::recovery::{AppAuthoritySnapshot, OneClickAuthoritySnapshot};
 use super::route_reconcile::configure_third_party_best_effort;
 use super::ssh_preflight::*;
@@ -264,6 +267,28 @@ fn typed_one_click_err(
         failure = failure.with_recovery(recovery);
     }
     failure
+}
+
+fn typed_authority_cleanup_err(
+    kind: OneClickFailureKind,
+    failure: AuthorityCleanupFailure,
+    environment_uncertain: bool,
+) -> TypedOneClickFailure {
+    let cleanup_required = failure.cleanup_requirement().is_some();
+    let phase = failure.phase();
+    let message = failure.to_string();
+    let recovery = if cleanup_required && environment_uncertain {
+        ProjectedRecovery::cleanup_required_uncertain()
+    } else if cleanup_required {
+        ProjectedRecovery::CLEANUP_REQUIRED
+    } else if environment_uncertain {
+        ProjectedRecovery::ENVIRONMENT_UNCERTAIN
+    } else {
+        ProjectedRecovery::NOT_NEEDED
+    };
+    TypedOneClickFailure::new(kind, message)
+        .with_recovery(recovery)
+        .with_safe_cause(phase.cause_code(), "authority cleanup typed failure")
 }
 
 pub(super) fn advance_runtime_transaction(
@@ -1030,16 +1055,19 @@ fn compensate_one_click_failure<R: Runtime>(
         } else {
             ""
         };
-        return Err(typed_one_click_err(
-            original_kind,
-            cleanup_required_error(
-                &format!(
-                    "{}；compensation_science_cleanup_failed；compensation_restore_blocked_science_candidate；{cleanup_error}{environment_codes}",
-                    failure.message(),
-                ),
-                &authority_snapshot.backup_root,
-                "science_candidate_stop_unproven",
+        let cleanup_failure = cleanup_required_error(
+            AuthorityCleanupPhase::Cleanup,
+            &format!(
+                "{}；compensation_science_cleanup_failed；compensation_restore_blocked_science_candidate；{cleanup_error}{environment_codes}",
+                failure.message(),
             ),
+            &authority_snapshot.backup_root,
+            "science_candidate_stop_unproven",
+        );
+        return Err(typed_authority_cleanup_err(
+            original_kind,
+            cleanup_failure,
+            environment_uncertain,
         ));
     }
     let ssh_cleanup = match failure.rollback.ssh_stub_transaction.as_ref() {
@@ -1115,16 +1143,22 @@ fn compensate_one_click_failure<R: Runtime>(
             codes.push("compensation_prior_science_restart_failed".to_string());
         }
     }
+    let mut snapshot_cleanup_required = false;
     if let Some(Err(error)) = snapshot_cleanup {
-        if error.contains("recovery_status=cleanup_required") {
-            codes.push(error);
+        if error.cleanup_requirement().is_some() {
+            snapshot_cleanup_required = true;
+            codes.push(error.to_string());
         } else {
             codes.push("compensation_snapshot_register_failed".to_string());
         }
     }
     let suffix = (!codes.is_empty()).then(|| format!("；{}", codes.join("; ")));
     let message = format!("{}{}", failure.message(), suffix.unwrap_or_default());
-    let recovery = if let Some(recovery) = recovery_from_diagnostic_codes(&message) {
+    let recovery = if snapshot_cleanup_required && environment_uncertain {
+        ProjectedRecovery::cleanup_required_uncertain()
+    } else if snapshot_cleanup_required {
+        ProjectedRecovery::CLEANUP_REQUIRED
+    } else if let Some(recovery) = recovery_from_diagnostic_codes(&message) {
         recovery
     } else if environment_uncertain {
         ProjectedRecovery::ENVIRONMENT_UNCERTAIN
@@ -1194,8 +1228,9 @@ fn one_click_login_with_options<R: Runtime>(
         })
         .transpose()
         .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-    retry_pending_authority_cleanup(&state)
-        .map_err(|message| typed_one_click_err(OneClickFailureKind::AuthoritySnapshot, message))?;
+    retry_pending_authority_cleanup(&state).map_err(|failure| {
+        typed_authority_cleanup_err(OneClickFailureKind::AuthoritySnapshot, failure, false)
+    })?;
     let version_cache = { lock(&state).science_version_cache.clone() };
 
     let (remembered_runtime, confirmed_stopped) = {
@@ -1517,7 +1552,9 @@ fn one_click_login_with_options<R: Runtime>(
                     "fallback_url": null
                 });
                 one_click_step(
-                    authority_snapshot.prepare_success(&mut value),
+                    authority_snapshot
+                        .prepare_success(&mut value)
+                        .map_err(String::from),
                     &rollback_context,
                 )?;
                 return Ok(value);
@@ -1960,7 +1997,9 @@ fn one_click_login_with_options<R: Runtime>(
         }
         rollback_context.set_kind(OneClickFailureKind::AuthoritySnapshot);
         one_click_step(
-            authority_snapshot.prepare_success(&mut value),
+            authority_snapshot
+                .prepare_success(&mut value)
+                .map_err(String::from),
             &rollback_context,
         )?;
         Ok(value)
