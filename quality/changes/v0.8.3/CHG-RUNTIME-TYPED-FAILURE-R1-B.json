@@ -45,7 +45,7 @@
         "metadata"
       ]
     },
-    "claim_state": "inferred",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -59,10 +59,12 @@
         "public"
       ],
       "basis": [
-        "focused authority cleanup and transaction-contract source tests passed on the uncommitted candidate",
+        "focused authority cleanup and transaction-contract source tests passed on source implementation exact SHA c5c6cb1a05577ac3ddfa18a633fb2277733e50d5",
         "complete Rust library regression passed outside the restricted sandbox with 482 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
         "typed phase, recovery path, cleanup code, retry, clear, and success degradation assertions",
-        "cleanup manifest schema, CAS publication, marker, inode, mode, ownership, tombstone, and bounded removal logic remain behavior-preserving"
+        "cleanup manifest schema, CAS publication, marker, inode, mode, ownership, tombstone, and bounded removal logic remain behavior-preserving",
+        "complete 15-suite GATE-SOURCE completion seal passed at exact SHA c5c6cb1a05577ac3ddfa18a633fb2277733e50d5 with run id c2b5ce9a7f5ccefe67f231a43ab3f157 and runner exit zero",
+        "exact-SHA clean-context independent completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings and verified all 15 result hashes"
       ]
     },
     "does_not_claim_fix": true,
