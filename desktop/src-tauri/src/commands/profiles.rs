@@ -78,14 +78,26 @@ pub(crate) async fn apply_profile_preset_sync(
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
     let lifecycle = lifecycle.inner().clone();
     run_blocking_typed(move || {
-        lifecycle
-            .with_serialized(|| {
-                let dir = config::default_dir();
-                apply_profile_preset_sync_in_dir(&dir, &id, &expected_preview_fingerprint)
-            })
-            .map_err(crate::commands::codex::RuntimeCommandError::from)
+        let dir = config::default_dir();
+        apply_profile_preset_sync_inner_cmd(
+            lifecycle.as_ref(),
+            &dir,
+            &id,
+            &expected_preview_fingerprint,
+        )
     })
     .await
+}
+
+fn apply_profile_preset_sync_inner_cmd(
+    lifecycle: &lifecycle::Lifecycle,
+    dir: &Path,
+    id: &str,
+    expected_preview_fingerprint: &str,
+) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
+    lifecycle
+        .with_serialized(|| apply_profile_preset_sync_in_dir(dir, id, expected_preview_fingerprint))
+        .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 
 fn apply_profile_preset_sync_in_dir(
@@ -340,6 +352,77 @@ fn update_profile_connection_inner_cmd(
     default_model_route_id: Option<String>,
     role_bindings: Option<crate::model_catalog::RoleBindings>,
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
+    let dir = config::default_dir();
+    let prepare_app = app.clone();
+    let validate_app = app;
+    let preflight_id = id.clone();
+    update_profile_connection_with(
+        lifecycle.as_ref(),
+        &dir,
+        id,
+        base_url,
+        api_format,
+        model,
+        key,
+        model_catalog,
+        default_model_route_id,
+        role_bindings,
+        move |_candidate, target_adapter| {
+            let (preflight_adapter, preflight_target) = if target_adapter == "codex" {
+                (
+                    "codex",
+                    crate::commands::codex::CodexPreflightTarget::Profile(preflight_id),
+                )
+            } else {
+                (
+                    target_adapter,
+                    crate::commands::codex::CodexPreflightTarget::NoProfile,
+                )
+            };
+            crate::commands::codex::prepare_provider_auth(
+                &prepare_app,
+                preflight_adapter,
+                preflight_target,
+            )
+        },
+        |prepared, _dir| {
+            if let Some(prepared) = prepared.as_ref() {
+                prepared.verify_unchanged()?;
+            }
+            Ok(())
+        },
+        move |candidate, prepared| {
+            scratch_validate_candidate(
+                &validate_app,
+                candidate,
+                prepared.as_ref().map(|prepared| prepared.proof()),
+            )
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_profile_connection_with<P, Prepare, Verify, Validate>(
+    lifecycle: &lifecycle::Lifecycle,
+    dir: &Path,
+    id: String,
+    base_url: Option<String>,
+    api_format: Option<String>,
+    model: Option<String>,
+    key: Option<String>,
+    model_catalog: Option<Vec<crate::model_catalog::ModelRoute>>,
+    default_model_route_id: Option<String>,
+    role_bindings: Option<crate::model_catalog::RoleBindings>,
+    prepare: Prepare,
+    verify: Verify,
+    validate: Validate,
+) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError>
+where
+    Prepare:
+        FnOnce(&config::Profile, &str) -> Result<P, crate::commands::codex::RuntimeCommandError>,
+    Verify: FnOnce(&P, &Path) -> Result<(), String>,
+    Validate: FnOnce(&config::Profile, &P) -> Result<bool, String>,
+{
     let catalog_edit = catalog_edit_from_parts(
         model.is_some(),
         model_catalog,
@@ -347,7 +430,7 @@ fn update_profile_connection_inner_cmd(
         role_bindings,
     )
     .map_err(crate::commands::codex::RuntimeCommandError::from)?;
-    let preflight_cfg = load_without_runtime_transaction(&config::default_dir())?;
+    let preflight_cfg = load_without_runtime_transaction(dir)?;
     let mut preflight_candidate = preflight_cfg
         .profile_by_id(&id)
         .cloned()
@@ -361,25 +444,10 @@ fn update_profile_connection_inner_cmd(
     .with_catalog(catalog_edit.clone());
     preflight_edit.apply(&mut preflight_candidate)?;
     let target_adapter = resolve_launch_plan(&preflight_candidate)?.adapter;
-    let (preflight_adapter, preflight_target) = if target_adapter == "codex" {
-        (
-            "codex",
-            crate::commands::codex::CodexPreflightTarget::Profile(id.clone()),
-        )
-    } else {
-        (
-            target_adapter.as_str(),
-            crate::commands::codex::CodexPreflightTarget::NoProfile,
-        )
-    };
-    let prepared =
-        crate::commands::codex::prepare_provider_auth(&app, preflight_adapter, preflight_target)?;
+    let prepared = prepare(&preflight_candidate, &target_adapter)?;
     lifecycle
         .with_serialized(|| -> Result<_, String> {
-            if let Some(prepared) = prepared.as_ref() {
-                prepared.verify_unchanged()?;
-            }
-            let dir = config::default_dir();
+            verify(&prepared, dir)?;
             let edit = ConnectionEdit::new(
                 base_url.clone(),
                 api_format.clone(),
@@ -387,12 +455,8 @@ fn update_profile_connection_inner_cmd(
                 key.clone(),
             )
             .with_catalog(catalog_edit.clone());
-            commit_profile_connection_in_dir(&dir, &id, edit, |candidate| {
-                scratch_validate_candidate(
-                    &app,
-                    candidate,
-                    prepared.as_ref().map(|prepared| prepared.proof()),
-                )
+            commit_profile_connection_in_dir(dir, &id, edit, |candidate| {
+                validate(candidate, &prepared)
             })
         })
         .map_err(crate::commands::codex::RuntimeCommandError::from)
@@ -508,18 +572,20 @@ fn pin_active_profile_in_dir(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_profile_preset_sync_in_dir, catalog_edit_from_parts, clear_profile_key_cmd,
-        commit_profile_connection_in_dir, delete_profile_cmd, persist_profile_candidate_inner,
-        pin_active_profile_in_dir, require_preview_fingerprint,
+        apply_profile_preset_sync_inner_cmd, catalog_edit_from_parts, clear_profile_key_cmd,
+        delete_profile_cmd, persist_profile_candidate_inner, pin_active_profile_in_dir,
+        require_preview_fingerprint, update_profile_connection_with,
     };
     use crate::{
         config::{self, Config, Profile, RuntimeBindingCommit, RuntimeTransactionJournal},
         lifecycle, lock, AppState, SharedAppState,
     };
     use std::{
+        cell::Cell,
         fs,
         process::Command,
-        sync::{Arc, Mutex},
+        sync::{mpsc, Arc, Mutex},
+        thread,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -890,22 +956,36 @@ mod tests {
                 ..Default::default()
             };
             config::save_to(&dir, &cfg).unwrap();
+            let lifecycle = lifecycle::Lifecycle::new();
+            let generation = lifecycle.current_generation();
+            let state = state_with_proxy_identity();
+            lock(&state).sandbox_url = Some("http://127.0.0.1:18765".into());
             let edited_key = format!("sk-edited-{label}");
-            let edit = crate::runtime::profile::ConnectionEdit::new(
+            let result = update_profile_connection_with(
+                &lifecycle,
+                &dir,
+                target.to_string(),
                 None,
                 None,
                 None,
                 Some(edited_key.clone()),
+                None,
+                None,
+                None,
+                |_candidate, adapter| {
+                    assert_eq!(adapter, "deepseek");
+                    Ok(())
+                },
+                |_prepared, _dir| Ok(()),
+                |_candidate, _prepared| crate::runtime::profile::nonactive_probe_verdict(&outcome),
             );
-
-            let result = commit_profile_connection_in_dir(&dir, target, edit, |_| {
-                crate::runtime::profile::nonactive_probe_verdict(&outcome)
-            });
             let after = config::load_from(&dir).unwrap();
 
             assert_eq!(after.active_id, cfg.active_id, "{label}");
             assert_eq!(after.runtime_binding, cfg.runtime_binding, "{label}");
             assert!(after.runtime_transaction.is_none(), "{label}");
+            assert_eq!(lifecycle.current_generation(), generation, "{label}");
+            assert_gateway_identity(&state, true);
             if let Some(expected_validated) = expected_validated {
                 let result = result.unwrap();
                 assert_eq!(result["committed"], true, "{label}");
@@ -921,6 +1001,113 @@ mod tests {
             }
             let _ = fs::remove_dir_all(&dir);
         }
+    }
+
+    #[test]
+    fn r0_update_connection_rechecks_auth_and_config_inside_lifecycle() {
+        let dir = tmpdir("r0-update-connection-proof-drift");
+        let cfg = Config {
+            profiles: vec![
+                profile("selected", "sk-selected"),
+                profile("applied", "sk-applied"),
+            ],
+            active_id: "selected".into(),
+            runtime_binding: Some(binding("applied")),
+            ..Default::default()
+        };
+        config::save_to(&dir, &cfg).unwrap();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let state = state_with_proxy_identity();
+        lock(&state).sandbox_url = Some("http://127.0.0.1:18765".into());
+        let live_before = {
+            let state = lock(&state);
+            (
+                state.secret.clone(),
+                state.provider.clone(),
+                state.launch_id.clone(),
+                state.key_fp,
+                state.sandbox_url.clone(),
+            )
+        };
+
+        let (held_tx, held_rx) = mpsc::channel();
+        let (prepared_tx, prepared_rx) = mpsc::channel();
+        let holder_lifecycle = lifecycle.clone();
+        let holder_dir = dir.clone();
+        let holder = thread::spawn(move || {
+            holder_lifecycle.with_serialized(|| {
+                held_tx.send(()).unwrap();
+                prepared_rx.recv().unwrap();
+                config::update(&holder_dir, |current| {
+                    current.profile_by_id_mut("selected").unwrap().api_key = "sk-concurrent".into();
+                })
+                .unwrap();
+            });
+        });
+        held_rx.recv().unwrap();
+
+        let validation_called = Cell::new(false);
+        let result = update_profile_connection_with(
+            lifecycle.as_ref(),
+            &dir,
+            "selected".into(),
+            None,
+            None,
+            None,
+            Some("sk-command-edit".into()),
+            None,
+            None,
+            None,
+            |_candidate, adapter| {
+                assert_eq!(adapter, "deepseek");
+                let snapshot = config::load_from(&dir).unwrap();
+                prepared_tx.send(()).unwrap();
+                Ok(snapshot)
+            },
+            |expected, verify_dir| {
+                if config::load_from(verify_dir).map_err(|error| error.to_string())? == *expected {
+                    Ok(())
+                } else {
+                    Err("config_changed_retry：认证检查期间配置发生变化".into())
+                }
+            },
+            |_candidate, _prepared| {
+                validation_called.set(true);
+                Ok(true)
+            },
+        );
+        holder.join().unwrap();
+
+        let error = result.unwrap_err().to_string();
+        let after = config::load_from(&dir).unwrap();
+        let live_after = {
+            let state = lock(&state);
+            (
+                state.secret.clone(),
+                state.provider.clone(),
+                state.launch_id.clone(),
+                state.key_fp,
+                state.sandbox_url.clone(),
+            )
+        };
+        assert!(error.contains("config_changed_retry"), "{error}");
+        assert!(!validation_called.get());
+        assert_eq!(after.active_id, cfg.active_id);
+        assert_eq!(after.runtime_binding, cfg.runtime_binding);
+        assert!(after.runtime_transaction.is_none());
+        assert_eq!(
+            after.profile_by_id("selected").unwrap().api_key,
+            "sk-concurrent",
+            "the command edit must not overwrite the concurrent mutation"
+        );
+        assert_ne!(
+            after.profile_by_id("selected").unwrap().api_key,
+            "sk-command-edit"
+        );
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert_eq!(live_after, live_before);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -970,6 +1157,8 @@ mod tests {
                 ..Default::default()
             };
             config::save_to(&dir, &cfg).unwrap();
+            let lifecycle = lifecycle::Lifecycle::new();
+            let generation = lifecycle.current_generation();
             assert_eq!(
                 crate::runtime::profile::build_get_config(&dir).unwrap()["selection_pending"],
                 pending_before,
@@ -978,7 +1167,7 @@ mod tests {
             let preview = crate::runtime::profile::build_preset_sync_preview(&dir, target).unwrap();
             let fingerprint = preview["preview_fingerprint"].as_str().unwrap();
 
-            apply_profile_preset_sync_in_dir(&dir, target, fingerprint).unwrap();
+            apply_profile_preset_sync_inner_cmd(&lifecycle, &dir, target, fingerprint).unwrap();
 
             let after = config::load_from(&dir).unwrap();
             assert_eq!(after.active_id, cfg.active_id, "{label}");
@@ -989,6 +1178,7 @@ mod tests {
                 pending_after,
                 "{label} after"
             );
+            assert_eq!(lifecycle.current_generation(), generation, "{label}");
             let _ = fs::remove_dir_all(&dir);
         }
 
@@ -1005,8 +1195,15 @@ mod tests {
             add_outdated_catalog_entry(cfg.profile_by_id_mut("selected").unwrap());
         })
         .unwrap();
+        let lifecycle = lifecycle::Lifecycle::new();
         let before_stale = config::load_from(&dir).unwrap();
-        assert!(apply_profile_preset_sync_in_dir(&dir, "selected", &stale_fingerprint).is_err());
+        assert!(apply_profile_preset_sync_inner_cmd(
+            &lifecycle,
+            &dir,
+            "selected",
+            &stale_fingerprint
+        )
+        .is_err());
         assert_eq!(config::load_from(&dir).unwrap(), before_stale);
 
         config::update(&dir, |cfg| {
@@ -1020,7 +1217,9 @@ mod tests {
         })
         .unwrap();
         let before_transaction = config::load_from(&dir).unwrap();
-        assert!(apply_profile_preset_sync_in_dir(&dir, "selected", "unused").is_err());
+        assert!(
+            apply_profile_preset_sync_inner_cmd(&lifecycle, &dir, "selected", "unused").is_err()
+        );
         assert_eq!(config::load_from(&dir).unwrap(), before_transaction);
         let _ = fs::remove_dir_all(&dir);
     }
