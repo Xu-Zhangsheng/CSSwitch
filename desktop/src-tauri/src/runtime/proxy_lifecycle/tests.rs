@@ -1,7 +1,9 @@
 use super::{
     configure_managed_proxy_command, find_gateway_in, finish_interrupted_gateway_recovery,
     formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
-    recover_interrupted_gateway_from_dir, skill_install_bridge_token, ManagedGatewayCleanup,
+    recover_interrupted_gateway_from_dir, skill_install_bridge_token,
+    InterruptedGatewayRecoveryErrorKind, InterruptedGatewayRecoveryOutcome,
+    InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
 };
 use crate::provider_contracts::{
     CachePolicy, EndpointPolicy, ModelPolicy, TimeoutPolicy, Transport,
@@ -194,18 +196,37 @@ fn interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity(
 
 #[test]
 fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
-    for (label, cleanup, expected_error) in [
+    for (label, cleanup, expected_result) in [
         (
             "not-managed",
             ManagedGatewayCleanup::NotManaged,
-            Some("未通过精确 Gateway binary/uid/PID 复核"),
+            Err(InterruptedGatewayRecoveryErrorKind::NotManaged),
         ),
         (
-            "stop-failed",
-            ManagedGatewayCleanup::StopFailed(4242),
-            Some("安全停止失败"),
+            "signal-failed",
+            ManagedGatewayCleanup::StopUnknown {
+                pid: 4242,
+                kind: ManagedGatewayStopUnknownKind::SignalFailed,
+            },
+            Err(InterruptedGatewayRecoveryErrorKind::StopUnknown(
+                InterruptedGatewayStopUnknownKind::SignalFailed,
+            )),
         ),
-        ("stopped", ManagedGatewayCleanup::Stopped(4242), None),
+        (
+            "exit-unconfirmed",
+            ManagedGatewayCleanup::StopUnknown {
+                pid: 4242,
+                kind: ManagedGatewayStopUnknownKind::ExitUnconfirmed,
+            },
+            Err(InterruptedGatewayRecoveryErrorKind::StopUnknown(
+                InterruptedGatewayStopUnknownKind::ExitUnconfirmed,
+            )),
+        ),
+        (
+            "stopped",
+            ManagedGatewayCleanup::Stopped(4242),
+            Ok(InterruptedGatewayRecoveryOutcome::Stopped(4242)),
+        ),
     ] {
         let dir = std::env::temp_dir().join(format!(
             "csswitch-r0-interrupted-recovery-{label}-{}-{}",
@@ -256,12 +277,21 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         crate::config::save_to(&dir, &cfg).unwrap();
 
         let result = finish_interrupted_gateway_recovery(&dir, &journal, || cleanup);
-        match expected_error {
-            Some(expected) => assert!(
-                result.as_ref().is_err_and(|error| error.contains(expected)),
-                "{label} must keep its exact post-stage error: {result:?}"
-            ),
-            None => assert!(result.is_ok(), "stopped outcome must succeed: {result:?}"),
+        assert_eq!(
+            result.as_ref().copied().map_err(|error| error.kind()),
+            expected_result,
+            "{label} must keep its exact typed post-stage outcome"
+        );
+        if let Err(error) = &result {
+            let expected = if label == "not-managed" {
+                "未通过精确 Gateway binary/uid/PID 复核"
+            } else {
+                "安全停止失败"
+            };
+            assert!(
+                error.contains(expected),
+                "{label} must keep its existing safe detail: {error}"
+            );
         }
         let after = crate::config::load_from(&dir).unwrap();
         let after_journal = after.runtime_transaction.unwrap();
@@ -357,9 +387,9 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         })
     });
     assert!(
-        result
-            .as_ref()
-            .is_err_and(|error| error.contains("未通过精确 Gateway binary/uid/PID 复核")),
+        result.as_ref().is_err_and(|error| error.kind()
+            == InterruptedGatewayRecoveryErrorKind::NotManaged
+            && error.contains("未通过精确 Gateway binary/uid/PID 复核")),
         "failed final identity recheck must preserve the post-stage NotManaged result: {result:?}"
     );
     assert!(
@@ -407,11 +437,16 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
     assert_eq!(signal_attempts.get(), 1);
     assert_eq!(
         signal_outcome.get(),
-        Some(ManagedGatewayCleanup::StopFailed(signal_pid))
+        Some(ManagedGatewayCleanup::StopUnknown {
+            pid: signal_pid,
+            kind: ManagedGatewayStopUnknownKind::SignalFailed,
+        })
     );
-    assert!(signal_result
-        .as_ref()
-        .is_err_and(|error| error.contains("安全停止失败")));
+    assert!(signal_result.as_ref().is_err_and(|error| error.kind()
+        == InterruptedGatewayRecoveryErrorKind::StopUnknown(
+            InterruptedGatewayStopUnknownKind::SignalFailed
+        )
+        && error.contains("安全停止失败")));
     assert_r0_recovery_stage(&signal_dir, &signal_journal);
     assert!(
         signal_child.try_wait().unwrap().is_none(),
@@ -437,10 +472,16 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
     assert_eq!(first_rechecks.get(), 1);
     assert_eq!(
         first_outcome.get(),
-        Some(ManagedGatewayCleanup::StopFailed(retry_pid)),
+        Some(ManagedGatewayCleanup::StopUnknown {
+            pid: retry_pid,
+            kind: ManagedGatewayStopUnknownKind::ExitUnconfirmed,
+        }),
         "a listener that ignores the first TERM must exhaust the production wait budget"
     );
-    assert!(first_result.is_err());
+    assert!(first_result.as_ref().is_err_and(|error| error.kind()
+        == InterruptedGatewayRecoveryErrorKind::StopUnknown(
+            InterruptedGatewayStopUnknownKind::ExitUnconfirmed
+        )));
     assert_r0_recovery_stage(&retry_dir, &retry_journal);
     assert!(retry_child.try_wait().unwrap().is_none());
 
@@ -459,9 +500,9 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         refused_outcome.get(),
         Some(ManagedGatewayCleanup::NotManaged)
     );
-    assert!(refused_result
-        .as_ref()
-        .is_err_and(|error| error.contains("未通过精确 Gateway binary/uid/PID 复核")));
+    assert!(refused_result.as_ref().is_err_and(|error| error.kind()
+        == InterruptedGatewayRecoveryErrorKind::NotManaged
+        && error.contains("未通过精确 Gateway binary/uid/PID 复核")));
     assert!(retry_child.try_wait().unwrap().is_none());
     assert_r0_recovery_stage(&retry_dir, &retry_journal);
 
@@ -481,7 +522,10 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         accepted_outcome.get(),
         Some(ManagedGatewayCleanup::Stopped(retry_pid))
     );
-    assert!(accepted_result.is_ok());
+    assert_eq!(
+        accepted_result,
+        Ok(InterruptedGatewayRecoveryOutcome::Stopped(retry_pid))
+    );
     assert_r0_recovery_stage(&retry_dir, &retry_journal);
     retry_child.stop().unwrap();
     fs::remove_dir_all(retry_dir).unwrap();
@@ -498,10 +542,16 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
     });
     assert_eq!(
         late_outcome.get(),
-        Some(ManagedGatewayCleanup::StopFailed(late_pid)),
+        Some(ManagedGatewayCleanup::StopUnknown {
+            pid: late_pid,
+            kind: ManagedGatewayStopUnknownKind::ExitUnconfirmed,
+        }),
         "the controlled late exit must occur after the production wait budget"
     );
-    assert!(late_result.is_err());
+    assert!(late_result.as_ref().is_err_and(|error| error.kind()
+        == InterruptedGatewayRecoveryErrorKind::StopUnknown(
+            InterruptedGatewayStopUnknownKind::ExitUnconfirmed
+        )));
     assert_r0_recovery_stage(&late_dir, &late_journal);
 
     fs::write(&allow_late_exit, b"allow\n").unwrap();
@@ -532,9 +582,13 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
     assert_eq!(
         late_retry_outcome.get(),
         Some(ManagedGatewayCleanup::NotManaged),
-        "retry after late exit must rediscover the absent listener instead of reusing StopFailed"
+        "retry after late exit must rediscover the absent listener instead of reusing StopUnknown"
     );
     assert!(late_retry_result.is_err());
+    assert_eq!(
+        late_retry_result.unwrap_err().kind(),
+        InterruptedGatewayRecoveryErrorKind::NotManaged
+    );
     assert_r0_recovery_stage(&late_dir, &late_journal);
     fs::remove_dir_all(late_dir).unwrap();
 }
@@ -632,6 +686,10 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     let state = Arc::new(Mutex::new(crate::AppState::default()));
 
     let error = recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        InterruptedGatewayRecoveryErrorKind::GatewayStart
+    );
     assert!(error.contains("target profile 与当前 active profile 不一致"));
     assert!(error.contains("已保留 listener 和事务 journal"));
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), before);
@@ -654,6 +712,10 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     let legacy_before = fs::read(dir.join("config.json")).unwrap();
     let legacy_error =
         recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap_err();
+    assert_eq!(
+        legacy_error.kind(),
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot
+    );
     assert!(
         legacy_error.contains("manual_recovery_required"),
         "legacy Science exposure must fail before listener probing: {legacy_error}"
@@ -682,6 +744,68 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     assert!(
         accepted,
         "mismatched recovery must leave the listener usable"
+    );
+
+    let mut no_journal_cfg = crate::config::load_from(&dir).unwrap();
+    no_journal_cfg.runtime_transaction = None;
+    crate::config::save_to(&dir, &no_journal_cfg).unwrap();
+    let no_journal_before = fs::read(dir.join("config.json")).unwrap();
+    assert_eq!(
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
+        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
+    );
+    assert_eq!(
+        fs::read(dir.join("config.json")).unwrap(),
+        no_journal_before,
+        "no-journal recovery must not rewrite config"
+    );
+
+    let managed_journal = crate::config::RuntimeTransactionJournal {
+        transaction_id: "tx-same-process-owned".into(),
+        target_profile_id: no_journal_cfg.active_id.clone(),
+        stage: "start_formal_gateway".into(),
+        previous_binding: None,
+        previous_gateway: None,
+    };
+    let mut managed_cfg = no_journal_cfg.clone();
+    managed_cfg.runtime_transaction = Some(managed_journal.clone());
+    crate::config::save_to(&dir, &managed_cfg).unwrap();
+    let managed_before = fs::read(dir.join("config.json")).unwrap();
+    state.lock().unwrap().launch_id = "same-process-owned".into();
+    assert_eq!(
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
+        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
+    );
+    state.lock().unwrap().launch_id.clear();
+    assert_eq!(fs::read(dir.join("config.json")).unwrap(), managed_before);
+    assert_eq!(
+        crate::config::load_from(&dir).unwrap().runtime_transaction,
+        Some(managed_journal.clone()),
+        "same-process ownership must preserve the journal for its tracked Child path"
+    );
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+
+    let unused_reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+    let unused_port = unused_reservation.local_addr().unwrap().port();
+    assert_ne!(unused_port, 8765);
+    drop(unused_reservation);
+    let mut no_listener_cfg = managed_cfg;
+    no_listener_cfg.proxy_port = unused_port;
+    no_listener_cfg.runtime_transaction = Some(managed_journal.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    let no_listener_before = fs::read(dir.join("config.json")).unwrap();
+    assert_eq!(
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
+        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
+    );
+    assert_eq!(
+        fs::read(dir.join("config.json")).unwrap(),
+        no_listener_before,
+        "absent-listener recovery must not rewrite the journal"
+    );
+    assert_eq!(
+        crate::config::load_from(&dir).unwrap().runtime_transaction,
+        Some(managed_journal)
     );
     fs::remove_dir_all(&dir).unwrap();
 }

@@ -24,6 +24,22 @@ struct OneClickGatewayPreflightSnapshot {
     launch_context: crate::GatewayLaunchContext,
 }
 
+pub(super) fn typed_interrupted_gateway_recovery_error(
+    error: crate::runtime::proxy_lifecycle::InterruptedGatewayRecoveryError,
+) -> TypedOneClickFailure {
+    use crate::runtime::proxy_lifecycle::InterruptedGatewayRecoveryErrorKind;
+
+    let kind = match error.kind() {
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot => {
+            OneClickFailureKind::AuthoritySnapshot
+        }
+        InterruptedGatewayRecoveryErrorKind::GatewayStart
+        | InterruptedGatewayRecoveryErrorKind::NotManaged
+        | InterruptedGatewayRecoveryErrorKind::StopUnknown(_) => OneClickFailureKind::GatewayStart,
+    };
+    TypedOneClickFailure::new(kind, error.to_string())
+}
+
 impl OneClickGatewayPreflightSnapshot {
     fn capture(state: &SharedAppState) -> Result<Option<Self>, String> {
         let mut current = lock(state);
@@ -212,21 +228,8 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
                 TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
             })?;
         }
-        crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state).map_err(
-            |message| {
-                // recover_interrupted_gateway still returns String; map known
-                // Science journal-preservation refuses away from gateway_start.
-                let kind = if message.contains("Science authority/environment")
-                    || message.contains("authority 快照")
-                    || message.contains("Science 环境暴露")
-                {
-                    OneClickFailureKind::AuthoritySnapshot
-                } else {
-                    OneClickFailureKind::GatewayStart
-                };
-                TypedOneClickFailure::new(kind, message)
-            },
-        )?;
+        crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)
+            .map_err(typed_interrupted_gateway_recovery_error)?;
         crate::runtime::sandbox_session::one_click_login(
             app,
             state,

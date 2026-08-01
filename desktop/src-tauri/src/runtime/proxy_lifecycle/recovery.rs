@@ -49,6 +49,71 @@ fn interrupted_health_matches(
     managed_identity && (target_matches || previous_matches)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InterruptedGatewayRecoveryOutcome {
+    NotNeeded,
+    Stopped(u32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InterruptedGatewayStopUnknownKind {
+    SignalFailed,
+    ExitUnconfirmed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InterruptedGatewayRecoveryErrorKind {
+    GatewayStart,
+    AuthoritySnapshot,
+    NotManaged,
+    StopUnknown(InterruptedGatewayStopUnknownKind),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InterruptedGatewayRecoveryError {
+    kind: InterruptedGatewayRecoveryErrorKind,
+    safe_detail: String,
+}
+
+impl InterruptedGatewayRecoveryError {
+    pub(crate) fn new(
+        kind: InterruptedGatewayRecoveryErrorKind,
+        safe_detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            safe_detail: safe_detail.into(),
+        }
+    }
+
+    pub(crate) fn kind(&self) -> InterruptedGatewayRecoveryErrorKind {
+        self.kind
+    }
+}
+
+impl std::fmt::Display for InterruptedGatewayRecoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.safe_detail)
+    }
+}
+
+impl std::ops::Deref for InterruptedGatewayRecoveryError {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.safe_detail
+    }
+}
+
+impl std::error::Error for InterruptedGatewayRecoveryError {}
+
+fn interrupted_gateway_recovery_error(
+    kind: InterruptedGatewayRecoveryErrorKind,
+    safe_detail: impl Into<String>,
+) -> InterruptedGatewayRecoveryError {
+    InterruptedGatewayRecoveryError::new(kind, safe_detail)
+}
+
 /// Consume an interrupted profile-switch journal after an app restart. An
 /// orphan is never adopted. It is stopped only when the persisted path secret
 /// authenticates a formal Rust Gateway, its public launch/catalog identity
@@ -58,7 +123,7 @@ fn interrupted_health_matches(
 pub(crate) fn recover_interrupted_gateway<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
-) -> Result<(), String> {
+) -> Result<InterruptedGatewayRecoveryOutcome, InterruptedGatewayRecoveryError> {
     let dir = config::default_dir();
     recover_interrupted_gateway_from_dir(app, state, &dir)
 }
@@ -67,24 +132,29 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
     dir: &Path,
-) -> Result<(), String> {
-    let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
+) -> Result<InterruptedGatewayRecoveryOutcome, InterruptedGatewayRecoveryError> {
+    let cfg = config::load_from(dir).map_err(|error| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            error.to_string(),
+        )
+    })?;
     let Some(journal) = cfg.runtime_transaction.as_ref() else {
-        return Ok(());
+        return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     };
     if journal.target_profile_id != cfg.active_id {
-        return Err(
-            "未完成运行事务的 target profile 与当前 active profile 不一致；已保留 listener 和事务 journal，拒绝自动恢复，等待人工或后续恢复。"
-                .into(),
-        );
+        return Err(interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            "未完成运行事务的 target profile 与当前 active profile 不一致；已保留 listener 和事务 journal，拒绝自动恢复，等待人工或后续恢复。",
+        ));
     }
     if crate::runtime::sandbox_session::runtime_transaction_requires_snapshot_preservation(
         &journal.stage,
     ) {
-        return Err(
-            "检测到中断的 Science authority/environment 事务；已保留 Gateway、事务 journal 与恢复快照，拒绝自动探测、停止或改写其身份；recovery_status=manual_recovery_required"
-                .into(),
-        );
+        return Err(interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
+            "检测到中断的 Science authority/environment 事务；已保留 Gateway、事务 journal 与恢复快照，拒绝自动探测、停止或改写其身份；recovery_status=manual_recovery_required",
+        ));
     }
     {
         let st = lock(state);
@@ -94,21 +164,32 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
             || !st.gateway_kind.is_empty()
         {
             // Same-process profile switching owns its Child and recovery.
-            return Ok(());
+            return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
         }
     }
     if !proc::loopback_port_in_use(cfg.proxy_port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
-        return Ok(());
+        return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     }
     if cfg.secret.is_empty() {
-        return Err(
-            "检测到未完成的运行事务，但正式端口被占用且配置没有 path secret；已拒绝接管。".into(),
-        );
+        return Err(interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            "检测到未完成的运行事务，但正式端口被占用且配置没有 path secret；已拒绝接管。",
+        ));
     }
-    let active = cfg
-        .active_profile()
-        .ok_or("未完成的运行事务指向不存在的 active profile")?;
-    let formal = crate::runtime::provider::resolve_launch_plan(active)?.formal();
+    let active = cfg.active_profile().ok_or_else(|| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            "未完成的运行事务指向不存在的 active profile",
+        )
+    })?;
+    let formal = crate::runtime::provider::resolve_launch_plan(active)
+        .map_err(|error| {
+            interrupted_gateway_recovery_error(
+                InterruptedGatewayRecoveryErrorKind::GatewayStart,
+                error,
+            )
+        })?
+        .formal();
     let target_shim = current_shim_mode_for_adapter(&formal.adapter);
     let target_catalog_fp = static_gateway_catalog_fp(&formal);
     let initial = proc::http_gateway_health(
@@ -116,7 +197,12 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
         Some(&cfg.secret),
         operation::LOCAL_HEALTH_TIMEOUT_MS,
     )
-    .ok_or("检测到未完成的运行事务，但端口 listener 不接受已提交 path secret；已拒绝接管。")?;
+    .ok_or_else(|| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            "检测到未完成的运行事务，但端口 listener 不接受已提交 path secret；已拒绝接管。",
+        )
+    })?;
     if !interrupted_health_matches(
         &initial,
         &formal.adapter,
@@ -138,12 +224,17 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
             provider_contract_digest: Some(&initial.provider_contract_digest),
         },
     ) {
-        return Err(
-            "未完成事务的端口 listener 与已提交/上一受管 Gateway 身份不一致；已拒绝结束未知进程。"
-                .into(),
-        );
+        return Err(interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            "未完成事务的端口 listener 与已提交/上一受管 Gateway 身份不一致；已拒绝结束未知进程。",
+        ));
     }
-    let binary = gateway_bin_path(app).ok_or("未找到本次应用打包的 Gateway，无法安全恢复事务")?;
+    let binary = gateway_bin_path(app).ok_or_else(|| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            "未找到本次应用打包的 Gateway，无法安全恢复事务",
+        )
+    })?;
     finish_interrupted_gateway_recovery(dir, journal, || {
         let initial_for_probe = initial.clone();
         stop_managed_gateway_on_port(cfg.proxy_port, &binary, || {
@@ -176,7 +267,7 @@ fn finish_interrupted_gateway_recovery<F>(
     dir: &Path,
     journal: &config::RuntimeTransactionJournal,
     cleanup: F,
-) -> Result<(), String>
+) -> Result<InterruptedGatewayRecoveryOutcome, InterruptedGatewayRecoveryError>
 where
     F: FnOnce() -> ManagedGatewayCleanup,
 {
@@ -191,14 +282,31 @@ where
             }
         }
     })
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            error.to_string(),
+        )
+    })?;
     match cleanup() {
-        ManagedGatewayCleanup::Stopped(_) => Ok(()),
-        ManagedGatewayCleanup::NotManaged => Err(
-            "未完成事务的 listener 未通过精确 Gateway binary/uid/PID 复核；已拒绝结束进程。".into(),
-        ),
-        ManagedGatewayCleanup::StopFailed(_) => {
-            Err("已确认未完成事务遗留的受管 Gateway，但安全停止失败。".into())
+        ManagedGatewayCleanup::Stopped(pid) => Ok(InterruptedGatewayRecoveryOutcome::Stopped(pid)),
+        ManagedGatewayCleanup::NotManaged => Err(interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::NotManaged,
+            "未完成事务的 listener 未通过精确 Gateway binary/uid/PID 复核；已拒绝结束进程。",
+        )),
+        ManagedGatewayCleanup::StopUnknown { kind, .. } => {
+            let kind = match kind {
+                ManagedGatewayStopUnknownKind::SignalFailed => {
+                    InterruptedGatewayStopUnknownKind::SignalFailed
+                }
+                ManagedGatewayStopUnknownKind::ExitUnconfirmed => {
+                    InterruptedGatewayStopUnknownKind::ExitUnconfirmed
+                }
+            };
+            Err(interrupted_gateway_recovery_error(
+                InterruptedGatewayRecoveryErrorKind::StopUnknown(kind),
+                "已确认未完成事务遗留的受管 Gateway，但安全停止失败。",
+            ))
         }
     }
 }

@@ -1,3 +1,4 @@
+use super::one_click::typed_interrupted_gateway_recovery_error;
 use super::{
     config_last_error_json, manual_open_result, project_one_click_failure,
     status_response_for_config_error, status_runtime_identity, status_upstream_applicable,
@@ -81,6 +82,10 @@ fn status_runtime_identity_prefers_launched_identity_and_fail_closes_partial_lau
 #[test]
 fn science_operation_failures_have_stable_structured_stages() {
     use crate::runtime::failure::{OneClickFailureKind, TypedOneClickFailure};
+    use crate::runtime::proxy_lifecycle::{
+        InterruptedGatewayRecoveryError, InterruptedGatewayRecoveryErrorKind,
+        InterruptedGatewayStopUnknownKind,
+    };
 
     let project = |kind: OneClickFailureKind, message: &str| {
         project_one_click_failure(TypedOneClickFailure::new(kind, message))
@@ -140,6 +145,50 @@ fn science_operation_failures_have_stable_structured_stages() {
             "代理 gateway 停止旧进程 沙箱"
         )["stage"],
         "catalog_verify"
+    );
+
+    let recovery_failure = |kind, message| {
+        typed_interrupted_gateway_recovery_error(InterruptedGatewayRecoveryError::new(
+            kind, message,
+        ))
+    };
+    let authority_failure = recovery_failure(
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
+        "message deliberately has no authority keyword",
+    );
+    assert_eq!(
+        authority_failure.kind(),
+        OneClickFailureKind::AuthoritySnapshot
+    );
+    assert_eq!(
+        project_one_click_failure(authority_failure)["stage"],
+        "science_start"
+    );
+    let not_managed_failure = recovery_failure(
+        InterruptedGatewayRecoveryErrorKind::NotManaged,
+        "Science authority/environment authority 快照 Science 环境暴露",
+    );
+    assert_eq!(
+        not_managed_failure.kind(),
+        OneClickFailureKind::GatewayStart
+    );
+    assert_eq!(
+        project_one_click_failure(not_managed_failure)["stage"],
+        "gateway_start"
+    );
+    let stop_unknown_failure = recovery_failure(
+        InterruptedGatewayRecoveryErrorKind::StopUnknown(
+            InterruptedGatewayStopUnknownKind::SignalFailed,
+        ),
+        "authority 快照",
+    );
+    assert_eq!(
+        stop_unknown_failure.kind(),
+        OneClickFailureKind::GatewayStart
+    );
+    assert_eq!(
+        project_one_click_failure(stop_unknown_failure)["stage"],
+        "gateway_start"
     );
 }
 

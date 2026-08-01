@@ -30,7 +30,16 @@ pub(crate) enum LegacyProxyCleanup {
 pub(crate) enum ManagedGatewayCleanup {
     NotManaged,
     Stopped(u32),
-    StopFailed(u32),
+    StopUnknown {
+        pid: u32,
+        kind: ManagedGatewayStopUnknownKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManagedGatewayStopUnknownKind {
+    SignalFailed,
+    ExitUnconfirmed,
 }
 
 fn parse_lsof_records(output: &str) -> Vec<(u32, String)> {
@@ -265,7 +274,10 @@ where
         return ManagedGatewayCleanup::NotManaged;
     }
     if signal_term(pid).is_err() {
-        return ManagedGatewayCleanup::StopFailed(pid);
+        return ManagedGatewayCleanup::StopUnknown {
+            pid,
+            kind: ManagedGatewayStopUnknownKind::SignalFailed,
+        };
     }
     for _ in 0..40 {
         if !listener_records(port)
@@ -276,7 +288,10 @@ where
         }
         thread::sleep(Duration::from_millis(50));
     }
-    ManagedGatewayCleanup::StopFailed(pid)
+    ManagedGatewayCleanup::StopUnknown {
+        pid,
+        kind: ManagedGatewayStopUnknownKind::ExitUnconfirmed,
+    }
 }
 
 #[cfg(test)]

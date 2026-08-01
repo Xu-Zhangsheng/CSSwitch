@@ -17,7 +17,7 @@ use tauri::{Manager, Runtime};
 
 use crate::runtime::legacy_proxy::{
     stop_legacy_csswitch_python_on_port, stop_managed_gateway_on_port, LegacyProxyCleanup,
-    ManagedGatewayCleanup,
+    ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
 };
 use crate::runtime::operation::{self, OperationStage, OperationTrace, POLL_INTERVAL_MS};
 use crate::runtime::provider::{
