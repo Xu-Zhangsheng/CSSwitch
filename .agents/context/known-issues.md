@@ -2,7 +2,7 @@
 
 状态：当前；按 v0.8.4 release source 与 2026-08-01 R0 分片基线整理
 
-最后复核：2026-08-01（Asia/Taipei）
+最后复核：2026-08-02（Asia/Taipei）
 
 失效条件：对应 change/bug record、Science 版本、release source、artifact 或 installed/live 证据改变时，受影响条目立即失效并须按当前版本重审。
 
@@ -183,7 +183,7 @@ tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/H
 复核三层 manifest、全部三十个 result/observation 引用哈希、snapshot 条目与 ignored identity。
 结论不得外推到 artifact、installed、live provider、Science、SSH、签名、公证或公开 release。
 
-`R1-E` source candidate 已实现但尚未 seal：production 已删除
+`R1-E` 已收口（source）：production 已删除
 `recovery_from_diagnostic_codes`，`RuntimeError`、`AuthorityCleanupFailure` 与
 `InterruptedGatewayRecoveryError` 不再通过 `Deref<str>` 暴露兼容性 `contains`。普通
 one-click error 构造与 command DTO 投影不再读取 message；中断 Science 入口、authority
@@ -201,9 +201,15 @@ loopback/process 的环境为 482 passed / 0 failed / 41 explicitly ignored。�
 失败。首轮 clean-context reviewer 发现 interrupted Gateway `AuthoritySnapshot` 在删除解析器后
 会从 `manual_recovery_required` 回退为 `degraded` HIGH，并指出 source-contract 未绑定该
 recovery mapping MEDIUM；已为 Gateway error 增加 typed recovery disposition、补齐 DTO
-recovery/environment 断言与双层 source-contract。修复后的新 clean-context 复审、implementation
-review 已 PASS，零 BLOCK/HIGH/MEDIUM/LOW；implementation commit 与 exact-SHA
-`GATE-SOURCE` completion seal 尚未完成，因此不得写成 `R1-E DONE`。
+recovery/environment 断言与双层 source-contract。修复后的新 clean-context candidate review
+已 PASS，零 BLOCK/HIGH/MEDIUM/LOW。implementation exact SHA
+`ff528eb6b62085e83b43184bfb878d8ff37e4de2` 取得十五 suite `GATE-SOURCE` completion
+seal PASS：run id `0be1d0796597853ca387a00a7ab6c683`、runner exit 0；manifest 含十五个
+test result 与十五个 source observation，desktop 身份为 523 discovered / 523 executed /
+482 passed / 0 failed / 41 approved ignored / 0 skipped / 0 not run，source snapshot 为 488 个
+tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/HIGH/MEDIUM/LOW，并
+复核三层 manifest、全部三十个 result/observation 引用哈希、snapshot 条目与 ignored identity。
+结论不得外推到 artifact、installed、live provider、Science、SSH、签名、公证或公开 release。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
@@ -211,12 +217,11 @@ review 已 PASS，零 BLOCK/HIGH/MEDIUM/LOW；implementation commit 与 exact-SH
 | `R1-B` | DONE | authority snapshot / pending cleanup typed outcome、exact-SHA source gate 与独立审查收口 |
 | `R1-C` | DONE | one-click compensation typed aggregate、exact-SHA source gate 与独立审查收口 |
 | `R1-D` | DONE | interrupted Gateway recovery typed outcome、exact-SHA source gate 与独立审查收口 |
-| `R1-E` | IMPLEMENTED / UNSEALED | production message semantic parsing 已清零；修复后回归与独立复审 PASS，待 commit 与 exact-SHA source gate 收口 |
+| `R1-E` | DONE | production message semantic parsing 清零、typed projection、exact-SHA source gate 与独立审查收口 |
 | `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
 
-唯一 `NEXT` 是收口 `R1-E`：提交已取得 clean-context PASS 的实现候选并绑定 clean exact SHA
-运行完整 source gate，随后补齐 closure metadata。完成前不得进入 `R1-F`，也不得
-触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
+唯一 `NEXT` 是 `R1-F`：完成 R1 整体 inventory、source gate 与最终审查。本阶段未进入
+`R1-F`，也未触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 
