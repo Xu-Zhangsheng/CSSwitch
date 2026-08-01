@@ -12,9 +12,9 @@
 
 `R0-0` 已收口：恢复仓库安全边界，并把 runtime mutation inventory
 的完成条件收紧为“每个 characterization 都是 source gate 发现且实际
-执行的精确身份，不得位于 ignored/skipped 集合”。当前 inventory 仍为
-`requirements-open`；已有 helper 或源码顺序检查不代表 command-level fault
-injection 完成。
+执行的精确身份，不得位于 ignored/skipped 集合”。该条件已在 R0-H 通过
+command-level parent、source gate 精确身份与独立完成审查收口；helper 或源码
+顺序检查本身仍不构成 characterization 证据。
 
 `R0-A` 已收口（source）：五个 source gate 身份分别冻结 one-click prior-stop
 错误、durable snapshot 到首个 journal 的中断窗口、snapshot capture rollback、
@@ -71,6 +71,13 @@ backup-before-single-v4-commit 与 setup 忽略首次错误后 boot prepare 失�
 线程绑定 mock host mutation；结论不扩展到 installed/live provider、artifact、Science
 Skill runtime 或产品行为修复。
 
+`R0-H` 已收口（source）：整体 inventory 共绑定七十四个精确 characterization
+身份，全部由 source gate 发现、实际执行，且不位于 ignored/skipped 集合；desktop
+身份闭合为 522 discovered / 41 approved ignored，frontend 闭合为 39 个精确身份。
+完整十五 suite `GATE-SOURCE` completion seal 与 clean-context 独立完成审查共同建立
+本次 R0 source closure。结论仅冻结当前 command-level 行为，不授权 R1-R11，也不扩展
+到 artifact、installed/live provider、Science、SSH、签名、公证或公开发布。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R0-A` | DONE | one-click prior stop、snapshot、DB restart 与 prior runtime restore |
@@ -80,10 +87,10 @@ Skill runtime 或产品行为修复。
 | `R0-E` | DONE | profile select/update/sync/revoke |
 | `R0-F` | DONE | Codex mutation |
 | `R0-G` | DONE | Skill/bridge/doctor/startup migration |
-| `R0-H` | **NEXT** | 整体 inventory、source gate 与最终独立审查收口 |
+| `R0-H` | DONE | 整体 inventory、source gate 与最终独立审查收口 |
 
-每个窗口只完成表中一个阶段；阶段结束时更新本表、完成该分片的
-验证/审查/提交和临时内容清理，并留下干净工作树再进入下一阶段。
+R0 已全部收口。后续 R1-R11 或其他重构必须另行明确目标、基线与证据边界，
+不得把本次 source closure 外推为产品修复或更高证据层 PASS。
 
 ## 下一轮重构的 P0 前置
 

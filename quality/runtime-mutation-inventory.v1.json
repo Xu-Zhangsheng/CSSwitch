@@ -18,9 +18,9 @@
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
       "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
     ],
-    "test_identity_semantics": "characterization_tests lists required stable identities for R0 completion, not evidence that every identity already exists. R0 may be declared complete only when every listed value is an exact discovered source-gate identity and is neither ignored nor skipped, and the separate completion review is complete; planned names remain incomplete until implemented, while a fully discovered set remains requirements-open until the R0-H review closes.",
-    "characterization_status": "requirements-open",
-    "completion_review_status": "pending"
+    "test_identity_semantics": "characterization_tests lists the stable identities required for R0 completion. R0 is complete because every listed value is an exact discovered and executed source-gate identity, none is ignored or skipped, and the separate clean-context completion review is complete; this remains source-only behavior characterization and does not authorize R1-R11 or promote artifact/live evidence.",
+    "characterization_status": "complete",
+    "completion_review_status": "complete"
   },
   "state_owners": [
     {
@@ -414,7 +414,7 @@
         {"id": "one-click.post-journal", "after_effects": ["authority snapshot and journal exist", "zero or more Gateway/Science/private mutations"], "observed_outcome": "Failure funnels through snapshot/private cleanup and prior runtime/Gateway restoration; cleanup uncertainty is persisted.", "compensation": "authority snapshot plus exact receipts and prior runtime restart"}
       ],
       "compensation": {"kind": "authority-snapshot", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "compensate_one_click_failure"}, "contract": "After snapshot creation, restore protected authority and prior binding/Gateway/Science from captured receipts; persist cleanup-required when identity-safe cleanup cannot be proven."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_to_journal_boundary_is_frozen", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_capture_failure_restarts_prior_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_post_receipt_failure_restores_prior_runtime", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_cold_start_commits_runtime_and_receipts", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_history_attention_commits_choice_session_without_starting_science", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_to_journal_boundary_is_frozen", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_capture_failure_restarts_prior_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_post_receipt_failure_restores_prior_runtime", "desktop/src-tauri/Cargo.toml::lib::tests::r0_second_instance_callback_boot_state_matrix_reuses_one_click_login_cmd", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel"],
       "known_gaps": ["Prior stop can precede durable recovery intent.", "Runtime journal stage remains string.", "One coordinator still combines multiple authorities."]
     },
     {
@@ -431,7 +431,7 @@
         {"id": "healthy-reopen.post-gateway", "after_effects": ["Gateway may have changed", "config may have changed"], "observed_outcome": "Restore prior config and AppState/Gateway snapshot; Science remains running.", "compensation": "dedicated config and Gateway rollback"}
       ],
       "compensation": {"kind": "dedicated-rollback", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, "contract": "Restore prior config and AppState/Gateway on failure; do not delete a marker created before the attempt and do not restart Science."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_existing_marker_is_read_only", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_existing_marker_is_read_only", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_missing_marker_bootstraps_without_credential_mutation"],
       "known_gaps": ["Marker creation is a non-compensated durable upgrade."]
     },
     {
@@ -449,7 +449,7 @@
         {"id": "history-restore.credential-write", "after_effects": ["managed Science stopped"], "observed_outcome": "Write/revalidation failure leaves Science stopped and references reusable.", "compensation": "oauth_forge handles its local atomicity; command has no runtime compensation"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, "contract": "Current command has no journal, authority snapshot, or prior Science restart; only successful credential selection rotates all references."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_pre_stop_rejection_preserves_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_config_drift_leaves_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_candidate_and_credential_failures_leave_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_rotates_all_references_only_after_success"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_pre_stop_rejection_preserves_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_config_drift_leaves_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_candidate_and_credential_failures_leave_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_rotates_all_references_only_after_success", "test/runtime_controller_history_restore.test.mjs::failed history restore never invokes one_click_login", "test/runtime_controller_history_restore.test.mjs::successful history restore invokes one_click_login exactly once after restore succeeds"],
       "known_gaps": ["Independent sibling transaction is not journaled or compensated."]
     },
     {
@@ -466,7 +466,7 @@
         {"id": "interrupted-recovery.stop-failed", "after_effects": ["journal stage changed", "TERM/KILL may have been attempted"], "observed_outcome": "Return error without stage rollback or prior Gateway restart; later retry rechecks identity.", "compensation": "none"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "contract": "Preserve current post-stage StopFailed behavior: no rollback, late-exit wait policy, or prior restart."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_matrix"],
       "known_gaps": ["Stop outcome is string/error based and stage update precedes process stop."]
     },
     {
@@ -480,7 +480,7 @@
       "ordered_effects": ["load selected profile", "obtain provider auth proof if needed", "serialize and recheck proof", "create/retain path secret and rotate Skill bridge key as needed", "reuse/restart/spawn Gateway using effective Science context", "return port without committing runtime binding or journal"],
       "failure_points": [{"id": "start-gateway-only.launch", "after_effects": ["path secret or bridge key may already be durable", "prior Gateway may have been replaced"], "observed_outcome": "Error is returned; binding/journal stay unchanged and Science is retained.", "compensation": "Gateway lifecycle performs only its local start cleanup; no operation receipt restores every durable side effect"}],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/lifecycle.rs", "symbol": "start_proxy_for"}, "contract": "Local child cleanup only; command has no binding commit and no full prior/new Gateway receipt."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_failure_matrix_preserves_current_partial_effects", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_reloads_selected_profile_after_serializer_wait", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_remembered_science_context_is_lost_on_cold_restore", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_success_matrix_freezes_role_science_and_action"],
       "known_gaps": ["Registered command has no bundled caller.", "Persisted launch recipe can omit derived Science host context."]
     },
     {
@@ -515,7 +515,7 @@
         {"id": "set-settings.config-commit", "after_effects": ["runtime stopped", "SSH bridge/stub may be removed"], "observed_outcome": "Prior settings remain durable but runtime stays stopped.", "compensation": "none"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "contract": "Stop/revoke/remove-before-commit behavior is preserved without journal or prior restart."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_stub_remove_failure_preserves_stop_before_commit"],
       "known_gaps": ["No durable receipt for teardown or SSH bridge changes."]
     },
     {
@@ -558,7 +558,7 @@
       "ordered_effects": ["cancel/wait/TERM/KILL registered Codex auth child", "attempt Science stop and ignore error", "stop tracked Gateway", "allow native exit", "Drop repeats Gateway safety stop"],
       "failure_points": [{"id": "native-exit.cleanup", "after_effects": ["one or both Tauri exit events may already have run cleanup", "Science stop may have failed"], "observed_outcome": "Cleanup remains repeatable best effort and cannot prevent native exit.", "compensation": "second event can retry; no generation bump or restart"}],
       "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "cleanup_for_exit"}, "contract": "Both ExitRequested and Exit call cleanup; errors do not block native termination, and AppState Drop stops any still-tracked Gateway."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway"],
       "known_gaps": ["Two Tauri events can repeat terminal side effects.", "No generation bump."]
     },
     {
@@ -589,7 +589,7 @@
         {"id": "update-connection.inconclusive", "after_effects": ["scratch returned 405, 429, 5xx, or no response"], "observed_outcome": "Commit with validated=false; applied/live state remains unchanged.", "compensation": "none needed for accepted intent"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "update_profile_connection_inner_cmd"}, "contract": "Only profile intent commits; scratch process is isolated and the command never applies the candidate."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_update_connection_validation_tristate_preserves_applied_runtime"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_update_connection_rechecks_auth_and_config_inside_lifecycle", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_update_connection_validation_tristate_preserves_applied_runtime"],
       "known_gaps": ["Outcome is projected as boolean validated plus error rather than a typed intent result."]
     },
     {
@@ -665,7 +665,7 @@
       "ordered_effects": ["require authenticated status through sidecar proof", "serialize and verify proof unchanged", "idempotently create canonical profile only when none exists"],
       "failure_points": [{"id": "codex-ensure-profile.commit", "after_effects": ["authentication proof obtained"], "observed_outcome": "Config failure reports safe profile_ensure failure and leaves OAuth untouched.", "compensation": "atomic config write"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "ensure_codex_profile_authenticated"}, "contract": "Intent repair never changes active_id and never starts/stops managed runtime."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_requires_authentication_and_is_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_requires_authentication_and_is_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_ensure_profile_rechecks_auth_inside_lifecycle"],
       "known_gaps": ["Authentication status is external to config and validated through a lease/proof."]
     },
     {

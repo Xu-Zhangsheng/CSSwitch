@@ -10,6 +10,7 @@
     "test/codex_auth_ui.test.mjs",
     "test/model_catalog_state.test.mjs",
     "test/profile_preview_mock.test.mjs",
+    "test/runtime_controller_history_restore.test.mjs",
     "test/quality/test_quality_kernel.py",
     "test/quality/test_run_evidence_aggregation_runner.py",
     "test/quality/test_run_evidence_atomic_store.py",
@@ -110,7 +111,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "QUALITY-METADATA"
       }
     },
@@ -193,7 +194,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "QUALITY-FOCUSED"
       }
     },
@@ -347,7 +348,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "RUN-EVIDENCE-CONTRACT"
       }
     },
@@ -554,7 +555,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "QUALITY-INVENTORY"
       }
     },
@@ -631,7 +632,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "PY-OFFLINE"
       }
     },
@@ -709,7 +710,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "PY-LOOPBACK"
       }
     },
@@ -776,7 +777,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "SHELL-SCRIPTS"
       }
     },
@@ -852,7 +853,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "RUST-DESKTOP"
       }
     },
@@ -923,7 +924,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "RUST-GATEWAY"
       }
     },
@@ -993,7 +994,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "RUST-CODEX-NETWORK"
       }
     },
@@ -1065,7 +1066,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "RUST-SKILL-PACKAGE"
       }
     },
@@ -1081,6 +1082,7 @@
         "test/codex_auth_ui.test.mjs",
         "test/model_catalog_state.test.mjs",
         "test/profile_preview_mock.test.mjs",
+        "test/runtime_controller_history_restore.test.mjs",
         "test/runtime_status_state.test.mjs",
         "test/skill_page_state.test.mjs"
       ],
@@ -1103,6 +1105,7 @@
         "test/codex_auth_ui.test.mjs",
         "test/model_catalog_state.test.mjs",
         "test/profile_preview_mock.test.mjs",
+        "test/runtime_controller_history_restore.test.mjs",
         "test/runtime_status_state.test.mjs",
         "test/skill_page_state.test.mjs"
       ],
@@ -1137,7 +1140,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "MJS-FRONTEND"
       }
     },
@@ -1375,7 +1378,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "ORPHAN-SKILL-BRIDGE"
       }
     },
@@ -1444,7 +1447,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "ORPHAN-SKILL-BOUNDARY"
       }
     },
@@ -2062,7 +2065,7 @@
       "environment_allowlist": [],
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f23647f19ad130a11720902b8f276fbf712fb52fd2ef4eef168896073e166116",
+        "sha256": "0e5bd1d1807ad628c5120d650332e05231fabb15e6e2d38459506284bd2be690",
         "suite_key": "SOURCE-GATE-CONTRACT"
       },
       "status": "implemented",
