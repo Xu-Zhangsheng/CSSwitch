@@ -211,6 +211,21 @@ tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/H
 复核三层 manifest、全部三十个 result/observation 引用哈希、snapshot 条目与 ignored identity。
 结论不得外推到 artifact、installed、live provider、Science、SSH、签名、公证或公开 release。
 
+`R1-F` 当前为 candidate / `UNSEALED`：已对 R1-A–E 的 typed envelope、authority
+cleanup、one-click compensation、interrupted Gateway recovery、command / auto-boot /
+profile projection 与 production source-contract 做整体 inventory。聚焦矩阵实际执行并
+PASS：`failure::` 8 passed、command structured-stage 1 passed、auto-boot 1 passed、
+transaction 24 passed / 2 explicitly ignored、proxy lifecycle 20 passed / 1 explicitly
+ignored、profile-switch 3 passed、boundary module 11 passed；完整 Rust lib 在允许隔离
+loopback / process identity 的环境为 482 passed / 0 failed / 41 explicitly ignored。
+
+敏感信息 canary 已单独执行并 PASS：compensation rollback 注入的原始 credential 未进入
+诊断表面；authority snapshot path / credential canary 与 runtime journal secret-free 回归亦在
+transaction matrix 中 PASS。两条 prior-Science compensation 隔离用例首次与其他测试进程
+并行执行时相互干扰失败，随后按各自 isolation contract 串行重跑均 PASS；该并行方式不作为
+有效证据。完整十五 suite `GATE-SOURCE` 与 exact-SHA clean-context 最终审查仍为
+`NOT-RUN` / pending，因此本阶段尚未建立 R1 source closure，也未进入 R2。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R1-A` | DONE | typed envelope 底座、冻结 DTO 投影、exact-SHA source gate 与独立审查收口 |
@@ -218,10 +233,10 @@ tracked entry。exact-SHA clean-context 独立完成审查亦 PASS，零 BLOCK/H
 | `R1-C` | DONE | one-click compensation typed aggregate、exact-SHA source gate 与独立审查收口 |
 | `R1-D` | DONE | interrupted Gateway recovery typed outcome、exact-SHA source gate 与独立审查收口 |
 | `R1-E` | DONE | production message semantic parsing 清零、typed projection、exact-SHA source gate 与独立审查收口 |
-| `R1-F` | NOT-STARTED | R1 整体 inventory、source gate 与最终审查 |
+| `R1-F` | IN-PROGRESS | 整体 inventory、矩阵与 canary 已完成；exact-SHA source gate 与最终审查 pending |
 
-唯一 `NEXT` 是 `R1-F`：完成 R1 整体 inventory、source gate 与最终审查。本阶段未进入
-`R1-F`，也未触碰 R2 journal schema、R3 state owner 或 R4 mutation lease。
+唯一 `NEXT` 仍是 `R1-F`：完成 exact-SHA source gate 与最终审查。尚未触碰 R2 journal
+schema、R3 state owner 或 R4 mutation lease。
 
 ## 下一轮重构的 P0 前置
 
