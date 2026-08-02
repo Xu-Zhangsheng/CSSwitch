@@ -194,25 +194,36 @@ pub(crate) fn sandbox_listener_matches_runtime(
 ///
 /// Returns `Err` when the stop script is missing or exits non-zero, so callers
 /// can report that Science may not have stopped cleanly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SciencePostTermAction {
+    Complete,
+    KillExact,
+    IdentityDrift,
+}
+
+fn science_post_term_action(
+    port_accepts_tcp: bool,
+    ownership_is_current: bool,
+) -> SciencePostTermAction {
+    match (port_accepts_tcp, ownership_is_current) {
+        (false, _) => SciencePostTermAction::Complete,
+        (true, true) => SciencePostTermAction::KillExact,
+        (true, false) => SciencePostTermAction::IdentityDrift,
+    }
+}
+
 pub(crate) fn stop_sandbox<R: Runtime>(
     app: &tauri::AppHandle<R>,
     sandbox: &mut Option<Child>,
     sandbox_url: &mut Option<String>,
-    runtime: Option<&ScienceRuntimeIdentity>,
-) -> Result<(), String> {
-    stop_sandbox_with_launch_token(app, sandbox, sandbox_url, runtime, None)
-}
-
-pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
-    app: &tauri::AppHandle<R>,
-    sandbox: &mut Option<Child>,
-    sandbox_url: &mut Option<String>,
-    runtime: Option<&ScienceRuntimeIdentity>,
-    launch_token: Option<&ScienceManagedLaunchToken>,
-) -> Result<(), String> {
+    request: ScienceStopRequest,
+) -> ScienceStopOutcome {
+    let ScienceStopRequest { runtime, ownership } = request;
     if !sandbox_data_dir().exists() {
         let sandbox_port = config::load_from(&config::default_dir())
-            .map_err(|error| format!("读取 Science 端口配置失败：{error}"))?
+            .map_err(|error| {
+                ScienceStopFailure::request_rejected(format!("读取 Science 端口配置失败：{error}"))
+            })?
             .sandbox_port;
         let first_port_observation = loopback_port_accepts_tcp(sandbox_port);
         let second_port_observation = if first_port_observation {
@@ -222,48 +233,70 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
             loopback_port_accepts_tcp(sandbox_port)
         };
         if second_port_observation {
-            return Err(
-                "Science data-dir 已消失，但配置端口仍有监听；未发送信号且未确认停止。".into(),
-            );
+            return Err(ScienceStopFailure::exit_unconfirmed(
+                "Science data-dir 已消失，但配置端口仍有监听；未发送信号且未确认停止。",
+            ));
         }
         kill_child(sandbox);
         *sandbox_url = None;
-        return Ok(());
+        return Ok(VerifiedScienceStop {
+            runtime: None,
+            ownership_was_proven: false,
+        });
     }
     let recovered;
-    let runtime = match runtime {
+    let runtime = match runtime.as_ref() {
         Some(runtime) => runtime,
         None => {
             let port = config::load_from(&config::default_dir())
-                .map_err(|e| format!("读取 Science 端口配置失败：{e}"))?
+                .map_err(|error| {
+                    ScienceStopFailure::request_rejected(format!(
+                        "读取 Science 端口配置失败：{error}"
+                    ))
+                })?
                 .sandbox_port;
-            let (state, runtime) = probe_sandbox_runtime(port)?;
-            let Some(runtime) = stop_runtime_from_probe(state, runtime)? else {
+            let (state, runtime) =
+                probe_sandbox_runtime(port).map_err(ScienceStopFailure::identity_drift)?;
+            let Some(runtime) = stop_runtime_from_probe(state, runtime)
+                .map_err(ScienceStopFailure::identity_drift)?
+            else {
                 kill_child(sandbox);
                 *sandbox_url = None;
-                return Ok(());
+                return Ok(VerifiedScienceStop {
+                    runtime: None,
+                    ownership_was_proven: false,
+                });
             };
             recovered = runtime;
             &recovered
         }
     };
     if !runtime.is_current() {
-        return Err("Science binary 在选择后发生变化；已拒绝用不同文件控制现有 daemon".into());
+        return Err(ScienceStopFailure::identity_drift(
+            "Science binary 在选择后发生变化；已拒绝用不同文件控制现有 daemon",
+        ));
     }
     let sandbox_port = config::load_from(&config::default_dir())
-        .map_err(|error| format!("读取 Science 端口配置失败：{error}"))?
+        .map_err(|error| {
+            ScienceStopFailure::request_rejected(format!("读取 Science 端口配置失败：{error}"))
+        })?
         .sandbox_port;
-    let stop_token = match launch_token {
-        Some(token) => token.clone(),
-        None => managed_launch_token(sandbox_port, runtime)
-            .ok_or("Science managed launch 身份无法确认；已拒绝调用 stop 或发送信号")?,
+    let stop_token = match ownership {
+        Some(receipt) => receipt.token,
+        None => managed_launch_token(sandbox_port, runtime).ok_or_else(|| {
+            ScienceStopFailure::identity_drift(
+                "Science managed launch 身份无法确认；已拒绝调用 stop 或发送信号",
+            )
+        })?,
     };
     if stop_token.record.port != sandbox_port
         || !managed_launch_token_is_current(&stop_token, runtime)
     {
-        return Err("Science managed launch 身份在停止前发生变化；未调用 stop 或发送信号".into());
+        return Err(ScienceStopFailure::identity_drift(
+            "Science managed launch 身份在停止前发生变化；未调用 stop 或发送信号",
+        ));
     }
-    let mut err = None;
+    let mut failure = None;
     match asset_root(app) {
         Some(root) => {
             let stop = root.join("scripts/stop-science-sandbox.sh");
@@ -281,23 +314,32 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
                     .status()
                 {
                     Ok(s) if s.success() => {}
-                    Ok(s) => err = Some(format!("停止沙箱脚本非零退出（{:?}）。", s.code())),
-                    Err(e) => err = Some(format!("调用停止沙箱脚本失败：{e}")),
+                    Ok(s) => {
+                        failure = Some(ScienceStopFailure::stop_command_failed(format!(
+                            "停止沙箱脚本非零退出（{:?}）。",
+                            s.code()
+                        )))
+                    }
+                    Err(e) => {
+                        failure = Some(ScienceStopFailure::stop_command_failed(format!(
+                            "调用停止沙箱脚本失败：{e}"
+                        )))
+                    }
                 }
             } else {
-                err = Some(
-                    "找不到打包的停止脚本，无法确认沙箱已停止（沙箱可能仍在运行）。".to_string(),
-                );
+                failure = Some(ScienceStopFailure::stop_command_failed(
+                    "找不到打包的停止脚本，无法确认沙箱已停止（沙箱可能仍在运行）。",
+                ));
             }
         }
         None => {
-            err = Some(
+            failure = Some(ScienceStopFailure::stop_command_failed(
                 "定位不到资源根，取不到停止脚本，无法确认沙箱已停止（沙箱可能仍在运行）。"
                     .to_string(),
-            );
+            ));
         }
     }
-    if err.is_none() && loopback_port_accepts_tcp(sandbox_port) {
+    if failure.is_none() && loopback_port_accepts_tcp(sandbox_port) {
         let pid = stop_token.record.listener_pid;
         if managed_launch_token_is_current(&stop_token, runtime) {
             // Some upstream Science builds return success and remove their
@@ -308,7 +350,9 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
             // SAFETY: kill does not dereference pointers. PID > 1 and exact
             // listener identity were checked immediately above.
             if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
-                err = Some("Science stop 返回成功但精确 daemon 无法接收 TERM。".into());
+                failure = Some(ScienceStopFailure::signal_failure(
+                    "Science stop 返回成功但精确 daemon 无法接收 TERM。",
+                ));
             } else {
                 for _ in 0..50 {
                     if !loopback_port_accepts_tcp(sandbox_port) {
@@ -316,44 +360,58 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                if managed_launch_token_is_current(&stop_token, runtime) {
-                    // SAFETY: the same launch token, including process-start
-                    // identity, is revalidated after the TERM wait.
-                    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-                    for _ in 0..20 {
-                        if !loopback_port_accepts_tcp(sandbox_port) {
-                            break;
+                match science_post_term_action(
+                    loopback_port_accepts_tcp(sandbox_port),
+                    managed_launch_token_is_current(&stop_token, runtime),
+                ) {
+                    SciencePostTermAction::Complete => {}
+                    SciencePostTermAction::KillExact => {
+                        // SAFETY: the same launch token, including process-start
+                        // identity, is revalidated after the TERM wait.
+                        let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                        for _ in 0..20 {
+                            if !loopback_port_accepts_tcp(sandbox_port) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
                         }
-                        std::thread::sleep(Duration::from_millis(100));
+                        if loopback_port_accepts_tcp(sandbox_port) {
+                            failure = Some(ScienceStopFailure::exit_unconfirmed(
+                                "Science stop 返回成功，但端口仍被占用；已拒绝把未知监听者当作停止成功。"
+                                    .to_string(),
+                            ));
+                        }
                     }
-                }
-                if loopback_port_accepts_tcp(sandbox_port) {
-                    err = Some(
-                        "Science stop 返回成功，但端口仍被占用；已拒绝把未知监听者当作停止成功。"
-                            .into(),
-                    );
+                    SciencePostTermAction::IdentityDrift => {
+                        // Preserve the existing user-visible text and refusal
+                        // to signal a replacement listener, but retain the
+                        // ownership reason in the typed outcome.
+                        failure = Some(ScienceStopFailure::identity_drift(
+                            "Science stop 返回成功，但端口仍被占用；已拒绝把未知监听者当作停止成功。",
+                        ));
+                    }
                 }
             }
         } else {
-            err = Some(
-                "Science stop 返回成功，但停止后的监听身份与启动记录不一致；未发送信号。".into(),
-            );
+            failure = Some(ScienceStopFailure::identity_drift(
+                "Science stop 返回成功，但停止后的监听身份与启动记录不一致；未发送信号。",
+            ));
         }
     }
     kill_child(sandbox);
     *sandbox_url = None;
-    if err.is_none() {
+    if failure.is_none() {
         if loopback_port_accepts_tcp(sandbox_port) {
-            err = Some(
+            failure = Some(ScienceStopFailure::exit_unconfirmed(
                 "Science stop 后配置端口重新出现监听；未确认停止且未清理 managed launch 记录。"
-                    .into(),
-            );
+                    .to_string(),
+            ));
         } else if let Err(error) = clear_managed_launch_identity(&stop_token, runtime) {
-            err = Some(error);
+            failure = Some(ScienceStopFailure::receipt_cleanup_failure(error));
         }
     }
     #[cfg(test)]
-    if err.is_none()
+    if failure.is_none()
         && SCIENCE_LIFECYCLE_TEST_SEAMS
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -362,10 +420,15 @@ pub(crate) fn stop_sandbox_with_launch_token<R: Runtime>(
                 *thread == std::thread::current().id() && *config_dir == config::default_dir()
             })
     {
-        err = Some("test-only post-stop failure after exact process and receipt cleanup".into());
+        failure = Some(ScienceStopFailure::outcome_publication_failure(
+            "test-only post-stop failure after exact process and receipt cleanup",
+        ));
     }
-    match err {
-        Some(e) => Err(e),
-        None => Ok(()),
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(VerifiedScienceStop {
+            runtime: Some(runtime.clone()),
+            ownership_was_proven: true,
+        }),
     }
 }

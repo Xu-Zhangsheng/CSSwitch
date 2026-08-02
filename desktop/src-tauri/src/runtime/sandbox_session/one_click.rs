@@ -19,8 +19,8 @@ use crate::runtime::proxy_lifecycle::{
 use crate::runtime::science::{
     probe_known_runtime, probe_sandbox_runtime_cached, runtime_identity_is_current, sandbox_home,
     sandbox_listener_matches_runtime, sandbox_url, select_science_runtime_cached, stop_sandbox,
-    stop_sandbox_with_launch_token, SandboxScienceState, ScienceManagedLaunchToken,
-    ScienceRuntimeIdentity, ScienceRuntimeSource,
+    SandboxScienceState, ScienceManagedLaunchToken, ScienceRuntimeIdentity, ScienceRuntimeSource,
+    ScienceStopOwnershipReceipt, ScienceStopRequest,
 };
 use crate::runtime::skill_install_bridge::{
     inspect_while_science_running, register_before_science_start, RegistrationStatus,
@@ -53,9 +53,14 @@ use healthy_reopen::healthy_reopen_with_gateway_rollback;
 fn stop_sandbox_state<R: Runtime>(
     app: &tauri::AppHandle<R>,
     st: &mut AppState,
-) -> Result<(), String> {
+) -> crate::runtime::science::ScienceStopOutcome {
     let runtime = st.science_runtime.clone();
-    let result = stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, runtime.as_ref());
+    let result = stop_sandbox(
+        app,
+        &mut st.sandbox,
+        &mut st.sandbox_url,
+        ScienceStopRequest::recover(runtime.as_ref()),
+    );
     if result.is_ok() {
         st.science_confirmed_stopped = runtime;
         st.science_runtime = None;
@@ -710,9 +715,12 @@ impl ManagedScienceRestartError {
         }
     }
 
-    fn after_exact_cleanup(message: impl Into<String>, cleanup: Result<(), String>) -> Self {
+    fn after_exact_cleanup(
+        message: impl Into<String>,
+        cleanup: crate::runtime::science::ScienceStopOutcome,
+    ) -> Self {
         match cleanup {
-            Ok(()) => Self {
+            Ok(_) => Self {
                 message: message.into(),
                 candidate_stop_proof: ManagedScienceCandidateStopProof::ConfirmedStopped,
                 diagnostic: PriorScienceRestartDiagnostic::Failed,
@@ -724,7 +732,7 @@ impl ManagedScienceRestartError {
     }
 
     #[cfg(test)]
-    fn test_post_spawn_validation(cleanup: Result<(), String>) -> Self {
+    fn test_post_spawn_validation(cleanup: crate::runtime::science::ScienceStopOutcome) -> Self {
         let mut failure = Self::after_exact_cleanup(
             "test-only prior Science post-spawn validation failure",
             cleanup,
@@ -1121,12 +1129,14 @@ fn restart_managed_science_with_budget<R: Runtime>(
             drop(seams);
             let mut sandbox = None;
             let mut url = None;
-            let cleanup = stop_sandbox_with_launch_token(
+            let cleanup = stop_sandbox(
                 app,
                 &mut sandbox,
                 &mut url,
-                Some(&prior.runtime),
-                Some(&_candidate_token),
+                ScienceStopRequest::exact(
+                    &prior.runtime,
+                    ScienceStopOwnershipReceipt::from_managed_launch(&_candidate_token),
+                ),
             );
             return Err(ManagedScienceRestartError::test_post_spawn_validation(
                 cleanup,
@@ -1140,13 +1150,16 @@ fn restart_managed_science_with_budget<R: Runtime>(
                 let mut sandbox = None;
                 let mut url = None;
                 let token_present = error.token().is_some();
-                let cleanup = stop_sandbox_with_launch_token(
-                    app,
-                    &mut sandbox,
-                    &mut url,
-                    Some(&prior.runtime),
-                    error.token(),
-                );
+                let request = error
+                    .token()
+                    .map(|token| {
+                        ScienceStopRequest::exact(
+                            &prior.runtime,
+                            ScienceStopOwnershipReceipt::from_managed_launch(token),
+                        )
+                    })
+                    .unwrap_or_else(|| ScienceStopRequest::recover(Some(&prior.runtime)));
+                let cleanup = stop_sandbox(app, &mut sandbox, &mut url, request);
                 let message = format!(
                     "恢复 prior Science 时 fresh managed receipt 提交失败：{}",
                     error.message()
@@ -1162,12 +1175,14 @@ fn restart_managed_science_with_budget<R: Runtime>(
     {
         let mut sandbox = None;
         let mut url = None;
-        let cleanup = stop_sandbox_with_launch_token(
+        let cleanup = stop_sandbox(
             app,
             &mut sandbox,
             &mut url,
-            Some(&prior.runtime),
-            Some(&token),
+            ScienceStopRequest::exact(
+                &prior.runtime,
+                ScienceStopOwnershipReceipt::from_managed_launch(&token),
+            ),
         );
         return Err(ManagedScienceRestartError::after_exact_cleanup(
             "恢复 prior Science 后 fresh managed receipt 回读不一致",
@@ -1586,18 +1601,29 @@ fn compensate_one_click_failure<R: Runtime>(
             sandbox_url,
             ..
         } = &mut *current;
-        let result = stop_sandbox_with_launch_token(
+        let result = stop_sandbox(
             app,
             sandbox,
             sandbox_url,
-            Some(&failure.rollback.launch_runtime),
-            failure.rollback.launch_token.as_ref(),
+            failure
+                .rollback
+                .launch_token
+                .as_ref()
+                .map(|token| {
+                    ScienceStopRequest::exact(
+                        &failure.rollback.launch_runtime,
+                        ScienceStopOwnershipReceipt::from_managed_launch(token),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    ScienceStopRequest::recover(Some(&failure.rollback.launch_runtime))
+                }),
         );
         if result.is_ok() {
             current.science_runtime = None;
             current.science_confirmed_stopped = Some(failure.rollback.launch_runtime.clone());
         }
-        result
+        result.map(|_| ()).map_err(|error| error.to_string())
     };
     if let Err(cleanup_error) = cleanup.as_ref() {
         let outcome =
@@ -1982,14 +2008,18 @@ fn one_click_login_with_options<R: Runtime>(
                 sandbox_url,
                 ..
             } = &mut *current;
-            stop_sandbox_with_launch_token(
+            stop_sandbox(
                 &app,
                 sandbox,
                 sandbox_url,
-                Some(&prior.runtime),
-                Some(&prior.launch_token),
+                ScienceStopRequest::exact(
+                    &prior.runtime,
+                    ScienceStopOwnershipReceipt::from_managed_launch(&prior.launch_token),
+                ),
             )
-            .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStop, message))?;
+            .map_err(|error| {
+                typed_one_click_err(OneClickFailureKind::ScienceStop, error.to_string())
+            })?;
             current.science_runtime = None;
             current.science_confirmed_stopped = Some(prior.runtime.clone());
         }
@@ -2448,12 +2478,14 @@ fn one_click_login_with_options<R: Runtime>(
                         ..
                     } = &mut *current;
                     one_click_step(
-                        stop_sandbox_with_launch_token(
+                        stop_sandbox(
                             &app,
                             sandbox,
                             sandbox_url,
-                            Some(&launch_runtime),
-                            Some(&first_token),
+                            ScienceStopRequest::exact(
+                                &launch_runtime,
+                                ScienceStopOwnershipReceipt::from_managed_launch(&first_token),
+                            ),
                         ),
                         &rollback_context,
                     )?;

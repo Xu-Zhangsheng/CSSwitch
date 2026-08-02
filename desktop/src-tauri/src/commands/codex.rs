@@ -707,7 +707,7 @@ fn stop_all_before_downgrade<R: tauri::Runtime>(
     let mut app_state = lock(state);
     let sandbox_result = super::runtime::stop_sandbox_state(app, &mut app_state);
     app_state.stop_proxy();
-    sandbox_result.map_err(|error| {
+    sandbox_result.map(|_| ()).map_err(|error| {
         format!("降级前无法安全停止受管 Science；配置、导出和本地认证文件均未修改：{error}")
     })
 }

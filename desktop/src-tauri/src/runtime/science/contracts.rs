@@ -141,6 +141,131 @@ pub(crate) struct ScienceManagedLaunchToken {
     receipt_file: Option<ManagedLaunchFileIdentity>,
 }
 
+/// Exact ownership proof carried into a Science stop request.
+///
+/// This remains process-local and deliberately exposes neither the managed
+/// launch record nor its private receipt path to command/DTO surfaces.
+#[derive(Clone, Debug)]
+pub(crate) struct ScienceStopOwnershipReceipt {
+    token: ScienceManagedLaunchToken,
+}
+
+impl ScienceStopOwnershipReceipt {
+    pub(crate) fn from_managed_launch(token: &ScienceManagedLaunchToken) -> Self {
+        Self {
+            token: token.clone(),
+        }
+    }
+}
+
+/// Typed intent for the existing synchronous Science stop operation.
+///
+/// `recover` preserves the historical probe-and-acquire path. `exact` is used
+/// when a caller already owns the launch receipt and must not retarget during
+/// cleanup. Neither constructor changes lock ownership or stop policy.
+#[derive(Clone, Debug)]
+pub(crate) struct ScienceStopRequest {
+    runtime: Option<ScienceRuntimeIdentity>,
+    ownership: Option<ScienceStopOwnershipReceipt>,
+}
+
+impl ScienceStopRequest {
+    pub(crate) fn recover(runtime: Option<&ScienceRuntimeIdentity>) -> Self {
+        Self {
+            runtime: runtime.cloned(),
+            ownership: None,
+        }
+    }
+
+    pub(crate) fn exact(
+        runtime: &ScienceRuntimeIdentity,
+        ownership: ScienceStopOwnershipReceipt,
+    ) -> Self {
+        Self {
+            runtime: Some(runtime.clone()),
+            ownership: Some(ownership),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScienceStopFailureKind {
+    RequestRejected,
+    IdentityDrift,
+    StopCommandFailed,
+    SignalFailure,
+    ExitUnconfirmed,
+    ReceiptCleanupFailure,
+    OutcomePublicationFailure,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScienceStopFailure {
+    kind: ScienceStopFailureKind,
+    message: String,
+}
+
+impl ScienceStopFailure {
+    fn new(kind: ScienceStopFailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn request_rejected(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::RequestRejected, message)
+    }
+
+    pub(crate) fn identity_drift(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::IdentityDrift, message)
+    }
+
+    pub(crate) fn stop_command_failed(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::StopCommandFailed, message)
+    }
+
+    pub(crate) fn signal_failure(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::SignalFailure, message)
+    }
+
+    pub(crate) fn exit_unconfirmed(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::ExitUnconfirmed, message)
+    }
+
+    pub(crate) fn receipt_cleanup_failure(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::ReceiptCleanupFailure, message)
+    }
+
+    pub(crate) fn outcome_publication_failure(message: impl Into<String>) -> Self {
+        Self::new(ScienceStopFailureKind::OutcomePublicationFailure, message)
+    }
+
+    pub(crate) fn kind(&self) -> ScienceStopFailureKind {
+        self.kind
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for ScienceStopFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ScienceStopFailure {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VerifiedScienceStop {
+    pub(crate) runtime: Option<ScienceRuntimeIdentity>,
+    pub(crate) ownership_was_proven: bool,
+}
+
+pub(crate) type ScienceStopOutcome = Result<VerifiedScienceStop, ScienceStopFailure>;
+
 #[cfg(test)]
 static MANAGED_LAUNCH_COMMIT_FAILURE_ONCE_FIRED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);

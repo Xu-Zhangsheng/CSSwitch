@@ -115,8 +115,8 @@
       "id": "process.science",
       "kind": "managed-process",
       "durability": "process",
-      "authority": "Managed Claude Science listener/process identity for the isolated data directory.",
-      "fields": ["child", "listener", "runtime_identity"],
+      "authority": "Managed Claude Science listener/process identity for the isolated data directory; stop callers use a typed request, optional exact ownership receipt, and classified verified/failure outcome.",
+      "fields": ["child", "listener", "runtime_identity", "stop_request", "stop_ownership_receipt", "stop_outcome"],
       "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/lifecycle.rs", "symbol": "stop_sandbox"}
     },
     {

@@ -440,7 +440,7 @@ source closure 外推到更高证据层。旧 R3-R11 顺序已被新的有限路
 | `R2-E` | DONE | 现有 typed journal 的生产 writer / reader / rollback / clear 与 V1 fail-closed compatibility 矩阵收口；完整记录 CAS、补偿前置 guard、exact-SHA gate 与独立审查完成；checkpoint/F5/StopFailed/operation scope 保持 |
 | `R2-F` | DONE | R2-A-E schema、identity、CAS、recovery、compatibility 总盘点、聚焦矩阵、exact-SHA gate 与最终独立审查收口 |
 | `Post-R2 Rebaseline` | DONE-READ-ONLY | exact HEAD 重新盘点 state owner、caller、长等待、mutation、失败链、typed outcome/receipt 与旧路线依赖 |
-| `S1 Typed Science stop contract` | NEXT-PROPOSED | 唯一建议 NEXT；尚未获得实施授权，只允许在授权后做 behavior-preserving typed stop request/receipt/outcome，不移动锁或改变 stop policy |
+| `S1 Typed Science stop contract` | CANDIDATE | 已获实施授权并形成 behavior-preserving typed stop request/receipt/outcome candidate；仍须 clean-context review 与 exact-SHA source gate 后才能标记 DONE，不移动锁或改变 stop policy |
 
 ### Post-R2 Rebaseline 结论与后续门
 
@@ -469,7 +469,7 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-唯一建议 `NEXT` 是 `S1`。它只为现有 Science stop caller 建立 typed request、ownership
+当前实施 candidate 是 `S1`。它只为现有 Science stop caller 建立 typed request、ownership
 receipt 与 `VerifiedStopped / identity drift / signal failure / exit unconfirmed / receipt cleanup
 failure` outcome，保持现有锁时机、command/DTO/text、stop/TERM/KILL/wait 顺序和 native-exit
 best-effort 语义。`S1` 不移动长等待、不拆 `AppState`、不建立 mutation lease，也不新增 F5

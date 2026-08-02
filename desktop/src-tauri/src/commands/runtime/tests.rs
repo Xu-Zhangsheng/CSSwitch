@@ -665,12 +665,16 @@ impl<R: tauri::Runtime> RuntimeSmokeCleanup<R> {
                 ..
             } = &mut *st;
             let runtime = science_runtime.clone();
-            let result =
-                science::stop_sandbox(&self.handle, sandbox, sandbox_url, runtime.as_ref());
+            let result = science::stop_sandbox(
+                &self.handle,
+                sandbox,
+                sandbox_url,
+                science::ScienceStopRequest::recover(runtime.as_ref()),
+            );
             st.stop_proxy();
             result
         };
-        stop_result?;
+        stop_result.map_err(|error| error.to_string())?;
         for (label, port) in [("Science", self.sandbox_port), ("Gateway", self.proxy_port)] {
             let mut closed = false;
             for _ in 0..50 {
@@ -3215,7 +3219,12 @@ fn isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt() {
             sandbox_url,
             ..
         } = &mut *authority;
-        science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref())
+        science::stop_sandbox(
+            &handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        )
     };
     let stopped_cleanly = safe_stop.is_ok()
         && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
@@ -3469,7 +3478,12 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
             sandbox_url,
             ..
         } = &mut *authority;
-        science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref())
+        science::stop_sandbox(
+            &handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        )
     };
     let listener_closed_after_safe_stop = TcpStream::connect(("127.0.0.1", sandbox_port)).is_err();
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
@@ -3699,7 +3713,12 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
             sandbox_url,
             ..
         } = &mut *authority;
-        science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref())
+        science::stop_sandbox(
+            &handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        )
     };
     let stopped_cleanly = safe_stop.is_ok()
         && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
@@ -3860,7 +3879,12 @@ fn isolated_profile_switch_snapshot_failure_reuses_restored_prior_science() {
             sandbox_url,
             ..
         } = &mut *authority;
-        science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref())
+        science::stop_sandbox(
+            &handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        )
     };
     let stopped_cleanly = safe_stop.is_ok()
         && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
@@ -4258,7 +4282,7 @@ fn isolated_r0_history_restore_command_contract() {
                 &app.handle().clone(),
                 sandbox,
                 sandbox_url,
-                runtime.as_ref(),
+                science::ScienceStopRequest::recover(runtime.as_ref()),
             )
         };
         assert!(safe_stop.is_ok());
@@ -5511,7 +5535,12 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
             sandbox_url,
             ..
         } = &mut *authority;
-        science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref())
+        science::stop_sandbox(
+            &handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        )
     };
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
@@ -5932,7 +5961,12 @@ fn run_cleanup_recovery_oracle(oracle: &str) {
                 sandbox_url,
                 ..
             } = &mut *authority;
-            let result = science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref());
+            let result = science::stop_sandbox(
+                &handle,
+                sandbox,
+                sandbox_url,
+                science::ScienceStopRequest::recover(runtime.as_ref()),
+            );
             authority.stop_proxy();
             result
         };
@@ -6377,7 +6411,12 @@ fn isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent() {
             sandbox_url,
             ..
         } = &mut *authority;
-        let _ = science::stop_sandbox(&handle, sandbox, sandbox_url, runtime.as_ref());
+        let _ = science::stop_sandbox(
+            &handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        );
         authority.stop_proxy();
     }
     drop(failpoint);
@@ -6962,7 +7001,13 @@ fn stop_test_sandbox<R: tauri::Runtime>(
             ..
         } = &mut *st;
         let runtime = science_runtime.clone();
-        assert!(science::stop_sandbox(handle, sandbox, sandbox_url, runtime.as_ref()).is_ok());
+        assert!(science::stop_sandbox(
+            handle,
+            sandbox,
+            sandbox_url,
+            science::ScienceStopRequest::recover(runtime.as_ref()),
+        )
+        .is_ok());
         *science_confirmed_stopped = runtime;
         *science_runtime = None;
     }

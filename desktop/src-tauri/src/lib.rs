@@ -30,7 +30,10 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager};
 
-use runtime::{science::stop_sandbox, system::kill_child};
+use runtime::{
+    science::{stop_sandbox, ScienceStopRequest},
+    system::kill_child,
+};
 
 use codex_auth_supervisor::{CodexAuthSupervisor, SharedCodexAuthSupervisor};
 
@@ -246,7 +249,17 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
+fn cleanup_for_exit_with<
+    R,
+    Cancel,
+    Wait,
+    Term,
+    Kill,
+    StopScience,
+    StopGateway,
+    StopValue,
+    StopError,
+>(
     app: &tauri::AppHandle<R>,
     mut cancel_codex: Cancel,
     mut wait_codex: Wait,
@@ -264,7 +277,7 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
         &tauri::AppHandle<R>,
         &mut AppState,
         &runtime::science::ScienceRuntimeIdentity,
-    ) -> Result<(), String>,
+    ) -> Result<StopValue, StopError>,
     StopGateway: FnMut(&mut AppState),
 {
     // First give login its protocol-level cancel path and read-only preflight
@@ -314,7 +327,14 @@ fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 libc::kill(pid as i32, libc::SIGKILL);
             }
         },
-        |app, st, runtime| stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, Some(runtime)),
+        |app, st, runtime| {
+            stop_sandbox(
+                app,
+                &mut st.sandbox,
+                &mut st.sandbox_url,
+                ScienceStopRequest::recover(Some(runtime)),
+            )
+        },
         AppState::stop_proxy,
     );
 }
@@ -861,7 +881,7 @@ mod tests {
                         science_attempts.set(attempt);
                         if attempt == 1 {
                             actions.borrow_mut().push("science:error".into());
-                            Err("controlled first Science stop failure".into())
+                            Err("controlled first Science stop failure".to_string())
                         } else {
                             actions.borrow_mut().push("science:stopped".into());
                             Ok(())

@@ -3,9 +3,10 @@ use super::*;
 pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     st: &mut AppState,
-) -> Result<(), String> {
+) -> crate::runtime::science::ScienceStopOutcome {
     let runtime = st.science_runtime.clone();
-    let result = stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, runtime.as_ref());
+    let request = crate::runtime::science::ScienceStopRequest::recover(runtime.as_ref());
+    let result = stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, request);
     if result.is_ok() {
         st.science_confirmed_stopped = runtime;
         st.science_runtime = None;
@@ -157,7 +158,9 @@ pub(super) fn stop_all_inner_cmd<R: tauri::Runtime>(
         let mut st = lock(&state);
         let sandbox_res = stop_sandbox_state(&app, &mut st);
         st.stop_proxy();
-        sandbox_res.map_err(|e| format!("代理已停；但{e}真实实例 8765 未受影响。"))
+        sandbox_res
+            .map(|_| ())
+            .map_err(|e| format!("代理已停；但{e}真实实例 8765 未受影响。"))
     })
 }
 

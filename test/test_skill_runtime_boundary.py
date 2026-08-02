@@ -402,6 +402,12 @@ class SkillRuntimeBoundary(unittest.TestCase):
     def test_science_runtime_identity_is_reused_for_serve_status_url_and_stop(self):
         session = sandbox_session_source()
         science = science_runtime_source()
+        science_contracts = (
+            ROOT / "desktop/src-tauri/src/runtime/science/contracts.rs"
+        ).read_text()
+        science_lifecycle = (
+            ROOT / "desktop/src-tauri/src/runtime/science/lifecycle.rs"
+        ).read_text()
         launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
         runtime = runtime_command_source()
         one_click = sandbox_session_one_click_source().split(
@@ -420,6 +426,30 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("configure_science_stop_script_command(", science)
         self.assertIn("Path::new(&runtime.path)", science)
         self.assertIn('"source": runtime.source.code()', runtime)
+        for contract in (
+            "ScienceStopRequest",
+            "ScienceStopOwnershipReceipt",
+            "ScienceStopOutcome",
+            "VerifiedScienceStop",
+            "ScienceStopFailureKind",
+        ):
+            self.assertIn(contract, science_contracts)
+        for outcome in (
+            "IdentityDrift",
+            "SignalFailure",
+            "ExitUnconfirmed",
+            "ReceiptCleanupFailure",
+        ):
+            self.assertIn(outcome, science_contracts)
+        self.assertIn("ScienceStopRequest::exact", session)
+        self.assertIn("ScienceStopRequest::recover", session)
+        self.assertIn("ScienceStopOwnershipReceipt::from_managed_launch", session)
+        self.assertNotIn("stop_sandbox_with_launch_token", science)
+        stop_contract = science_lifecycle.split(
+            "pub(crate) fn stop_sandbox", 1
+        )[1]
+        self.assertIn(") -> ScienceStopOutcome", stop_contract)
+        self.assertNotIn("Result<(), String>", stop_contract)
 
     def test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry(self):
         js = (ROOT / "desktop/src/profile-controller.js").read_text()

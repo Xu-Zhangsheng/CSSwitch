@@ -15,13 +15,14 @@ use super::{
     probe_sandbox_runtime_cached, read_managed_launch_record,
     restore_unmatched_managed_launch_tombstone, runtime_identity_is_current, runtime_status_value,
     safe_science_version_with_timeout, sandbox_home, sandbox_running_ours, sandbox_url,
-    science_executable_fingerprint, science_runtime_preflight_for_paths,
+    science_executable_fingerprint, science_post_term_action, science_runtime_preflight_for_paths,
     science_runtime_preflight_for_paths_cached, science_runtime_preflight_for_paths_with_updated,
     science_status_running, secure_runtime_snapshot_root, select_science_runtime_for_paths,
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
     settings_change_needs_teardown, stop_runtime_from_probe, trusted_science_status,
-    SandboxScienceState, ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceVersionCache,
-    CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
+    SandboxScienceState, SciencePostTermAction, ScienceRuntimeIdentity, ScienceRuntimeSource,
+    ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache, CACHED_ONCE_CHOICE,
+    MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
 };
 
 #[test]
@@ -582,6 +583,64 @@ fn stop_probe_is_idempotent_only_for_confirmed_stopped_state() {
     );
     assert!(stop_runtime_from_probe(SandboxScienceState::Unknown, None).is_err());
     assert!(stop_runtime_from_probe(SandboxScienceState::RunningHealthy, None).is_err());
+    assert_eq!(
+        science_post_term_action(false, false),
+        SciencePostTermAction::Complete,
+        "a closed port completes without requiring a still-live ownership token"
+    );
+    assert_eq!(
+        science_post_term_action(true, true),
+        SciencePostTermAction::KillExact,
+        "a surviving exact listener retains the historical KILL fallback"
+    );
+    assert_eq!(
+        science_post_term_action(true, false),
+        SciencePostTermAction::IdentityDrift,
+        "a surviving replacement listener must never be collapsed into exit-unconfirmed"
+    );
+
+    let typed_failures = [
+        (
+            ScienceStopFailure::request_rejected("request"),
+            ScienceStopFailureKind::RequestRejected,
+            "request",
+        ),
+        (
+            ScienceStopFailure::identity_drift("identity"),
+            ScienceStopFailureKind::IdentityDrift,
+            "identity",
+        ),
+        (
+            ScienceStopFailure::stop_command_failed("command"),
+            ScienceStopFailureKind::StopCommandFailed,
+            "command",
+        ),
+        (
+            ScienceStopFailure::signal_failure("signal"),
+            ScienceStopFailureKind::SignalFailure,
+            "signal",
+        ),
+        (
+            ScienceStopFailure::exit_unconfirmed("exit"),
+            ScienceStopFailureKind::ExitUnconfirmed,
+            "exit",
+        ),
+        (
+            ScienceStopFailure::receipt_cleanup_failure("receipt"),
+            ScienceStopFailureKind::ReceiptCleanupFailure,
+            "receipt",
+        ),
+        (
+            ScienceStopFailure::outcome_publication_failure("outcome"),
+            ScienceStopFailureKind::OutcomePublicationFailure,
+            "outcome",
+        ),
+    ];
+    for (failure, expected_kind, expected_message) in typed_failures {
+        assert_eq!(failure.kind(), expected_kind);
+        assert_eq!(failure.message(), expected_message);
+        assert_eq!(failure.to_string(), expected_message);
+    }
 }
 
 #[test]

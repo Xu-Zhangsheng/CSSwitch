@@ -302,7 +302,7 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
             {
                 let mut app_state = lock(&state);
                 if app_state.science_runtime.is_some() {
-                    stop_sandbox_state(&app, &mut app_state)?;
+                    stop_sandbox_state(&app, &mut app_state).map_err(|error| error.to_string())?;
                 } else if proc::loopback_port_in_use(
                     expected_port,
                     operation::LOCAL_HEALTH_TIMEOUT_MS,
