@@ -762,6 +762,29 @@ pub enum RuntimeTransactionRecord {
     V2(RuntimeTransactionV2),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeTransactionV1EnvironmentState<'a> {
+    Pending { runtime_fingerprint: &'a str },
+    AuthoritySnapshotActive { runtime_fingerprint: &'a str },
+}
+
+impl<'a> RuntimeTransactionV1EnvironmentState<'a> {
+    pub fn runtime_fingerprint(self) -> &'a str {
+        match self {
+            Self::Pending {
+                runtime_fingerprint,
+            }
+            | Self::AuthoritySnapshotActive {
+                runtime_fingerprint,
+            } => runtime_fingerprint,
+        }
+    }
+
+    pub fn is_authority_snapshot_active(self) -> bool {
+        matches!(self, Self::AuthoritySnapshotActive { .. })
+    }
+}
+
 impl From<RuntimeTransactionV1> for RuntimeTransactionRecord {
     fn from(journal: RuntimeTransactionV1) -> Self {
         Self::V1(journal)
@@ -869,20 +892,29 @@ impl RuntimeTransactionRecord {
         }
     }
 
+    #[cfg(test)]
     pub fn legacy_stage(&self) -> Option<&str> {
         self.as_v1().map(|journal| journal.stage.as_str())
     }
 
+    pub fn v1_environment_state(&self) -> Option<RuntimeTransactionV1EnvironmentState<'_>> {
+        match self {
+            Self::V1(journal) => legacy_environment_state(&journal.stage),
+            Self::V2(_) => None,
+        }
+    }
+
     pub fn runtime_fingerprint(&self) -> Option<&str> {
         match self {
-            Self::V1(journal) => legacy_runtime_fingerprint(&journal.stage),
+            Self::V1(journal) => legacy_environment_state(&journal.stage)
+                .map(RuntimeTransactionV1EnvironmentState::runtime_fingerprint),
             Self::V2(journal) => journal.runtime_fingerprint.as_deref(),
         }
     }
 
     pub fn requires_snapshot_preservation(&self) -> bool {
         match self {
-            Self::V1(journal) => legacy_stage_requires_snapshot_preservation(&journal.stage),
+            Self::V1(journal) => legacy_environment_state(&journal.stage).is_some(),
             Self::V2(journal) => journal.snapshot_ticket.is_some(),
         }
     }
@@ -908,17 +940,22 @@ fn valid_runtime_snapshot_ticket(value: &str) -> bool {
 const LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str = "start_science_environment_pending:";
 const LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:";
 
-fn legacy_runtime_fingerprint(stage: &str) -> Option<&str> {
-    let fingerprint = stage
-        .strip_prefix(LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
-        .or_else(|| stage.strip_prefix(LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX))?;
-    valid_runtime_fingerprint(fingerprint).then_some(fingerprint)
-}
-
-fn legacy_stage_requires_snapshot_preservation(stage: &str) -> bool {
-    matches!(stage, "start_science" | "start_science_environment_pending")
-        || stage.starts_with(LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
-        || stage.starts_with(LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX)
+fn legacy_environment_state(stage: &str) -> Option<RuntimeTransactionV1EnvironmentState<'_>> {
+    if let Some(runtime_fingerprint) =
+        stage.strip_prefix(LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
+    {
+        return valid_runtime_fingerprint(runtime_fingerprint).then_some(
+            RuntimeTransactionV1EnvironmentState::Pending {
+                runtime_fingerprint,
+            },
+        );
+    }
+    let runtime_fingerprint = stage.strip_prefix(LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX)?;
+    valid_runtime_fingerprint(runtime_fingerprint).then_some(
+        RuntimeTransactionV1EnvironmentState::AuthoritySnapshotActive {
+            runtime_fingerprint,
+        },
+    )
 }
 
 fn validate_runtime_transaction_v1(journal: &RuntimeTransactionV1) -> Result<(), String> {
@@ -936,7 +973,7 @@ fn validate_runtime_transaction_v1(journal: &RuntimeTransactionV1) -> Result<(),
             | "start_formal_gateway"
             | "recover_interrupted_gateway"
     );
-    if known_plain || legacy_runtime_fingerprint(&journal.stage).is_some() {
+    if known_plain || legacy_environment_state(&journal.stage).is_some() {
         Ok(())
     } else {
         Err("unknown or malformed V1 runtime_transaction stage".into())

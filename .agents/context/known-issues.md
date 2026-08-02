@@ -247,7 +247,7 @@ R1 已全部收口。R2 已进入首个窄阶段；R3 state owner 与 R4 mutatio
 
 ## R2 versioned typed runtime journal 进度
 
-`R2-A` implementation candidate 已完成但尚未收口：根 `Config.schema_version` 保持 `4`，
+`R2-A` repaired implementation candidate 已完成但尚未收口：根 `Config.schema_version` 保持 `4`，
 嵌套 `runtime_transaction` reader 现在区分无嵌套版本的 V1 与 `schema_version=2` 的
 typed V2。V1 继续按原 wire shape 写入且不会自动升级；reader 对 future version、unknown
 field、unknown V1 stage、无法证明 fingerprint 的 legacy Science environment stage，以及
@@ -257,12 +257,15 @@ binding / Gateway public identity、compensation state 与 Gateway stop outcome�
 production writer 遇到 V2 会保留事务并拒绝改写。现有 checkpoint 时机、runtime effect、
 frontend DTO、command/event 与恢复策略均未迁移。
 
-focused config identities 4/4 PASS；沙箱外完整 Rust lib 为 527 discovered / 486 passed /
-0 failed / 41 existing approved ignored。quality metadata、document governance、format 与 diff
-check 亦 PASS。当前仍是未提交 working-tree candidate；local candidate commit 未获授权，
-因此 exact candidate SHA 的十五 suite `GATE-SOURCE`、completion review 与 evidence seal 均为
-`NOT-RUN`。唯一 `NEXT` 是完成 `R2-A` 的 candidate review 与授权后的 exact-SHA closure；
-`R2-B` 尚未开始，不得提前迁移 one-click checkpoint writer。
+首个 candidate exact SHA `e8ed08050f4a7d7f5a94d3c27c483defca00f699` 的十五 suite
+`GATE-SOURCE` 虽取得 PASS，但随后 clean-context completion review 发现 `one_click.rs` 仍在
+V1 adapter 外按 prefix 解释 legacy journal stage，评为 HIGH 并给出 FAIL；该 run 不作为
+R2-A closure 证据。当前 repair 已把 prefix 识别集中到 `config.rs` 的 typed V1 environment
+accessor，orchestration 只消费 typed classification；V1 wire writer 未改变。repair focused
+config identities 4/4 与 one-click runtime-journal identity 1/1 PASS，format、source-contract scan
+与 diff check PASS。repaired candidate commit、其 exact-SHA 十五 suite `GATE-SOURCE`、completion
+review 与 evidence seal 均为 `NOT-RUN`。唯一 `NEXT` 是完成 repaired candidate 的独立审查与
+exact-SHA closure；`R2-B` 尚未开始，不得提前迁移 one-click checkpoint writer。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|

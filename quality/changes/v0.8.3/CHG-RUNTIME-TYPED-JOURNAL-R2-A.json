@@ -15,10 +15,13 @@
       "desktop/src-tauri/src/runtime/profile_switch.rs",
       "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs",
       "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "quality/runtime-mutation-inventory.v1.json",
       "quality/test-catalog.v1.json",
       "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-A.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
@@ -69,8 +72,11 @@
         "four focused config source/unit identities cover V1 no-upgrade, unknown and future fail-closed parsing, V2 typed secret-free round-trip, and illegal state rejection",
         "the existing legacy runtime-journal identity and three profile-switch identities passed without changing the V1 wire or checkpoint behavior",
         "the interrupted Gateway post-stage outcome identity passed outside the restricted sandbox after the restricted run returned Operation not permitted for its test-owned loopback/process fixture",
-        "the complete Rust library source test passed outside the restricted sandbox with 486 passed, 0 failed, and 41 existing approved ignored identities out of 527 discovered",
-        "complete exact-SHA 15-suite GATE-SOURCE and completion review are NOT-RUN pending explicit local commit authorization"
+        "the initial candidate complete Rust library source test passed outside the restricted sandbox with 486 passed, 0 failed, and 41 existing approved ignored identities out of 527 discovered",
+        "initial candidate SHA e8ed08050f4a7d7f5a94d3c27c483defca00f699 produced a passing 15-suite source gate, but its clean-context completion review found one HIGH",
+        "the HIGH identified V1 stage-prefix parsing outside the Config adapter, so the initial candidate run is rejected as R2-A closure evidence",
+        "the repair centralizes legacy prefix interpretation in a typed Config V1 environment accessor and its four config identities plus one one-click journal identity passed",
+        "repaired exact-SHA 15-suite GATE-SOURCE and completion review are NOT-RUN"
       ]
     },
     "does_not_claim_fix": true,

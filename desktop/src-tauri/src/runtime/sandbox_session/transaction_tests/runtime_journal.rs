@@ -42,50 +42,26 @@ fn runtime_journal_advances_in_place_and_retargets_without_secrets() {
     let second = second_record.as_v1().unwrap();
     assert_eq!(second.transaction_id, first.transaction_id);
     assert_eq!(second.stage, environment_stage);
+    let environment_state = second_record.v1_environment_state().unwrap();
+    assert_eq!(environment_state.runtime_fingerprint(), runtime_id);
     assert_eq!(
-        interrupted_science_environment_runtime_id(&second.stage),
+        second_record.runtime_fingerprint(),
         Some(runtime_id.as_str())
     );
-    assert!(interrupted_science_environment_runtime_id(
-        "start_science_environment_pending:not-a-fingerprint"
-    )
-    .is_none());
-    assert!(
-        runtime_transaction_requires_snapshot_preservation("start_science")
-            && runtime_transaction_requires_snapshot_preservation(
-                "start_science_environment_pending"
-            )
-            && runtime_transaction_requires_snapshot_preservation(&environment_stage)
-            && !runtime_transaction_requires_snapshot_preservation("recover_interrupted_gateway"),
-        "legacy and fingerprinted environment-exposure stages must fail closed"
-    );
-    for listener_state in [
-        "stopped-no-gateway",
-        "running-no-gateway",
-        "stopped-managed-gateway",
-        "running-managed-gateway",
-    ] {
-        let legacy = validate_interrupted_science_transaction_entry(Some("start_science"), None)
-            .expect_err("legacy 0.8.3 start_science must never authorize an automatic spawn");
-        assert_eq!(
-            legacy.projected_recovery(),
-            crate::runtime::failure::ProjectedRecovery::environment_uncertain_manual()
-        );
-        assert!(
-            legacy.to_string().contains("environment_uncertain")
-                && legacy.to_string().contains("newer_runtime_required")
-                && legacy.to_string().contains("manual_recovery_required"),
-            "legacy oracle {listener_state} must fail closed: {legacy}"
-        );
-    }
+    assert!(!environment_state.is_authority_snapshot_active());
+    assert!(second_record.requires_snapshot_preservation());
+    validate_interrupted_science_transaction_entry(Some(environment_state)).unwrap();
     let authority_stage = format!("{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX}{runtime_id}");
-    assert_eq!(
-        interrupted_science_environment_runtime_id(&authority_stage),
-        Some(runtime_id.as_str())
-    );
-    let authority =
-        validate_interrupted_science_transaction_entry(Some(&authority_stage), Some(&runtime_id))
-            .expect_err("active authority snapshot must require explicit recovery");
+    advance_runtime_transaction(&dir, "new", Some(previous.clone()), &authority_stage).unwrap();
+    let authority_record = config::load_from(&dir)
+        .unwrap()
+        .runtime_transaction
+        .unwrap();
+    let authority_state = authority_record.v1_environment_state().unwrap();
+    assert_eq!(authority_state.runtime_fingerprint(), runtime_id);
+    assert!(authority_state.is_authority_snapshot_active());
+    let authority = validate_interrupted_science_transaction_entry(Some(authority_state))
+        .expect_err("active authority snapshot must require explicit recovery");
     assert_eq!(
         authority.projected_recovery(),
         crate::runtime::failure::ProjectedRecovery::MANUAL_RECOVERY_REQUIRED

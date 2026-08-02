@@ -229,7 +229,7 @@
       "authority_owner": "config.transaction",
       "fields": ["previous_binding", "previous_gateway", "stage", "target_profile_id", "transaction_id"],
       "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "advance_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_with_options"}],
-      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "runtime_transaction_requires_snapshot_preservation"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "v1_environment_state"}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"},
       "known_gap": "Stage is a string; the record does not cover mode/settings/Codex/downgrade/profile revocation, and the verified prior-Science stop can precede journal creation."
     },

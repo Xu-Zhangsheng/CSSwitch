@@ -28,8 +28,7 @@ use one_click::{
 };
 #[allow(unused_imports)]
 pub(crate) use one_click::{
-    force_restart_science_for_active, interrupted_science_environment_runtime_id, one_click_login,
-    reconcile_science_for_active, runtime_transaction_requires_snapshot_preservation,
+    force_restart_science_for_active, one_click_login, reconcile_science_for_active,
     ReconcileScienceError,
 };
 #[cfg(test)]

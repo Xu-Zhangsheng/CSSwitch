@@ -354,40 +354,13 @@ pub(super) fn advance_runtime_transaction(
 pub(super) const SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str =
     "start_science_environment_pending:";
 pub(super) const AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:";
-const LEGACY_SCIENCE_ENVIRONMENT_STAGE: &str = "start_science";
-const LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE: &str = "start_science_environment_pending";
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn interrupted_science_environment_runtime_id(stage: &str) -> Option<&str> {
-    let runtime_id = stage
-        .strip_prefix(SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
-        .or_else(|| stage.strip_prefix(AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX))?;
-    (runtime_id.len() == 64
-        && runtime_id
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
-    .then_some(runtime_id)
-}
-
-pub(crate) fn runtime_transaction_requires_snapshot_preservation(stage: &str) -> bool {
-    stage == LEGACY_SCIENCE_ENVIRONMENT_STAGE
-        || stage == LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE
-        || stage.starts_with(SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
-        || stage.starts_with(AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX)
-}
 
 pub(super) fn validate_interrupted_science_transaction_entry(
-    stage: Option<&str>,
-    runtime_id: Option<&str>,
+    environment_state: Option<config::RuntimeTransactionV1EnvironmentState<'_>>,
 ) -> Result<(), InterruptedScienceRecoveryError> {
-    if stage.is_some_and(runtime_transaction_requires_snapshot_preservation) && runtime_id.is_none()
+    if environment_state
+        .is_some_and(config::RuntimeTransactionV1EnvironmentState::is_authority_snapshot_active)
     {
-        return Err(InterruptedScienceRecoveryError::new(
-            "检测到旧版或无法识别的 Science 启动中断记录；无法证明当时使用的 runtime，已拒绝自动清理快照或再次启动；environment_uncertain；newer_runtime_required；recovery_status=manual_recovery_required",
-            ProjectedRecovery::environment_uncertain_manual(),
-        ));
-    }
-    if stage.is_some_and(|stage| stage.starts_with(AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX)) {
         return Err(InterruptedScienceRecoveryError::new(
             "检测到 authority 快照已登记但受保护状态写入未完成；已保留恢复快照并拒绝把部分写入态作为新基线；recovery_status=manual_recovery_required",
             ProjectedRecovery::MANUAL_RECOVERY_REQUIRED,
@@ -1466,19 +1439,14 @@ fn one_click_login_with_options<R: Runtime>(
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)),
         false => Ok(()),
     }?;
-    let interrupted_environment_stage = cfg
+    let interrupted_environment_state = cfg
         .runtime_transaction
         .as_ref()
-        .and_then(config::RuntimeTransactionRecord::legacy_stage);
-    let interrupted_environment_runtime_id = cfg
-        .runtime_transaction
-        .as_ref()
-        .and_then(config::RuntimeTransactionRecord::runtime_fingerprint);
-    validate_interrupted_science_transaction_entry(
-        interrupted_environment_stage,
-        interrupted_environment_runtime_id,
-    )
-    .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
+        .and_then(config::RuntimeTransactionRecord::v1_environment_state);
+    let interrupted_environment_runtime_id = interrupted_environment_state
+        .map(config::RuntimeTransactionV1EnvironmentState::runtime_fingerprint);
+    validate_interrupted_science_transaction_entry(interrupted_environment_state)
+        .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
     let active_profile = cfg.active_profile().ok_or_else(|| {
         typed_one_click_err(
             OneClickFailureKind::NoActiveProfile,

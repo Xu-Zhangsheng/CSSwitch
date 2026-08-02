@@ -1,9 +1,8 @@
 use super::{
     advance_runtime_transaction, cleanup_tombstone_path, clear_runtime_transaction,
     finalize_registered_authority_cleanup, gateway_model_catalog_timeout_ms,
-    interrupted_science_environment_runtime_id, parse_pending_cleanup_manifest,
-    prevalidate_one_click_system_ssh, retry_pending_authority_cleanup,
-    runtime_transaction_requires_snapshot_preservation, science_health_control_error,
+    parse_pending_cleanup_manifest, prevalidate_one_click_system_ssh,
+    retry_pending_authority_cleanup, science_health_control_error,
     test_arm_authority_cleanup_parent_sync_failure, test_arm_authority_snapshot_capture_failure,
     test_arm_authority_snapshot_cleanup_fault, test_arm_authority_snapshot_clone_errno,
     test_arm_authority_snapshot_completion_sync_failure,
