@@ -313,15 +313,31 @@ profile-switch typed record 与当前 journal 完整相等时允许首个 one-cl
 V2 checkpoint 接棒或 healthy-reopen binding commit；当前 journal 消失、回退 V1 或 retarget
 均拒绝覆盖，普通 one-click 与重启仍 fail-closed。focused source/unit、quality metadata、inventory、
 document governance、format 与 diff check 已 PASS；隔离 profile-switch snapshot failure
-rollback 在允许动态 loopback 与测试自有进程的环境 PASS。exact-SHA 十五 suite
-`GATE-SOURCE` 与 clean-context completion review 尚未运行，因此本段不构成 R2-C closure。
+rollback 在允许动态 loopback 与测试自有进程的环境 PASS。首个 candidate exact SHA
+`ba5e5b02addd90807879281ce01235aed143b170` 的完整 gate 有十四个 suite PASS；唯一
+`SUITE-RUST-DESKTOP` 失败来自 profile reconcile source contract 使用了实际不存在的旧
+finalization 截断符，导致抽取范围泄漏到后续 secret-free 测试并误判合法的
+`.contains(forbidden)`；该 run `e6cec66c85440a7f4e855e170e5bc277` 不作为 closure 证据。
+repair 只把静态合同截断点绑定到真实 `update_result` finalization boundary，没有修改生产语义；
+exact focused test、quality metadata 与 clean-context repair review PASS。
+
+最终 candidate exact SHA `14aa95802127fedaded7845aa7e84e25a5aa2ed3` 取得十五 suite
+`GATE-SOURCE` completion seal PASS：run id `24906181899e0c07f9bb62260fe60b63`、runner exit 0；
+manifest 含十五个 PASS test result 与十五个 PASS source observation，递归 schema/semantic/hash
+回读 PASS。desktop 身份为 528 discovered / 487 passed / 0 failed / 41 approved ignored /
+0 skipped / 0 todo / 0 not run，source snapshot 为 492 个 tracked entry。exact-SHA clean-context
+completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
+上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-C 仅建立 source/unit
+结论，不外推 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
+唯一 `NEXT` 是 `R2-D`；本窗口停止，不提前迁移其他 runtime writer。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
 | `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
-| `R2-C` | IMPLEMENTED（CLOSURE PENDING） | test-only profile-switch writer 已迁移 typed V2；等待 focused checks、candidate commit、exact-SHA gate 与独立审查 |
-| `R2-D`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
+| `R2-C` | DONE | test-only profile-switch writer typed V2、完整记录 CAS、exact-SHA gate 与独立审查收口；产品选择仍 intent-only |
+| `R2-D` | NEXT（NOT-STARTED） | interrupted-Gateway recovery writer；不在本窗口范围 |
+| `R2-E`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置
 

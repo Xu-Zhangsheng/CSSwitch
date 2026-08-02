@@ -67,9 +67,13 @@
         "the initial reconcile resolver and first checkpoint both reject disappeared, V1-regressed, or field-retargeted handoff journals while ordinary V1/empty one-click remains compatible and refuses V2",
         "the healthy-reopen binding commit performs a second complete-record CAS, preserves bytes after same-id compensation drift between read and commit, and clears the journal only after the exact expected record is restored",
         "the profile reconcile source contract stops at the actual update_result finalization branch so later secret-free assertions cannot be misclassified as message-based recovery inference",
-        "focused profile-switch, V1/V2 schema, one-click handoff, isolated snapshot rollback, quality metadata, impact-pr, inventory, document governance, boundary, format, and diff checks passed",
-        "exact-SHA source gate is pending",
-        "clean-context completion review is pending"
+        "candidate SHA ba5e5b02addd90807879281ce01235aed143b170 passed 14 suites; desktop rejected stale unbounded source-contract extraction after a later secret-free contains assertion, so run e6cec66c85440a7f4e855e170e5bc277 is rejected",
+        "the repair binds the contract to actual update_result finalization without changing production; focused checks including isolated snapshot rollback, metadata, and clean-context repair review passed",
+        "complete 15-suite GATE-SOURCE passed at exact SHA 14aa95802127fedaded7845aa7e84e25a5aa2ed3 with run id 24906181899e0c07f9bb62260fe60b63 and runner exit zero",
+        "recursive schema, semantic, and hash readback passed with 15 passing results, 15 passing source observations, and a 492-entry clean source snapshot",
+        "desktop identity closed at 528 discovered, 487 passed, zero failed, 41 approved ignored, zero skipped, zero todo, and zero not run",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings",
+        "this evidence-only seal records the verified candidate and run and does not claim that the seal commit itself ran the complete gate"
       ]
     },
     "does_not_claim_fix": true,
