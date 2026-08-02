@@ -60,7 +60,11 @@
         "cargo check passed and the complete Rust library serial regression passed with 487 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
         "the first parallel full-library run was rejected as evidence after one unrelated Codex cancel failure; that identity and the complete serial rerun both passed",
         "the inventory preserves the F5 pre-intent gap, StopFailed behavior, current checkpoint timing, and the existing runtime_transaction operation scope",
-        "complete 15-suite GATE-SOURCE and exact-SHA clean-context completion review remain pending"
+        "complete 15-suite GATE-SOURCE passed at exact SHA be961cb27701fd2adfde699c342cdd4dcf8a3d8d with run id 81a0f70476b075da3763390f88b4385c and runner exit zero",
+        "the completion seal contains 15 passing test results and 15 passing source observations; all 30 manifest references and all three seal references were independently rehashed",
+        "desktop identity closed at 528 discovered and executed, 487 passed, zero failed, 41 approved ignored, and zero skipped, todo, or not run",
+        "the clean-commit source snapshot contains 495 tracked entries whose paths, modes, sizes, contents, and hashes match the exact candidate HEAD",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings and confirmed the source-only evidence boundary and Post-R2 stop gate"
       ]
     },
     "does_not_claim_fix": true,
