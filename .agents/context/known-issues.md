@@ -381,8 +381,24 @@ recovery snapshot。新增回归先触发真实 checkpoint CAS 拒绝，再穿�
 restore 之后且 inventory 漏列直接 reader/healthy-reopen rollback；当前修复已把 guard 前移到
 Gateway/authority/config/AppState restore 之前，并补齐对应 inventory anchor。candidate cleanup
 与 SSH cleanup 仍保持既有次序。checkpoint 时机、F5、`StopFailed` 后行为
-和 journal 覆盖范围均未改变。当前仍待新的 clean-context 独立复审、完整 exact-SHA source
-gate 与证据回写，因此表中保持 `R2-E = NEXT`，不得提前进入 R2-F。
+和 journal 覆盖范围均未改变。
+
+首次 candidate exact SHA `638fdd55987f176c89f9a12c6f39de6923b36aed` 的完整 gate
+run `d15f213da1cc5c067c09c0e9d84526e3` 在 `SUITE-PY-OFFLINE` 暴露一条仍绑定旧
+`&journal_progress` 调用的 profile-pin source assertion；该 run 为 FAIL，不作为 closure 证据。
+修复后的测试以 whitespace-tolerant regex 绑定 `&mut journal_progress` 参数顺序，并取得独立
+clean-context PASS。
+
+最终 candidate exact SHA `8b1471550cf69178770a15f9dcc8378e7f334037` 取得十五 suite
+`GATE-SOURCE` completion seal PASS：run id `d29764f44c9a39f28bf2aaf03a035177`、runner
+exit 0；manifest 含十五个 PASS test result 与十五个 PASS source observation。desktop 身份为
+528 discovered / 528 executed / 487 passed / 0 failed / 41 approved ignored / 0 skipped /
+0 todo / 0 not run，clean source snapshot 为 494 个 tracked entry。最终 exact-SHA clean-context
+completion review 递归回读 seal、manifest、results、observations 与 snapshot hash 后 PASS，零
+BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录上述已验证 candidate 与 run，
+不声称 seal commit 本身执行过完整 gate。R2-E 仅建立 source/unit 结论，不外推 artifact、
+installed/runtime、live provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到
+R2-F；当前不自动进入 R2-F，更不进入 R3。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
@@ -390,8 +406,8 @@ gate 与证据回写，因此表中保持 `R2-E = NEXT`，不得提前进入 R2-
 | `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
 | `R2-C` | DONE | test-only profile-switch writer typed V2、完整记录 CAS、exact-SHA gate 与独立审查收口；产品选择仍 intent-only |
 | `R2-D` | DONE | interrupted-Gateway recovery typed V2 intent/outcome、canonical compensation、完整记录 CAS、跨重启 drift fail-closed、exact-SHA gate 与独立审查收口 |
-| `R2-E` | NEXT | 收口现有 typed journal 的生产 writer / reader / V1 fail-closed compatibility 边界；只做等价核验与必要修正，不移动 checkpoint 时机、不关闭 F5、不扩成全局 journal |
-| `R2-F` | NOT-STARTED | 汇总复核 R2-A-E 的 schema、identity、recovery 与 compatibility 证据，完成 R2 source 层总验收；不引入新的产品或 crash-recovery 语义 |
+| `R2-E` | DONE | 现有 typed journal 的生产 writer / reader / rollback / clear 与 V1 fail-closed compatibility 矩阵收口；完整记录 CAS、补偿前置 guard、exact-SHA gate 与独立审查完成；checkpoint/F5/StopFailed/operation scope 保持 |
+| `R2-F` | NEXT | 汇总复核 R2-A-E 的 schema、identity、recovery 与 compatibility 证据，完成 R2 source 层总验收；不引入新的产品或 crash-recovery 语义 |
 | `Post-R2 Rebaseline` | REQUIRED-AFTER-R2 | R2-F 完成后先停止实施，按实时源码重新规划 R3+；在新路线获明确授权前，R3-R11 均不是 `NEXT` |
 
 ### R2 退出与后续路线重规划门

@@ -49,7 +49,7 @@
         "metadata"
       ]
     },
-    "claim_state": "unknown",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -71,7 +71,9 @@
         "the existing config V1 identity round-trips all eight plain stages and both fingerprint-bearing environment stages without nested schema publication or implicit upgrade",
         "the existing config V2 identity round-trips all eight one-click phases, test-only profile-switch publication, and six interrupted-Gateway recovery outcomes across save/load/save",
         "the transaction source contract binds complete-record progress, checkpoint publication, terminal clear, binding commit, and canonical compensation/Gateway outcomes",
-        "focused compile and the expanded exact unit identities passed; replacement clean-context review and complete source gate remain pending"
+        "the complete 15-suite GATE-SOURCE seal passed at exact SHA 8b1471550cf69178770a15f9dcc8378e7f334037 with run d29764f44c9a39f28bf2aaf03a035177 and runner exit zero",
+        "the sealed desktop observation records 528 discovered and executed, 487 passed, zero failed, 41 approved ignored, and no skipped, todo, or not-run identities",
+        "the exact-SHA clean-context completion review verified 15 passing results, 15 passing observations, recursive hashes, a 494-entry snapshot, and zero findings"
       ]
     },
     "does_not_claim_fix": true,
