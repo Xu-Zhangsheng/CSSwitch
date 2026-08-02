@@ -247,7 +247,7 @@ R1 已全部收口。R2 已进入首个窄阶段；R3 state owner 与 R4 mutatio
 
 ## R2 versioned typed runtime journal 进度
 
-`R2-A` repaired implementation candidate 已完成但尚未收口：根 `Config.schema_version` 保持 `4`，
+`R2-A` 已收口（source）：根 `Config.schema_version` 保持 `4`，
 嵌套 `runtime_transaction` reader 现在区分无嵌套版本的 V1 与 `schema_version=2` 的
 typed V2。V1 继续按原 wire shape 写入且不会自动升级；reader 对 future version、unknown
 field、unknown V1 stage、无法证明 fingerprint 的 legacy Science environment stage，以及
@@ -267,15 +267,23 @@ exact SHA `7a2e87539eac2fb90758f15926bab18123e7dd68` 的完整 gate 有十四个
 `SUITE-ORPHAN-SKILL-BOUNDARY` 因 source assertion 仍依赖已删除的 legacy `start_science`
 parser 常量而 FAIL；该 run 亦不作为 closure 证据。当前 source-contract repair 已改为冻结
 实际八个 V1 one-click checkpoint identity，boundary suite 11/11 PASS；inventory 5/5、quality
-metadata、document governance、format 与 diff check PASS。new candidate commit、其 exact-SHA
-十五 suite `GATE-SOURCE`、completion review 与 evidence seal 均为 `NOT-RUN`。唯一 `NEXT` 是
-完成新 candidate 的独立审查与 exact-SHA closure；`R2-B` 尚未开始，不得提前迁移 one-click
-checkpoint writer。
+metadata、document governance、format 与 diff check PASS。
+
+最终 candidate exact SHA `deff0b73e4c0f4876220e162ad123bece356424d` 取得十五 suite
+`GATE-SOURCE` completion seal PASS：run id `d6094581cd5d3fd9972a287f5ec0a456`、runner exit 0；
+manifest 含十五个 PASS test result 与十五个 PASS source observation，递归 schema/semantic/hash
+回读 PASS。desktop 身份为 527 discovered / 486 passed / 0 failed / 41 approved ignored /
+0 skipped / 0 todo / 0 not run，source snapshot 为 490 个 tracked entry。exact-SHA clean-context
+completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
+上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-A 仅建立 source/unit
+结论，不外推到 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
+唯一 `NEXT` 是 `R2-B`；本窗口停止，不提前迁移 one-click checkpoint writer。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
-| `R2-A` | ACTIVE（未收口） | nested V1/V2 schema、V1 只读兼容与 fail-closed typed accessor；仍写 V1 |
-| `R2-B`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
+| `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
+| `R2-B` | NEXT（NOT-STARTED） | one-click V2 checkpoint migration；不在本窗口范围 |
+| `R2-C`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置
 

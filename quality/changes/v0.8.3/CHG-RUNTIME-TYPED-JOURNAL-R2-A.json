@@ -56,7 +56,7 @@
         "metadata"
       ]
     },
-    "claim_state": "inferred",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -73,14 +73,15 @@
         "four focused config source/unit identities cover V1 no-upgrade, unknown and future fail-closed parsing, V2 typed secret-free round-trip, and illegal state rejection",
         "the existing legacy runtime-journal identity and three profile-switch identities passed without changing the V1 wire or checkpoint behavior",
         "the interrupted Gateway post-stage outcome identity passed outside the restricted sandbox after the restricted run returned Operation not permitted for its test-owned loopback/process fixture",
-        "the initial candidate complete Rust library source test passed outside the restricted sandbox with 486 passed, 0 failed, and 41 existing approved ignored identities out of 527 discovered",
-        "initial candidate SHA e8ed08050f4a7d7f5a94d3c27c483defca00f699 produced a passing 15-suite source gate, but its clean-context completion review found one HIGH",
-        "the HIGH identified V1 stage-prefix parsing outside the Config adapter, so the initial candidate run is rejected as R2-A closure evidence",
+        "initial candidate SHA e8ed08050f4a7d7f5a94d3c27c483defca00f699 passed the source gate but completion review found V1 prefix parsing outside the Config adapter, so that run is rejected",
         "the repair centralizes legacy prefix interpretation in a typed Config V1 environment accessor and its four config identities plus one one-click journal identity passed",
-        "repaired candidate SHA 7a2e87539eac2fb90758f15926bab18123e7dd68 passed 14 source suites but failed the orphan boundary suite",
-        "the boundary assertion still depended on the removed legacy start_science parser constant, so that run is rejected as closure evidence",
+        "repaired SHA 7a2e87539eac2fb90758f15926bab18123e7dd68 passed 14 suites but its stale orphan boundary assertion failed, so that run is rejected",
         "the source-contract repair replaces the stale legacy assertion with the actual eight V1 one-click checkpoint identities",
-        "new exact-SHA 15-suite GATE-SOURCE and completion review are NOT-RUN"
+        "complete 15-suite GATE-SOURCE passed at exact SHA deff0b73e4c0f4876220e162ad123bece356424d with run id d6094581cd5d3fd9972a287f5ec0a456 and runner exit zero",
+        "the completion seal and recursive readback contain 15 passing results, 15 passing observations, and a 490-entry clean source snapshot",
+        "desktop identity closed at 527 discovered, 486 passed, zero failed, 41 approved ignored, zero skipped, zero todo, and zero not run",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings",
+        "this evidence-only seal records the verified candidate and run and does not claim that the seal commit itself ran the complete gate"
       ]
     },
     "does_not_claim_fix": true,
