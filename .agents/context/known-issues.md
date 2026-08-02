@@ -431,6 +431,25 @@ Science、SSH、签名、公证、Gatekeeper 或 release。只读 Post-R2 Rebase
 source closure 外推到更高证据层。旧 R3-R11 顺序已被新的有限路线取代，任何实施仍须
 逐阶段明确授权。
 
+`S1` 已收口（source）：Science stop request、ownership receipt、verified outcome 与 classified
+failure 已覆盖现有生产 caller；confirmed-stopped authority 与 recovery/environment 只从 typed
+outcome 和 provenance 推导。rollback、Codex、native exit、history attention/restore、one-click
+compensation 与 DB restart 的恢复关键路径都要求 matching exact proof。离线 history continuation
+携带 process-local typed quiescence proof，在 credential mutation 前重跑完整 typed probe；若恢复前
+出现新的 live managed runtime，则 exact-stop 后推进同一 session proof，旋转后的 reference 可继续复用。
+
+candidate exact SHA `f50b532b1c6bca763c9a69f6e0da767784f01005` 取得完整十五 suite
+`GATE-SOURCE` PASS：run id `ea903bae3a6e990122d5992526bc967c`、runner exit 0；manifest
+含十五个 PASS test result 与十五个 PASS source observation，全部三十个引用哈希与 seal 三个
+顶层引用重算一致。Desktop 身份为 528 discovered / 487 passed / 0 failed / 41 approved ignored，
+clean-commit source snapshot 为 497 个 tracked entry。较早同 SHA run
+`696fd9d004ec90a5a36fbf55f7fa3618` 因一条不属于 S1 的 Codex cancel wire 测试单次失败而保持
+FAIL；它没有与后续完整独立 PASS run 混合。exact-SHA clean-context completion review PASS，
+零 BLOCK/HIGH/MEDIUM/LOW，并确认此前六类 authority/provenance findings 全部闭合。本文所在
+evidence-only seal commit 只记录上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整
+gate。S1 仅建立 source/unit 结论，不外推 artifact、installed/runtime、live provider、Science、
+SSH、签名、公证、Gatekeeper 或 release，也不移动锁、不改变 stop policy、不进入 S2。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
@@ -440,7 +459,7 @@ source closure 外推到更高证据层。旧 R3-R11 顺序已被新的有限路
 | `R2-E` | DONE | 现有 typed journal 的生产 writer / reader / rollback / clear 与 V1 fail-closed compatibility 矩阵收口；完整记录 CAS、补偿前置 guard、exact-SHA gate 与独立审查完成；checkpoint/F5/StopFailed/operation scope 保持 |
 | `R2-F` | DONE | R2-A-E schema、identity、CAS、recovery、compatibility 总盘点、聚焦矩阵、exact-SHA gate 与最终独立审查收口 |
 | `Post-R2 Rebaseline` | DONE-READ-ONLY | exact HEAD 重新盘点 state owner、caller、长等待、mutation、失败链、typed outcome/receipt 与旧路线依赖 |
-| `S1 Typed Science stop contract` | CANDIDATE | typed stop request/receipt/outcome 已覆盖生产 caller；六轮独立审查 findings 均已修复，离线 history continuation 以 process-local typed quiescence proof、完整 probe recheck 与可复用 proof advancement 闭合并补真实 IPC 回归；仍须新 candidate review 与 exact-SHA source gate 后才能标记 DONE，不移动锁或改变 stop policy |
+| `S1 Typed Science stop contract` | DONE | typed stop request/receipt/outcome 与 recovery-critical exact proof 已覆盖生产 caller；离线 history continuation 以 process-local typed quiescence proof、完整 probe recheck 与可复用 proof advancement 闭合；exact-SHA gate 与最终独立审查 PASS，不移动锁或改变 stop policy |
 
 ### Post-R2 Rebaseline 结论与后续门
 
@@ -469,12 +488,12 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-当前实施 candidate 是 `S1`。它只为现有 Science stop caller 建立 typed request、ownership
-receipt 与 `VerifiedStopped / identity drift / signal failure / exit unconfirmed / receipt cleanup
-failure` outcome，保持现有锁时机、command/DTO/text、stop/TERM/KILL/wait 顺序和 native-exit
-best-effort 语义。`S1` 不移动长等待、不拆 `AppState`、不建立 mutation lease，也不新增 F5
-pre-stop durable intent。改变 crash recovery 行为的 `PriorStopIntent/Outcome` 继续与
-`AuthorityTransaction` 接口等价提取分开，要求独立证据、operation contract 与明确授权。
+`S1` 已按上述边界完成。有限路线中的下一提议项是 `S2` Science process-local owner 与锁外
+等待/CAS，但本次没有自动授权或进入 S2。`S1` 保持现有锁时机、command/DTO/text、
+stop/TERM/KILL/wait 顺序和 native-exit best-effort 语义；不拆 `AppState`、不建立 mutation
+lease，也不新增 F5 pre-stop durable intent。改变 crash recovery 行为的
+`PriorStopIntent/Outcome` 继续与 `AuthorityTransaction` 接口等价提取分开，要求独立证据、
+operation contract 与明确授权。
 
 ## 下一轮重构的 P0 前置
 
