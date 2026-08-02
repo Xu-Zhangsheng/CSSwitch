@@ -12,7 +12,7 @@
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
-| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionJournal` | 持久；自由字符串 stage |
+| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click 写 typed V2，兼容与其余未迁移 writer 仍可读写 V1 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | `science-managed-launch.v1.json` + live listener identity | 持久 receipt 与 live 组合 |
 | virtual login | Science credential files + CSSwitch `virtual-org.v1.json` marker | 分属 Science/CSSwitch |
@@ -69,10 +69,10 @@ Skill 安装不取得 `Lifecycle`，而是在文件选择前后复核相同
 | 阶段域 | 形态 | 用途 |
 |---|---|---|
 | operation trace | typed `OperationStage` | 脱敏运行日志和耗时 |
-| runtime journal | string `stage` | crash/recovery 的持久 checkpoint（**未** typed 化） |
+| runtime journal | versioned V1/V2；one-click V2 使用 typed `phase` | crash/recovery 的持久 checkpoint |
 | frontend DTO | coarse string | 用户可见失败定位 |
 
-一键/auto-boot 失败由内部 `runtime/failure.rs` 的 `OneClickFailureKind` 在**产生点**标注，再投影到冻结的 coarse stage（`prepare|science_stop|gateway_start|catalog_verify|science_start`）与 `recovery_status` / `environment_status`。**不得**用用户文案 `contains` 反推 stage。journal checkpoint 字符串与 recovery 语义独立，本层不改。
+一键/auto-boot 失败由内部 `runtime/failure.rs` 的 `OneClickFailureKind` 在**产生点**标注，再投影到冻结的 coarse stage（`prepare|science_stop|gateway_start|catalog_verify|science_start`）与 `recovery_status` / `environment_status`。**不得**用用户文案 `contains` 反推 stage。frontend DTO、operation trace 与 runtime journal 仍是三个不同阶段域；one-click V2 的 typed phase 不改变 UI DTO。
 
 ## 一键开始事务
 
@@ -83,12 +83,17 @@ Skill 安装不取得 `Lifecycle`，而是在文件选择前后复核相同
 3. 若启用 SSH，完成真实 config、alias、wrapper、sidecar/stub 预检；
 4. 确认或精确停止 prior Science；
 5. 固定 opaque roots，捕获 protected projection，并持久登记 recovery disposition；
-6. 准备 virtual login 与 SSH bridge；
-7. 启动/复用 Gateway，校验 model catalog；
-8. 启动 Science，校验 health、listener、binary、data-dir 与 managed receipt；
-9. 复核 Science DB/catalog；
-10. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
-11. 计算并提交 runtime binding、清除 journal，随后打开 UI。
+6. 从同一 candidate Science identity 计算一次 64-hex fingerprint，并从已登记 authority snapshot 取得一次经验证的 `managed_id` ticket；首个 V2 checkpoint 同时携带两者；
+7. 准备 virtual login 与 SSH bridge；
+8. 启动/复用 Gateway，校验 model catalog；
+9. 启动 Science，校验 health、listener、binary、data-dir 与 managed receipt；
+10. 复核 Science DB/catalog；
+11. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
+12. 计算并提交 runtime binding、按同一 transaction identity 清除 journal，随后打开 UI。
+
+one-click 的八个 checkpoint 时机均写 V2。后续 phase 只能推进 typed `phase` 与其对应的 exposure，必须保留首写的 transaction id、candidate fingerprint 与 snapshot ticket；任一 identity 漂移都保留当前 journal 并 fail-closed。
+
+首个 checkpoint 原子提交失败、且 protected mutation 尚未开始时，同一进程只能通过 `PreJournalAbort` 使用内存中的 registered ticket 进入既有补偿。进程在 snapshot 已登记、journal 尚未提交的区间崩溃或重启时，没有这个内存票据；`ActiveRecovery` 仍要求人工恢复，不能自动删除或恢复。F5 也明确保留：verified prior-Science stop 仍可发生在任何 durable intent 之前，本阶段没有把 journal 前移到 destructive stop 之前。
 
 已健康 daemon 的 reuse/reopen 分支顺序不同：它先确保 Gateway、复核 model
 catalog，再提交 runtime binding 并清 journal，之后才检查或 best-effort 修复
@@ -138,7 +143,9 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 ## 当前架构缺口
 
 - ~~journal/trace/frontend stage 没有统一 typed source~~ 一键/auto-boot UI stage
-  已由 `OneClickFailureKind` 投影；journal 仍为 recovery checkpoint 字符串；
+  已由 `OneClickFailureKind` 投影；one-click journal 已写 typed V2，但
+  profile-switch / interrupted Gateway compatibility writer 仍保留 V1 string stage；
+- F5：prior Science 的 verified stop 仍可早于 durable intent；
 - ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
 - ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与
   `boot_error` 现携带与手动一键同 shape 的 failed DTO；

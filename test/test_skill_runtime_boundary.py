@@ -299,57 +299,42 @@ class SkillRuntimeBoundary(unittest.TestCase):
         gateway_ready = one_click_runtime.index("verify_gateway_model_catalog_traced(")
         science_spawn = one_click_runtime.index('Command::new("zsh")', gateway_ready)
         self.assertLess(gateway_ready, science_spawn)
-        stop_writer = one_click_source.split(
-            "fn mark_stop_old_science_transaction", 1
-        )[1].split("pub(super) fn clear_runtime_transaction", 1)[0]
-        self.assertRegex(
-            stop_writer,
-            r'(?s)RuntimeTransactionJournal\s*\{.*?stage:\s*"stop_old_science"\.into\(\),',
-        )
-        self.assertEqual(one_click_runtime.count("mark_stop_old_science_transaction("), 1)
-        self.assertEqual(one_click_runtime.count("advance_runtime_transaction("), 7)
-        self.assertLess(
-            one_click_runtime.index("mark_stop_old_science_transaction("),
-            one_click_runtime.index("advance_runtime_transaction("),
-        )
+        self.assertEqual(one_click_runtime.count("write_one_click_checkpoint("), 8)
         checkpoint_stages = re.findall(
-            r"(?s)advance_runtime_transaction\(\s*&dir,\s*&active_profile\.id,\s*"
-            r"transaction_cfg\.runtime_binding\.clone\(\),\s*([^,\n]+),\s*\)",
+            r"(?s)write_one_click_checkpoint\(\s*&dir,\s*&transaction_identity,\s*"
+            r"&mut journal_progress,\s*config::RuntimeTransactionPhase::(\w+),\s*\)",
             one_click_runtime,
         )
         self.assertEqual(
             checkpoint_stages,
             [
-                '"start_gateway"',
-                "&authority_active_stage",
-                "&environment_pending_stage",
-                '"wait_science_db_reverify"',
-                '"restart_science_after_db_heal"',
-                '"verify_science_db_after_restart"',
-                '"verify_science_catalog"',
+                "StopOldScience",
+                "StartGateway",
+                "AuthoritySnapshotActive",
+                "StartScienceEnvironmentPending",
+                "WaitScienceDbReverify",
+                "RestartScienceAfterDbHeal",
+                "VerifyScienceDbAfterRestart",
+                "VerifyScienceCatalog",
             ],
         )
         self.assertRegex(
             one_click_runtime,
-            r'(?s)let authority_active_stage = format!\(\s*'
-            r'"\{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX\}\{\}",\s*'
-            r'launch_runtime\.environment_transaction_id\(\)\s*\);',
+            r"let candidate_fingerprint = launch_runtime\.environment_transaction_id\(\);",
         )
+        self.assertEqual(one_click_runtime.count("environment_transaction_id()"), 1)
         self.assertRegex(
             one_click_runtime,
-            r'(?s)let environment_pending_stage = format!\(\s*'
-            r'"\{SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX\}\{\}",\s*'
-            r'launch_runtime\.environment_transaction_id\(\)\s*\);',
+            r"(?s)let snapshot_ticket = match authority_snapshot\.registered_snapshot_ticket\(\)"
+            r".*?let transaction_identity = OneClickTransactionIdentity \{"
+            r".*?runtime_fingerprint: candidate_fingerprint,"
+            r".*?snapshot_ticket: snapshot_ticket\.clone\(\),"
+            r".*?let mut journal_progress = OneClickJournalProgress::PreJournalAbort \{"
+            r".*?registered_ticket: snapshot_ticket,",
         )
-        self.assertIn(
-            'AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:"',
-            one_click_source,
-        )
-        self.assertIn(
-            'SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str =\n'
-            '    "start_science_environment_pending:"',
-            one_click_source,
-        )
+        self.assertNotIn("RuntimeTransactionJournal {", one_click_runtime)
+        self.assertNotIn("SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX", one_click_source)
+        self.assertNotIn("AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX", one_click_source)
         self.assertEqual(one_click_runtime.count("runtime_transaction = Some("), 0)
 
         one_click_command = command_one_click.split(

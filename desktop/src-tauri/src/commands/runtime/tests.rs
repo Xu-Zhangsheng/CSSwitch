@@ -3036,6 +3036,14 @@ fn r0_one_click_snapshot_capture_failure_restarts_prior_runtime() {
 }
 
 #[test]
+fn r2_b_one_click_pre_journal_abort_uses_registered_ticket_compensation() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science",
+        &[("CSSWITCH_TEST_R2_B_PRE_JOURNAL_ABORT", "1")],
+    );
+}
+
+#[test]
 fn r0_one_click_db_restart_unproven_candidate_blocks_restore() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent",
@@ -3546,6 +3554,10 @@ fn isolated_prior_science_post_spawn_failure_cleans_candidate() {
 #[test]
 #[ignore = "explicit Acceptance-boundary snapshot quiesce rollback; temp HOME, managed fake Science, and loopback only"]
 fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_science() {
+    let pre_journal_abort = env::var("CSSWITCH_TEST_R2_B_PRE_JOURNAL_ABORT")
+        .ok()
+        .as_deref()
+        == Some("1");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -3636,10 +3648,12 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
     let _snapshot_seam = sandbox_session::test_arm_one_click_snapshot_capture(
         config_dir.clone(),
         snapshot_observation.clone(),
-        true,
+        !pre_journal_abort,
         prior_pid,
         receipt_path.clone(),
     );
+    let _first_journal_seam = pre_journal_abort
+        .then(|| sandbox_session::test_arm_one_click_first_journal_failure(config_dir.clone()));
 
     port_reservations.release_one_click_ports();
     let failed = sandbox_session::one_click_login(
@@ -3690,19 +3704,30 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
     let stopped_cleanly = safe_stop.is_ok()
         && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
         && !receipt_path.exists();
+    let cleanup_manifest_empty = config::read_pending_authority_cleanup_manifest(&config_dir)
+        .unwrap()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value["entries"].as_array().map(Vec::is_empty))
+        .unwrap_or(false);
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
+    let expected_failure = if pre_journal_abort {
+        "test-only one-click first journal write failure"
+    } else {
+        "test-only one-click authority snapshot capture failure"
+    };
     assert!(
-        failed.as_ref().is_err_and(|error| {
-            error
-                .to_string()
-                .contains("test-only one-click authority snapshot capture failure")
-        }),
-        "fixture must reach the injected snapshot capture failure: {failed:?}"
+        failed
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains(expected_failure)),
+        "fixture must reach the injected snapshot or first-journal failure: mode_pre_journal={pre_journal_abort}, result={failed:?}"
     );
     assert!(
-            restarted_after_quiesce && stable_authority_unchanged && stopped_cleanly,
-            "snapshot failure must be observed only after verified stop with prior process and receipt absent, preserve stable authority, restart prior Science with fresh ownership, leave no orphan prior PID, and remain safely stoppable: observation={observation:?}, prior_pid={prior_pid}, restored_pid={restored_pid:?}, receipt_pid={receipt_pid:?}, app={app_after:?}, safe_stop={safe_stop:?}"
+            restarted_after_quiesce
+                && stable_authority_unchanged
+                && stopped_cleanly
+                && cleanup_manifest_empty,
+            "snapshot capture failure or same-process PreJournalAbort must occur only after verified stop, preserve stable authority, use the registered ticket to clean the snapshot, restart prior Science with fresh ownership, leave no orphan prior PID, and remain safely stoppable: mode_pre_journal={pre_journal_abort}, observation={observation:?}, prior_pid={prior_pid}, restored_pid={restored_pid:?}, receipt_pid={receipt_pid:?}, app={app_after:?}, safe_stop={safe_stop:?}, cleanup_manifest_empty={cleanup_manifest_empty}"
         );
 }
 

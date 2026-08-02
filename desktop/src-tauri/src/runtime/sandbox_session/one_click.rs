@@ -276,6 +276,7 @@ impl InterruptedScienceRecoveryError {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn projected_recovery(&self) -> ProjectedRecovery {
         self.recovery
     }
@@ -316,44 +317,139 @@ fn typed_authority_cleanup_err(
         .with_safe_cause(phase.cause_code(), "authority cleanup typed failure")
 }
 
-pub(super) fn advance_runtime_transaction(
-    dir: &Path,
-    active_profile_id: &str,
-    previous_binding: Option<config::RuntimeBindingCommit>,
-    stage: &str,
-) -> Result<(), String> {
-    config::update_result(dir, |current| {
-        match current.runtime_transaction.as_mut() {
-        Some(journal) if journal.is_v2() => Err(
-            "typed runtime journal retargeted the V1 writer; preserved the typed transaction and refused the phase advance".into(),
-        ),
-        Some(journal) if journal.target_profile_id() == active_profile_id => {
-            let journal = journal
-                .as_v1_mut()
-                .expect("V2 is rejected before the V1 phase advance");
-            journal.stage = stage.to_string();
-            Ok(((), true))
-        }
-        _ => {
-            current.runtime_transaction = Some(
-                config::RuntimeTransactionJournal {
-                    transaction_id: config::new_id(),
-                    target_profile_id: active_profile_id.to_string(),
-                    stage: stage.to_string(),
-                    previous_binding: previous_binding.clone(),
-                    previous_gateway: None,
-                }
-                .into(),
-            );
-            Ok(((), true))
-        }
-    }
-    })
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OneClickTransactionIdentity {
+    pub(super) target_profile_id: String,
+    pub(super) runtime_fingerprint: String,
+    pub(super) snapshot_ticket: config::RuntimeSnapshotTicket,
+    pub(super) previous_binding: Option<config::RuntimeBindingCommit>,
 }
 
-pub(super) const SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str =
-    "start_science_environment_pending:";
-pub(super) const AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:";
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum OneClickJournalProgress {
+    PreJournalAbort {
+        registered_ticket: config::RuntimeSnapshotTicket,
+    },
+    Journaled {
+        transaction_id: String,
+        registered_ticket: config::RuntimeSnapshotTicket,
+    },
+}
+
+impl OneClickJournalProgress {
+    fn registered_ticket(&self) -> &config::RuntimeSnapshotTicket {
+        match self {
+            Self::PreJournalAbort { registered_ticket }
+            | Self::Journaled {
+                registered_ticket, ..
+            } => registered_ticket,
+        }
+    }
+
+    pub(super) fn transaction_id(&self) -> Option<&str> {
+        match self {
+            Self::PreJournalAbort { .. } => None,
+            Self::Journaled { transaction_id, .. } => Some(transaction_id),
+        }
+    }
+}
+
+pub(super) fn one_click_phase_exposure(
+    phase: config::RuntimeTransactionPhase,
+) -> config::RuntimeEnvironmentExposure {
+    match phase {
+        config::RuntimeTransactionPhase::StartScienceEnvironmentPending => {
+            config::RuntimeEnvironmentExposure::Possible
+        }
+        config::RuntimeTransactionPhase::WaitScienceDbReverify
+        | config::RuntimeTransactionPhase::RestartScienceAfterDbHeal
+        | config::RuntimeTransactionPhase::VerifyScienceDbAfterRestart
+        | config::RuntimeTransactionPhase::VerifyScienceCatalog => {
+            config::RuntimeEnvironmentExposure::Exposed
+        }
+        _ => config::RuntimeEnvironmentExposure::NotExposed,
+    }
+}
+
+fn one_click_journal_matches(
+    journal: &config::RuntimeTransactionV2,
+    identity: &OneClickTransactionIdentity,
+    transaction_id: &str,
+) -> bool {
+    journal.schema_version == config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2
+        && journal.transaction_id == transaction_id
+        && journal.operation == config::RuntimeTransactionOperation::OneClick
+        && journal.target_profile_id == identity.target_profile_id
+        && journal.runtime_fingerprint.as_deref() == Some(&identity.runtime_fingerprint)
+        && journal.snapshot_ticket.as_ref() == Some(&identity.snapshot_ticket)
+}
+
+pub(super) fn write_one_click_checkpoint(
+    dir: &Path,
+    identity: &OneClickTransactionIdentity,
+    progress: &mut OneClickJournalProgress,
+    phase: config::RuntimeTransactionPhase,
+) -> Result<(), String> {
+    if progress.registered_ticket() != &identity.snapshot_ticket {
+        return Err("one-click checkpoint rejected a replaced in-memory snapshot ticket".into());
+    }
+    #[cfg(test)]
+    if progress.transaction_id().is_none() {
+        let mut seams = SANDBOX_SESSION_TEST_SEAMS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if seams.one_click_fail_first_journal.as_deref() == Some(dir) {
+            seams.one_click_fail_first_journal = None;
+            return Err("test-only one-click first journal write failure".into());
+        }
+    }
+    let expected_transaction_id = progress.transaction_id().map(str::to_string);
+    let transaction_id = config::update_result(dir, |current| {
+        match (
+            &mut current.runtime_transaction,
+            expected_transaction_id.as_deref(),
+        ) {
+            (Some(config::RuntimeTransactionRecord::V2(journal)), Some(expected))
+                if one_click_journal_matches(journal, identity, expected) =>
+            {
+                journal.phase = phase;
+                journal.environment_exposure = one_click_phase_exposure(phase);
+                Ok((journal.transaction_id.clone(), true))
+            }
+            (Some(config::RuntimeTransactionRecord::V2(_)), _) => {
+                Err("one-click checkpoint identity changed; preserved the typed transaction".into())
+            }
+            (Some(config::RuntimeTransactionRecord::V1(_)) | None, None) => {
+                let transaction_id = config::new_id();
+                current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(
+                    config::RuntimeTransactionV2 {
+                        schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+                        transaction_id: transaction_id.clone(),
+                        operation: config::RuntimeTransactionOperation::OneClick,
+                        target_profile_id: identity.target_profile_id.clone(),
+                        phase,
+                        runtime_fingerprint: Some(identity.runtime_fingerprint.clone()),
+                        environment_exposure: one_click_phase_exposure(phase),
+                        snapshot_ticket: Some(identity.snapshot_ticket.clone()),
+                        previous_binding: identity.previous_binding.clone(),
+                        previous_gateway: None,
+                        compensation: config::RuntimeCompensationState::NotStarted,
+                        gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
+                    },
+                ));
+                Ok((transaction_id, true))
+            }
+            (Some(config::RuntimeTransactionRecord::V1(_)) | None, Some(_)) => Err(
+                "one-click checkpoint journal disappeared or regressed; refused replacement".into(),
+            ),
+        }
+    })?;
+    *progress = OneClickJournalProgress::Journaled {
+        transaction_id,
+        registered_ticket: identity.snapshot_ticket.clone(),
+    };
+    Ok(())
+}
 
 pub(super) fn validate_interrupted_science_transaction_entry(
     environment_state: Option<config::RuntimeTransactionV1EnvironmentState<'_>>,
@@ -947,64 +1043,48 @@ fn capture_authority_after_science_quiesce<R: Runtime>(
     }
 }
 
-fn mark_stop_old_science_transaction(
+pub(super) fn clear_one_click_transaction(
     dir: &Path,
-    active_profile_id: &str,
-    previous_binding: Option<config::RuntimeBindingCommit>,
+    identity: &OneClickTransactionIdentity,
+    progress: &OneClickJournalProgress,
 ) -> Result<(), String> {
+    let expected_transaction_id = progress
+        .transaction_id()
+        .ok_or("one-click cannot clear a journal before its first durable checkpoint")?;
     config::update_result(dir, |current| {
-        if current
-            .runtime_transaction
-            .as_ref()
-            .is_some_and(config::RuntimeTransactionRecord::is_v2)
-        {
-            return Err(
-                "typed runtime journal retargeted the V1 stop checkpoint; preserved the typed transaction"
-                    .into(),
-            );
-        }
-        current.runtime_transaction = Some(
-            config::RuntimeTransactionJournal {
-                transaction_id: config::new_id(),
-                target_profile_id: active_profile_id.to_string(),
-                stage: "stop_old_science".into(),
-                previous_binding: previous_binding.clone(),
-                previous_gateway: None,
+        match current.runtime_transaction.as_ref() {
+            Some(config::RuntimeTransactionRecord::V2(journal))
+                if one_click_journal_matches(journal, identity, expected_transaction_id) => {}
+            _ => {
+                return Err(
+                    "one-click clear identity changed; preserved the runtime transaction".into(),
+                )
             }
-            .into(),
-        );
-        Ok(((), true))
-    })
-}
-
-pub(super) fn clear_runtime_transaction(dir: &Path) -> Result<(), String> {
-    config::update_result(dir, |current| {
-        if current
-            .runtime_transaction
-            .as_ref()
-            .is_some_and(config::RuntimeTransactionRecord::is_v2)
-        {
-            return Err(
-                "typed runtime journal retargeted the V1 clearer; preserved the typed transaction"
-                    .into(),
-            );
         }
         current.runtime_transaction = None;
         Ok(((), true))
     })
 }
 
-fn commit_runtime_binding(dir: &Path, binding: config::RuntimeBindingCommit) -> Result<(), String> {
+fn commit_runtime_binding(
+    dir: &Path,
+    identity: &OneClickTransactionIdentity,
+    progress: &OneClickJournalProgress,
+    binding: config::RuntimeBindingCommit,
+) -> Result<(), String> {
+    let expected_transaction_id = progress
+        .transaction_id()
+        .ok_or("one-click cannot commit a binding before its first durable checkpoint")?;
     config::update_result(dir, |current| {
-        if current
-            .runtime_transaction
-            .as_ref()
-            .is_some_and(config::RuntimeTransactionRecord::is_v2)
-        {
-            return Err(
-                "typed runtime journal retargeted the V1 binding commit; preserved the typed transaction"
-                    .into(),
-            );
+        match current.runtime_transaction.as_ref() {
+            Some(config::RuntimeTransactionRecord::V2(journal))
+                if one_click_journal_matches(journal, identity, expected_transaction_id) => {}
+            _ => {
+                return Err(
+                    "one-click binding commit identity changed; preserved the runtime transaction"
+                        .into(),
+                )
+            }
         }
         current.runtime_binding = Some(binding.clone());
         current.runtime_transaction = None;
@@ -1254,11 +1334,24 @@ fn compensate_one_click_failure<R: Runtime>(
     dir: &Path,
     trace: &OperationTrace,
     authority_snapshot: &mut OneClickAuthoritySnapshot,
+    journal_progress: &OneClickJournalProgress,
     prior_science: Option<&PriorScienceContext>,
     failure: OneClickFailure,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
 ) -> Result<Value, TypedOneClickFailure> {
     let original_kind = failure.typed.kind();
+    if let OneClickJournalProgress::PreJournalAbort { registered_ticket } = journal_progress {
+        let in_memory_ticket = authority_snapshot.registered_snapshot_ticket();
+        if in_memory_ticket.as_ref() != Ok(registered_ticket) {
+            authority_snapshot.preserve_recovery = true;
+            trace.finish("error=pre_journal_abort_ticket_unverified");
+            return Err(TypedOneClickFailure::new(
+                original_kind,
+                "首个 one-click V2 checkpoint 失败，且同进程 registered snapshot ticket 无法重新验证；已保留 ActiveRecovery 并要求人工恢复。",
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
+    }
     let cross_runtime_environment = failure.rollback.launch_attempted
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
     let environment = CompensationEnvironment::from_launch(
@@ -1434,7 +1527,7 @@ fn one_click_login_with_options<R: Runtime>(
     {
         true => Err(TypedOneClickFailure::new(
                 OneClickFailureKind::Prepare,
-                "检测到 typed runtime journal；当前 R2-A 兼容层拒绝在 writer 迁移前改写或恢复该事务；recovery_status=manual_recovery_required",
+                "检测到中断的 one-click V2 runtime journal；当前阶段保留其 snapshot ticket 并要求人工恢复；recovery_status=manual_recovery_required",
             )
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)),
         false => Ok(()),
@@ -1608,6 +1701,7 @@ fn one_click_login_with_options<R: Runtime>(
         &launch_runtime,
     )
     .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
+    let candidate_fingerprint = launch_runtime.environment_transaction_id();
     let mut rollback_context = OneClickRollbackContext {
         proxy_action: ProxyAction::Reused,
         sandbox_port: sport,
@@ -1713,26 +1807,49 @@ fn one_click_login_with_options<R: Runtime>(
             ));
         }
     };
+    let snapshot_ticket = match authority_snapshot.registered_snapshot_ticket() {
+        Ok(ticket) => ticket,
+        Err(cause) => {
+            authority_snapshot.preserve_recovery = true;
+            return Err(TypedOneClickFailure::new(
+                OneClickFailureKind::AuthoritySnapshot,
+                format!(
+                    "authority snapshot registered ticket 无法验证，已保留 ActiveRecovery 并要求人工恢复：{cause}"
+                ),
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
+    };
+    let transaction_identity = OneClickTransactionIdentity {
+        target_profile_id: active_profile.id.clone(),
+        runtime_fingerprint: candidate_fingerprint,
+        snapshot_ticket: snapshot_ticket.clone(),
+        previous_binding: cfg.runtime_binding.clone(),
+    };
+    let mut journal_progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: snapshot_ticket,
+    };
     let transaction_result = (|| -> Result<Value, OneClickFailure> {
         if running_runtime_to_stop.is_some() {
             rollback_context.set_kind(OneClickFailureKind::ScienceStop);
             one_click_step(
-                mark_stop_old_science_transaction(
+                write_one_click_checkpoint(
                     &dir,
-                    &active_profile.id,
-                    cfg.runtime_binding.clone(),
+                    &transaction_identity,
+                    &mut journal_progress,
+                    config::RuntimeTransactionPhase::StopOldScience,
                 ),
                 &rollback_context,
             )?;
         }
         rollback_context.set_kind(OneClickFailureKind::Prepare);
-        let transaction_cfg = one_click_step(config::load_from(&dir), &rollback_context)?;
+        let _transaction_cfg = one_click_step(config::load_from(&dir), &rollback_context)?;
         one_click_step(
-            advance_runtime_transaction(
+            write_one_click_checkpoint(
                 &dir,
-                &active_profile.id,
-                transaction_cfg.runtime_binding.clone(),
-                "start_gateway",
+                &transaction_identity,
+                &mut journal_progress,
+                config::RuntimeTransactionPhase::StartGateway,
             ),
             &rollback_context,
         )?;
@@ -1755,16 +1872,12 @@ fn one_click_login_with_options<R: Runtime>(
             authority_snapshot.validate_science_restore_root(),
             &rollback_context,
         )?;
-        let authority_active_stage = format!(
-            "{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX}{}",
-            launch_runtime.environment_transaction_id()
-        );
         one_click_step(
-            advance_runtime_transaction(
+            write_one_click_checkpoint(
                 &dir,
-                &active_profile.id,
-                transaction_cfg.runtime_binding.clone(),
-                &authority_active_stage,
+                &transaction_identity,
+                &mut journal_progress,
+                config::RuntimeTransactionPhase::AuthoritySnapshotActive,
             ),
             &rollback_context,
         )?;
@@ -1791,7 +1904,10 @@ fn one_click_login_with_options<R: Runtime>(
                         choices,
                     });
                 }
-                one_click_step(clear_runtime_transaction(&dir), &rollback_context)?;
+                one_click_step(
+                    clear_one_click_transaction(&dir, &transaction_identity, &journal_progress),
+                    &rollback_context,
+                )?;
                 trace.finish("attention=history_choice_required");
                 let mut value = json!({
                     "msg": "检测到多份旧历史记录。请选择要恢复的一份；CSSwitch 不会删除其他记录。",
@@ -1889,16 +2005,12 @@ fn one_click_login_with_options<R: Runtime>(
             &rollback_context,
         )?;
         rollback_context.set_kind(OneClickFailureKind::SandboxLaunch);
-        let environment_pending_stage = format!(
-            "{SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX}{}",
-            launch_runtime.environment_transaction_id()
-        );
         one_click_step(
-            advance_runtime_transaction(
+            write_one_click_checkpoint(
                 &dir,
-                &active_profile.id,
-                transaction_cfg.runtime_binding.clone(),
-                &environment_pending_stage,
+                &transaction_identity,
+                &mut journal_progress,
+                config::RuntimeTransactionPhase::StartScienceEnvironmentPending,
             ),
             &rollback_context,
         )?;
@@ -2059,11 +2171,11 @@ fn one_click_login_with_options<R: Runtime>(
         }
         rollback_context.set_kind(OneClickFailureKind::ScienceDbReverify);
         one_click_step(
-            advance_runtime_transaction(
+            write_one_click_checkpoint(
                 &dir,
-                &active_profile.id,
-                transaction_cfg.runtime_binding.clone(),
-                "wait_science_db_reverify",
+                &transaction_identity,
+                &mut journal_progress,
+                config::RuntimeTransactionPhase::WaitScienceDbReverify,
             ),
             &rollback_context,
         )?;
@@ -2109,11 +2221,11 @@ fn one_click_login_with_options<R: Runtime>(
                         .failure("Science DB recovery 的首次受管进程未完成 verified stop"));
                 }
                 one_click_step(
-                    advance_runtime_transaction(
+                    write_one_click_checkpoint(
                         &dir,
-                        &active_profile.id,
-                        transaction_cfg.runtime_binding.clone(),
-                        "restart_science_after_db_heal",
+                        &transaction_identity,
+                        &mut journal_progress,
+                        config::RuntimeTransactionPhase::RestartScienceAfterDbHeal,
                     ),
                     &rollback_context,
                 )?;
@@ -2147,11 +2259,11 @@ fn one_click_login_with_options<R: Runtime>(
                 rollback_context.launch_token = Some(second_token.clone());
                 rollback_context.launch_confirmed_stopped = false;
                 one_click_step(
-                    advance_runtime_transaction(
+                    write_one_click_checkpoint(
                         &dir,
-                        &active_profile.id,
-                        transaction_cfg.runtime_binding.clone(),
-                        "verify_science_db_after_restart",
+                        &transaction_identity,
+                        &mut journal_progress,
+                        config::RuntimeTransactionPhase::VerifyScienceDbAfterRestart,
                     ),
                     &rollback_context,
                 )?;
@@ -2172,11 +2284,11 @@ fn one_click_login_with_options<R: Runtime>(
         }
         rollback_context.set_kind(OneClickFailureKind::Prepare);
         one_click_step(
-            advance_runtime_transaction(
+            write_one_click_checkpoint(
                 &dir,
-                &active_profile.id,
-                transaction_cfg.runtime_binding.clone(),
-                "verify_science_catalog",
+                &transaction_identity,
+                &mut journal_progress,
+                config::RuntimeTransactionPhase::VerifyScienceCatalog,
             ),
             &rollback_context,
         )?;
@@ -2213,7 +2325,10 @@ fn one_click_login_with_options<R: Runtime>(
             ),
             &rollback_context,
         )?;
-        one_click_step(commit_runtime_binding(&dir, committed), &rollback_context)?;
+        one_click_step(
+            commit_runtime_binding(&dir, &transaction_identity, &journal_progress, committed),
+            &rollback_context,
+        )?;
         rollback_context.set_kind(OneClickFailureKind::OpenSurface);
         let (message, fallback_url) = if open_surface {
             match open_science_surface(&app, &url) {
@@ -2268,6 +2383,7 @@ fn one_click_login_with_options<R: Runtime>(
             &dir,
             &trace,
             &mut authority_snapshot,
+            &journal_progress,
             prior_science_for_compensation,
             failure,
             reconcile_disposition,

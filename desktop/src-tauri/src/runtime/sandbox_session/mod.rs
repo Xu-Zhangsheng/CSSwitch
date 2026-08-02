@@ -22,9 +22,8 @@ use authority_snapshot::{
 use catalog_verify::*;
 #[cfg(test)]
 use one_click::{
-    advance_runtime_transaction, clear_runtime_transaction, science_health_control_error,
-    validate_interrupted_science_transaction_entry, AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX,
-    SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX,
+    clear_one_click_transaction, one_click_phase_exposure, science_health_control_error,
+    write_one_click_checkpoint, OneClickJournalProgress, OneClickTransactionIdentity,
 };
 #[allow(unused_imports)]
 pub(crate) use one_click::{
@@ -49,9 +48,10 @@ pub(crate) use authority_snapshot::{
     test_arm_authority_snapshot_capture_failure, test_arm_authority_snapshot_cleanup_fault,
     test_arm_authority_snapshot_directory_barrier, test_arm_gateway_catalog_bypass,
     test_arm_healthy_reopen_catalog_failure, test_arm_one_click_exit_after_snapshot_capture,
-    test_arm_one_click_snapshot_capture, test_arm_prior_restart_post_spawn_failure,
-    test_arm_rollback_diagnostic_canary, test_prior_restart_post_spawn_identity,
-    test_rollback_diagnostic_snapshot, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
+    test_arm_one_click_first_journal_failure, test_arm_one_click_snapshot_capture,
+    test_arm_prior_restart_post_spawn_failure, test_arm_rollback_diagnostic_canary,
+    test_prior_restart_post_spawn_identity, test_rollback_diagnostic_snapshot,
+    SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
 };
 
 #[cfg(test)]

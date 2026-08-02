@@ -277,12 +277,21 @@ manifest 含十五个 PASS test result 与十五个 PASS source observation，�
 completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
 上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-A 仅建立 source/unit
 结论，不外推到 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
-唯一 `NEXT` 是 `R2-B`；本窗口停止，不提前迁移 one-click checkpoint writer。
+`R2-B` implementation candidate 已完成：现有八个 one-click checkpoint 保持原时机并改写
+typed V2 phase；首写冻结同一个 candidate fingerprint、verified snapshot `managed_id` ticket
+与 transaction id，后续 checkpoint、clear 和 binding commit 均按 exact identity fail-closed。
+首写失败且 protected mutation 尚未开始时，只有同进程 `PreJournalAbort` 可持内存中的
+registered ticket 进入既有补偿；重启后的 no-journal `ActiveRecovery` 仍拒绝自动恢复并要求
+人工处置。destructive stop 前仍未增加 durable intent，F5 gap 明确保留。focused source/unit、
+隔离 PreJournalAbort 与既有 crash/no-journal characterization 已通过，修复后 clean-context
+预提交审查 PASS，零 BLOCK/HIGH/MEDIUM/LOW；exact-SHA 十五 suite `GATE-SOURCE` 尚未运行，
+因此本段只记录 implementation candidate，不构成 R2-B closure，也不外推 artifact、installed/runtime、
+live provider、Science、SSH、签名、公证或 release。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
-| `R2-B` | NEXT（NOT-STARTED） | one-click V2 checkpoint migration；不在本窗口范围 |
+| `R2-B` | IMPLEMENTED（CLOSURE PENDING） | 八个 one-click checkpoint 已迁移 V2；等待 candidate commit 的 exact-SHA gate 与 completion review |
 | `R2-C`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置

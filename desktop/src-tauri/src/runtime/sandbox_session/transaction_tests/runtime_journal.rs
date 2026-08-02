@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn runtime_journal_advances_in_place_and_retargets_without_secrets() {
+fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     let dir = std::env::temp_dir().join(format!(
         "csswitch-runtime-journal-{}-{}",
         std::process::id(),
@@ -17,109 +17,122 @@ fn runtime_journal_advances_in_place_and_retargets_without_secrets() {
         &dir,
         &Config {
             runtime_binding: Some(previous.clone()),
+            runtime_transaction: Some(
+                config::RuntimeTransactionJournal {
+                    transaction_id: "legacy-interrupted".into(),
+                    target_profile_id: "old-target".into(),
+                    stage: "start_gateway".into(),
+                    previous_binding: None,
+                    previous_gateway: None,
+                }
+                .into(),
+            ),
             ..Default::default()
         },
     )
     .unwrap();
 
-    advance_runtime_transaction(&dir, "new", Some(previous.clone()), "start_gateway").unwrap();
+    let snapshot_ticket = config::RuntimeSnapshotTicket::verified(
+        ".one-click-rollback-fedcba9876543210fedcba9876543210".into(),
+    )
+    .unwrap();
+    let identity = OneClickTransactionIdentity {
+        target_profile_id: "new".into(),
+        runtime_fingerprint: "a".repeat(64),
+        snapshot_ticket: snapshot_ticket.clone(),
+        previous_binding: Some(previous.clone()),
+    };
+    let mut progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: snapshot_ticket.clone(),
+    };
+    write_one_click_checkpoint(
+        &dir,
+        &identity,
+        &mut progress,
+        config::RuntimeTransactionPhase::StopOldScience,
+    )
+    .unwrap();
     let first_record = config::load_from(&dir)
         .unwrap()
         .runtime_transaction
         .unwrap();
-    let first = first_record.as_v1().unwrap();
+    let first = first_record.as_v2().unwrap();
+    assert_eq!(first.schema_version, 2);
+    assert_eq!(
+        first.operation,
+        config::RuntimeTransactionOperation::OneClick
+    );
     assert_eq!(first.target_profile_id, "new");
-    assert_eq!(first.stage, "start_gateway");
+    assert_eq!(first.phase, config::RuntimeTransactionPhase::StopOldScience);
+    assert_eq!(first.runtime_fingerprint, Some("a".repeat(64)));
+    assert_eq!(first.snapshot_ticket, Some(snapshot_ticket.clone()));
     assert_eq!(first.previous_binding, Some(previous.clone()));
-
-    let runtime_id = "a".repeat(64);
-    let environment_stage = format!("{SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX}{runtime_id}");
-    advance_runtime_transaction(&dir, "new", Some(previous.clone()), &environment_stage).unwrap();
-    let second_record = config::load_from(&dir)
-        .unwrap()
-        .runtime_transaction
-        .unwrap();
-    let second = second_record.as_v1().unwrap();
-    assert_eq!(second.transaction_id, first.transaction_id);
-    assert_eq!(second.stage, environment_stage);
-    let environment_state = second_record.v1_environment_state().unwrap();
-    assert_eq!(environment_state.runtime_fingerprint(), runtime_id);
     assert_eq!(
-        second_record.runtime_fingerprint(),
-        Some(runtime_id.as_str())
-    );
-    assert!(!environment_state.is_authority_snapshot_active());
-    assert!(second_record.requires_snapshot_preservation());
-    validate_interrupted_science_transaction_entry(Some(environment_state)).unwrap();
-    let authority_stage = format!("{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX}{runtime_id}");
-    advance_runtime_transaction(&dir, "new", Some(previous.clone()), &authority_stage).unwrap();
-    let authority_record = config::load_from(&dir)
-        .unwrap()
-        .runtime_transaction
-        .unwrap();
-    let authority_state = authority_record.v1_environment_state().unwrap();
-    assert_eq!(authority_state.runtime_fingerprint(), runtime_id);
-    assert!(authority_state.is_authority_snapshot_active());
-    let authority = validate_interrupted_science_transaction_entry(Some(authority_state))
-        .expect_err("active authority snapshot must require explicit recovery");
-    assert_eq!(
-        authority.projected_recovery(),
-        crate::runtime::failure::ProjectedRecovery::MANUAL_RECOVERY_REQUIRED
+        progress.transaction_id(),
+        Some(first.transaction_id.as_str())
     );
 
-    advance_runtime_transaction(&dir, "newer", Some(previous), "start_gateway").unwrap();
-    let retargeted_record = config::load_from(&dir)
-        .unwrap()
-        .runtime_transaction
-        .unwrap();
-    let retargeted = retargeted_record.as_v1().unwrap();
-    assert_ne!(retargeted.transaction_id, second.transaction_id);
-    assert_eq!(retargeted.target_profile_id, "newer");
-    let encoded = serde_json::to_string(&retargeted).unwrap();
+    let phases = [
+        config::RuntimeTransactionPhase::StartGateway,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+        config::RuntimeTransactionPhase::StartScienceEnvironmentPending,
+        config::RuntimeTransactionPhase::WaitScienceDbReverify,
+        config::RuntimeTransactionPhase::RestartScienceAfterDbHeal,
+        config::RuntimeTransactionPhase::VerifyScienceDbAfterRestart,
+        config::RuntimeTransactionPhase::VerifyScienceCatalog,
+    ];
+    for phase in phases {
+        write_one_click_checkpoint(&dir, &identity, &mut progress, phase).unwrap();
+        let current = config::load_from(&dir)
+            .unwrap()
+            .runtime_transaction
+            .unwrap();
+        let current = current.as_v2().unwrap();
+        assert_eq!(current.transaction_id, first.transaction_id);
+        assert_eq!(current.phase, phase);
+        assert_eq!(
+            current.runtime_fingerprint.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(current.snapshot_ticket.as_ref(), Some(&snapshot_ticket));
+        assert_eq!(
+            current.environment_exposure,
+            one_click_phase_exposure(phase)
+        );
+    }
+
+    let encoded = serde_json::to_string(
+        &config::load_from(&dir)
+            .unwrap()
+            .runtime_transaction
+            .unwrap(),
+    )
+    .unwrap();
     assert!(!encoded.contains("api_key"));
     assert!(!encoded.contains("base_url"));
 
-    let typed = config::RuntimeTransactionRecord::V2(config::RuntimeTransactionV2 {
-        schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
-        transaction_id: "typed-retarget".into(),
-        operation: config::RuntimeTransactionOperation::OneClick,
-        target_profile_id: "other-target".into(),
-        phase: config::RuntimeTransactionPhase::StartGateway,
-        runtime_fingerprint: Some("b".repeat(64)),
-        environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
-        snapshot_ticket: Some(config::RuntimeSnapshotTicket {
-            managed_id: ".one-click-rollback-fedcba9876543210fedcba9876543210".into(),
-        }),
-        previous_binding: None,
-        previous_gateway: None,
-        compensation: config::RuntimeCompensationState::NotStarted,
-        gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
-    });
-    config::update(&dir, |cfg| cfg.runtime_transaction = Some(typed.clone())).unwrap();
     let before_typed_advance = std::fs::read(dir.join("config.json")).unwrap();
-    let error = advance_runtime_transaction(&dir, "newer", None, "verify_science_catalog")
-        .expect_err("a V1 writer must not overwrite a differently targeted V2 journal");
-    assert!(error.contains("preserved the typed transaction"));
+    let replacement = OneClickTransactionIdentity {
+        runtime_fingerprint: "b".repeat(64),
+        ..identity.clone()
+    };
+    let error = write_one_click_checkpoint(
+        &dir,
+        &replacement,
+        &mut progress,
+        config::RuntimeTransactionPhase::VerifyScienceCatalog,
+    )
+    .expect_err("a later phase must not replace the first candidate fingerprint");
+    assert!(error.contains("identity changed"));
     assert_eq!(
         std::fs::read(dir.join("config.json")).unwrap(),
         before_typed_advance
     );
-    assert_eq!(
-        config::load_from(&dir).unwrap().runtime_transaction,
-        Some(typed.clone())
-    );
-    for guarded_writer in [clear_runtime_transaction(&dir)] {
-        assert!(guarded_writer
-            .expect_err("every remaining V1 writer must preserve V2")
-            .contains("preserved the typed transaction"));
-        assert_eq!(
-            std::fs::read(dir.join("config.json")).unwrap(),
-            before_typed_advance
-        );
-        assert_eq!(
-            config::load_from(&dir).unwrap().runtime_transaction,
-            Some(typed.clone())
-        );
-    }
+
+    clear_one_click_transaction(&dir, &identity, &progress).unwrap();
+    assert!(config::load_from(&dir)
+        .unwrap()
+        .runtime_transaction
+        .is_none());
     let _ = std::fs::remove_dir_all(dir);
 }

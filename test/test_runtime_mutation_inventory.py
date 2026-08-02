@@ -73,6 +73,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.route-configuration-v1",
     "record.runtime-binding-v1",
     "record.runtime-transaction-v1",
+    "record.runtime-transaction-v2",
     "record.sandbox-ssh-stub-v2",
     "record.science-credential-v1",
     "record.science-receipt-v1",
@@ -509,6 +510,17 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         self.assertEqual(
             one_click_failures["one-click.post-snapshot-pre-journal"]["after_effects"],
             ["authority snapshot captured", "runtime transaction journal not yet committed"],
+        )
+        self.assertIn(
+            "same-process PreJournalAbort",
+            one_click_failures["one-click.post-snapshot-pre-journal"]["observed_outcome"],
+        )
+        self.assertIn("F5 remains", one_click["known_gaps"][0])
+        self.assertIn(
+            "record.runtime-transaction-v2", one_click["durable_records"]["writes"]
+        )
+        self.assertNotIn(
+            "record.runtime-transaction-v1", one_click["durable_records"]["writes"]
         )
 
         self.assertEqual(

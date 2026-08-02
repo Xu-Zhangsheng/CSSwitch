@@ -178,6 +178,22 @@ pub(super) struct OneClickAuthoritySnapshot {
 }
 
 impl OneClickAuthoritySnapshot {
+    pub(super) fn registered_snapshot_ticket(
+        &self,
+    ) -> Result<config::RuntimeSnapshotTicket, String> {
+        let ticket = self
+            .cleanup_ticket
+            .as_ref()
+            .ok_or("registered authority snapshot ticket is missing")?;
+        if ticket.entry.managed_id != self.cleanup_context.managed_id
+            || ticket.entry.path != self.backup_root
+            || ticket.entry.marker != ticket.entry.managed_id
+        {
+            return Err("registered authority snapshot ticket identity changed".into());
+        }
+        config::RuntimeSnapshotTicket::verified(ticket.entry.managed_id.clone())
+    }
+
     pub(super) fn science_opaque_root_bindings(
         root: Option<&std::fs::File>,
     ) -> Result<[Option<(u64, u64)>; SCIENCE_OWNED_OPAQUE_ROOTS.len()], String> {

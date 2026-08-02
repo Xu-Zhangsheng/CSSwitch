@@ -1,0 +1,87 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-B",
+    "version": "v0.8.3",
+    "title": "Migrate one-click checkpoints to the V2 runtime journal",
+    "summary": "Migrates the existing eight one-click checkpoint sites from the V1 string-stage writer to typed V2 phases without moving their runtime timing. The first durable checkpoint freezes one candidate runtime fingerprint and one verified registered snapshot managed_id ticket; later phases, success clear, and binding commit require that same transaction identity. A first-write failure before protected mutation may enter existing compensation only through same-process PreJournalAbort with the in-memory registered ticket. Restarted ActiveRecovery without a journal remains manual, and the destructive-stop-before-durable-intent F5 gap is intentionally retained.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "desktop/src-tauri/src/config.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/authority_snapshot/test_seams.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/authority_snapshot.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-B.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py",
+      "test/test_runtime_mutation_inventory.py",
+      "test/test_profile_pin_contract.py",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-ORPHAN-SKILL-BOUNDARY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "the focused V2 identity covers all eight typed phases, first-write V1 replacement, immutable transaction id, candidate fingerprint and verified managed_id ticket, exact clear, and secret-free serialization",
+        "the isolated first-journal write fault uses a temporary HOME, fake Science identity, dynamic loopback ports, and the in-memory registered ticket to prove same-process PreJournalAbort compensation and prior Science restart",
+        "the existing crash-after-snapshot-before-journal characterization remains unchanged and continues to require manual recovery for ActiveRecovery without a journal",
+        "the source boundary binds exactly eight production V2 checkpoint calls and one candidate fingerprint derivation",
+        "focused inventory, document governance, quality metadata, format, and diff checks passed",
+        "the repaired implementation received a clean-context pre-commit review PASS with zero BLOCK, HIGH, MEDIUM, or LOW findings",
+        "the complete exact-SHA source gate and exact-SHA completion review remain pending, so this record does not yet claim R2-B closure"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

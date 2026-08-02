@@ -700,6 +700,15 @@ pub struct RuntimeSnapshotTicket {
     pub managed_id: String,
 }
 
+impl RuntimeSnapshotTicket {
+    pub(crate) fn verified(managed_id: String) -> Result<Self, String> {
+        if !valid_runtime_snapshot_ticket(&managed_id) {
+            return Err("runtime_transaction V2 snapshot ticket is invalid".into());
+        }
+        Ok(Self { managed_id })
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeCompensationStep {
@@ -904,6 +913,7 @@ impl RuntimeTransactionRecord {
         }
     }
 
+    #[allow(dead_code)]
     pub fn runtime_fingerprint(&self) -> Option<&str> {
         match self {
             Self::V1(journal) => legacy_environment_state(&journal.stage)

@@ -41,7 +41,10 @@ class ProfilePinContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, pin)
 
         one_click = session.split("fn one_click_login_with_options", 1)[1]
-        self.assertIn("commit_runtime_binding(&dir, committed)", one_click)
+        self.assertIn(
+            "commit_runtime_binding(&dir, &transaction_identity, &journal_progress, committed)",
+            one_click,
+        )
         preset = profiles.split("pub(crate) async fn apply_profile_preset_sync", 1)[1].split(
             "// ---------- profile CRUD", 1
         )[0]

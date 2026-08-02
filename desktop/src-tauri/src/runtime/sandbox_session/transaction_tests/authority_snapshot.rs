@@ -668,11 +668,21 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         "a complete authority snapshot must be durably registered before protected writes"
     );
     let runtime_id = "b".repeat(64);
-    advance_runtime_transaction(
+    let snapshot_ticket = snapshot.registered_snapshot_ticket().unwrap();
+    let snapshot_identity = OneClickTransactionIdentity {
+        target_profile_id: "snapshot-crash-fixture".into(),
+        runtime_fingerprint: runtime_id.clone(),
+        snapshot_ticket: snapshot_ticket.clone(),
+        previous_binding: None,
+    };
+    let mut snapshot_progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: snapshot_ticket,
+    };
+    write_one_click_checkpoint(
         &config_dir,
-        "snapshot-crash-fixture",
-        None,
-        &format!("{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX}{runtime_id}"),
+        &snapshot_identity,
+        &mut snapshot_progress,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
     )
     .unwrap();
     let retry_error = retry_pending_authority_cleanup(&state)
@@ -684,7 +694,7 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
             && backup_root.is_dir(),
         "active crash recovery must preserve the exact registered root: {retry_error}"
     );
-    clear_runtime_transaction(&config_dir).unwrap();
+    clear_one_click_transaction(&config_dir, &snapshot_identity, &snapshot_progress).unwrap();
     snapshot
         .restore(&config_dir, &state, ProxyAction::Reused)
         .expect("fresh missing authority parents must already satisfy prior absence");
@@ -710,11 +720,21 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         b"partial-protected-write\n",
     )
     .unwrap();
-    advance_runtime_transaction(
+    let panic_ticket = panic_snapshot.registered_snapshot_ticket().unwrap();
+    let panic_identity = OneClickTransactionIdentity {
+        target_profile_id: "snapshot-panic-fixture".into(),
+        runtime_fingerprint: runtime_id,
+        snapshot_ticket: panic_ticket.clone(),
+        previous_binding: None,
+    };
+    let mut panic_progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: panic_ticket,
+    };
+    write_one_click_checkpoint(
         &config_dir,
-        "snapshot-panic-fixture",
-        None,
-        &format!("{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX}{runtime_id}"),
+        &panic_identity,
+        &mut panic_progress,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
     )
     .unwrap();
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {

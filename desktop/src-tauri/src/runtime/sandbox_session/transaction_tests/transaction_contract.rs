@@ -370,12 +370,40 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             )
         })
         .expect("one-click must capture authority_snapshot before mutation");
+    let transaction_index = one_click
+        .block
+        .stmts
+        .iter()
+        .position(|statement| {
+            matches!(
+                statement,
+                Stmt::Local(local)
+                    if local_name(local).is_some_and(|name| name == "transaction_result")
+            )
+        })
+        .expect("one-click must contain transaction_result after snapshot identity freeze");
+    assert_eq!(
+        transaction_index,
+        snapshot_index + 4,
+        "authority_snapshot must be followed by the verified ticket, frozen V2 identity, PreJournalAbort progress, and transaction_result"
+    );
+    let frozen_identity_locals = one_click.block.stmts[snapshot_index + 1..transaction_index]
+        .iter()
+        .map(|statement| match statement {
+            Stmt::Local(local) => local_name(local).expect("identity freeze must use named locals"),
+            _ => panic!("identity freeze boundary may contain only named local statements"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        frozen_identity_locals,
+        ["snapshot_ticket", "transaction_identity", "journal_progress"],
+        "snapshot ticket, transaction identity, and PreJournalAbort progress must be frozen exactly once before protected mutation"
+    );
     assert_eq!(
         one_click.block.stmts.len(),
-        snapshot_index + 3,
-        "authority_snapshot must be followed by exactly transaction_result and its final match"
+        transaction_index + 2,
+        "transaction_result must still be followed only by its final match"
     );
-    let transaction_index = snapshot_index + 1;
     let transaction_statement = &one_click.block.stmts[transaction_index];
     let transaction_local = match transaction_statement {
         Stmt::Local(local)
