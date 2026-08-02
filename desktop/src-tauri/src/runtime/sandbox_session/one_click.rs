@@ -128,6 +128,7 @@ pub(crate) fn one_click_login<R: Runtime>(
         auth_proof,
         true,
         None,
+        None,
     )
 }
 
@@ -172,6 +173,7 @@ pub(crate) fn reconcile_science_for_active<R: Runtime>(
     state: SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+    profile_switch_transaction: &config::RuntimeTransactionV2,
 ) -> Result<Value, ReconcileScienceError> {
     let mut disposition = PriorScienceDisposition::RestartRequired;
     one_click_login_with_options(
@@ -181,6 +183,7 @@ pub(crate) fn reconcile_science_for_active<R: Runtime>(
         None,
         auth_proof,
         false,
+        Some(profile_switch_transaction),
         Some(&mut disposition),
     )
     .map_err(|failure| {
@@ -252,7 +255,7 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
         }
         None => {}
     }
-    one_click_login_with_options(app, state, lifecycle, None, auth_proof, false, None)
+    one_click_login_with_options(app, state, lifecycle, None, auth_proof, false, None, None)
 }
 
 fn typed_one_click_err(
@@ -323,6 +326,7 @@ pub(super) struct OneClickTransactionIdentity {
     pub(super) runtime_fingerprint: String,
     pub(super) snapshot_ticket: config::RuntimeSnapshotTicket,
     pub(super) previous_binding: Option<config::RuntimeBindingCommit>,
+    pub(super) profile_switch_handoff: Option<config::RuntimeTransactionV2>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -384,6 +388,121 @@ fn one_click_journal_matches(
         && journal.snapshot_ticket.as_ref() == Some(&identity.snapshot_ticket)
 }
 
+fn profile_switch_handoff_matches(
+    journal: &config::RuntimeTransactionV2,
+    expected: &config::RuntimeTransactionV2,
+    active_profile_id: &str,
+    current_binding: Option<&config::RuntimeBindingCommit>,
+) -> bool {
+    journal == expected
+        && expected.schema_version == config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2
+        && expected.operation == config::RuntimeTransactionOperation::ProfileSwitch
+        && expected.target_profile_id == active_profile_id
+        && expected.phase == config::RuntimeTransactionPhase::StartFormalGateway
+        && expected.runtime_fingerprint.is_none()
+        && expected.environment_exposure == config::RuntimeEnvironmentExposure::NotExposed
+        && expected.snapshot_ticket.is_none()
+        && expected.previous_binding.as_ref() == current_binding
+        && expected.compensation == config::RuntimeCompensationState::NotStarted
+        && expected.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted
+}
+
+pub(super) fn healthy_reopen_transaction_matches(
+    journal: Option<&config::RuntimeTransactionRecord>,
+    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
+    active_profile_id: &str,
+    current_binding: Option<&config::RuntimeBindingCommit>,
+) -> bool {
+    match expected_profile_switch_transaction {
+        Some(expected) => matches!(
+            journal,
+            Some(config::RuntimeTransactionRecord::V2(typed))
+                if profile_switch_handoff_matches(
+                    typed,
+                    expected,
+                    active_profile_id,
+                    current_binding,
+                )
+        ),
+        None => !journal.is_some_and(config::RuntimeTransactionRecord::is_v2),
+    }
+}
+
+pub(super) fn resolve_profile_switch_handoff(
+    journal: Option<&config::RuntimeTransactionRecord>,
+    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
+    reconcile_expected: bool,
+    active_profile_id: &str,
+    current_binding: Option<&config::RuntimeBindingCommit>,
+) -> Result<Option<config::RuntimeTransactionV2>, &'static str> {
+    match expected_profile_switch_transaction {
+        Some(expected) if reconcile_expected => match journal {
+            Some(config::RuntimeTransactionRecord::V2(typed))
+                if profile_switch_handoff_matches(
+                    typed,
+                    expected,
+                    active_profile_id,
+                    current_binding,
+                ) =>
+            {
+                Ok(Some(expected.clone()))
+            }
+            _ => Err(
+                "profile-switch handoff journal disappeared, regressed, or retargeted before reconcile",
+            ),
+        },
+        Some(_) => Err("profile-switch handoff was supplied outside the reconcile path"),
+        None if journal.is_some_and(config::RuntimeTransactionRecord::is_v2) => {
+            Err("interrupted typed runtime journal requires manual recovery")
+        }
+        None => Ok(None),
+    }
+}
+
+pub(super) fn commit_healthy_reopen_binding(
+    dir: &Path,
+    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
+    committed: &config::RuntimeBindingCommit,
+) -> Result<(), String> {
+    config::update_result(dir, |config| {
+        if !healthy_reopen_transaction_matches(
+            config.runtime_transaction.as_ref(),
+            expected_profile_switch_transaction,
+            &config.active_id,
+            config.runtime_binding.as_ref(),
+        ) {
+            return Err(
+                "runtime journal retargeted healthy reopen; preserved the current transaction"
+                    .into(),
+            );
+        }
+        config.runtime_binding = Some(committed.clone());
+        config.runtime_transaction = None;
+        Ok(((), true))
+    })
+}
+
+fn new_one_click_journal(
+    identity: &OneClickTransactionIdentity,
+    transaction_id: String,
+    phase: config::RuntimeTransactionPhase,
+) -> config::RuntimeTransactionRecord {
+    config::RuntimeTransactionRecord::V2(config::RuntimeTransactionV2 {
+        schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+        transaction_id,
+        operation: config::RuntimeTransactionOperation::OneClick,
+        target_profile_id: identity.target_profile_id.clone(),
+        phase,
+        runtime_fingerprint: Some(identity.runtime_fingerprint.clone()),
+        environment_exposure: one_click_phase_exposure(phase),
+        snapshot_ticket: Some(identity.snapshot_ticket.clone()),
+        previous_binding: identity.previous_binding.clone(),
+        previous_gateway: None,
+        compensation: config::RuntimeCompensationState::NotStarted,
+        gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
+    })
+}
+
 pub(super) fn write_one_click_checkpoint(
     dir: &Path,
     identity: &OneClickTransactionIdentity,
@@ -405,6 +524,20 @@ pub(super) fn write_one_click_checkpoint(
     }
     let expected_transaction_id = progress.transaction_id().map(str::to_string);
     let transaction_id = config::update_result(dir, |current| {
+        let profile_switch_handoff_matches = match current.runtime_transaction.as_ref() {
+            Some(config::RuntimeTransactionRecord::V2(journal)) => identity
+                .profile_switch_handoff
+                .as_ref()
+                .is_some_and(|expected| {
+                    profile_switch_handoff_matches(
+                        journal,
+                        expected,
+                        &identity.target_profile_id,
+                        identity.previous_binding.as_ref(),
+                    )
+                }),
+            _ => false,
+        };
         match (
             &mut current.runtime_transaction,
             expected_transaction_id.as_deref(),
@@ -416,29 +549,35 @@ pub(super) fn write_one_click_checkpoint(
                 journal.environment_exposure = one_click_phase_exposure(phase);
                 Ok((journal.transaction_id.clone(), true))
             }
-            (Some(config::RuntimeTransactionRecord::V2(_)), _) => {
-                Err("one-click checkpoint identity changed; preserved the typed transaction".into())
-            }
-            (Some(config::RuntimeTransactionRecord::V1(_)) | None, None) => {
+            (Some(config::RuntimeTransactionRecord::V2(_)), None)
+                if profile_switch_handoff_matches =>
+            {
                 let transaction_id = config::new_id();
-                current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(
-                    config::RuntimeTransactionV2 {
-                        schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
-                        transaction_id: transaction_id.clone(),
-                        operation: config::RuntimeTransactionOperation::OneClick,
-                        target_profile_id: identity.target_profile_id.clone(),
-                        phase,
-                        runtime_fingerprint: Some(identity.runtime_fingerprint.clone()),
-                        environment_exposure: one_click_phase_exposure(phase),
-                        snapshot_ticket: Some(identity.snapshot_ticket.clone()),
-                        previous_binding: identity.previous_binding.clone(),
-                        previous_gateway: None,
-                        compensation: config::RuntimeCompensationState::NotStarted,
-                        gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
-                    },
+                current.runtime_transaction = Some(new_one_click_journal(
+                    identity,
+                    transaction_id.clone(),
+                    phase,
                 ));
                 Ok((transaction_id, true))
             }
+            (Some(config::RuntimeTransactionRecord::V2(_)), _) => {
+                Err("one-click checkpoint identity changed; preserved the typed transaction".into())
+            }
+            (Some(config::RuntimeTransactionRecord::V1(_)) | None, None)
+                if identity.profile_switch_handoff.is_none() =>
+            {
+                let transaction_id = config::new_id();
+                current.runtime_transaction = Some(new_one_click_journal(
+                    identity,
+                    transaction_id.clone(),
+                    phase,
+                ));
+                Ok((transaction_id, true))
+            }
+            (Some(config::RuntimeTransactionRecord::V1(_)) | None, None) => Err(
+                "profile-switch handoff journal disappeared or regressed; refused replacement"
+                    .into(),
+            ),
             (Some(config::RuntimeTransactionRecord::V1(_)) | None, Some(_)) => Err(
                 "one-click checkpoint journal disappeared or regressed; refused replacement".into(),
             ),
@@ -1514,24 +1653,29 @@ fn one_click_login_with_options<R: Runtime>(
     runtime_choice: Option<&str>,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     open_surface: bool,
+    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
 ) -> Result<Value, TypedOneClickFailure> {
     let trace = OperationTrace::start(OperationKind::OneClickLogin, "command=one_click_login");
     let dir = config::default_dir();
     let cfg = config::load_from(&dir)
         .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
-    match cfg
-        .runtime_transaction
-        .as_ref()
-        .is_some_and(config::RuntimeTransactionRecord::is_v2)
-    {
-        true => Err(TypedOneClickFailure::new(
-                OneClickFailureKind::Prepare,
-                "检测到中断的 one-click V2 runtime journal；当前阶段保留其 snapshot ticket 并要求人工恢复；recovery_status=manual_recovery_required",
-            )
-            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)),
-        false => Ok(()),
-    }?;
+    let profile_switch_handoff = resolve_profile_switch_handoff(
+        cfg.runtime_transaction.as_ref(),
+        expected_profile_switch_transaction,
+        reconcile_disposition.is_some(),
+        &cfg.active_id,
+        cfg.runtime_binding.as_ref(),
+    )
+    .map_err(|detail| {
+        TypedOneClickFailure::new(
+            OneClickFailureKind::Prepare,
+            format!(
+                "检测到无法接管的 runtime journal；已保留当前事务并要求人工恢复：{detail}；recovery_status=manual_recovery_required"
+            ),
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+    })?;
     let interrupted_environment_state = cfg
         .runtime_transaction
         .as_ref()
@@ -1656,6 +1800,7 @@ fn one_click_login_with_options<R: Runtime>(
                     sport,
                     &running_runtime,
                     open_surface,
+                    profile_switch_handoff.as_ref(),
                 )?;
                 if interrupted_environment_runtime_id.is_some() {
                     reopened["recovery_status"] = json!("environment_uncertain");
@@ -1825,6 +1970,7 @@ fn one_click_login_with_options<R: Runtime>(
         runtime_fingerprint: candidate_fingerprint,
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: cfg.runtime_binding.clone(),
+        profile_switch_handoff,
     };
     let mut journal_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket,

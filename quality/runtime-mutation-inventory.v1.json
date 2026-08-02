@@ -43,7 +43,7 @@
       "id": "config.transaction",
       "kind": "durable-config",
       "durability": "filesystem",
-      "authority": "Open one-click/profile-switch recovery transaction with string stage and previous public identities.",
+      "authority": "Open versioned one-click/profile-switch recovery transaction with typed or compatibility stage and previous public identities.",
       "fields": ["runtime_transaction"],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"}
     },
@@ -228,18 +228,18 @@
       "format": "RuntimeTransactionJournal embedded in config v4",
       "authority_owner": "config.transaction",
       "fields": ["previous_binding", "previous_gateway", "stage", "target_profile_id", "transaction_id"],
-      "writers": [{"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "apply_candidate_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}],
       "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "v1_environment_state"}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"},
-      "known_gap": "Compatibility/profile-switch/Gateway-recovery phases still use the V1 string stage; the record does not cover mode/settings/Codex/downgrade/profile revocation."
+      "known_gap": "Compatibility/Gateway-recovery phases still use the V1 string stage; the record does not cover mode/settings/Codex/downgrade/profile revocation."
     },
     {
       "id": "record.runtime-transaction-v2",
       "format": "RuntimeTransactionV2 embedded in config v4",
       "authority_owner": "config.transaction",
       "fields": ["compensation", "environment_exposure", "gateway_stop_outcome", "operation", "phase", "previous_binding", "previous_gateway", "runtime_fingerprint", "schema_version", "snapshot_ticket", "target_profile_id", "transaction_id"],
-      "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "write_one_click_checkpoint"}],
-      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_with_options"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "apply_candidate_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "write_one_click_checkpoint"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "is_expected_profile_switch_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "resolve_profile_switch_handoff"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "commit_healthy_reopen_binding"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionV2"},
       "known_gap": "One-click prior-Science stop can still precede durable intent; a restart with ActiveRecovery but no journal remains manual recovery."
     },

@@ -674,6 +674,7 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         runtime_fingerprint: runtime_id.clone(),
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: None,
+        profile_switch_handoff: None,
     };
     let mut snapshot_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket,
@@ -726,6 +727,7 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         runtime_fingerprint: runtime_id,
         snapshot_ticket: panic_ticket.clone(),
         previous_binding: None,
+        profile_switch_handoff: None,
     };
     let mut panic_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: panic_ticket,

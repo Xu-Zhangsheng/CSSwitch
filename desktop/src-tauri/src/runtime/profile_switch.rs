@@ -75,39 +75,48 @@ fn apply_candidate_transaction(
     is_edit: bool,
     previous_binding: Option<config::RuntimeBindingCommit>,
     previous_gateway: Option<config::GatewayRuntimeJournalIdentity>,
-) {
+) -> config::RuntimeTransactionV2 {
     current.active_id = id.to_string();
     if is_edit {
         if let Some(profile) = current.profile_by_id_mut(id) {
             *profile = candidate.clone();
         }
     }
-    current.runtime_transaction = Some(
-        config::RuntimeTransactionJournal {
-            transaction_id: transaction_id.to_string(),
-            target_profile_id: id.to_string(),
-            stage: "start_formal_gateway".into(),
-            previous_binding,
-            previous_gateway,
-        }
-        .into(),
-    );
+    let journal = config::RuntimeTransactionV2 {
+        schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+        transaction_id: transaction_id.to_string(),
+        operation: config::RuntimeTransactionOperation::ProfileSwitch,
+        target_profile_id: id.to_string(),
+        phase: config::RuntimeTransactionPhase::StartFormalGateway,
+        runtime_fingerprint: None,
+        environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
+        snapshot_ticket: None,
+        previous_binding,
+        previous_gateway,
+        compensation: config::RuntimeCompensationState::NotStarted,
+        gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
+    };
+    current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(journal.clone()));
+    journal
+}
+
+fn is_expected_profile_switch_transaction(
+    journal: &config::RuntimeTransactionRecord,
+    expected: &config::RuntimeTransactionV2,
+) -> bool {
+    matches!(journal, config::RuntimeTransactionRecord::V2(typed) if typed == expected)
 }
 
 fn restore_prior_config_for_candidate(
     dir: &std::path::Path,
     prior: &config::Config,
-    transaction_id: &str,
-    target_profile_id: &str,
+    expected: &config::RuntimeTransactionV2,
 ) -> Result<(), String> {
     config::update_result(dir, |current| {
         let Some(journal) = current.runtime_transaction.as_ref() else {
             return Err("profile-switch transaction disappeared before rollback".into());
         };
-        if journal.is_v2()
-            || journal.transaction_id() != transaction_id
-            || journal.target_profile_id() != target_profile_id
-        {
+        if !is_expected_profile_switch_transaction(journal, expected) {
             return Err(
                 "profile-switch transaction retargeted before rollback; preserved the current transaction"
                     .into(),
@@ -180,7 +189,7 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
         .as_ref()
         .is_some_and(config::RuntimeTransactionRecord::is_v2)
     {
-        return Err("检测到 typed runtime journal；当前 R2-A 兼容层拒绝在 profile-switch writer 迁移前改写该事务；recovery_status=manual_recovery_required".into());
+        return Err("检测到未完成的 typed runtime journal；profile-switch writer 拒绝改写该事务；recovery_status=manual_recovery_required".into());
     }
     let mut candidate = cfg
         .profile_by_id(id)
@@ -326,15 +335,15 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
         config::write_rolling_backup(&dir).ok();
     }
     let candidate_transaction_id = config::new_id();
-    if let Err(error) = config::update_result(&dir, |current| {
+    let candidate_transaction = match config::update_result(&dir, |current| {
         if current
             .runtime_transaction
             .as_ref()
             .is_some_and(config::RuntimeTransactionRecord::is_v2)
         {
-            return Err("typed runtime journal retargeted the V1 profile-switch writer; preserved the typed transaction".into());
+            return Err("typed runtime journal retargeted the profile-switch writer; preserved the typed transaction".into());
         }
-        apply_candidate_transaction(
+        let journal = apply_candidate_transaction(
             current,
             &candidate,
             id,
@@ -343,18 +352,21 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
             cfg.runtime_binding.clone(),
             previous_gateway.clone(),
         );
-        Ok(((), true))
+        Ok((journal, true))
     }) {
-        trace.finish("error=candidate_config_publish_failed");
-        return Ok(json!({
-            "committed": false,
-            "stage": "config_commit",
-            "status": "error",
-            "recovery_status": "not_needed",
-            "message": format!("候选连接已校验，但配置与事务日志原子提交失败：{error}"),
-            "fallback_url": null,
-        }));
-    }
+        Ok(journal) => journal,
+        Err(error) => {
+            trace.finish("error=candidate_config_publish_failed");
+            return Ok(json!({
+                "committed": false,
+                "stage": "config_commit",
+                "status": "error",
+                "recovery_status": "not_needed",
+                "message": format!("候选连接已校验，但配置与事务日志原子提交失败：{error}"),
+                "fallback_url": null,
+            }));
+        }
+    };
 
     lifecycle.bump_generation();
     if let Err(error) = start_proxy_for(
@@ -368,7 +380,7 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
     ) {
         trace.stage(OperationStage::Rollback, "reason=proxy_unhealthy");
         let config_restored =
-            restore_prior_config_for_candidate(&dir, &cfg, &candidate_transaction_id, id).is_ok();
+            restore_prior_config_for_candidate(&dir, &cfg, &candidate_transaction).is_ok();
         let proxy_restored = config_restored
             && restore_proxy_for_active(
                 app,
@@ -402,14 +414,14 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
             state.clone(),
             lifecycle,
             auth_proof,
+            &candidate_transaction,
         ) {
             let prior_science_restored = error.prior_science_restored();
             let environment_uncertain = error.environment_uncertain();
             let error_message = error.cause().to_string();
             trace.stage(OperationStage::Rollback, "reason=science_reconcile_failed");
             let config_restored =
-                restore_prior_config_for_candidate(&dir, &cfg, &candidate_transaction_id, id)
-                    .is_ok();
+                restore_prior_config_for_candidate(&dir, &cfg, &candidate_transaction).is_ok();
             let proxy_restored = config_restored
                 && restore_proxy_for_active(
                     app,
@@ -480,10 +492,7 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
             let Some(journal) = current.runtime_transaction.as_ref() else {
                 return Err("profile-switch transaction disappeared before finalization".into());
             };
-            if journal.is_v2()
-                || journal.transaction_id() != candidate_transaction_id
-                || journal.target_profile_id() != id
-            {
+            if !is_expected_profile_switch_transaction(journal, &candidate_transaction) {
                 return Err("profile-switch transaction retargeted before finalization; preserved the current transaction".into());
             }
             current.runtime_binding = None;
@@ -493,8 +502,7 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
         if let Err(error) = clear_result {
             trace.stage(OperationStage::Rollback, "reason=commit_marker_failed");
             let config_restored =
-                restore_prior_config_for_candidate(&dir, &cfg, &candidate_transaction_id, id)
-                    .is_ok();
+                restore_prior_config_for_candidate(&dir, &cfg, &candidate_transaction).is_ok();
             let proxy_restored = config_restored
                 && restore_proxy_for_active(
                     app,
@@ -618,7 +626,7 @@ mod tests {
             provider_contract_digest: "contract-digest-old".into(),
             catalog_fp: "gateway-catalog-old".into(),
         };
-        apply_candidate_transaction(
+        let expected_transaction = apply_candidate_transaction(
             &mut cfg,
             &candidate,
             "new",
@@ -632,7 +640,33 @@ mod tests {
         assert_eq!(cfg.profile_by_id("new").unwrap().name, "candidate");
         let journal = cfg.runtime_transaction.as_ref().unwrap();
         assert_eq!(journal.target_profile_id(), "new");
-        assert_eq!(journal.legacy_stage(), Some("start_formal_gateway"));
+        let typed = journal.as_v2().unwrap();
+        assert_eq!(
+            typed.schema_version,
+            config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2
+        );
+        assert_eq!(
+            typed.operation,
+            config::RuntimeTransactionOperation::ProfileSwitch
+        );
+        assert_eq!(
+            typed.phase,
+            config::RuntimeTransactionPhase::StartFormalGateway
+        );
+        assert_eq!(
+            typed.environment_exposure,
+            config::RuntimeEnvironmentExposure::NotExposed
+        );
+        assert_eq!(typed.runtime_fingerprint, None);
+        assert_eq!(typed.snapshot_ticket, None);
+        assert_eq!(
+            typed.compensation,
+            config::RuntimeCompensationState::NotStarted
+        );
+        assert_eq!(
+            typed.gateway_stop_outcome,
+            config::RuntimeGatewayStopOutcome::NotAttempted
+        );
         assert_eq!(journal.previous_binding(), Some(&old_binding));
         assert_eq!(journal.previous_gateway(), Some(&previous_gateway));
 
@@ -650,23 +684,66 @@ mod tests {
             },
         )
         .unwrap();
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+        let encoded_journal = &encoded["runtime_transaction"];
+        assert_eq!(encoded_journal["schema_version"], 2);
+        assert_eq!(encoded_journal["operation"], "profile_switch");
+        assert_eq!(encoded_journal["phase"], "start_formal_gateway");
+        let journal_text = serde_json::to_string(encoded_journal).unwrap();
+        for forbidden in ["api_key", "credential", "secret", "/Users/"] {
+            assert!(
+                !journal_text.contains(forbidden),
+                "journal leaked `{forbidden}`"
+            );
+        }
+        for label in ["previous-gateway", "compensation"] {
+            config::update(&dir, |current| {
+                let typed = current
+                    .runtime_transaction
+                    .as_mut()
+                    .and_then(config::RuntimeTransactionRecord::as_v2_mut)
+                    .unwrap();
+                match label {
+                    "previous-gateway" => {
+                        typed.previous_gateway.as_mut().unwrap().launch_id =
+                            "retargeted-gateway".into();
+                    }
+                    "compensation" => {
+                        typed.compensation = config::RuntimeCompensationState::InProgress;
+                    }
+                    _ => unreachable!(),
+                }
+            })
+            .unwrap();
+            let retargeted = std::fs::read(dir.join("config.json")).unwrap();
+            assert!(
+                restore_prior_config_for_candidate(&dir, &prior_config, &expected_transaction)
+                    .is_err(),
+                "{label} drift must fail closed"
+            );
+            assert_eq!(std::fs::read(dir.join("config.json")).unwrap(), retargeted);
+            config::update(&dir, |current| {
+                current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(
+                    expected_transaction.clone(),
+                ));
+            })
+            .unwrap();
+        }
         config::update(&dir, |current| {
             current
                 .runtime_transaction
                 .as_mut()
-                .and_then(config::RuntimeTransactionRecord::as_v1_mut)
+                .and_then(config::RuntimeTransactionRecord::as_v2_mut)
                 .unwrap()
                 .transaction_id = "retargeted-transaction".into();
         })
         .unwrap();
         let retargeted_bytes = std::fs::read(dir.join("config.json")).unwrap();
-        assert!(restore_prior_config_for_candidate(
-            &dir,
-            &prior_config,
-            "candidate-transaction",
-            "new"
-        )
-        .is_err());
+        assert!(
+            restore_prior_config_for_candidate(&dir, &prior_config, &expected_transaction,)
+                .is_err()
+        );
         assert_eq!(
             std::fs::read(dir.join("config.json")).unwrap(),
             retargeted_bytes
@@ -677,13 +754,10 @@ mod tests {
             .replace("start_formal_gateway", "unknown_future_stage")
             .into_bytes();
         std::fs::write(dir.join("config.json"), &malformed_bytes).unwrap();
-        assert!(restore_prior_config_for_candidate(
-            &dir,
-            &prior_config,
-            "retargeted-transaction",
-            "new"
-        )
-        .is_err());
+        assert!(
+            restore_prior_config_for_candidate(&dir, &prior_config, &expected_transaction,)
+                .is_err()
+        );
         assert_eq!(
             std::fs::read(dir.join("config.json")).unwrap(),
             malformed_bytes

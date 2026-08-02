@@ -12,7 +12,7 @@
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
-| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click 写 typed V2，兼容与其余未迁移 writer 仍可读写 V1 |
+| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click 与 compiled test-only profile-switch writer 写 typed V2，兼容与 interrupted-Gateway recovery writer 仍可读写 V1 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | `science-managed-launch.v1.json` + live listener identity | 持久 receipt 与 live 组合 |
 | virtual login | Science credential files + CSSwitch `virtual-org.v1.json` marker | 分属 Science/CSSwitch |
@@ -108,6 +108,11 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 - 真正应用由下一次一键开始执行。
 - mode 切到 official 时先 bump generation，停止受管 Science/Gateway，再持久化 mode；停机失败不提交。
 - 当前产品不执行运行中 profile switch transaction；`set_active_profile` 只提交 selection，下一次一键开始按新的 active profile 重新走完整启动与补偿链。源码中的 `set_active_profile_txn` / `PriorScienceRestored` 链是 `compiled + test-only` candidate，不属于当前 product-reachable 合同。
+- 该 test-only candidate 的 profile-switch V2 只能在同一进程、同一 reconcile 调用内按原
+  完整 typed record（含 transaction/target、previous binding/Gateway、operation/phase、
+  exposure、compensation 与 Gateway outcome）交给首个 one-click V2
+  checkpoint，或由 exact healthy-reopen CAS 提交 binding 并清除；当前 journal 消失、回退
+  V1 或 retarget 时均保留当前状态并拒绝覆盖。普通 one-click 或重启不会把该记录当作可接管事务。
 
 ## 历史恢复
 
@@ -144,7 +149,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 - ~~journal/trace/frontend stage 没有统一 typed source~~ 一键/auto-boot UI stage
   已由 `OneClickFailureKind` 投影；one-click journal 已写 typed V2，但
-  profile-switch / interrupted Gateway compatibility writer 仍保留 V1 string stage；
+  interrupted Gateway compatibility writer 仍保留 V1 string stage；compiled test-only
+  profile-switch writer 已写 typed V2；
 - F5：prior Science 的 verified stop 仍可早于 durable intent；
 - ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
 - ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与

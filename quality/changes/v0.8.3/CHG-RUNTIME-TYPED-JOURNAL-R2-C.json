@@ -1,0 +1,76 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-C",
+    "version": "v0.8.3",
+    "title": "Migrate the compiled profile-switch writer to the V2 runtime journal",
+    "summary": "Migrates the compiled, test-only profile-switch transaction writer from the V1 string stage to a typed V2 profile_switch/start_formal_gateway record without changing publication, Gateway start, rollback, reconciliation handoff, or finalization timing. The typed record carries prior binding and public Gateway identity, remains not_exposed with no runtime fingerprint or snapshot ticket, and rollback, finalization, cold handoff, and healthy-reopen commit compare the complete caller-published typed record. Same-process Science reconciliation may replace it with the first one-click V2 checkpoint only when the complete original profile-switch transaction matches; normal one-click and restart paths remain fail-closed. The product-reachable profile selection command remains intent-only, and interrupted Gateway recovery remains a later writer slice.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/runtime/profile_switch.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/authority_snapshot.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-C.json",
+      "quality/runtime-mutation-inventory.v1.json"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "the profile-switch source/unit identity freezes typed V2 schema, operation, phase, exposure, compensation, Gateway outcome, previous public identities, complete-record retarget protection, and secret-free serialization",
+        "the existing one-click journal identity covers complete-record same-process profile-switch handoff to a fresh one-click transaction and rejects transaction-id or same-id previous-Gateway drift from the caller-published original",
+        "the initial reconcile resolver and first checkpoint both reject disappeared, V1-regressed, or field-retargeted handoff journals while ordinary V1/empty one-click remains compatible and refuses V2",
+        "the healthy-reopen binding commit performs a second complete-record CAS, preserves bytes after same-id compensation drift between read and commit, and clears the journal only after the exact expected record is restored",
+        "focused profile-switch, V1/V2 schema, one-click handoff, isolated snapshot rollback, quality metadata, impact-pr, inventory, document governance, boundary, format, and diff checks passed",
+        "exact-SHA source gate is pending",
+        "clean-context completion review is pending"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

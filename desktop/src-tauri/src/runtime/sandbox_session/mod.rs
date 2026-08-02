@@ -22,7 +22,8 @@ use authority_snapshot::{
 use catalog_verify::*;
 #[cfg(test)]
 use one_click::{
-    clear_one_click_transaction, one_click_phase_exposure, science_health_control_error,
+    clear_one_click_transaction, commit_healthy_reopen_binding, healthy_reopen_transaction_matches,
+    one_click_phase_exposure, resolve_profile_switch_handoff, science_health_control_error,
     write_one_click_checkpoint, OneClickJournalProgress, OneClickTransactionIdentity,
 };
 #[allow(unused_imports)]

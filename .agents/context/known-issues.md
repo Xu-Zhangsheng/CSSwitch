@@ -299,13 +299,28 @@ manifest 含十五个 PASS test result 与十五个 PASS source observation，�
 completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
 上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-B 仅建立 source/unit
 结论，不外推 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
-唯一 `NEXT` 是 `R2-C`；本窗口停止，不提前迁移其他 runtime writer。
+`R2-C` implementation candidate 已完成：compiled + test-only 的 profile-switch writer
+保持 candidate config 与 journal 原子 publish、正式 Gateway 启动、rollback 与 finalization
+时机不变，把 `start_formal_gateway` V1 string stage 改写为
+`operation=profile_switch / phase=start_formal_gateway` 的 typed V2。该记录不携带 runtime
+fingerprint 或 snapshot ticket，environment 保持 `not_exposed`，compensation 为
+`not_started`，Gateway stop outcome 为 `not_attempted`；publish、rollback 与 clear 均按
+caller 保存的完整 typed record fail-closed，包括 transaction/target、previous binding/Gateway、
+operation/phase、exposure、compensation 与 Gateway outcome。当前产品可达的
+`set_active_profile` 仍只是 selection intent，本阶段没有启用 test-only transaction，也没有
+迁移 interrupted-Gateway recovery writer。同进程 Science reconcile 只在 caller 原始
+profile-switch typed record 与当前 journal 完整相等时允许首个 one-click
+V2 checkpoint 接棒或 healthy-reopen binding commit；当前 journal 消失、回退 V1 或 retarget
+均拒绝覆盖，普通 one-click 与重启仍 fail-closed。focused source/unit、quality metadata、inventory、
+document governance、format 与 diff check 已 PASS；隔离 profile-switch snapshot failure
+rollback 在允许动态 loopback 与测试自有进程的环境 PASS。exact-SHA 十五 suite
+`GATE-SOURCE` 与 clean-context completion review 尚未运行，因此本段不构成 R2-C closure。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
 | `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
-| `R2-C` | NEXT（NOT-STARTED） | 不在本窗口范围 |
+| `R2-C` | IMPLEMENTED（CLOSURE PENDING） | test-only profile-switch writer 已迁移 typed V2；等待 focused checks、candidate commit、exact-SHA gate 与独立审查 |
 | `R2-D`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置

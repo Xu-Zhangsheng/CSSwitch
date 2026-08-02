@@ -18,6 +18,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
     sport: u16,
     running_runtime: &ScienceRuntimeIdentity,
     open_surface: bool,
+    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
 ) -> Result<Value, TypedOneClickFailure> {
     let app_snapshot = AppAuthoritySnapshot::capture(state);
     let prior_config = cfg.clone();
@@ -38,14 +39,15 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         let refreshed_cfg = config::load_from(dir).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
-        if refreshed_cfg
-            .runtime_transaction
-            .as_ref()
-            .is_some_and(config::RuntimeTransactionRecord::is_v2)
-        {
+        if !healthy_reopen_transaction_matches(
+            refreshed_cfg.runtime_transaction.as_ref(),
+            expected_profile_switch_transaction,
+            &refreshed_cfg.active_id,
+            refreshed_cfg.runtime_binding.as_ref(),
+        ) {
             return Err(TypedOneClickFailure::new(
                 OneClickFailureKind::Prepare,
-                "typed runtime journal retargeted healthy reopen; preserved the typed transaction and refused the V1 binding commit",
+                "runtime journal retargeted healthy reopen; preserved the current transaction and refused the binding commit",
             )
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
@@ -60,19 +62,10 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             running_runtime,
         )
         .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-        config::update_result(dir, |config| {
-            if config
-                .runtime_transaction
-                .as_ref()
-                .is_some_and(config::RuntimeTransactionRecord::is_v2)
-            {
-                return Err("typed runtime journal retargeted healthy reopen; preserved the typed transaction".into());
-            }
-            config.runtime_binding = Some(committed.clone());
-            config.runtime_transaction = None;
-            Ok(((), true))
-        })
-        .map_err(|error| typed_one_click_err(OneClickFailureKind::Prepare, error.to_string()))?;
+        commit_healthy_reopen_binding(dir, expected_profile_switch_transaction, &committed)
+            .map_err(|error| {
+                typed_one_click_err(OneClickFailureKind::Prepare, error.to_string())
+            })?;
         let installer = match current_skill_install_bridge_key() {
             Ok(installer_key) => {
                 inspect_while_science_running(app, auth_dir, &installer_bridge, &installer_key)
