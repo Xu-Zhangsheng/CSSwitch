@@ -26,7 +26,8 @@
       "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-A.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
       "test/quality/test_run_evidence_attempt0_runner.py",
-      "test/quality/test_source_gate_runtime.py"
+      "test/quality/test_source_gate_runtime.py",
+      "test/test_skill_runtime_boundary.py"
     ],
     "requirement_ids": [
       "REQ-083-PATHS",
@@ -76,7 +77,10 @@
         "initial candidate SHA e8ed08050f4a7d7f5a94d3c27c483defca00f699 produced a passing 15-suite source gate, but its clean-context completion review found one HIGH",
         "the HIGH identified V1 stage-prefix parsing outside the Config adapter, so the initial candidate run is rejected as R2-A closure evidence",
         "the repair centralizes legacy prefix interpretation in a typed Config V1 environment accessor and its four config identities plus one one-click journal identity passed",
-        "repaired exact-SHA 15-suite GATE-SOURCE and completion review are NOT-RUN"
+        "repaired candidate SHA 7a2e87539eac2fb90758f15926bab18123e7dd68 passed 14 source suites but failed the orphan boundary suite",
+        "the boundary assertion still depended on the removed legacy start_science parser constant, so that run is rejected as closure evidence",
+        "the source-contract repair replaces the stale legacy assertion with the actual eight V1 one-click checkpoint identities",
+        "new exact-SHA 15-suite GATE-SOURCE and completion review are NOT-RUN"
       ]
     },
     "does_not_claim_fix": true,

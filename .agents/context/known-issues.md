@@ -262,10 +262,15 @@ frontend DTO、command/event 与恢复策略均未迁移。
 V1 adapter 外按 prefix 解释 legacy journal stage，评为 HIGH 并给出 FAIL；该 run 不作为
 R2-A closure 证据。当前 repair 已把 prefix 识别集中到 `config.rs` 的 typed V1 environment
 accessor，orchestration 只消费 typed classification；V1 wire writer 未改变。repair focused
-config identities 4/4 与 one-click runtime-journal identity 1/1 PASS，format、source-contract scan
-与 diff check PASS。repaired candidate commit、其 exact-SHA 十五 suite `GATE-SOURCE`、completion
-review 与 evidence seal 均为 `NOT-RUN`。唯一 `NEXT` 是完成 repaired candidate 的独立审查与
-exact-SHA closure；`R2-B` 尚未开始，不得提前迁移 one-click checkpoint writer。
+config identities 4/4 与 one-click runtime-journal identity 1/1 PASS。首个 repaired candidate
+exact SHA `7a2e87539eac2fb90758f15926bab18123e7dd68` 的完整 gate 有十四个 suite PASS，唯一
+`SUITE-ORPHAN-SKILL-BOUNDARY` 因 source assertion 仍依赖已删除的 legacy `start_science`
+parser 常量而 FAIL；该 run 亦不作为 closure 证据。当前 source-contract repair 已改为冻结
+实际八个 V1 one-click checkpoint identity，boundary suite 11/11 PASS；inventory 5/5、quality
+metadata、document governance、format 与 diff check PASS。new candidate commit、其 exact-SHA
+十五 suite `GATE-SOURCE`、completion review 与 evidence seal 均为 `NOT-RUN`。唯一 `NEXT` 是
+完成新 candidate 的独立审查与 exact-SHA closure；`R2-B` 尚未开始，不得提前迁移 one-click
+checkpoint writer。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|

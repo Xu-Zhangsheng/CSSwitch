@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import stat
 import subprocess
 import tempfile
@@ -298,8 +299,58 @@ class SkillRuntimeBoundary(unittest.TestCase):
         gateway_ready = one_click_runtime.index("verify_gateway_model_catalog_traced(")
         science_spawn = one_click_runtime.index('Command::new("zsh")', gateway_ready)
         self.assertLess(gateway_ready, science_spawn)
-        for stage in ("start_gateway", "start_science", "verify_science_catalog"):
-            self.assertIn(f'"{stage}"', session)
+        stop_writer = one_click_source.split(
+            "fn mark_stop_old_science_transaction", 1
+        )[1].split("pub(super) fn clear_runtime_transaction", 1)[0]
+        self.assertRegex(
+            stop_writer,
+            r'(?s)RuntimeTransactionJournal\s*\{.*?stage:\s*"stop_old_science"\.into\(\),',
+        )
+        self.assertEqual(one_click_runtime.count("mark_stop_old_science_transaction("), 1)
+        self.assertEqual(one_click_runtime.count("advance_runtime_transaction("), 7)
+        self.assertLess(
+            one_click_runtime.index("mark_stop_old_science_transaction("),
+            one_click_runtime.index("advance_runtime_transaction("),
+        )
+        checkpoint_stages = re.findall(
+            r"(?s)advance_runtime_transaction\(\s*&dir,\s*&active_profile\.id,\s*"
+            r"transaction_cfg\.runtime_binding\.clone\(\),\s*([^,\n]+),\s*\)",
+            one_click_runtime,
+        )
+        self.assertEqual(
+            checkpoint_stages,
+            [
+                '"start_gateway"',
+                "&authority_active_stage",
+                "&environment_pending_stage",
+                '"wait_science_db_reverify"',
+                '"restart_science_after_db_heal"',
+                '"verify_science_db_after_restart"',
+                '"verify_science_catalog"',
+            ],
+        )
+        self.assertRegex(
+            one_click_runtime,
+            r'(?s)let authority_active_stage = format!\(\s*'
+            r'"\{AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX\}\{\}",\s*'
+            r'launch_runtime\.environment_transaction_id\(\)\s*\);',
+        )
+        self.assertRegex(
+            one_click_runtime,
+            r'(?s)let environment_pending_stage = format!\(\s*'
+            r'"\{SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX\}\{\}",\s*'
+            r'launch_runtime\.environment_transaction_id\(\)\s*\);',
+        )
+        self.assertIn(
+            'AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:"',
+            one_click_source,
+        )
+        self.assertIn(
+            'SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str =\n'
+            '    "start_science_environment_pending:"',
+            one_click_source,
+        )
+        self.assertEqual(one_click_runtime.count("runtime_transaction = Some("), 0)
 
         one_click_command = command_one_click.split(
             "pub(crate) fn one_click_login_cmd", 1
