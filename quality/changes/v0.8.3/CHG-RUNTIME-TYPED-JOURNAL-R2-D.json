@@ -15,7 +15,8 @@
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
       "docs/architecture/runtime-state-transactions.md",
       "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-D.json",
-      "quality/runtime-mutation-inventory.v1.json"
+      "quality/runtime-mutation-inventory.v1.json",
+      "test/test_skill_runtime_boundary.py"
     ],
     "requirement_ids": [
       "REQ-083-PATHS",
@@ -27,6 +28,7 @@
       "kind": "update",
       "required_suite_ids": [
         "SUITE-RUST-DESKTOP",
+        "SUITE-ORPHAN-SKILL-BOUNDARY",
         "SUITE-QUALITY-METADATA",
         "SUITE-QUALITY-FOCUSED",
         "SUITE-QUALITY-INVENTORY"
@@ -62,6 +64,7 @@
         "the existing isolated signal/wait/retry matrix passes with typed SignalFailed, ExitUnconfirmed, NotManaged, and Stopped persistence while preserving the existing production wait and retry identity behavior",
         "the mismatch identity preserves mismatched, unsupported, no-journal, same-process, and first-attempt-absent records, converts a prior attempt to AbsentAfterAttempt, and freezes terminal no-retry behavior",
         "the transaction source contract binds complete-record CAS, typed intent and terminal outcomes, and the absence of V1 stage mutation",
+        "the source runtime boundary binds interrupted recovery to the record-level previous Gateway accessor instead of the removed V1 field expression",
         "metadata, inventory, document governance, quality focused, format, diff, and the complete 528-discovered Desktop Rust lib passed; exact-SHA GATE-SOURCE and clean-context review remain NOT-RUN"
       ]
     },

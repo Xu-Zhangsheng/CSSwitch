@@ -391,7 +391,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertNotIn("recovery_from_diagnostic_codes", one_click_runtime)
         self.assertIn("stop_managed_gateway_on_port", lifecycle)
         self.assertIn('health.intent == "formal"', lifecycle)
-        self.assertIn("journal.previous_gateway.as_ref()", lifecycle)
+        self.assertIn("journal.previous_gateway()", lifecycle)
         self.assertIn("current == initial_for_probe", lifecycle)
         boot = lib.split("LaunchPath::BootScience", 1)[1].split("// ---------- 入口", 1)[0]
         self.assertIn("boot_result_error(&value)", boot)
