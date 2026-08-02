@@ -16,6 +16,7 @@
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/authority_snapshot.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
       "docs/architecture/runtime-state-transactions.md",
       "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-C.json",
       "quality/runtime-mutation-inventory.v1.json"
@@ -65,6 +66,7 @@
         "the existing one-click journal identity covers complete-record same-process profile-switch handoff to a fresh one-click transaction and rejects transaction-id or same-id previous-Gateway drift from the caller-published original",
         "the initial reconcile resolver and first checkpoint both reject disappeared, V1-regressed, or field-retargeted handoff journals while ordinary V1/empty one-click remains compatible and refuses V2",
         "the healthy-reopen binding commit performs a second complete-record CAS, preserves bytes after same-id compensation drift between read and commit, and clears the journal only after the exact expected record is restored",
+        "the profile reconcile source contract stops at the actual update_result finalization branch so later secret-free assertions cannot be misclassified as message-based recovery inference",
         "focused profile-switch, V1/V2 schema, one-click handoff, isolated snapshot rollback, quality metadata, impact-pr, inventory, document governance, boundary, format, and diff checks passed",
         "exact-SHA source gate is pending",
         "clean-context completion review is pending"

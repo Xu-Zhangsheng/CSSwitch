@@ -273,7 +273,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         .split("if let Err(error) = crate::runtime::sandbox_session::reconcile_science_for_active")
         .nth(1)
         .and_then(|tail| {
-            tail.split("} else if let Err(error) = config::update")
+            tail.split("} else {\n        let clear_result = config::update_result")
                 .next()
         })
         .expect("profile reconcile projection must remain discoverable");
