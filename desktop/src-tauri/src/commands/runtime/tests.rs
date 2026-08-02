@@ -1439,13 +1439,16 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
         before.active_id = "prior-codex-gateway".into();
     }
     before.secret = config::new_id();
-    before.runtime_transaction = Some(config::RuntimeTransactionJournal {
-        transaction_id: "prior-ssh-transaction-journal".into(),
-        target_profile_id: candidate_profile_id.clone(),
-        stage: "prior-authority".into(),
-        previous_binding: before.runtime_binding.clone(),
-        previous_gateway: None,
-    });
+    before.runtime_transaction = Some(
+        config::RuntimeTransactionJournal {
+            transaction_id: "prior-ssh-transaction-journal".into(),
+            target_profile_id: candidate_profile_id.clone(),
+            stage: "start_gateway".into(),
+            previous_binding: before.runtime_binding.clone(),
+            previous_gateway: None,
+        }
+        .into(),
+    );
     config::save_to(&config_dir, &before).unwrap();
     let sandbox_home = home
         .join(config::CONFIG_DIR_NAME)
@@ -4442,12 +4445,12 @@ exit 23
     let journal = config::RuntimeTransactionJournal {
         transaction_id: "preexisting-transaction".into(),
         target_profile_id: cfg.active_id.clone(),
-        stage: "preexisting-stage".into(),
+        stage: "start_gateway".into(),
         previous_binding: Some(binding.clone()),
         previous_gateway: None,
     };
     cfg.runtime_binding = Some(binding.clone());
-    cfg.runtime_transaction = Some(journal.clone());
+    cfg.runtime_transaction = Some(journal.clone().into());
     config::save_to(&config_dir, &cfg).unwrap();
 
     let science_child = std::process::Command::new("/bin/sleep")
@@ -4474,7 +4477,7 @@ exit 23
 
     let after = config::load_from(&config_dir).unwrap();
     assert_eq!(after.runtime_binding, Some(binding));
-    assert_eq!(after.runtime_transaction, Some(journal));
+    assert_eq!(after.runtime_transaction, Some(journal.into()));
     assert!(!after.secret.is_empty(), "path secret must remain durable");
     assert!(
         config_dir
@@ -4551,12 +4554,12 @@ fn isolated_r0_start_gateway_only_success_matrix() {
     let journal = config::RuntimeTransactionJournal {
         transaction_id: "r0-start-gateway-success-prior-journal".into(),
         target_profile_id: applied_profile_id.clone(),
-        stage: "r0-prior-stage".into(),
+        stage: "start_gateway".into(),
         previous_binding: Some(binding.clone()),
         previous_gateway: None,
     };
     cfg.runtime_binding = Some(binding.clone());
-    cfg.runtime_transaction = Some(journal.clone());
+    cfg.runtime_transaction = Some(journal.clone().into());
     config::save_to(&config_dir, &cfg).unwrap();
 
     let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
@@ -4588,7 +4591,10 @@ fn isolated_r0_start_gateway_only_success_matrix() {
     let first_publish_count = fs::read_to_string(&publish_log).unwrap().lines().count();
     let after_first = config::load_from(&config_dir).unwrap();
     assert_eq!(after_first.runtime_binding, Some(binding.clone()));
-    assert_eq!(after_first.runtime_transaction, Some(journal.clone()));
+    assert_eq!(
+        after_first.runtime_transaction,
+        Some(journal.clone().into())
+    );
 
     let reused = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
     assert_eq!(reused["port"], proxy_port);
@@ -4758,12 +4764,12 @@ exit 23
     let journal = config::RuntimeTransactionJournal {
         transaction_id: format!("r0-start-gateway-{oracle}-journal"),
         target_profile_id: applied_profile_id,
-        stage: "failure-prior-stage".into(),
+        stage: "start_gateway".into(),
         previous_binding: Some(binding.clone()),
         previous_gateway: None,
     };
     cfg.runtime_binding = Some(binding.clone());
-    cfg.runtime_transaction = Some(journal.clone());
+    cfg.runtime_transaction = Some(journal.clone().into());
     if oracle == "spawn-error" {
         cfg.secret.clear();
     } else {
@@ -4918,12 +4924,12 @@ fn isolated_r0_start_gateway_only_serializer_recheck() {
     let journal = config::RuntimeTransactionJournal {
         transaction_id: "r0-start-gateway-serializer-journal".into(),
         target_profile_id: binding.profile_id.clone(),
-        stage: "serializer-prior-stage".into(),
+        stage: "start_gateway".into(),
         previous_binding: Some(binding.clone()),
         previous_gateway: None,
     };
     cfg.runtime_binding = Some(binding.clone());
-    cfg.runtime_transaction = Some(journal.clone());
+    cfg.runtime_transaction = Some(journal.clone().into());
     config::save_to(&config_dir, &cfg).unwrap();
 
     let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
@@ -4999,7 +5005,7 @@ exec '{}' "$@"
     );
     assert_eq!(after.active_id, selected_after_wait);
     assert_eq!(after.runtime_binding, Some(binding));
-    assert_eq!(after.runtime_transaction, Some(journal));
+    assert_eq!(after.runtime_transaction, Some(journal.into()));
     assert!(lock(&state).proxy.is_none());
     assert!(fs::read_to_string(&publish_log).unwrap().is_empty());
     fs::remove_dir_all(&tmp).unwrap();
@@ -8042,13 +8048,16 @@ fn isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait() {
     cfg.profile_by_id_mut("ssh-transaction").unwrap().api_key = original_api_canary.clone();
     cfg.secret = config::new_id();
     cfg.experimental_codex_enabled = true;
-    cfg.runtime_transaction = Some(config::RuntimeTransactionJournal {
-        transaction_id: "serialized-prior-journal".into(),
-        target_profile_id: "ssh-transaction".into(),
-        stage: "prior-authority".into(),
-        previous_binding: cfg.runtime_binding.clone(),
-        previous_gateway: None,
-    });
+    cfg.runtime_transaction = Some(
+        config::RuntimeTransactionJournal {
+            transaction_id: "serialized-prior-journal".into(),
+            target_profile_id: "ssh-transaction".into(),
+            stage: "start_gateway".into(),
+            previous_binding: cfg.runtime_binding.clone(),
+            previous_gateway: None,
+        }
+        .into(),
+    );
     cfg.profiles.push(Profile {
         id: "prior-codex-credential-recheck".into(),
         name: "Prior Codex credential recheck".into(),
@@ -8352,13 +8361,16 @@ fn isolated_late_failure_preserves_preexisting_managed_stub_when_science_stopped
     let api_canary = format!("managed-stub-api-{}", config::new_id());
     cfg.profile_by_id_mut("ssh-transaction").unwrap().api_key = api_canary.clone();
     cfg.secret = config::new_id();
-    cfg.runtime_transaction = Some(config::RuntimeTransactionJournal {
-        transaction_id: "preexisting-stub-prior-journal".into(),
-        target_profile_id: "ssh-transaction".into(),
-        stage: "prior-authority".into(),
-        previous_binding: cfg.runtime_binding.clone(),
-        previous_gateway: None,
-    });
+    cfg.runtime_transaction = Some(
+        config::RuntimeTransactionJournal {
+            transaction_id: "preexisting-stub-prior-journal".into(),
+            target_profile_id: "ssh-transaction".into(),
+            stage: "start_gateway".into(),
+            previous_binding: cfg.runtime_binding.clone(),
+            previous_gateway: None,
+        }
+        .into(),
+    );
     config::save_to(&config_dir, &cfg).unwrap();
 
     let sandbox_home = home

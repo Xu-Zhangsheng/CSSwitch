@@ -243,9 +243,31 @@ provider、Science、SSH、签名、公证或公开 release。
 | `R1-E` | DONE | production message semantic parsing 清零、typed projection、exact-SHA source gate 与独立审查收口 |
 | `R1-F` | DONE | 整体 inventory、矩阵、canary、exact-SHA source gate 与最终独立审查收口 |
 
-R1 已全部收口。唯一 `NEXT` 是 `R2`：按现有架构基线分片设计 versioned typed runtime
-journal；首个等价切片只 typed 化现有 checkpoint，不移动写入时机，也不新增 pre-stop durable
-intent。R2 尚未开始，R3 state owner 与 R4 mutation lease 亦未触碰。
+R1 已全部收口。R2 已进入首个窄阶段；R3 state owner 与 R4 mutation lease 仍未触碰。
+
+## R2 versioned typed runtime journal 进度
+
+`R2-A` implementation candidate 已完成但尚未收口：根 `Config.schema_version` 保持 `4`，
+嵌套 `runtime_transaction` reader 现在区分无嵌套版本的 V1 与 `schema_version=2` 的
+typed V2。V1 继续按原 wire shape 写入且不会自动升级；reader 对 future version、unknown
+field、unknown V1 stage、无法证明 fingerprint 的 legacy Science environment stage，以及
+非法 V2 operation / phase / exposure / Gateway outcome 组合 fail-closed。V2 schema 只保存
+typed operation / phase、runtime fingerprint、environment exposure、snapshot ticket、previous
+binding / Gateway public identity、compensation state 与 Gateway stop outcome；R2-A 的 V1
+production writer 遇到 V2 会保留事务并拒绝改写。现有 checkpoint 时机、runtime effect、
+frontend DTO、command/event 与恢复策略均未迁移。
+
+focused config identities 4/4 PASS；沙箱外完整 Rust lib 为 527 discovered / 486 passed /
+0 failed / 41 existing approved ignored。quality metadata、document governance、format 与 diff
+check 亦 PASS。当前仍是未提交 working-tree candidate；local candidate commit 未获授权，
+因此 exact candidate SHA 的十五 suite `GATE-SOURCE`、completion review 与 evidence seal 均为
+`NOT-RUN`。唯一 `NEXT` 是完成 `R2-A` 的 candidate review 与授权后的 exact-SHA closure；
+`R2-B` 尚未开始，不得提前迁移 one-click checkpoint writer。
+
+| 阶段 | 状态 | 边界 |
+|---|---|---|
+| `R2-A` | ACTIVE（未收口） | nested V1/V2 schema、V1 只读兼容与 fail-closed typed accessor；仍写 V1 |
+| `R2-B`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置
 

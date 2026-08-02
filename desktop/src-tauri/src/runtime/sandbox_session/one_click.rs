@@ -322,22 +322,33 @@ pub(super) fn advance_runtime_transaction(
     previous_binding: Option<config::RuntimeBindingCommit>,
     stage: &str,
 ) -> Result<(), String> {
-    config::update(dir, |current| match current.runtime_transaction.as_mut() {
-        Some(journal) if journal.target_profile_id == active_profile_id => {
+    config::update_result(dir, |current| {
+        match current.runtime_transaction.as_mut() {
+        Some(journal) if journal.is_v2() => Err(
+            "typed runtime journal retargeted the V1 writer; preserved the typed transaction and refused the phase advance".into(),
+        ),
+        Some(journal) if journal.target_profile_id() == active_profile_id => {
+            let journal = journal
+                .as_v1_mut()
+                .expect("V2 is rejected before the V1 phase advance");
             journal.stage = stage.to_string();
+            Ok(((), true))
         }
         _ => {
-            current.runtime_transaction = Some(config::RuntimeTransactionJournal {
-                transaction_id: config::new_id(),
-                target_profile_id: active_profile_id.to_string(),
-                stage: stage.to_string(),
-                previous_binding: previous_binding.clone(),
-                previous_gateway: None,
-            });
+            current.runtime_transaction = Some(
+                config::RuntimeTransactionJournal {
+                    transaction_id: config::new_id(),
+                    target_profile_id: active_profile_id.to_string(),
+                    stage: stage.to_string(),
+                    previous_binding: previous_binding.clone(),
+                    previous_gateway: None,
+                }
+                .into(),
+            );
+            Ok(((), true))
         }
+    }
     })
-    .map(|_| ())
-    .map_err(|error| error.to_string())
 }
 
 pub(super) const SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str =
@@ -346,6 +357,7 @@ pub(super) const AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snaps
 const LEGACY_SCIENCE_ENVIRONMENT_STAGE: &str = "start_science";
 const LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE: &str = "start_science_environment_pending";
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn interrupted_science_environment_runtime_id(stage: &str) -> Option<&str> {
     let runtime_id = stage
         .strip_prefix(SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
@@ -967,32 +979,64 @@ fn mark_stop_old_science_transaction(
     active_profile_id: &str,
     previous_binding: Option<config::RuntimeBindingCommit>,
 ) -> Result<(), String> {
-    config::update(dir, |current| {
-        current.runtime_transaction = Some(config::RuntimeTransactionJournal {
-            transaction_id: config::new_id(),
-            target_profile_id: active_profile_id.to_string(),
-            stage: "stop_old_science".into(),
-            previous_binding: previous_binding.clone(),
-            previous_gateway: None,
-        });
+    config::update_result(dir, |current| {
+        if current
+            .runtime_transaction
+            .as_ref()
+            .is_some_and(config::RuntimeTransactionRecord::is_v2)
+        {
+            return Err(
+                "typed runtime journal retargeted the V1 stop checkpoint; preserved the typed transaction"
+                    .into(),
+            );
+        }
+        current.runtime_transaction = Some(
+            config::RuntimeTransactionJournal {
+                transaction_id: config::new_id(),
+                target_profile_id: active_profile_id.to_string(),
+                stage: "stop_old_science".into(),
+                previous_binding: previous_binding.clone(),
+                previous_gateway: None,
+            }
+            .into(),
+        );
+        Ok(((), true))
     })
-    .map(|_| ())
-    .map_err(|error| error.to_string())
 }
 
 pub(super) fn clear_runtime_transaction(dir: &Path) -> Result<(), String> {
-    config::update(dir, |current| current.runtime_transaction = None)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    config::update_result(dir, |current| {
+        if current
+            .runtime_transaction
+            .as_ref()
+            .is_some_and(config::RuntimeTransactionRecord::is_v2)
+        {
+            return Err(
+                "typed runtime journal retargeted the V1 clearer; preserved the typed transaction"
+                    .into(),
+            );
+        }
+        current.runtime_transaction = None;
+        Ok(((), true))
+    })
 }
 
 fn commit_runtime_binding(dir: &Path, binding: config::RuntimeBindingCommit) -> Result<(), String> {
-    config::update(dir, |current| {
+    config::update_result(dir, |current| {
+        if current
+            .runtime_transaction
+            .as_ref()
+            .is_some_and(config::RuntimeTransactionRecord::is_v2)
+        {
+            return Err(
+                "typed runtime journal retargeted the V1 binding commit; preserved the typed transaction"
+                    .into(),
+            );
+        }
         current.runtime_binding = Some(binding.clone());
         current.runtime_transaction = None;
+        Ok(((), true))
     })
-    .map(|_| ())
-    .map_err(|error| error.to_string())
 }
 
 fn history_recovery_choices(
@@ -1410,14 +1454,26 @@ fn one_click_login_with_options<R: Runtime>(
     let dir = config::default_dir();
     let cfg = config::load_from(&dir)
         .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
+    match cfg
+        .runtime_transaction
+        .as_ref()
+        .is_some_and(config::RuntimeTransactionRecord::is_v2)
+    {
+        true => Err(TypedOneClickFailure::new(
+                OneClickFailureKind::Prepare,
+                "检测到 typed runtime journal；当前 R2-A 兼容层拒绝在 writer 迁移前改写或恢复该事务；recovery_status=manual_recovery_required",
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)),
+        false => Ok(()),
+    }?;
     let interrupted_environment_stage = cfg
         .runtime_transaction
         .as_ref()
-        .map(|journal| journal.stage.as_str());
+        .and_then(config::RuntimeTransactionRecord::legacy_stage);
     let interrupted_environment_runtime_id = cfg
         .runtime_transaction
         .as_ref()
-        .and_then(|journal| interrupted_science_environment_runtime_id(&journal.stage));
+        .and_then(config::RuntimeTransactionRecord::runtime_fingerprint);
     validate_interrupted_science_transaction_entry(
         interrupted_environment_stage,
         interrupted_environment_runtime_id,

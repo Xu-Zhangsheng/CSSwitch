@@ -38,6 +38,17 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         let refreshed_cfg = config::load_from(dir).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
+        if refreshed_cfg
+            .runtime_transaction
+            .as_ref()
+            .is_some_and(config::RuntimeTransactionRecord::is_v2)
+        {
+            return Err(TypedOneClickFailure::new(
+                OneClickFailureKind::Prepare,
+                "typed runtime journal retargeted healthy reopen; preserved the typed transaction and refused the V1 binding commit",
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
         let committed = crate::runtime::provider::desired_runtime_binding(
             &refreshed_cfg,
             refreshed_cfg.active_profile().ok_or_else(|| {
@@ -49,9 +60,17 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             running_runtime,
         )
         .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-        config::update(dir, |config| {
+        config::update_result(dir, |config| {
+            if config
+                .runtime_transaction
+                .as_ref()
+                .is_some_and(config::RuntimeTransactionRecord::is_v2)
+            {
+                return Err("typed runtime journal retargeted healthy reopen; preserved the typed transaction".into());
+            }
             config.runtime_binding = Some(committed.clone());
             config.runtime_transaction = None;
+            Ok(((), true))
         })
         .map_err(|error| typed_one_click_err(OneClickFailureKind::Prepare, error.to_string()))?;
         let installer = match current_skill_install_bridge_key() {
@@ -111,19 +130,28 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         Ok(value) => Ok(value),
         Err(primary) => {
             let mut recovery_errors = Vec::new();
-            if let Err(error) =
-                config::save_to(dir, &prior_config).map_err(|error| error.to_string())
-            {
+            let config_restore = config::update_result(dir, |current| {
+                if current.runtime_transaction != prior_config.runtime_transaction {
+                    return Err("healthy reopen transaction retargeted before rollback; preserved the current transaction".into());
+                }
+                *current = prior_config.clone();
+                Ok(((), true))
+            });
+            if let Err(error) = config_restore.as_ref() {
                 recovery_errors.push(format!("config={error}"));
             }
-            if let Err(error) = app_snapshot.restore_with_gateway(
-                app,
-                state,
-                lifecycle,
-                auth_proof,
-                ProxyAction::Restarted,
-            ) {
-                recovery_errors.push(format!("gateway={error}"));
+            if config_restore.is_ok() {
+                if let Err(error) = app_snapshot.restore_with_gateway(
+                    app,
+                    state,
+                    lifecycle,
+                    auth_proof,
+                    ProxyAction::Restarted,
+                ) {
+                    recovery_errors.push(format!("gateway={error}"));
+                }
+            } else {
+                recovery_errors.push("gateway=skipped_after_transaction_retarget".into());
             }
             if recovery_errors.is_empty() {
                 Err(primary)

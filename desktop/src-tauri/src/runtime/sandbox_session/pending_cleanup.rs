@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
 use super::authority_snapshot::{inode_u64, sync_authority_cleanup_parent, AuthorityTreeSnapshot};
-use super::runtime_transaction_requires_snapshot_preservation;
 pub(super) const PENDING_CLEANUP_MARKER_FILE: &str = ".csswitch-one-click-rollback.marker";
 pub(super) const MAX_PENDING_CLEANUP_MANIFEST_BYTES: usize = 64 * 1024;
 
@@ -836,17 +835,16 @@ pub(super) fn retry_pending_authority_cleanup(
             "authority_snapshot_recovery_required",
         ));
     }
-    let active_stage = config::load_from(&config_dir)
+    let active_transaction = config::load_from(&config_dir)
         .map_err(|error| {
             retry_failure(format!(
                 "cleanup_manifest_read_failed：无法读取运行事务：{error}"
             ))
         })?
-        .runtime_transaction
-        .map(|journal| journal.stage);
-    if active_stage
-        .as_deref()
-        .is_some_and(runtime_transaction_requires_snapshot_preservation)
+        .runtime_transaction;
+    if active_transaction
+        .as_ref()
+        .is_some_and(|journal| journal.requires_snapshot_preservation())
     {
         return Err(cleanup_required_error(
             AuthorityCleanupPhase::Retry,

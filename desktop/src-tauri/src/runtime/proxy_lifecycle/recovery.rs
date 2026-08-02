@@ -156,15 +156,19 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
     let Some(journal) = cfg.runtime_transaction.as_ref() else {
         return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     };
-    if journal.target_profile_id != cfg.active_id {
+    if journal.is_v2() {
+        return Err(interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
+            "检测到 typed runtime journal；当前 R2-A 兼容层拒绝在 recovery writer 迁移前探测、停止或改写其 Gateway；recovery_status=manual_recovery_required",
+        ));
+    }
+    if journal.target_profile_id() != cfg.active_id {
         return Err(interrupted_gateway_recovery_error(
             InterruptedGatewayRecoveryErrorKind::GatewayStart,
             "未完成运行事务的 target profile 与当前 active profile 不一致；已保留 listener 和事务 journal，拒绝自动恢复，等待人工或后续恢复。",
         ));
     }
-    if crate::runtime::sandbox_session::runtime_transaction_requires_snapshot_preservation(
-        &journal.stage,
-    ) {
+    if journal.requires_snapshot_preservation() {
         return Err(interrupted_gateway_recovery_error(
             InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
             "检测到中断的 Science authority/environment 事务；已保留 Gateway、事务 journal 与恢复快照，拒绝自动探测、停止或改写其身份；recovery_status=manual_recovery_required",
@@ -224,7 +228,7 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
         &formal.contract_id,
         &formal.contract_digest,
         target_catalog_fp.as_deref(),
-        journal.previous_gateway.as_ref(),
+        journal.previous_gateway(),
     ) || !proc::http_health_gateway(
         cfg.proxy_port,
         Some(&cfg.secret),
@@ -249,7 +253,10 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
             "未找到本次应用打包的 Gateway，无法安全恢复事务",
         )
     })?;
-    finish_interrupted_gateway_recovery(dir, journal, || {
+    let legacy_journal = journal
+        .as_v1()
+        .expect("R2-A rejects V2 before legacy Gateway recovery");
+    finish_interrupted_gateway_recovery(dir, legacy_journal, || {
         let initial_for_probe = initial.clone();
         stop_managed_gateway_on_port(cfg.proxy_port, &binary, || {
             let Some(current) = proc::http_gateway_health(
@@ -285,16 +292,22 @@ fn finish_interrupted_gateway_recovery<F>(
 where
     F: FnOnce() -> ManagedGatewayCleanup,
 {
-    config::update(dir, |current| {
-        if let Some(current_journal) = current.runtime_transaction.as_mut() {
-            if current_journal.transaction_id == journal.transaction_id
-                && !crate::runtime::sandbox_session::runtime_transaction_requires_snapshot_preservation(
-                    &current_journal.stage,
-                )
-            {
-                current_journal.stage = "recover_interrupted_gateway".into();
-            }
+    config::update_result(dir, |current| {
+        let Some(current_journal) = current.runtime_transaction.as_mut() else {
+            return Err("runtime transaction disappeared before Gateway recovery intent publication".into());
+        };
+        if current_journal.is_v2()
+            || current_journal.transaction_id() != journal.transaction_id
+            || current_journal.target_profile_id() != journal.target_profile_id
+            || current_journal.requires_snapshot_preservation()
+        {
+            return Err("runtime transaction retargeted before Gateway recovery intent publication; preserved the current transaction".into());
         }
+        current_journal
+            .as_v1_mut()
+            .expect("V2 is rejected before legacy Gateway recovery")
+            .stage = "recover_interrupted_gateway".into();
+        Ok(((), true))
     })
     .map_err(|error| {
         interrupted_gateway_recovery_error(

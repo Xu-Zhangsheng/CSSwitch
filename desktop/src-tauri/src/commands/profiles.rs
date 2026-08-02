@@ -1207,13 +1207,16 @@ mod tests {
         assert_eq!(config::load_from(&dir).unwrap(), before_stale);
 
         config::update(&dir, |cfg| {
-            cfg.runtime_transaction = Some(RuntimeTransactionJournal {
-                transaction_id: "txn".into(),
-                target_profile_id: "selected".into(),
-                stage: "prepare".into(),
-                previous_binding: None,
-                previous_gateway: None,
-            });
+            cfg.runtime_transaction = Some(
+                RuntimeTransactionJournal {
+                    transaction_id: "txn".into(),
+                    target_profile_id: "selected".into(),
+                    stage: "start_gateway".into(),
+                    previous_binding: None,
+                    previous_gateway: None,
+                }
+                .into(),
+            );
         })
         .unwrap();
         let before_transaction = config::load_from(&dir).unwrap();
@@ -1303,13 +1306,16 @@ mod tests {
                 Config {
                     profiles: vec![profile("active", "sk-active"), profile("next", "sk-next")],
                     active_id: "active".into(),
-                    runtime_transaction: Some(RuntimeTransactionJournal {
-                        transaction_id: "txn".into(),
-                        target_profile_id: "next".into(),
-                        stage: "prepare".into(),
-                        previous_binding: None,
-                        previous_gateway: None,
-                    }),
+                    runtime_transaction: Some(
+                        RuntimeTransactionJournal {
+                            transaction_id: "txn".into(),
+                            target_profile_id: "next".into(),
+                            stage: "start_gateway".into(),
+                            previous_binding: None,
+                            previous_gateway: None,
+                        }
+                        .into(),
+                    ),
                     ..Default::default()
                 },
                 "next",
@@ -1368,7 +1374,7 @@ mod tests {
         let journal = RuntimeTransactionJournal {
             transaction_id: "txn".into(),
             target_profile_id: "selected".into(),
-            stage: "prepare".into(),
+            stage: "start_gateway".into(),
             previous_binding: Some(binding("applied")),
             previous_gateway: None,
         };
@@ -1376,7 +1382,7 @@ mod tests {
             profiles: vec![profile("applied", "sk-a"), profile("selected", "sk-b")],
             active_id: "selected".into(),
             runtime_binding: Some(binding("applied")),
-            runtime_transaction: Some(journal),
+            runtime_transaction: Some(journal.into()),
             ..Default::default()
         };
         config::save_to(&dir, &cfg).unwrap();

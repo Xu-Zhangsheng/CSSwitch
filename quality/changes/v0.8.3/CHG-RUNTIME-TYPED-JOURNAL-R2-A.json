@@ -1,0 +1,79 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-A",
+    "version": "v0.8.3",
+    "title": "Establish the R2 versioned runtime journal schema",
+    "summary": "Introduces a nested versioned runtime-transaction record while keeping the root Config schema at v4 and retaining the exact unversioned V1 wire shape for all production writers. The compatibility reader distinguishes missing nested version as V1 and nested schema v2 as a typed journal, rejects unknown versions, malformed legacy stages, unknown fields, and illegal V2 phase/exposure combinations, and keeps V2 fail-closed until later R2 writer slices. Frontend DTOs, command/event names, checkpoint timing, runtime effects, and recovery policy are unchanged.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/commands/profiles.rs",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "desktop/src-tauri/src/config.rs",
+      "desktop/src-tauri/src/runtime/profile_switch.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "quality/test-catalog.v1.json",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-A.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "inferred",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "four focused config source/unit identities cover V1 no-upgrade, unknown and future fail-closed parsing, V2 typed secret-free round-trip, and illegal state rejection",
+        "the existing legacy runtime-journal identity and three profile-switch identities passed without changing the V1 wire or checkpoint behavior",
+        "the interrupted Gateway post-stage outcome identity passed outside the restricted sandbox after the restricted run returned Operation not permitted for its test-owned loopback/process fixture",
+        "the complete Rust library source test passed outside the restricted sandbox with 486 passed, 0 failed, and 41 existing approved ignored identities out of 527 discovered",
+        "complete exact-SHA 15-suite GATE-SOURCE and completion review are NOT-RUN pending explicit local commit authorization"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

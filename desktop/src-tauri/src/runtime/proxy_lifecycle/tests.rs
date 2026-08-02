@@ -63,7 +63,7 @@ fn r0_interrupted_recovery_fixture(
     fs::create_dir_all(&dir).unwrap();
     let journal = crate::config::RuntimeTransactionJournal {
         transaction_id: format!("tx-real-{label}"),
-        target_profile_id: String::new(),
+        target_profile_id: "fixture-profile".into(),
         stage: "start_formal_gateway".into(),
         previous_binding: None,
         previous_gateway: None,
@@ -71,7 +71,7 @@ fn r0_interrupted_recovery_fixture(
     crate::config::save_to(
         &dir,
         &crate::config::Config {
-            runtime_transaction: Some(journal.clone()),
+            runtime_transaction: Some(journal.clone().into()),
             ..Default::default()
         },
     )
@@ -124,8 +124,11 @@ fn assert_r0_recovery_stage(
 ) {
     let current = crate::config::load_from(dir).unwrap();
     let current_journal = current.runtime_transaction.unwrap();
-    assert_eq!(current_journal.transaction_id, journal.transaction_id);
-    assert_eq!(current_journal.stage, "recover_interrupted_gateway");
+    assert_eq!(current_journal.transaction_id(), journal.transaction_id);
+    assert_eq!(
+        current_journal.legacy_stage(),
+        Some("recover_interrupted_gateway")
+    );
 }
 
 fn health(provider: &str, launch_id: &str, catalog_fp: &str) -> crate::proc::GatewayHealth {
@@ -271,7 +274,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             }],
             active_id: "target-profile".into(),
             runtime_binding: Some(previous_binding.clone()),
-            runtime_transaction: Some(journal.clone()),
+            runtime_transaction: Some(journal.clone().into()),
             ..Default::default()
         };
         crate::config::save_to(&dir, &cfg).unwrap();
@@ -295,11 +298,20 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         }
         let after = crate::config::load_from(&dir).unwrap();
         let after_journal = after.runtime_transaction.unwrap();
-        assert_eq!(after_journal.transaction_id, journal.transaction_id);
-        assert_eq!(after_journal.target_profile_id, journal.target_profile_id);
-        assert_eq!(after_journal.previous_binding, journal.previous_binding);
-        assert_eq!(after_journal.previous_gateway, journal.previous_gateway);
-        assert_eq!(after_journal.stage, "recover_interrupted_gateway");
+        assert_eq!(after_journal.transaction_id(), journal.transaction_id);
+        assert_eq!(after_journal.target_profile_id(), journal.target_profile_id);
+        assert_eq!(
+            after_journal.previous_binding(),
+            journal.previous_binding.as_ref()
+        );
+        assert_eq!(
+            after_journal.previous_gateway(),
+            journal.previous_gateway.as_ref()
+        );
+        assert_eq!(
+            after_journal.legacy_stage(),
+            Some("recover_interrupted_gateway")
+        );
         assert_eq!(after.runtime_binding, Some(previous_binding));
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -350,13 +362,13 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
 
     let journal = crate::config::RuntimeTransactionJournal {
         transaction_id: "tx-identity-recheck".into(),
-        target_profile_id: String::new(),
+        target_profile_id: "identity-recheck-profile".into(),
         stage: "start_formal_gateway".into(),
         previous_binding: None,
         previous_gateway: None,
     };
     let cfg = crate::config::Config {
-        runtime_transaction: Some(journal.clone()),
+        runtime_transaction: Some(journal.clone().into()),
         ..Default::default()
     };
     crate::config::save_to(&dir, &cfg).unwrap();
@@ -368,8 +380,8 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
                 .runtime_transaction
                 .as_ref()
                 .unwrap()
-                .stage,
-            "recover_interrupted_gateway",
+                .legacy_stage(),
+            Some("recover_interrupted_gateway"),
             "durable recovery stage must precede the final process identity recheck"
         );
         super::stop_managed_gateway_on_port(port, &current_exe, || {
@@ -380,8 +392,8 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
                     .runtime_transaction
                     .as_ref()
                     .unwrap()
-                    .stage,
-                "recover_interrupted_gateway"
+                    .legacy_stage(),
+                Some("recover_interrupted_gateway")
             );
             false
         })
@@ -679,7 +691,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         active_id: "active-profile".into(),
         proxy_port: address.port(),
         sandbox_port: if address.port() == 8990 { 8991 } else { 8990 },
-        runtime_transaction: Some(journal.clone()),
+        runtime_transaction: Some(journal.clone().into()),
         ..Default::default()
     };
     crate::config::save_to(&dir, &cfg).unwrap();
@@ -701,7 +713,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), before);
     assert_eq!(
         crate::config::load_from(&dir).unwrap().runtime_transaction,
-        Some(journal)
+        Some(journal.into())
     );
     assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 
@@ -713,26 +725,23 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         previous_binding: None,
         previous_gateway: None,
     };
-    legacy_cfg.runtime_transaction = Some(legacy_journal.clone());
+    legacy_cfg.runtime_transaction = Some(legacy_journal.clone().into());
     crate::config::save_to(&dir, &legacy_cfg).unwrap();
     let legacy_before = fs::read(dir.join("config.json")).unwrap();
     let legacy_error =
         recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap_err();
     assert_eq!(
         legacy_error.kind(),
-        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot
+        InterruptedGatewayRecoveryErrorKind::GatewayStart
     );
     assert!(
         legacy_error
             .to_string()
-            .contains("manual_recovery_required"),
-        "legacy Science exposure must fail before listener probing: {legacy_error}"
+            .contains("unknown or malformed V1 runtime_transaction stage"),
+        "legacy Science exposure without a fingerprint must fail during journal decoding before listener probing: {legacy_error}"
     );
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), legacy_before);
-    assert_eq!(
-        crate::config::load_from(&dir).unwrap().runtime_transaction,
-        Some(legacy_journal)
-    );
+    assert!(crate::config::load_from(&dir).is_err());
     assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 
     let _client = TcpStream::connect(address).unwrap();
@@ -754,7 +763,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         "mismatched recovery must leave the listener usable"
     );
 
-    let mut no_journal_cfg = crate::config::load_from(&dir).unwrap();
+    let mut no_journal_cfg = legacy_cfg;
     no_journal_cfg.runtime_transaction = None;
     crate::config::save_to(&dir, &no_journal_cfg).unwrap();
     let no_journal_before = fs::read(dir.join("config.json")).unwrap();
@@ -776,7 +785,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         previous_gateway: None,
     };
     let mut managed_cfg = no_journal_cfg.clone();
-    managed_cfg.runtime_transaction = Some(managed_journal.clone());
+    managed_cfg.runtime_transaction = Some(managed_journal.clone().into());
     crate::config::save_to(&dir, &managed_cfg).unwrap();
     let managed_before = fs::read(dir.join("config.json")).unwrap();
     state.lock().unwrap().launch_id = "same-process-owned".into();
@@ -788,7 +797,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), managed_before);
     assert_eq!(
         crate::config::load_from(&dir).unwrap().runtime_transaction,
-        Some(managed_journal.clone()),
+        Some(managed_journal.clone().into()),
         "same-process ownership must preserve the journal for its tracked Child path"
     );
     assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
@@ -799,7 +808,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     drop(unused_reservation);
     let mut no_listener_cfg = managed_cfg;
     no_listener_cfg.proxy_port = unused_port;
-    no_listener_cfg.runtime_transaction = Some(managed_journal.clone());
+    no_listener_cfg.runtime_transaction = Some(managed_journal.clone().into());
     crate::config::save_to(&dir, &no_listener_cfg).unwrap();
     let no_listener_before = fs::read(dir.join("config.json")).unwrap();
     assert_eq!(
@@ -813,7 +822,7 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     );
     assert_eq!(
         crate::config::load_from(&dir).unwrap().runtime_transaction,
-        Some(managed_journal)
+        Some(managed_journal.into())
     );
     fs::remove_dir_all(&dir).unwrap();
 }

@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use crate::model_catalog::{ModelRoute, RoleBindings};
 use crate::provider_contracts::{CredentialSource, ModelPolicy};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 struct ConfigAccessState {
@@ -649,13 +649,382 @@ pub struct GatewayRuntimeJournalIdentity {
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct RuntimeTransactionJournal {
+pub struct RuntimeTransactionV1 {
     pub transaction_id: String,
     pub target_profile_id: String,
     pub stage: String,
     pub previous_binding: Option<RuntimeBindingCommit>,
     #[serde(default)]
     pub previous_gateway: Option<GatewayRuntimeJournalIdentity>,
+}
+
+/// Source-compatible name for the unversioned journal written before R2.
+/// New code should store it through [`RuntimeTransactionRecord::V1`].
+pub type RuntimeTransactionJournal = RuntimeTransactionV1;
+
+pub const RUNTIME_TRANSACTION_SCHEMA_VERSION_V2: u32 = 2;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTransactionOperation {
+    OneClick,
+    ProfileSwitch,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTransactionPhase {
+    StopOldScience,
+    StartGateway,
+    AuthoritySnapshotActive,
+    StartScienceEnvironmentPending,
+    WaitScienceDbReverify,
+    RestartScienceAfterDbHeal,
+    VerifyScienceDbAfterRestart,
+    VerifyScienceCatalog,
+    StartFormalGateway,
+    RecoverInterruptedGateway,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEnvironmentExposure {
+    NotExposed,
+    Possible,
+    Exposed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSnapshotTicket {
+    pub managed_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCompensationStep {
+    ScienceCleanup,
+    SshCleanup,
+    AuthorityRestore,
+    ConfigRestore,
+    AppStateRestore,
+    GatewayRestore,
+    PriorScienceRestart,
+    SnapshotCleanup,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeCompensationState {
+    NotStarted,
+    InProgress,
+    Incomplete {
+        failed_steps: Vec<RuntimeCompensationStep>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeGatewayStopOutcome {
+    NotAttempted,
+    Pending,
+    Stopped,
+    NotManaged,
+    SignalFailed,
+    ExitUnconfirmed,
+    AbsentAfterAttempt,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeTransactionV2 {
+    pub schema_version: u32,
+    pub transaction_id: String,
+    pub operation: RuntimeTransactionOperation,
+    pub target_profile_id: String,
+    pub phase: RuntimeTransactionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_fingerprint: Option<String>,
+    pub environment_exposure: RuntimeEnvironmentExposure,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_ticket: Option<RuntimeSnapshotTicket>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_binding: Option<RuntimeBindingCommit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_gateway: Option<GatewayRuntimeJournalIdentity>,
+    pub compensation: RuntimeCompensationState,
+    pub gateway_stop_outcome: RuntimeGatewayStopOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeTransactionRecord {
+    V1(RuntimeTransactionV1),
+    V2(RuntimeTransactionV2),
+}
+
+impl From<RuntimeTransactionV1> for RuntimeTransactionRecord {
+    fn from(journal: RuntimeTransactionV1) -> Self {
+        Self::V1(journal)
+    }
+}
+
+impl Serialize for RuntimeTransactionRecord {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::V1(journal) => journal.serialize(serializer),
+            Self::V2(journal) => journal.serialize(serializer),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RuntimeTransactionWire {
+    V2(RuntimeTransactionV2),
+    V1(RuntimeTransactionV1),
+}
+
+impl<'de> Deserialize<'de> for RuntimeTransactionRecord {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match RuntimeTransactionWire::deserialize(deserializer)? {
+            RuntimeTransactionWire::V1(journal) => {
+                validate_runtime_transaction_v1(&journal).map_err(serde::de::Error::custom)?;
+                Ok(Self::V1(journal))
+            }
+            RuntimeTransactionWire::V2(journal) => {
+                validate_runtime_transaction_v2(&journal).map_err(serde::de::Error::custom)?;
+                Ok(Self::V2(journal))
+            }
+        }
+    }
+}
+
+impl RuntimeTransactionRecord {
+    pub fn is_v2(&self) -> bool {
+        matches!(self, Self::V2(_))
+    }
+
+    pub fn transaction_id(&self) -> &str {
+        match self {
+            Self::V1(journal) => &journal.transaction_id,
+            Self::V2(journal) => &journal.transaction_id,
+        }
+    }
+
+    pub fn target_profile_id(&self) -> &str {
+        match self {
+            Self::V1(journal) => &journal.target_profile_id,
+            Self::V2(journal) => &journal.target_profile_id,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn previous_binding(&self) -> Option<&RuntimeBindingCommit> {
+        match self {
+            Self::V1(journal) => journal.previous_binding.as_ref(),
+            Self::V2(journal) => journal.previous_binding.as_ref(),
+        }
+    }
+
+    pub fn previous_gateway(&self) -> Option<&GatewayRuntimeJournalIdentity> {
+        match self {
+            Self::V1(journal) => journal.previous_gateway.as_ref(),
+            Self::V2(journal) => journal.previous_gateway.as_ref(),
+        }
+    }
+
+    pub fn as_v1(&self) -> Option<&RuntimeTransactionV1> {
+        match self {
+            Self::V1(journal) => Some(journal),
+            Self::V2(_) => None,
+        }
+    }
+
+    pub fn as_v1_mut(&mut self) -> Option<&mut RuntimeTransactionV1> {
+        match self {
+            Self::V1(journal) => Some(journal),
+            Self::V2(_) => None,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn as_v2(&self) -> Option<&RuntimeTransactionV2> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(journal) => Some(journal),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn as_v2_mut(&mut self) -> Option<&mut RuntimeTransactionV2> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(journal) => Some(journal),
+        }
+    }
+
+    pub fn legacy_stage(&self) -> Option<&str> {
+        self.as_v1().map(|journal| journal.stage.as_str())
+    }
+
+    pub fn runtime_fingerprint(&self) -> Option<&str> {
+        match self {
+            Self::V1(journal) => legacy_runtime_fingerprint(&journal.stage),
+            Self::V2(journal) => journal.runtime_fingerprint.as_deref(),
+        }
+    }
+
+    pub fn requires_snapshot_preservation(&self) -> bool {
+        match self {
+            Self::V1(journal) => legacy_stage_requires_snapshot_preservation(&journal.stage),
+            Self::V2(journal) => journal.snapshot_ticket.is_some(),
+        }
+    }
+}
+
+fn valid_runtime_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn valid_runtime_snapshot_ticket(value: &str) -> bool {
+    let Some(suffix) = value.strip_prefix(".one-click-rollback-") else {
+        return false;
+    };
+    suffix.len() == 32
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+const LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str = "start_science_environment_pending:";
+const LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:";
+
+fn legacy_runtime_fingerprint(stage: &str) -> Option<&str> {
+    let fingerprint = stage
+        .strip_prefix(LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
+        .or_else(|| stage.strip_prefix(LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX))?;
+    valid_runtime_fingerprint(fingerprint).then_some(fingerprint)
+}
+
+fn legacy_stage_requires_snapshot_preservation(stage: &str) -> bool {
+    matches!(stage, "start_science" | "start_science_environment_pending")
+        || stage.starts_with(LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX)
+        || stage.starts_with(LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX)
+}
+
+fn validate_runtime_transaction_v1(journal: &RuntimeTransactionV1) -> Result<(), String> {
+    if journal.transaction_id.is_empty() || journal.target_profile_id.is_empty() {
+        return Err("runtime_transaction V1 identity must be non-empty".into());
+    }
+    let known_plain = matches!(
+        journal.stage.as_str(),
+        "stop_old_science"
+            | "start_gateway"
+            | "wait_science_db_reverify"
+            | "restart_science_after_db_heal"
+            | "verify_science_db_after_restart"
+            | "verify_science_catalog"
+            | "start_formal_gateway"
+            | "recover_interrupted_gateway"
+    );
+    if known_plain || legacy_runtime_fingerprint(&journal.stage).is_some() {
+        Ok(())
+    } else {
+        Err("unknown or malformed V1 runtime_transaction stage".into())
+    }
+}
+
+fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(), String> {
+    if journal.schema_version != RUNTIME_TRANSACTION_SCHEMA_VERSION_V2 {
+        return Err("runtime_transaction V2 schema_version mismatch".into());
+    }
+    if journal.transaction_id.is_empty() || journal.target_profile_id.is_empty() {
+        return Err("runtime_transaction V2 identity must be non-empty".into());
+    }
+    if let Some(fingerprint) = journal.runtime_fingerprint.as_deref() {
+        if !valid_runtime_fingerprint(fingerprint) {
+            return Err("runtime_transaction V2 fingerprint is invalid".into());
+        }
+    }
+    if journal
+        .snapshot_ticket
+        .as_ref()
+        .is_some_and(|ticket| !valid_runtime_snapshot_ticket(&ticket.managed_id))
+    {
+        return Err("runtime_transaction V2 snapshot ticket is invalid".into());
+    }
+    if matches!(
+        &journal.compensation,
+        RuntimeCompensationState::Incomplete { failed_steps } if failed_steps.is_empty()
+    ) {
+        return Err("runtime_transaction V2 incomplete compensation has no failed step".into());
+    }
+
+    let one_click_identity =
+        journal.runtime_fingerprint.is_some() && journal.snapshot_ticket.is_some();
+    let valid_phase = match (journal.operation, journal.phase) {
+        (
+            RuntimeTransactionOperation::OneClick,
+            RuntimeTransactionPhase::StartFormalGateway
+            | RuntimeTransactionPhase::RecoverInterruptedGateway,
+        ) => false,
+        (RuntimeTransactionOperation::OneClick, _) => one_click_identity,
+        (
+            RuntimeTransactionOperation::ProfileSwitch,
+            RuntimeTransactionPhase::StartFormalGateway
+            | RuntimeTransactionPhase::RecoverInterruptedGateway,
+        ) => {
+            journal.runtime_fingerprint.is_none()
+                && journal.snapshot_ticket.is_none()
+                && journal.environment_exposure == RuntimeEnvironmentExposure::NotExposed
+        }
+        (RuntimeTransactionOperation::ProfileSwitch, _) => false,
+    };
+    if !valid_phase {
+        return Err("runtime_transaction V2 operation/phase identity is invalid".into());
+    }
+
+    let exposure_valid = match journal.phase {
+        RuntimeTransactionPhase::StopOldScience
+        | RuntimeTransactionPhase::StartGateway
+        | RuntimeTransactionPhase::AuthoritySnapshotActive
+        | RuntimeTransactionPhase::StartFormalGateway => {
+            journal.environment_exposure == RuntimeEnvironmentExposure::NotExposed
+        }
+        RuntimeTransactionPhase::StartScienceEnvironmentPending => {
+            journal.environment_exposure == RuntimeEnvironmentExposure::Possible
+        }
+        RuntimeTransactionPhase::WaitScienceDbReverify
+        | RuntimeTransactionPhase::RestartScienceAfterDbHeal
+        | RuntimeTransactionPhase::VerifyScienceDbAfterRestart
+        | RuntimeTransactionPhase::VerifyScienceCatalog => {
+            journal.environment_exposure == RuntimeEnvironmentExposure::Exposed
+        }
+        RuntimeTransactionPhase::RecoverInterruptedGateway => true,
+    };
+    if !exposure_valid {
+        return Err("runtime_transaction V2 phase/exposure is invalid".into());
+    }
+
+    let gateway_outcome_valid =
+        if journal.phase == RuntimeTransactionPhase::RecoverInterruptedGateway {
+            journal.gateway_stop_outcome != RuntimeGatewayStopOutcome::NotAttempted
+        } else {
+            journal.gateway_stop_outcome == RuntimeGatewayStopOutcome::NotAttempted
+        };
+    if !gateway_outcome_valid {
+        return Err("runtime_transaction V2 gateway outcome is invalid for phase".into());
+    }
+    Ok(())
 }
 
 fn default_schema_version() -> u32 {
@@ -746,7 +1115,7 @@ pub struct Config {
     #[serde(default)]
     pub runtime_binding: Option<RuntimeBindingCommit>,
     #[serde(default)]
-    pub runtime_transaction: Option<RuntimeTransactionJournal>,
+    pub runtime_transaction: Option<RuntimeTransactionRecord>,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
@@ -2618,6 +2987,204 @@ mod tests {
         );
         assert!(c.codex_network.proxy_url.is_empty());
         assert_eq!(c.mode, "proxy");
+    }
+
+    fn valid_one_click_v2(phase: RuntimeTransactionPhase) -> RuntimeTransactionV2 {
+        let environment_exposure = match phase {
+            RuntimeTransactionPhase::StartScienceEnvironmentPending => {
+                RuntimeEnvironmentExposure::Possible
+            }
+            RuntimeTransactionPhase::WaitScienceDbReverify
+            | RuntimeTransactionPhase::RestartScienceAfterDbHeal
+            | RuntimeTransactionPhase::VerifyScienceDbAfterRestart
+            | RuntimeTransactionPhase::VerifyScienceCatalog => RuntimeEnvironmentExposure::Exposed,
+            _ => RuntimeEnvironmentExposure::NotExposed,
+        };
+        RuntimeTransactionV2 {
+            schema_version: RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "tx-v2".into(),
+            operation: RuntimeTransactionOperation::OneClick,
+            target_profile_id: "target-profile".into(),
+            phase,
+            runtime_fingerprint: Some("a".repeat(64)),
+            environment_exposure,
+            snapshot_ticket: Some(RuntimeSnapshotTicket {
+                managed_id: ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+            }),
+            previous_binding: Some(RuntimeBindingCommit {
+                profile_id: "prior-profile".into(),
+                route_fp: "route-fp".into(),
+                catalog_fp: "catalog-fp".into(),
+                binding_fp: "binding-fp".into(),
+            }),
+            previous_gateway: Some(GatewayRuntimeJournalIdentity {
+                provider: "deepseek".into(),
+                shim: "anthropic".into(),
+                launch_id: "launch-id".into(),
+                provider_contract_id: "deepseek-native".into(),
+                provider_contract_digest: "contract-digest".into(),
+                catalog_fp: "catalog-fp".into(),
+            }),
+            compensation: RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: RuntimeGatewayStopOutcome::NotAttempted,
+        }
+    }
+
+    #[test]
+    fn runtime_transaction_v1_round_trip_does_not_upgrade_wire() {
+        let dir = tmpdir();
+        let journal = RuntimeTransactionJournal {
+            transaction_id: "legacy-tx".into(),
+            target_profile_id: "legacy-target".into(),
+            stage: "start_gateway".into(),
+            previous_binding: None,
+            previous_gateway: None,
+        };
+        save_to(
+            &dir,
+            &Config {
+                runtime_transaction: Some(journal.clone().into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let first: serde_json::Value =
+            serde_json::from_slice(&fs::read(config_path(&dir)).unwrap()).unwrap();
+        assert_eq!(first["schema_version"], CURRENT_SCHEMA_VERSION);
+        assert!(first["runtime_transaction"]["schema_version"].is_null());
+
+        let loaded = load_from(&dir).unwrap();
+        assert_eq!(loaded.runtime_transaction, Some(journal.clone().into()));
+        save_to(&dir, &loaded).unwrap();
+        let second: serde_json::Value =
+            serde_json::from_slice(&fs::read(config_path(&dir)).unwrap()).unwrap();
+        assert!(second["runtime_transaction"]["schema_version"].is_null());
+        assert_eq!(second["runtime_transaction"]["stage"], "start_gateway");
+    }
+
+    #[test]
+    fn runtime_transaction_reader_rejects_unknown_v1_and_future_v2() {
+        let unknown_v1 = serde_json::json!({
+            "transaction_id": "legacy-tx",
+            "target_profile_id": "target",
+            "stage": "unknown-stage",
+            "previous_binding": null
+        });
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(unknown_v1).is_err());
+
+        let malformed_environment = serde_json::json!({
+            "transaction_id": "legacy-tx",
+            "target_profile_id": "target",
+            "stage": "start_science_environment_pending:not-a-fingerprint",
+            "previous_binding": null
+        });
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(malformed_environment).is_err());
+
+        for legacy_environment_stage in ["start_science", "start_science_environment_pending"] {
+            let legacy_environment = serde_json::json!({
+                "transaction_id": "legacy-tx",
+                "target_profile_id": "target",
+                "stage": legacy_environment_stage,
+                "previous_binding": null
+            });
+            assert!(
+                serde_json::from_value::<RuntimeTransactionRecord>(legacy_environment).is_err(),
+                "legacy environment stage without a fingerprint must fail closed"
+            );
+        }
+
+        let future = serde_json::json!({
+            "schema_version": 3,
+            "transaction_id": "future-tx"
+        });
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(future).is_err());
+
+        let duplicate_stage = r#"{
+            "transaction_id":"legacy-tx",
+            "target_profile_id":"target",
+            "stage":"start_gateway",
+            "stage":"verify_science_catalog",
+            "previous_binding":null
+        }"#;
+        assert!(serde_json::from_str::<RuntimeTransactionRecord>(duplicate_stage).is_err());
+    }
+
+    #[test]
+    fn runtime_transaction_v2_round_trip_is_typed_and_secret_free() {
+        let mut journal = RuntimeTransactionRecord::V2(valid_one_click_v2(
+            RuntimeTransactionPhase::StartScienceEnvironmentPending,
+        ));
+        assert_eq!(
+            journal.as_v2_mut().unwrap().operation,
+            RuntimeTransactionOperation::OneClick
+        );
+        let encoded = serde_json::to_value(&journal).unwrap();
+        assert_eq!(encoded["schema_version"], 2);
+        assert_eq!(encoded["operation"], "one_click");
+        assert_eq!(encoded["phase"], "start_science_environment_pending");
+        assert_eq!(encoded["environment_exposure"], "possible");
+        assert!(journal.requires_snapshot_preservation());
+        assert_eq!(
+            journal
+                .as_v2()
+                .unwrap()
+                .snapshot_ticket
+                .as_ref()
+                .unwrap()
+                .managed_id,
+            ".one-click-rollback-0123456789abcdef0123456789abcdef"
+        );
+        let text = serde_json::to_string(&encoded).unwrap();
+        for forbidden in ["api_key", "base_url", "secret", "credential", "/Users/"] {
+            assert!(!text.contains(forbidden), "journal leaked `{forbidden}`");
+        }
+        assert_eq!(
+            serde_json::from_value::<RuntimeTransactionRecord>(encoded).unwrap(),
+            journal
+        );
+    }
+
+    #[test]
+    fn runtime_transaction_v2_rejects_illegal_state_and_unknown_fields() {
+        let mut wrong_exposure = serde_json::to_value(RuntimeTransactionRecord::V2(
+            valid_one_click_v2(RuntimeTransactionPhase::VerifyScienceCatalog),
+        ))
+        .unwrap();
+        wrong_exposure["environment_exposure"] = serde_json::json!("not_exposed");
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(wrong_exposure).is_err());
+
+        let mut missing_ticket = serde_json::to_value(RuntimeTransactionRecord::V2(
+            valid_one_click_v2(RuntimeTransactionPhase::StartGateway),
+        ))
+        .unwrap();
+        missing_ticket
+            .as_object_mut()
+            .unwrap()
+            .remove("snapshot_ticket");
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(missing_ticket).is_err());
+
+        let mut path_ticket = serde_json::to_value(RuntimeTransactionRecord::V2(
+            valid_one_click_v2(RuntimeTransactionPhase::StartGateway),
+        ))
+        .unwrap();
+        path_ticket["snapshot_ticket"]["managed_id"] =
+            serde_json::json!("/Users/example/private-snapshot");
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(path_ticket).is_err());
+
+        let mut unknown_field = serde_json::to_value(RuntimeTransactionRecord::V2(
+            valid_one_click_v2(RuntimeTransactionPhase::StartGateway),
+        ))
+        .unwrap();
+        unknown_field["message"] = serde_json::json!("must not be persisted");
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(unknown_field).is_err());
+
+        let one_click_gateway_recovery = RuntimeTransactionRecord::V2(valid_one_click_v2(
+            RuntimeTransactionPhase::RecoverInterruptedGateway,
+        ));
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(
+            serde_json::to_value(one_click_gateway_recovery).unwrap()
+        )
+        .is_err());
     }
 
     #[test]
