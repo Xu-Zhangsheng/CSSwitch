@@ -362,7 +362,8 @@ manifest 含十五个 PASS test result 与十五个 PASS source observation，�
 clean-context completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW，历史 findings CLOSED 3 / OPEN 0。
 本文所在 evidence-only seal commit 只记录上述已验证 candidate 与 run，不声称 seal commit 本身
 执行过完整 gate。R2-D 仅建立 source/unit 结论，不外推 artifact、installed/runtime、live
-provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到 R2-E；本窗口不进入 R2-E/F。
+provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到 R2-E；当前不进入 R2-F，
+更不把 2026-07-31 rebaseline 中的 R3-R11 顺序视为已自动授权的后续实施计划。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
@@ -370,8 +371,35 @@ provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到 
 | `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
 | `R2-C` | DONE | test-only profile-switch writer typed V2、完整记录 CAS、exact-SHA gate 与独立审查收口；产品选择仍 intent-only |
 | `R2-D` | DONE | interrupted-Gateway recovery typed V2 intent/outcome、canonical compensation、完整记录 CAS、跨重启 drift fail-closed、exact-SHA gate 与独立审查收口 |
-| `R2-E` | NEXT | 不在本窗口范围 |
-| `R2-F` | NOT-STARTED | 不在本窗口范围 |
+| `R2-E` | NEXT | 收口现有 typed journal 的生产 writer / reader / V1 fail-closed compatibility 边界；只做等价核验与必要修正，不移动 checkpoint 时机、不关闭 F5、不扩成全局 journal |
+| `R2-F` | NOT-STARTED | 汇总复核 R2-A-E 的 schema、identity、recovery 与 compatibility 证据，完成 R2 source 层总验收；不引入新的产品或 crash-recovery 语义 |
+| `Post-R2 Rebaseline` | REQUIRED-AFTER-R2 | R2-F 完成后先停止实施，按实时源码重新规划 R3+；在新路线获明确授权前，R3-R11 均不是 `NEXT` |
+
+### R2 退出与后续路线重规划门
+
+R2-E 先实时盘点所有生产 writer、reader、upgrade 与 recovery 入口，证明合法 V2
+组合、V1 fail-closed compatibility 和重启读取矩阵已经闭合；如果盘点暴露不一致，只允许
+在 typed journal 现有语义内修正。它不得借机新增 pre-stop durable intent、改变
+`StopFailed` 后的 stage / wait / restart 行为，也不得把 mode、settings、Codex、downgrade
+或 profile revocation 纳入 `runtime_transaction`。
+
+R2-F 是 R2 的 source 层总收口：对齐 R2-A-E 的 inventory、schema / identity / CAS
+约束、focused regressions、完整 source gate 和独立审查，明确记录仍保留的 F5 与非
+source 证据缺口。R2-F 不是新功能片，也不外推 artifact、installed/runtime、live、签名、
+公证或 release 结论。
+
+R2-F 完成后设置强制停止点，执行一次只读的 **Post-R2 Rebaseline**：
+
+1. 以当时 exact HEAD 的源码、测试和当前文档为基线，重新盘点 R3-R11 所涉及的 state
+   owner、caller、长等待、mutation 边界、失败链和现有 typed receipt；
+2. 复核依赖图、剩余风险与可独立验收的最小切片，判断 R3 / R4 是否仍应优先，允许调整、
+   合并、拆分、延后或取消旧阶段；
+3. 产出新的有限路线：每阶段写明要消除的不确定性、范围、前置、退出条件与明确非目标；
+4. 经用户明确授权新的唯一 `NEXT` 后才进入实施，不能由 R2 完成自动跳转到 R3。
+
+2026-07-31 rebaseline 对 R3-R11 的描述在该停止点仅作为历史架构输入。无论后续路线怎样
+调整，R5 中 `AuthorityTransaction` 的接口等价提取与改变 crash 行为的
+`PriorStopIntent/Outcome` 仍须分开；后者继续要求证据、operation contract 和独立授权。
 
 ## 下一轮重构的 P0 前置
 
