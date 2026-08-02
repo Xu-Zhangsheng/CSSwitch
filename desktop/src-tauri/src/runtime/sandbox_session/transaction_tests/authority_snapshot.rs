@@ -695,7 +695,7 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
             && backup_root.is_dir(),
         "active crash recovery must preserve the exact registered root: {retry_error}"
     );
-    clear_one_click_transaction(&config_dir, &snapshot_identity, &snapshot_progress).unwrap();
+    clear_one_click_transaction(&config_dir, &snapshot_identity, &mut snapshot_progress).unwrap();
     snapshot
         .restore(&config_dir, &state, ProxyAction::Reused)
         .expect("fresh missing authority parents must already satisfy prior absence");

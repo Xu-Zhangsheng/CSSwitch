@@ -31,6 +31,11 @@ use super::pending_cleanup::{
     RegisteredAuthorityCleanup,
 };
 
+pub(super) enum RuntimeTransactionRestoreExpectation {
+    Unchecked,
+    Exact(Option<config::RuntimeTransactionRecord>),
+}
+
 pub(super) struct AppAuthoritySnapshot {
     pub(super) proxy_present: bool,
     pub(super) proxy_port: u16,
@@ -769,7 +774,15 @@ impl OneClickAuthoritySnapshot {
         lifecycle: &lifecycle::Lifecycle,
         auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
         proxy_action: ProxyAction,
+        runtime_transaction: &RuntimeTransactionRestoreExpectation,
     ) -> Result<(), String> {
+        if let RuntimeTransactionRestoreExpectation::Exact(expected) = runtime_transaction {
+            let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
+            if current.runtime_transaction.as_ref() != expected.as_ref() {
+                self.preserve_recovery = true;
+                return Err("one-click compensation found a retargeted runtime journal; preserved the current config, authority, runtime state, and recovery snapshot".into());
+            }
+        }
         if proxy_action == ProxyAction::Restarted {
             lock(state).stop_proxy();
         }
@@ -789,9 +802,21 @@ impl OneClickAuthoritySnapshot {
                 errors.push(error);
             }
         }
-        if let Err(error) =
-            config::save_to(config_dir, &self.config).map_err(|error| error.to_string())
-        {
+        let config_restore = match runtime_transaction {
+            RuntimeTransactionRestoreExpectation::Unchecked => {
+                config::save_to(config_dir, &self.config).map_err(|error| error.to_string())
+            }
+            RuntimeTransactionRestoreExpectation::Exact(expected) => {
+                config::update_result(config_dir, |current| {
+                    if current.runtime_transaction.as_ref() != expected.as_ref() {
+                        return Err("one-click compensation found a retargeted runtime journal; preserved the current config and recovery snapshot".into());
+                    }
+                    *current = self.config.clone();
+                    Ok(((), true))
+                })
+            }
+        };
+        if let Err(error) = config_restore {
             errors.push(error);
         }
         if let Err(error) =

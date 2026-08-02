@@ -91,7 +91,19 @@ Skill 安装不取得 `Lifecycle`，而是在文件选择前后复核相同
 11. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
 12. 计算并提交 runtime binding、按同一 transaction identity 清除 journal，随后打开 UI。
 
-one-click 的八个 checkpoint 时机均写 V2。后续 phase 只能推进 typed `phase` 与其对应的 exposure，必须保留首写的 transaction id、candidate fingerprint 与 snapshot ticket；任一 identity 漂移都保留当前 journal 并 fail-closed。
+one-click 的八个 checkpoint 时机均写 V2。进程内 progress 保存上一次实际提交的完整
+V2 record；后续 phase 只在磁盘记录与该完整 record 相等时推进 typed `phase` 及其对应
+exposure，成功清 journal 与 binding commit 也执行相同 CAS。transaction id、candidate
+fingerprint、snapshot ticket、prior binding、canonical compensation 与 Gateway outcome
+必须保持不变；同 ID 的 phase、exposure 或其他字段漂移同样保留当前 journal 并
+fail-closed。
+
+统一失败补偿也受同一记录约束：`Journaled` progress 只在当前 config 仍含完整上一条
+record 时允许恢复捕获前 config；成功 clear/binding commit 后 progress 进入 `Finalized`，
+只在当前 journal 仍为空时允许后续补偿恢复。该 expectation 在 stop Gateway、恢复 authority
+tree 或 AppState 之前先验证，并在 config commit 时再次 CAS；任一 retarget 都保留当前整份
+config、authority、运行态与 recovery snapshot，将 authority restore 记为不完整；不会由补偿
+覆盖刚刚拒绝的漂移记录或应用捕获态副作用。
 
 首个 checkpoint 原子提交失败、且 protected mutation 尚未开始时，同一进程只能通过 `PreJournalAbort` 使用内存中的 registered ticket 进入既有补偿。进程在 snapshot 已登记、journal 尚未提交的区间崩溃或重启时，没有这个内存票据；`ActiveRecovery` 仍要求人工恢复，不能自动删除或恢复。F5 也明确保留：verified prior-Science stop 仍可发生在任何 durable intent 之前，本阶段没有把 journal 前移到 destructive stop 之前。
 
@@ -122,6 +134,14 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 `start_formal_gateway|recover_interrupted_gateway`；one-click snapshot、其他 V1 phase、target
 漂移或同进程仍持有 Child 的路径都不会探测或停止 listener。兼容 V1 一旦需要继续恢复，
 只会原子升级为 V2，不再写回 string stage。
+
+V1 reader 只接受十种已冻结 wire stage（八种 plain stage 与两种携带合法 64-hex
+fingerprint 的 environment stage），save/load 不会隐式升级或改写 wire。未知、缺失
+fingerprint、future nested schema、未知字段和重复字段均在 config load 时 fail-closed。
+当前生产可写 V2 的重启矩阵限于八个 one-click phases、test-only profile-switch
+`start_formal_gateway`，以及 interrupted-Gateway recovery 的
+`pending|stopped|not_managed|signal_failed|exit_unconfirmed|absent_after_attempt`；其它组合
+不得由 reader 推断为可恢复语义。
 
 通过 path secret、初始公开 Gateway identity/contract 与 packaged binary 可用性检查后，recovery
 先用调用方读取的**完整原记录** CAS 发布

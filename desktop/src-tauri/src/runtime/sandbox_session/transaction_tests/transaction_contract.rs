@@ -272,6 +272,64 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && !gateway_recovery_source.contains("当前 R2-A 兼容层"),
         "interrupted Gateway recovery must publish typed V2 intent/outcomes with complete-record CAS and never write a V1 string stage"
     );
+    let one_click_progress = source
+        .split("pub(super) enum OneClickJournalProgress")
+        .nth(1)
+        .and_then(|tail| tail.split("pub(super) fn one_click_phase_exposure").next())
+        .expect("one-click journal progress must remain discoverable");
+    let one_click_writer = source
+        .split("pub(super) fn write_one_click_checkpoint")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(super) fn validate_interrupted_science_transaction_entry")
+                .next()
+        })
+        .expect("one-click V2 writer must remain discoverable");
+    let one_click_terminal_writers = source
+        .split("pub(super) fn clear_one_click_transaction")
+        .nth(1)
+        .and_then(|tail| tail.split("fn history_recovery_choices").next())
+        .expect("one-click terminal journal writers must remain discoverable");
+    let one_click_restore = recovery_source
+        .split("pub(super) fn restore_with_gateway")
+        .nth(2)
+        .expect("one-click authority restore must remain discoverable");
+    let restore_guard = one_click_restore
+        .find("if let RuntimeTransactionRestoreExpectation::Exact(expected)")
+        .expect("one-click compensation must preflight the current journal");
+    let first_restore_effect = one_click_restore
+        .find("lock(state).stop_proxy()")
+        .expect("one-click compensation runtime restore must remain discoverable");
+    assert!(
+        one_click_progress.contains("record: config::RuntimeTransactionV2")
+            && one_click_progress.contains("Self::Finalized { .. } =>")
+            && one_click_progress.contains("RuntimeTransactionRestoreExpectation::Exact(Some(")
+            && one_click_progress.contains(
+                "Self::Finalized { .. } => RuntimeTransactionRestoreExpectation::Exact(None)"
+            )
+            && one_click_writer
+                .contains("let expected_record = progress.journaled_record().cloned()")
+            && one_click_writer.contains("journal == expected")
+            && one_click_writer.contains("RuntimeTransactionRecord::V2(next.clone())")
+            && one_click_terminal_writers
+                .matches("journal == &expected_record")
+                .count()
+                == 2
+            && one_click_terminal_writers.matches("OneClickJournalProgress::Finalized").count()
+                == 2
+            && source.contains(
+                "journal.compensation == config::RuntimeCompensationState::NotStarted"
+            )
+            && source.contains(
+                "journal.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted"
+            )
+            && source.contains("journal_progress.restore_expectation()")
+            && recovery_source.contains(
+                "current.runtime_transaction.as_ref() != expected.as_ref()"
+            )
+            && restore_guard < first_restore_effect,
+        "one-click checkpoint, clear, binding commit, and compensation restore must CAS the complete current V2 state and preserve canonical writer fields"
+    );
     let ordinary_constructor = source
         .split("fn typed_one_click_err")
         .nth(1)

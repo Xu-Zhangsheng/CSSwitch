@@ -131,6 +131,87 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     assert!(!encoded.contains("api_key"));
     assert!(!encoded.contains("base_url"));
 
+    let expected_before_drift = config::load_from(&dir)
+        .unwrap()
+        .runtime_transaction
+        .unwrap();
+    for (label, drift) in [
+        ("previous-binding", "binding"),
+        ("compensation", "compensation"),
+        ("phase", "phase"),
+    ] {
+        config::update(&dir, |current| {
+            let typed = current
+                .runtime_transaction
+                .as_mut()
+                .and_then(config::RuntimeTransactionRecord::as_v2_mut)
+                .unwrap();
+            match drift {
+                "binding" => typed.previous_binding.as_mut().unwrap().binding_fp = "drift".into(),
+                "compensation" => typed.compensation = config::RuntimeCompensationState::InProgress,
+                "phase" => {
+                    typed.phase = config::RuntimeTransactionPhase::StartGateway;
+                    typed.environment_exposure = config::RuntimeEnvironmentExposure::NotExposed;
+                }
+                _ => unreachable!(),
+            }
+        })
+        .unwrap();
+        let drifted_bytes = std::fs::read(dir.join("config.json")).unwrap();
+        let error = write_one_click_checkpoint(
+            &dir,
+            &identity,
+            &mut progress,
+            config::RuntimeTransactionPhase::VerifyScienceCatalog,
+        )
+        .expect_err("same-id complete-record drift must fail closed");
+        assert!(error.contains("identity changed"), "{label}");
+        assert_eq!(
+            std::fs::read(dir.join("config.json")).unwrap(),
+            drifted_bytes
+        );
+        config::update(&dir, |current| {
+            current.runtime_transaction = Some(expected_before_drift.clone());
+        })
+        .unwrap();
+    }
+
+    config::update(&dir, |current| {
+        let typed = current
+            .runtime_transaction
+            .as_mut()
+            .and_then(config::RuntimeTransactionRecord::as_v2_mut)
+            .unwrap();
+        typed.phase = config::RuntimeTransactionPhase::StartGateway;
+        typed.environment_exposure = config::RuntimeEnvironmentExposure::NotExposed;
+    })
+    .unwrap();
+    let before_terminal_drift_rejection = std::fs::read(dir.join("config.json")).unwrap();
+    let clear_error = clear_one_click_transaction(&dir, &identity, &mut progress)
+        .expect_err("clear must compare the complete last checkpoint");
+    assert!(clear_error.contains("identity changed"));
+    let commit_error = commit_runtime_binding(
+        &dir,
+        &identity,
+        &mut progress,
+        RuntimeBindingCommit {
+            profile_id: "new".into(),
+            route_fp: "new-route".into(),
+            catalog_fp: "new-catalog".into(),
+            binding_fp: "new-binding".into(),
+        },
+    )
+    .expect_err("binding commit must compare the complete last checkpoint");
+    assert!(commit_error.contains("identity changed"));
+    assert_eq!(
+        std::fs::read(dir.join("config.json")).unwrap(),
+        before_terminal_drift_rejection
+    );
+    config::update(&dir, |current| {
+        current.runtime_transaction = Some(expected_before_drift.clone());
+    })
+    .unwrap();
+
     let before_typed_advance = std::fs::read(dir.join("config.json")).unwrap();
     let replacement = OneClickTransactionIdentity {
         runtime_fingerprint: "b".repeat(64),
@@ -149,7 +230,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         before_typed_advance
     );
 
-    clear_one_click_transaction(&dir, &identity, &progress).unwrap();
+    clear_one_click_transaction(&dir, &identity, &mut progress).unwrap();
     assert!(config::load_from(&dir)
         .unwrap()
         .runtime_transaction
@@ -450,4 +531,116 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         Some(handed_off.transaction_id.as_str())
     );
     let _ = std::fs::remove_dir_all(dir);
+
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut env = ScopedEnv::new();
+    let compensation_tmp = isolated_tmpdir("runtime-journal-compensation-cas");
+    let home = compensation_tmp.join("home");
+    env.set("HOME", &home);
+    let compensation_dir = config::default_dir();
+    let sandbox_home = compensation_dir.join("sandbox/home");
+    let auth_dir = sandbox_home.join(".claude-science");
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    std::fs::write(auth_dir.join("active-org.json"), b"prior-authority\n").unwrap();
+    std::fs::set_permissions(
+        auth_dir.join("active-org.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let compensation_config = Config::default();
+    config::save_to(&compensation_dir, &compensation_config).unwrap();
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let mut authority_snapshot = OneClickAuthoritySnapshot::capture(
+        &compensation_dir,
+        &sandbox_home,
+        &auth_dir,
+        &compensation_config,
+        &state,
+    )
+    .unwrap();
+    let compensation_ticket = authority_snapshot.registered_snapshot_ticket().unwrap();
+    let compensation_identity = OneClickTransactionIdentity {
+        target_profile_id: "compensation-target".into(),
+        runtime_fingerprint: "c".repeat(64),
+        snapshot_ticket: compensation_ticket.clone(),
+        previous_binding: None,
+        profile_switch_handoff: None,
+    };
+    let mut compensation_progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: compensation_ticket,
+    };
+    write_one_click_checkpoint(
+        &compensation_dir,
+        &compensation_identity,
+        &mut compensation_progress,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+    )
+    .unwrap();
+    config::update(&compensation_dir, |current| {
+        let typed = current
+            .runtime_transaction
+            .as_mut()
+            .and_then(config::RuntimeTransactionRecord::as_v2_mut)
+            .unwrap();
+        typed.phase = config::RuntimeTransactionPhase::StartGateway;
+        typed.environment_exposure = config::RuntimeEnvironmentExposure::NotExposed;
+    })
+    .unwrap();
+    let drifted_bytes = std::fs::read(compensation_dir.join("config.json")).unwrap();
+    let checkpoint_error = write_one_click_checkpoint(
+        &compensation_dir,
+        &compensation_identity,
+        &mut compensation_progress,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+    )
+    .expect_err("same-id phase drift must reject the production checkpoint");
+    assert!(checkpoint_error.contains("identity changed"));
+    assert_eq!(
+        std::fs::read(compensation_dir.join("config.json")).unwrap(),
+        drifted_bytes
+    );
+    std::fs::write(auth_dir.join("active-org.json"), b"retargeted-authority\n").unwrap();
+    {
+        let mut current = crate::lock(&state);
+        current.proxy_port = 4242;
+    }
+    let backup_root = authority_snapshot.backup_root.clone();
+    let science_bin = compensation_tmp.join("fake-science");
+    std::fs::write(&science_bin, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&science_bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let launch_runtime = crate::runtime::science::test_runtime_identity(science_bin);
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let error = test_compensate_one_click_failure(
+        app.handle(),
+        &state,
+        &crate::lifecycle::Lifecycle::default(),
+        &compensation_dir,
+        &mut authority_snapshot,
+        &compensation_progress,
+        launch_runtime,
+    )
+    .expect_err("production compensation must fail closed after journal drift");
+    assert!(error.to_string().contains("compensation_restore_failed"));
+    assert_eq!(
+        std::fs::read(compensation_dir.join("config.json")).unwrap(),
+        drifted_bytes,
+        "production compensation must not overwrite or clear the drifted journal"
+    );
+    assert_eq!(
+        std::fs::read(auth_dir.join("active-org.json")).unwrap(),
+        b"retargeted-authority\n",
+        "journal mismatch must reject compensation before restoring protected authority"
+    );
+    assert_eq!(
+        crate::lock(&state).proxy_port,
+        4242,
+        "journal mismatch must reject compensation before restoring captured AppState"
+    );
+    assert!(backup_root.is_dir());
+    drop(authority_snapshot);
+    let _ = std::fs::remove_dir_all(compensation_tmp);
 }

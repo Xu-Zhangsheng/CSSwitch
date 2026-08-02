@@ -365,6 +365,25 @@ clean-context completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW，历史 findin
 provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到 R2-E；当前不进入 R2-F，
 更不把 2026-07-31 rebaseline 中的 R3-R11 顺序视为已自动授权的后续实施计划。
 
+`R2-E` implementation candidate 已完成：实时 inventory 已覆盖 V1/V2 的 deserialize、
+blocker、one-click、test-only profile-switch、interrupted-Gateway recovery、healthy reopen、
+pending cleanup、rollback、checkpoint、binding commit 与 clear 入口。one-click 进程内
+progress 现在保存上一条完整 V2 record；后续 checkpoint、成功 clear 与 binding commit
+只有在磁盘 record 完整相等时才推进，transaction/candidate/ticket 相同但 prior binding、
+compensation、phase/exposure 或其他字段漂移也保留当前 journal 并 fail-closed。既有测试
+identity 已扩展为十种合法 V1 wire stage 的 unchanged-wire save/load，以及当前全部生产 V2
+phase/outcome 的 save/load/save 重启矩阵。首轮 clean-context 审查发现 helper 拒绝漂移后，
+统一补偿仍可能用捕获前 config 覆盖当前 journal HIGH；修复后 `Journaled` 补偿要求完整
+record CAS，成功 clear/binding commit 后的 `Finalized` 补偿要求 journal 仍为空，retarget 时
+在任何 authority/runtime restore 前立即拒绝，并保留当前 config、authority、AppState 与
+recovery snapshot。新增回归先触发真实 checkpoint CAS 拒绝，再穿过生产 compensation 漏斗
+并证明这些状态均保留。第二次 clean-context 审查进一步发现 guard 位于 authority/runtime
+restore 之后且 inventory 漏列直接 reader/healthy-reopen rollback；当前修复已把 guard 前移到
+Gateway/authority/config/AppState restore 之前，并补齐对应 inventory anchor。candidate cleanup
+与 SSH cleanup 仍保持既有次序。checkpoint 时机、F5、`StopFailed` 后行为
+和 journal 覆盖范围均未改变。当前仍待新的 clean-context 独立复审、完整 exact-SHA source
+gate 与证据回写，因此表中保持 `R2-E = NEXT`，不得提前进入 R2-F。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |

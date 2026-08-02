@@ -3084,33 +3084,54 @@ mod tests {
     #[test]
     fn runtime_transaction_v1_round_trip_does_not_upgrade_wire() {
         let dir = tmpdir();
-        let journal = RuntimeTransactionJournal {
-            transaction_id: "legacy-tx".into(),
-            target_profile_id: "legacy-target".into(),
-            stage: "start_gateway".into(),
-            previous_binding: None,
-            previous_gateway: None,
-        };
-        save_to(
-            &dir,
-            &Config {
-                runtime_transaction: Some(journal.clone().into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let first: serde_json::Value =
-            serde_json::from_slice(&fs::read(config_path(&dir)).unwrap()).unwrap();
-        assert_eq!(first["schema_version"], CURRENT_SCHEMA_VERSION);
-        assert!(first["runtime_transaction"]["schema_version"].is_null());
+        let stages = [
+            "stop_old_science".to_string(),
+            "start_gateway".to_string(),
+            "wait_science_db_reverify".to_string(),
+            "restart_science_after_db_heal".to_string(),
+            "verify_science_db_after_restart".to_string(),
+            "verify_science_catalog".to_string(),
+            "start_formal_gateway".to_string(),
+            "recover_interrupted_gateway".to_string(),
+            format!(
+                "{LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX}{}",
+                "a".repeat(64)
+            ),
+            format!(
+                "{LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX}{}",
+                "b".repeat(64)
+            ),
+        ];
+        for (index, stage) in stages.into_iter().enumerate() {
+            let journal = RuntimeTransactionJournal {
+                transaction_id: format!("legacy-tx-{index}"),
+                target_profile_id: "legacy-target".into(),
+                stage: stage.clone(),
+                previous_binding: None,
+                previous_gateway: None,
+            };
+            save_to(
+                &dir,
+                &Config {
+                    runtime_transaction: Some(journal.clone().into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let first: serde_json::Value =
+                serde_json::from_slice(&fs::read(config_path(&dir)).unwrap()).unwrap();
+            assert_eq!(first["schema_version"], CURRENT_SCHEMA_VERSION);
+            assert!(first["runtime_transaction"]["schema_version"].is_null());
+            assert_eq!(first["runtime_transaction"]["stage"], stage);
 
-        let loaded = load_from(&dir).unwrap();
-        assert_eq!(loaded.runtime_transaction, Some(journal.clone().into()));
-        save_to(&dir, &loaded).unwrap();
-        let second: serde_json::Value =
-            serde_json::from_slice(&fs::read(config_path(&dir)).unwrap()).unwrap();
-        assert!(second["runtime_transaction"]["schema_version"].is_null());
-        assert_eq!(second["runtime_transaction"]["stage"], "start_gateway");
+            let loaded = load_from(&dir).unwrap();
+            assert_eq!(loaded.runtime_transaction, Some(journal.clone().into()));
+            save_to(&dir, &loaded).unwrap();
+            let second: serde_json::Value =
+                serde_json::from_slice(&fs::read(config_path(&dir)).unwrap()).unwrap();
+            assert!(second["runtime_transaction"]["schema_version"].is_null());
+            assert_eq!(second["runtime_transaction"]["stage"], stage);
+        }
     }
 
     #[test]
@@ -3193,6 +3214,77 @@ mod tests {
             serde_json::from_value::<RuntimeTransactionRecord>(encoded).unwrap(),
             journal
         );
+
+        let dir = tmpdir();
+        let one_click_phases = [
+            RuntimeTransactionPhase::StopOldScience,
+            RuntimeTransactionPhase::StartGateway,
+            RuntimeTransactionPhase::AuthoritySnapshotActive,
+            RuntimeTransactionPhase::StartScienceEnvironmentPending,
+            RuntimeTransactionPhase::WaitScienceDbReverify,
+            RuntimeTransactionPhase::RestartScienceAfterDbHeal,
+            RuntimeTransactionPhase::VerifyScienceDbAfterRestart,
+            RuntimeTransactionPhase::VerifyScienceCatalog,
+        ];
+        let mut production_records = one_click_phases
+            .into_iter()
+            .map(valid_one_click_v2)
+            .collect::<Vec<_>>();
+        production_records.push(RuntimeTransactionV2 {
+            schema_version: RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "profile-switch-start".into(),
+            operation: RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: "target-profile".into(),
+            phase: RuntimeTransactionPhase::StartFormalGateway,
+            runtime_fingerprint: None,
+            environment_exposure: RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: None,
+            previous_gateway: None,
+            compensation: RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: RuntimeGatewayStopOutcome::NotAttempted,
+        });
+        for outcome in [
+            RuntimeGatewayStopOutcome::Pending,
+            RuntimeGatewayStopOutcome::Stopped,
+            RuntimeGatewayStopOutcome::NotManaged,
+            RuntimeGatewayStopOutcome::SignalFailed,
+            RuntimeGatewayStopOutcome::ExitUnconfirmed,
+            RuntimeGatewayStopOutcome::AbsentAfterAttempt,
+        ] {
+            production_records.push(RuntimeTransactionV2 {
+                schema_version: RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+                transaction_id: format!("profile-switch-recovery-{outcome:?}"),
+                operation: RuntimeTransactionOperation::ProfileSwitch,
+                target_profile_id: "target-profile".into(),
+                phase: RuntimeTransactionPhase::RecoverInterruptedGateway,
+                runtime_fingerprint: None,
+                environment_exposure: RuntimeEnvironmentExposure::NotExposed,
+                snapshot_ticket: None,
+                previous_binding: None,
+                previous_gateway: None,
+                compensation: RuntimeCompensationState::NotStarted,
+                gateway_stop_outcome: outcome,
+            });
+        }
+        for record in production_records {
+            let expected = RuntimeTransactionRecord::V2(record);
+            save_to(
+                &dir,
+                &Config {
+                    runtime_transaction: Some(expected.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let loaded = load_from(&dir).unwrap();
+            assert_eq!(loaded.runtime_transaction.as_ref(), Some(&expected));
+            save_to(&dir, &loaded).unwrap();
+            assert_eq!(
+                load_from(&dir).unwrap().runtime_transaction.as_ref(),
+                Some(&expected)
+            );
+        }
     }
 
     #[test]
