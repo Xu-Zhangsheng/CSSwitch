@@ -77,8 +77,13 @@
         "the existing crash-after-snapshot-before-journal characterization remains unchanged and continues to require manual recovery for ActiveRecovery without a journal",
         "the source boundary binds exactly eight production V2 checkpoint calls and one candidate fingerprint derivation",
         "focused inventory, document governance, quality metadata, format, and diff checks passed",
-        "the repaired implementation received a clean-context pre-commit review PASS with zero BLOCK, HIGH, MEDIUM, or LOW findings",
-        "the complete exact-SHA source gate and exact-SHA completion review remain pending, so this record does not yet claim R2-B closure"
+        "candidate SHA f969d56dbd293e235afc1ed97f4e4e1d63d1b074 passed 14 suites; desktop rejected an over-broad manifest-empty assertion in the pre-registration snapshot-failure mode, so run 9ab7dd50d8794411d7c1fae43d0a1527 is rejected",
+        "the repair limits manifest-empty proof to the actual PreJournalAbort mode while preserving the legacy pre-registration snapshot-failure contract, and both isolated identities plus a clean-context repair review passed",
+        "complete 15-suite GATE-SOURCE passed at exact SHA 545ad28f0253f7ea9d2bde076ad7b136318c6b0e with run id 37f69cfd7ed2150425033872c3f7085b and runner exit zero",
+        "recursive schema, semantic, and hash readback passed with 15 passing results, 15 passing source observations, and a 491-entry clean source snapshot",
+        "desktop identity closed at 528 discovered, 487 passed, zero failed, 41 approved ignored, zero skipped, zero todo, and zero not run",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings",
+        "this evidence-only seal records the verified candidate and run and does not claim that the seal commit itself ran the complete gate"
       ]
     },
     "does_not_claim_fix": true,

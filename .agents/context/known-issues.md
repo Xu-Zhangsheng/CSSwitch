@@ -284,15 +284,29 @@ typed V2 phase；首写冻结同一个 candidate fingerprint、verified snapshot
 registered ticket 进入既有补偿；重启后的 no-journal `ActiveRecovery` 仍拒绝自动恢复并要求
 人工处置。destructive stop 前仍未增加 durable intent，F5 gap 明确保留。focused source/unit、
 隔离 PreJournalAbort 与既有 crash/no-journal characterization 已通过，修复后 clean-context
-预提交审查 PASS，零 BLOCK/HIGH/MEDIUM/LOW；exact-SHA 十五 suite `GATE-SOURCE` 尚未运行，
-因此本段只记录 implementation candidate，不构成 R2-B closure，也不外推 artifact、installed/runtime、
-live provider、Science、SSH、签名、公证或 release。
+预提交审查 PASS，零 BLOCK/HIGH/MEDIUM/LOW。首个 candidate exact SHA
+`f969d56dbd293e235afc1ed97f4e4e1d63d1b074` 的完整 gate 有十四个 suite PASS；唯一
+`SUITE-RUST-DESKTOP` 因新增 characterization 把 snapshot 尚未注册 ticket 的旧 capture-failure
+模式也错误要求 cleanup manifest empty 而 FAIL，该 run `9ab7dd50d8794411d7c1fae43d0a1527`
+不作为 closure 证据。repair 只把该断言限定到真正的 `PreJournalAbort` 模式；旧 snapshot-failure
+与新 PreJournalAbort 两个隔离 identity 均 PASS，且 clean-context repair review PASS。
+
+最终 candidate exact SHA `545ad28f0253f7ea9d2bde076ad7b136318c6b0e` 取得十五 suite
+`GATE-SOURCE` completion seal PASS：run id `37f69cfd7ed2150425033872c3f7085b`、runner exit 0；
+manifest 含十五个 PASS test result 与十五个 PASS source observation，递归 schema/semantic/hash
+回读 PASS。desktop 身份为 528 discovered / 487 passed / 0 failed / 41 approved ignored /
+0 skipped / 0 todo / 0 not run，source snapshot 为 491 个 tracked entry。exact-SHA clean-context
+completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
+上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-B 仅建立 source/unit
+结论，不外推 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
+唯一 `NEXT` 是 `R2-C`；本窗口停止，不提前迁移其他 runtime writer。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
-| `R2-B` | IMPLEMENTED（CLOSURE PENDING） | 八个 one-click checkpoint 已迁移 V2；等待 candidate commit 的 exact-SHA gate 与 completion review |
-| `R2-C`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
+| `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
+| `R2-C` | NEXT（NOT-STARTED） | 不在本窗口范围 |
+| `R2-D`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置
 
