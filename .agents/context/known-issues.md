@@ -329,9 +329,9 @@ manifest 含十五个 PASS test result 与十五个 PASS source observation，�
 completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
 上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-C 仅建立 source/unit
 结论，不外推 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
-`R2-D` implementation candidate 已完成但尚未收口：interrupted profile-switch Gateway
+`R2-D` 已收口（source）：interrupted profile-switch Gateway
 recovery 只接受可证明的 `start_formal_gateway|recover_interrupted_gateway` V1 兼容记录或
-对应的 V2 profile-switch 记录；V1 继续恢复时以完整原记录 CAS 原子升级为
+对应的 V2 profile-switch 记录，且 V2 compensation 必须仍为 `not_started`；V1 继续恢复时以完整原记录 CAS 原子升级为
 `operation=profile_switch / phase=recover_interrupted_gateway / gateway_stop_outcome=pending`，
 不再写回 string stage。既有 path-secret/health/contract/binary/uid/PID 与最终 listener
 identity recheck 之后，stop 结果以第二次完整记录 CAS 持久化为
@@ -346,17 +346,32 @@ journal/absent-listener identity 与 transaction source contract 均通过；动
 自有进程仅在隔离沙箱外执行，明确避开 8765。`cargo check --offline --lib` PASS。metadata、
 inventory、document governance、quality focused 14/14、format 与 diff check 均 PASS；当前完整
 Desktop Rust lib 为 528 discovered / 487 passed / 0 failed / 41 approved ignored / 0 skipped /
-0 todo / 0 not run。clean-context review、exact-SHA 十五 suite `GATE-SOURCE` 与 completion seal
-仍为 `NOT-RUN`，不得提前声称 R2-D DONE。
-唯一 `NEXT` 是完成 R2-D candidate 验证与独立审查；本窗口不进入 R2-E/F。
+0 todo / 0 not run。首个 exact candidate `3b434dc85dbcd93f4c7c189455db676a20457f9e`
+虽取得十五 suite gate PASS，但 completion review 发现 outcome CAS 保留的
+`recover_interrupted_gateway/pending + compensation=in_progress` 漂移记录可在重启后重新进入
+recovery 并驱动 listener stop；该 run `e33982446c192e09d2ae364aaed5eeb4` 不作为 closure 证据。
+repair 把两个允许 V2 phase 的 eligibility 都冻结为 canonical `compensation=not_started`，并新增
+save/load 重启式行为回归，证明漂移记录保留原 bytes/journal 且不探测 listener；clean-context
+repair review PASS，零 BLOCK/HIGH/MEDIUM/LOW，原 HIGH CLOSED。
+
+最终 candidate exact SHA `e185de9c22d61662acbe28af655466a27720fd36` 取得十五 suite
+`GATE-SOURCE` completion seal PASS：run id `d01855a2128636df9cfec061bda56c9d`、runner exit 0；
+manifest 含十五个 PASS test result 与十五个 PASS source observation，递归 semantic/hash
+回读 PASS。desktop 身份为 528 discovered / 487 passed / 0 failed / 41 approved ignored /
+0 skipped / 0 todo / 0 not run，source snapshot 为 493 个 tracked entry。最终 exact-SHA
+clean-context completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW，历史 findings CLOSED 3 / OPEN 0。
+本文所在 evidence-only seal commit 只记录上述已验证 candidate 与 run，不声称 seal commit 本身
+执行过完整 gate。R2-D 仅建立 source/unit 结论，不外推 artifact、installed/runtime、live
+provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到 R2-E；本窗口不进入 R2-E/F。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
 | `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
 | `R2-C` | DONE | test-only profile-switch writer typed V2、完整记录 CAS、exact-SHA gate 与独立审查收口；产品选择仍 intent-only |
-| `R2-D` | ACTIVE（未收口） | interrupted-Gateway recovery typed V2 intent/outcome、完整记录 CAS；待独立审查与 exact-SHA gate |
-| `R2-E`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
+| `R2-D` | DONE | interrupted-Gateway recovery typed V2 intent/outcome、canonical compensation、完整记录 CAS、跨重启 drift fail-closed、exact-SHA gate 与独立审查收口 |
+| `R2-E` | NEXT | 不在本窗口范围 |
+| `R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置
 
