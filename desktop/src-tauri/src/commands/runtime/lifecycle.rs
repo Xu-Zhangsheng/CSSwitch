@@ -7,8 +7,8 @@ pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
     let runtime = st.science_runtime.clone();
     let request = crate::runtime::science::ScienceStopRequest::recover(runtime.as_ref());
     let result = stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, request);
-    if result.is_ok() {
-        st.science_confirmed_stopped = runtime;
+    if let Ok(verified) = result.as_ref() {
+        st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
         st.science_runtime = None;
     }
     result

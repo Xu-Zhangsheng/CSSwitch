@@ -17,10 +17,10 @@ use crate::runtime::proxy_lifecycle::{
     current_skill_install_bridge_key, ensure_proxy, skill_install_bridge_dir,
 };
 use crate::runtime::science::{
-    probe_known_runtime, probe_sandbox_runtime_cached, runtime_identity_is_current, sandbox_home,
-    sandbox_listener_matches_runtime, sandbox_url, select_science_runtime_cached, stop_sandbox,
-    SandboxScienceState, ScienceManagedLaunchToken, ScienceRuntimeIdentity, ScienceRuntimeSource,
-    ScienceStopOwnershipReceipt, ScienceStopRequest,
+    managed_launch_token_for_runtime, probe_known_runtime, probe_sandbox_runtime_cached,
+    runtime_identity_is_current, sandbox_home, sandbox_listener_matches_runtime, sandbox_url,
+    select_science_runtime_cached, stop_sandbox, SandboxScienceState, ScienceManagedLaunchToken,
+    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopOwnershipReceipt, ScienceStopRequest,
 };
 use crate::runtime::skill_install_bridge::{
     inspect_while_science_running, register_before_science_start, RegistrationStatus,
@@ -28,7 +28,7 @@ use crate::runtime::skill_install_bridge::{
 use crate::runtime::system::{asset_root, log_path, open_in_browser, open_log, redact, tail_file};
 use crate::{
     config, lifecycle, lock, oauth_forge, proc, AppState, HistoryRecoveryChoice,
-    HistoryRecoverySession, SharedAppState,
+    HistoryRecoveryScienceQuiescence, HistoryRecoverySession, SharedAppState,
 };
 
 // Sibling modules are owned by the sandbox_session facade.
@@ -61,8 +61,8 @@ fn stop_sandbox_state<R: Runtime>(
         &mut st.sandbox_url,
         ScienceStopRequest::recover(runtime.as_ref()),
     );
-    if result.is_ok() {
-        st.science_confirmed_stopped = runtime;
+    if let Ok(verified) = result.as_ref() {
+        st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
         st.science_runtime = None;
     }
     result
@@ -223,13 +223,40 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
 ) -> Result<Value, TypedOneClickFailure> {
     let cfg = config::load_from(&config::default_dir())
         .map_err(|error| typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string()))?;
-    let remembered = { lock(&state).science_runtime.clone() };
+    let (remembered, confirmed_stopped) = {
+        let current = lock(&state);
+        (
+            current.science_runtime.clone(),
+            current.science_confirmed_stopped.clone(),
+        )
+    };
     match remembered {
         Some(runtime) => match probe_known_runtime(cfg.sandbox_port, &runtime) {
             SandboxScienceState::RunningHealthy => {
                 let mut st = lock(&state);
-                st.science_runtime = Some(runtime);
-                stop_sandbox_state(&app, &mut st).map_err(|error| {
+                let receipt = managed_launch_token_for_runtime(cfg.sandbox_port, &runtime)
+                    .ok_or_else(|| {
+                        typed_one_click_err(
+                            OneClickFailureKind::ScienceStop,
+                            "回滚时无法取得候选 Science 的精确受管启动身份。",
+                        )
+                    })?;
+                let AppState {
+                    sandbox,
+                    sandbox_url,
+                    ..
+                } = &mut *st;
+                let verified = stop_sandbox(
+                    &app,
+                    sandbox,
+                    sandbox_url,
+                    ScienceStopRequest::exact(
+                        &runtime,
+                        ScienceStopOwnershipReceipt::from_managed_launch(&receipt),
+                    ),
+                )
+                .and_then(|verified| verified.require_exact_stop_of(&runtime))
+                .map_err(|error| {
                     typed_one_click_err(
                         OneClickFailureKind::ScienceStop,
                         format!(
@@ -237,11 +264,14 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                         ),
                     )
                 })?;
+                st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
+                st.science_runtime = None;
             }
             SandboxScienceState::Stopped => {
-                let mut st = lock(&state);
-                st.science_confirmed_stopped = Some(runtime);
-                st.science_runtime = None;
+                return Err(typed_one_click_err(
+                    OneClickFailureKind::ScienceStop,
+                    "回滚时仅确认 Science 端口已关闭，未取得精确停止 receipt；已拒绝继续恢复 authority。",
+                ));
             }
             SandboxScienceState::Unknown => {
                 return Err(typed_one_click_err(
@@ -250,6 +280,11 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                 ));
             }
         },
+        None if confirmed_stopped.is_some()
+            && !proc::loopback_port_in_use(
+                cfg.sandbox_port,
+                operation::LOCAL_HEALTH_TIMEOUT_MS,
+            ) => {}
         None if proc::loopback_port_in_use(
             cfg.sandbox_port,
             operation::LOCAL_HEALTH_TIMEOUT_MS,
@@ -260,7 +295,12 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                 "回滚时 Science 端口仍被占用，但没有可确认的 runtime 身份；已拒绝强制结束。",
             ));
         }
-        None => {}
+        None => {
+            return Err(typed_one_click_err(
+                OneClickFailureKind::ScienceStop,
+                "回滚时 Science 端口已关闭，但没有 verified-stopped receipt；已拒绝继续恢复 authority。",
+            ));
+        }
     }
     one_click_login_with_options(app, state, lifecycle, None, auth_proof, false, None, None)
 }
@@ -717,9 +757,10 @@ impl ManagedScienceRestartError {
 
     fn after_exact_cleanup(
         message: impl Into<String>,
+        expected_runtime: &ScienceRuntimeIdentity,
         cleanup: crate::runtime::science::ScienceStopOutcome,
     ) -> Self {
-        match cleanup {
+        match cleanup.and_then(|verified| verified.require_exact_stop_of(expected_runtime)) {
             Ok(_) => Self {
                 message: message.into(),
                 candidate_stop_proof: ManagedScienceCandidateStopProof::ConfirmedStopped,
@@ -732,9 +773,13 @@ impl ManagedScienceRestartError {
     }
 
     #[cfg(test)]
-    fn test_post_spawn_validation(cleanup: crate::runtime::science::ScienceStopOutcome) -> Self {
+    fn test_post_spawn_validation(
+        expected_runtime: &ScienceRuntimeIdentity,
+        cleanup: crate::runtime::science::ScienceStopOutcome,
+    ) -> Self {
         let mut failure = Self::after_exact_cleanup(
             "test-only prior Science post-spawn validation failure",
+            expected_runtime,
             cleanup,
         );
         failure.diagnostic = PriorScienceRestartDiagnostic::TestPostSpawnValidationFailed;
@@ -1139,6 +1184,7 @@ fn restart_managed_science_with_budget<R: Runtime>(
                 ),
             );
             return Err(ManagedScienceRestartError::test_post_spawn_validation(
+                &prior.runtime,
                 cleanup,
             ));
         }
@@ -1165,7 +1211,11 @@ fn restart_managed_science_with_budget<R: Runtime>(
                     error.message()
                 );
                 return Err(if token_present {
-                    ManagedScienceRestartError::after_exact_cleanup(message, cleanup)
+                    ManagedScienceRestartError::after_exact_cleanup(
+                        message,
+                        &prior.runtime,
+                        cleanup,
+                    )
                 } else {
                     ManagedScienceRestartError::after_spawn_unproven(message)
                 });
@@ -1186,6 +1236,7 @@ fn restart_managed_science_with_budget<R: Runtime>(
         );
         return Err(ManagedScienceRestartError::after_exact_cleanup(
             "恢复 prior Science 后 fresh managed receipt 回读不一致",
+            &prior.runtime,
             cleanup,
         ));
     }
@@ -1619,9 +1670,11 @@ fn compensate_one_click_failure<R: Runtime>(
                     ScienceStopRequest::recover(Some(&failure.rollback.launch_runtime))
                 }),
         );
-        if result.is_ok() {
+        let result = result
+            .and_then(|verified| verified.require_exact_stop_of(&failure.rollback.launch_runtime));
+        if let Ok(verified) = result.as_ref() {
             current.science_runtime = None;
-            current.science_confirmed_stopped = Some(failure.rollback.launch_runtime.clone());
+            current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
         }
         result.map(|_| ()).map_err(|error| error.to_string())
     };
@@ -1855,6 +1908,7 @@ fn one_click_login_with_options<R: Runtime>(
             st.science_confirmed_stopped.clone(),
         )
     };
+    let remembered_runtime_was_present = remembered_runtime.is_some();
     let (science_state, running_runtime) = match remembered_runtime {
         Some(runtime) => {
             let science_state = probe_known_runtime(sport, &runtime);
@@ -2008,7 +2062,7 @@ fn one_click_login_with_options<R: Runtime>(
                 sandbox_url,
                 ..
             } = &mut *current;
-            stop_sandbox(
+            let verified = stop_sandbox(
                 &app,
                 sandbox,
                 sandbox_url,
@@ -2017,11 +2071,12 @@ fn one_click_login_with_options<R: Runtime>(
                     ScienceStopOwnershipReceipt::from_managed_launch(&prior.launch_token),
                 ),
             )
+            .and_then(|verified| verified.require_exact_stop_of(&prior.runtime))
             .map_err(|error| {
                 typed_one_click_err(OneClickFailureKind::ScienceStop, error.to_string())
             })?;
             current.science_runtime = None;
-            current.science_confirmed_stopped = Some(prior.runtime.clone());
+            current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
         }
         let receipt = dir.join("science-managed-launch.v1.json");
         if proc::loopback_port_in_use(sport, operation::LOCAL_HEALTH_TIMEOUT_MS)
@@ -2144,7 +2199,25 @@ fn one_click_login_with_options<R: Runtime>(
                 "隔离 Science 预览端口 {preview_port} 已被占用；未启动或结束任何占用者。请修改沙箱端口后重试。"
             )));
         }
-        lock(&state).science_confirmed_stopped = None;
+        let verified_stopped_runtime = {
+            let mut current = lock(&state);
+            let verified = current.science_confirmed_stopped.clone();
+            current.science_confirmed_stopped = None;
+            verified
+        };
+        let history_science_quiescence = match verified_stopped_runtime.as_ref() {
+            Some(runtime) => HistoryRecoveryScienceQuiescence::ExactStopped(runtime.clone()),
+            None if running_runtime_to_stop.is_none()
+                && !remembered_runtime_was_present
+                && science_state == SandboxScienceState::Stopped =>
+            {
+                HistoryRecoveryScienceQuiescence::NoManagedRuntimeObserved
+            }
+            None => {
+                return Err(rollback_context
+                    .failure("历史恢复前缺少 typed Science quiescence proof；已拒绝发布选择会话"));
+            }
+        };
         rollback_context.set_kind(OneClickFailureKind::AuthoritySnapshot);
         one_click_step(
             authority_snapshot.validate_science_restore_root(),
@@ -2173,12 +2246,13 @@ fn one_click_login_with_options<R: Runtime>(
                     one_click_step(history_recovery_choices(candidates), &rollback_context)?;
                 {
                     let mut app_state = lock(&state);
-                    app_state.science_confirmed_stopped = Some(launch_runtime.clone());
+                    app_state.science_confirmed_stopped = verified_stopped_runtime.clone();
                     app_state.history_recovery = Some(HistoryRecoverySession {
                         active_profile_id: active_profile.id.clone(),
                         sandbox_port: sport,
                         auth_dir: auth_dir.clone(),
                         sandbox_root: sbx_home.clone(),
+                        science_quiescence: history_science_quiescence.clone(),
                         choices,
                     });
                 }
@@ -2477,7 +2551,7 @@ fn one_click_login_with_options<R: Runtime>(
                         sandbox_url,
                         ..
                     } = &mut *current;
-                    one_click_step(
+                    let verified = one_click_step(
                         stop_sandbox(
                             &app,
                             sandbox,
@@ -2486,11 +2560,12 @@ fn one_click_login_with_options<R: Runtime>(
                                 &launch_runtime,
                                 ScienceStopOwnershipReceipt::from_managed_launch(&first_token),
                             ),
-                        ),
+                        )
+                        .and_then(|verified| verified.require_exact_stop_of(&launch_runtime)),
                         &rollback_context,
                     )?;
                     current.science_runtime = None;
-                    current.science_confirmed_stopped = Some(launch_runtime.clone());
+                    current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
                 }
                 rollback_context.launch_confirmed_stopped = true;
                 if proc::loopback_port_in_use(sport, operation::LOCAL_HEALTH_TIMEOUT_MS)

@@ -68,6 +68,13 @@
         "the existing source boundary identity asserts typed request, ownership receipt, verified outcome, classified failures, exact/recover caller migration, and removal of the string-only stop helper",
         "serial focused R0 characterization passed 53 tests with zero failures and 12 approved ignored identities; the one unrelated parallel Codex cancellation failure passed on exact rerun and the serial matrix passed cleanly",
         "the repaired candidate received a clean-context independent review with zero BLOCK, HIGH, MEDIUM, or LOW findings after the initial reviewer finding on post-TERM identity-drift classification was repaired and retested",
+        "the first committed candidate completion review found that unproven idempotent stop success could still be promoted to confirmed-stopped authority",
+        "the repaired candidate derives confirmed runtime and every exact cleanup from VerifiedScienceStop ownership proof; existing Rust and source-boundary identities reject unproven promotion",
+        "a follow-up candidate review found rollback restart and history recovery still used the idempotent helper; both now acquire exact managed receipts and require matching verified stop proof",
+        "an all-caller review found observed-stopped and remembered/planned runtime branches could still publish confirmed authority; direct Some(runtime) publication is removed and branch-level boundaries freeze the rule",
+        "an authority-publish review found rollback could continue with no runtime and no receipt when the port was closed; only an existing verified-stopped receipt may now enter that restart branch",
+        "a rollback-closure review found offline history restore lacked a carried typed precondition; the in-memory session now distinguishes exact-stopped from no-managed-runtime observation and revalidates either before credential restore",
+        "a typed-quiescence review found remembered-runtime production, raw-port revalidation, and reusable-session drift gaps; production now excludes remembered runtime, reruns the full typed probe, and advances reused proof after exact stop",
         "a complete exact-SHA 15-suite GATE-SOURCE seal and clean-context completion review are required before S1 can advance to DONE"
       ]
     },

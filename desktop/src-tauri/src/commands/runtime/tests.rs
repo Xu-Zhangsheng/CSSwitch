@@ -4029,7 +4029,10 @@ fn isolated_r0_one_click_history_attention() {
     let app = tauri::test::mock_builder()
         .manage(state.clone())
         .manage(lifecycle)
-        .invoke_handler(tauri::generate_handler![super::one_click_login])
+        .invoke_handler(tauri::generate_handler![
+            super::one_click_login,
+            super::restore_history_choice
+        ])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -4070,7 +4073,10 @@ fn isolated_r0_one_click_history_attention() {
     assert_eq!(attention["stage"], "history_recovery");
     assert_eq!(returned_references.len(), 2);
     assert_eq!(session_references, returned_references);
-    assert!(stopped_runtime.is_some());
+    assert!(
+        stopped_runtime.is_none(),
+        "history attention without a prior verified stop must not invent confirmed authority"
+    );
     assert!(runtime_absent && child_absent);
     assert!(lock(&state).proxy.is_none());
     assert!(listener_pid_if_unique(sandbox_port).is_none());
@@ -4085,6 +4091,64 @@ fn isolated_r0_one_click_history_attention() {
         "history attention must stop before Science launch"
     );
     assert!(!marker.exists());
+    let restored = invoke_json(
+        &webview,
+        "restore_history_choice",
+        serde_json::json!({"reference": returned_references[0]}),
+    )
+    .expect("typed no-managed-runtime proof must authorize the attention-to-restore continuation");
+    assert_eq!(restored["status"], "ok");
+    assert_eq!(restored["action"], "history_choice_restored");
+    let second_reference = restored["choices"][0]["reference"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let runtime =
+        science::select_science_runtime_cached(None, &science::ScienceVersionCache::default())
+            .unwrap();
+    let drifted_pid = start_managed_fake_science(
+        &fake_science,
+        &sandbox_home,
+        &science_data,
+        sandbox_port,
+        &runtime,
+    );
+    {
+        let mut authority = lock(&state);
+        authority.science_runtime = Some(runtime.clone());
+        authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}/history-drift"));
+    }
+    let restored_after_live_drift = invoke_json(
+        &webview,
+        "restore_history_choice",
+        serde_json::json!({"reference": second_reference}),
+    )
+    .expect("a newly live managed runtime must be exact-stopped before history restore");
+    assert_eq!(restored_after_live_drift["status"], "ok");
+    assert!(process_start_identity_if_alive(drifted_pid).is_none());
+    {
+        let authority = lock(&state);
+        assert_eq!(authority.science_confirmed_stopped.as_ref(), Some(&runtime));
+        assert!(matches!(
+            authority
+                .history_recovery
+                .as_ref()
+                .map(|session| &session.science_quiescence),
+            Some(crate::HistoryRecoveryScienceQuiescence::ExactStopped(expected))
+                if expected == &runtime
+        ));
+    }
+    let third_reference = restored_after_live_drift["choices"][0]["reference"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let restored_from_advanced_proof = invoke_json(
+        &webview,
+        "restore_history_choice",
+        serde_json::json!({"reference": third_reference}),
+    )
+    .expect("rotated references must reuse the advanced exact-stopped session proof");
+    assert_eq!(restored_from_advanced_proof["status"], "ok");
     fs::remove_dir_all(&tmp).unwrap();
 }
 
@@ -4198,6 +4262,9 @@ fn isolated_r0_history_restore_command_contract() {
             sandbox_port,
             auth_dir: science_data.clone(),
             sandbox_root: sandbox_home.clone(),
+            science_quiescence: crate::HistoryRecoveryScienceQuiescence::ExactStopped(
+                prior_runtime.clone(),
+            ),
             choices,
         });
         authority.boot_attention = Some(serde_json::json!({"status": "history"}));

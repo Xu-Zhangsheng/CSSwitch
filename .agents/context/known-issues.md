@@ -440,7 +440,7 @@ source closure 外推到更高证据层。旧 R3-R11 顺序已被新的有限路
 | `R2-E` | DONE | 现有 typed journal 的生产 writer / reader / rollback / clear 与 V1 fail-closed compatibility 矩阵收口；完整记录 CAS、补偿前置 guard、exact-SHA gate 与独立审查完成；checkpoint/F5/StopFailed/operation scope 保持 |
 | `R2-F` | DONE | R2-A-E schema、identity、CAS、recovery、compatibility 总盘点、聚焦矩阵、exact-SHA gate 与最终独立审查收口 |
 | `Post-R2 Rebaseline` | DONE-READ-ONLY | exact HEAD 重新盘点 state owner、caller、长等待、mutation、失败链、typed outcome/receipt 与旧路线依赖 |
-| `S1 Typed Science stop contract` | CANDIDATE | 已获实施授权并形成 behavior-preserving typed stop request/receipt/outcome candidate；仍须 clean-context review 与 exact-SHA source gate 后才能标记 DONE，不移动锁或改变 stop policy |
+| `S1 Typed Science stop contract` | CANDIDATE | typed stop request/receipt/outcome 已覆盖生产 caller；六轮独立审查 findings 均已修复，离线 history continuation 以 process-local typed quiescence proof、完整 probe recheck 与可复用 proof advancement 闭合并补真实 IPC 回归；仍须新 candidate review 与 exact-SHA source gate 后才能标记 DONE，不移动锁或改变 stop policy |
 
 ### Post-R2 Rebaseline 结论与后续门
 

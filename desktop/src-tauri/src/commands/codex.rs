@@ -537,19 +537,21 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
     let active_profile_is_codex = cfg
         .active_profile()
         .is_some_and(|profile| profile.template_id == "codex");
-    let (provider, tracked, remembered_runtime, version_cache) = {
+    let (provider, tracked, running_runtime, confirmed_runtime, version_cache) = {
         let mut st = lock(state);
         let provider = st.provider.clone();
         let tracked = tracked_proxy_state(&mut st);
         (
             provider,
             tracked,
-            st.science_runtime
-                .clone()
-                .or_else(|| st.science_confirmed_stopped.clone()),
+            st.science_runtime.clone(),
+            st.science_confirmed_stopped.clone(),
             st.science_version_cache.clone(),
         )
     };
+    let remembered_runtime = running_runtime
+        .clone()
+        .or_else(|| confirmed_runtime.clone());
     let untracked_proxy_port_occupied = matches!(
         tracked,
         TrackedProxyState::Absent | TrackedProxyState::Exited
@@ -583,7 +585,7 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
         } else {
             kill_child(&mut st.sandbox);
             st.sandbox_url = None;
-            st.science_confirmed_stopped = remembered_runtime;
+            st.science_confirmed_stopped = confirmed_runtime;
             st.science_runtime = None;
         }
         lifecycle.bump_generation();

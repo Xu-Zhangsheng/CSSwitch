@@ -264,6 +264,35 @@ pub(crate) struct VerifiedScienceStop {
     pub(crate) ownership_was_proven: bool,
 }
 
+impl VerifiedScienceStop {
+    /// Return the stopped runtime only when the operation proved the exact
+    /// managed launch identity. A closed port without a data-dir remains a
+    /// successful idempotent stop, but it is not an ownership receipt and
+    /// must never be promoted to `science_confirmed_stopped`.
+    pub(crate) fn confirmed_runtime(&self) -> Option<&ScienceRuntimeIdentity> {
+        self.ownership_was_proven
+            .then_some(self.runtime.as_ref())
+            .flatten()
+    }
+
+    pub(crate) fn proves_exact_stop_of(&self, expected: &ScienceRuntimeIdentity) -> bool {
+        self.confirmed_runtime() == Some(expected)
+    }
+
+    pub(crate) fn require_exact_stop_of(
+        self,
+        expected: &ScienceRuntimeIdentity,
+    ) -> Result<Self, ScienceStopFailure> {
+        if self.proves_exact_stop_of(expected) {
+            Ok(self)
+        } else {
+            Err(ScienceStopFailure::identity_drift(
+                "Science stop 已确认端口关闭，但未证明指定受管启动身份已停止。",
+            ))
+        }
+    }
+}
+
 pub(crate) type ScienceStopOutcome = Result<VerifiedScienceStop, ScienceStopFailure>;
 
 #[cfg(test)]

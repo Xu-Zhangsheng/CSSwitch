@@ -19,8 +19,10 @@ use crate::runtime::provider::{
 };
 use crate::runtime::proxy_lifecycle::ensure_proxy;
 use crate::runtime::science::{
+    managed_launch_token_for_runtime, probe_sandbox_runtime_cached,
     sandbox_listener_matches_runtime, sandbox_url, science_runtime_preflight as runtime_preflight,
-    settings_change_needs_teardown, stop_sandbox, SCIENCE_DOWNLOAD_URL,
+    settings_change_needs_teardown, stop_sandbox, SandboxScienceState, ScienceStopOwnershipReceipt,
+    ScienceStopRequest, SCIENCE_DOWNLOAD_URL,
 };
 use crate::runtime::settings::{
     remove_managed_sandbox_ssh_stub, system_ssh_config_path, validate_runtime_ports,

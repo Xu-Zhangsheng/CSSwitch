@@ -21,8 +21,8 @@ use super::{
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
     settings_change_needs_teardown, stop_runtime_from_probe, trusted_science_status,
     SandboxScienceState, SciencePostTermAction, ScienceRuntimeIdentity, ScienceRuntimeSource,
-    ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache, CACHED_ONCE_CHOICE,
-    MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
+    ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache, VerifiedScienceStop,
+    CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
 };
 
 #[test]
@@ -641,6 +641,33 @@ fn stop_probe_is_idempotent_only_for_confirmed_stopped_state() {
         assert_eq!(failure.message(), expected_message);
         assert_eq!(failure.to_string(), expected_message);
     }
+
+    let root = unique_temp_dir("science-stop-proof-projection").unwrap();
+    let bin = root.join("claude-science");
+    write_fake_bin(&bin, 0o755).unwrap();
+    let runtime = ScienceRuntimeIdentity {
+        path: bin.clone(),
+        source: ScienceRuntimeSource::InstalledApp,
+        version: None,
+        fingerprint: science_executable_fingerprint(&bin).unwrap(),
+    };
+    let unproven = VerifiedScienceStop {
+        runtime: None,
+        ownership_was_proven: false,
+    };
+    assert!(unproven.confirmed_runtime().is_none());
+    assert_eq!(
+        unproven.require_exact_stop_of(&runtime).unwrap_err().kind(),
+        ScienceStopFailureKind::IdentityDrift,
+        "a closed port without ownership proof must not satisfy an exact cleanup"
+    );
+    let proven = VerifiedScienceStop {
+        runtime: Some(runtime.clone()),
+        ownership_was_proven: true,
+    };
+    assert!(proven.proves_exact_stop_of(&runtime));
+    assert_eq!(proven.confirmed_runtime(), Some(&runtime));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -199,7 +199,14 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 - Science stop 已建立 process-local `ScienceStopRequest`、可选 exact
   `ScienceStopOwnershipReceipt` 与 `ScienceStopOutcome`；mode、settings、stop/quit、history、
   one-click compensation/DB restart、Codex downgrade 与 native exit 均从 typed outcome 判定
-  verified stop 或 classified failure，用户可见文本与 stop/TERM/KILL/wait 顺序保持不变；
+  verified stop 或 classified failure。端口已关闭但 data-dir / ownership receipt 不存在的
+  幂等成功不会发布 `science_confirmed_stopped`，也不能满足 one-click exact cleanup 或继续
+  需要停止既有 runtime 的 authority recovery。首次离线历史恢复则由进程内
+  `HistoryRecoveryScienceQuiescence::NoManagedRuntimeObserved` 冻结“preflight 未发现受管
+  runtime”这一不同的 typed 前置，并在 restore 前以完整 Science probe 重新校验 session、端口与
+  当前 typed state；若期间出现受管 runtime，restore 必须 exact-stop 并把 session proof 推进为
+  `ExactStopped` 后才能旋转引用。它不冒充 exact stop receipt。用户可见文本与
+  stop/TERM/KILL/wait 顺序保持不变；
 - `stop_all` 仍持有 `AppState` 锁跨越 stop script、TERM/KILL 与轮询等待；S1 没有建立锁外
   ownership claim、generation/identity CAS 或 replacement-runtime stale-result guard，不能据此直接
   移出长等待；

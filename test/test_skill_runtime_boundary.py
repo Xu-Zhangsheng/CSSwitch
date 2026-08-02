@@ -444,6 +444,65 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ScienceStopRequest::exact", session)
         self.assertIn("ScienceStopRequest::recover", session)
         self.assertIn("ScienceStopOwnershipReceipt::from_managed_launch", session)
+        self.assertIn("require_exact_stop_of", science_contracts)
+        self.assertGreaterEqual(session.count("require_exact_stop_of"), 5)
+        self.assertGreaterEqual(runtime.count("require_exact_stop_of"), 1)
+        self.assertIn("verified.confirmed_runtime().cloned()", session)
+        force_restart = session.split(
+            "pub(crate) fn force_restart_science_for_active", 1
+        )[1].split("fn typed_one_click_err", 1)[0]
+        history_restore = runtime_command_module("one_click").split(
+            "pub(super) async fn restore_history_choice_command", 1
+        )[1]
+        for recovery_caller in (force_restart, history_restore):
+            self.assertIn("ScienceStopRequest::exact", recovery_caller)
+            self.assertIn("require_exact_stop_of", recovery_caller)
+            self.assertIn("confirmed_runtime().cloned()", recovery_caller)
+            self.assertNotIn("stop_sandbox_state", recovery_caller)
+        self.assertIn("HistoryRecoveryScienceQuiescence", session)
+        self.assertIn("HistoryRecoveryScienceQuiescence", history_restore)
+        self.assertIn("ExactStopped(expected)", history_restore)
+        self.assertIn("NoManagedRuntimeObserved", history_restore)
+        self.assertIn("science_quiescence.clone()", history_restore)
+        self.assertIn("probe_sandbox_runtime_cached", history_restore)
+        self.assertIn("current_science_state != SandboxScienceState::Stopped", history_restore)
+        self.assertIn(
+            "session.science_quiescence =\n                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime)",
+            history_restore,
+        )
+        self.assertIn("remembered_runtime_was_present", session)
+        self.assertRegex(
+            session,
+            r"(?s)None if running_runtime_to_stop\.is_none\(\)\s*"
+            r"&& !remembered_runtime_was_present\s*"
+            r"&& science_state == SandboxScienceState::Stopped",
+        )
+        stopped_branch = force_restart.split("SandboxScienceState::Stopped =>", 1)[1].split(
+            "SandboxScienceState::Unknown", 1
+        )[0]
+        self.assertIn("return Err", stopped_branch)
+        self.assertNotIn("science_confirmed_stopped", stopped_branch)
+        no_runtime_branches = force_restart.split(
+            "None if confirmed_stopped.is_some()", 1
+        )[1]
+        self.assertIn("=> {}", no_runtime_branches)
+        self.assertIn("None if proc::loopback_port_in_use", no_runtime_branches)
+        no_receipt_branch = no_runtime_branches.rsplit("None =>", 1)[1]
+        self.assertIn("return Err", no_receipt_branch)
+        self.assertIn("没有 verified-stopped receipt", no_receipt_branch)
+        self.assertIn(
+            "app_state.science_confirmed_stopped = verified_stopped_runtime.clone()",
+            session,
+        )
+        codex = (ROOT / "desktop/src-tauri/src/commands/codex.rs").read_text()
+        self.assertIn("st.science_confirmed_stopped = confirmed_runtime", codex)
+        for typed_publisher in (
+            runtime_command_module("lifecycle"),
+            runtime_command_module("one_click"),
+            sandbox_session_one_click_source(),
+            codex,
+        ):
+            self.assertNotIn("science_confirmed_stopped = Some(", typed_publisher)
         self.assertNotIn("stop_sandbox_with_launch_token", science)
         stop_contract = science_lifecycle.split(
             "pub(crate) fn stop_sandbox", 1

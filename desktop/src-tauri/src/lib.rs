@@ -139,7 +139,14 @@ pub(crate) struct HistoryRecoverySession {
     pub(crate) sandbox_port: u16,
     pub(crate) auth_dir: std::path::PathBuf,
     pub(crate) sandbox_root: std::path::PathBuf,
+    pub(crate) science_quiescence: HistoryRecoveryScienceQuiescence,
     pub(crate) choices: Vec<HistoryRecoveryChoice>,
+}
+
+#[derive(Clone)]
+pub(crate) enum HistoryRecoveryScienceQuiescence {
+    ExactStopped(runtime::science::ScienceRuntimeIdentity),
+    NoManagedRuntimeObserved,
 }
 
 #[derive(Clone)]
@@ -249,17 +256,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn cleanup_for_exit_with<
-    R,
-    Cancel,
-    Wait,
-    Term,
-    Kill,
-    StopScience,
-    StopGateway,
-    StopValue,
-    StopError,
->(
+fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
     app: &tauri::AppHandle<R>,
     mut cancel_codex: Cancel,
     mut wait_codex: Wait,
@@ -277,7 +274,7 @@ fn cleanup_for_exit_with<
         &tauri::AppHandle<R>,
         &mut AppState,
         &runtime::science::ScienceRuntimeIdentity,
-    ) -> Result<StopValue, StopError>,
+    ) -> runtime::science::ScienceStopOutcome,
     StopGateway: FnMut(&mut AppState),
 {
     // First give login its protocol-level cancel path and read-only preflight
@@ -298,9 +295,16 @@ fn cleanup_for_exit_with<
     lifecycle.with_serialized(|| {
         let mut st = lock(&state);
         if let Some(runtime) = st.science_runtime.clone() {
-            let stop_result = stop_science(app, &mut st, &runtime);
-            if stop_result.is_ok() {
-                st.science_runtime = None;
+            match stop_science(app, &mut st, &runtime) {
+                Ok(verified) => {
+                    // Native exit remains best-effort and publishes no recovery
+                    // receipt, but it still consumes the typed stopped runtime
+                    // instead of reducing the outcome to string/boolean control.
+                    if verified.runtime.is_none() || verified.confirmed_runtime().is_some() {
+                        st.science_runtime = None;
+                    }
+                }
+                Err(_failure) => {}
             }
         }
         stop_gateway(&mut st);
@@ -881,10 +885,17 @@ mod tests {
                         science_attempts.set(attempt);
                         if attempt == 1 {
                             actions.borrow_mut().push("science:error".into());
-                            Err("controlled first Science stop failure".to_string())
+                            Err(
+                                crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
+                                    "controlled first Science stop failure",
+                                ),
+                            )
                         } else {
                             actions.borrow_mut().push("science:stopped".into());
-                            Ok(())
+                            Ok(crate::runtime::science::VerifiedScienceStop {
+                                runtime: Some(runtime.clone()),
+                                ownership_was_proven: true,
+                            })
                         }
                     },
                     |app_state| {

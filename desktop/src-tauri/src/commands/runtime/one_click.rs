@@ -272,7 +272,7 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
                 .active_profile()
                 .map(|profile| profile.id.clone())
                 .ok_or("当前选择已变化，本次历史恢复选择已作废")?;
-            let (auth_dir, sandbox_root, candidate, expected_port) = {
+            let (auth_dir, sandbox_root, candidate, expected_port, science_quiescence) = {
                 let app_state = lock(&state);
                 let session = app_state
                     .history_recovery
@@ -293,6 +293,7 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
                     session.sandbox_root.clone(),
                     choice.candidate.clone(),
                     session.sandbox_port,
+                    session.science_quiescence.clone(),
                 )
             };
 
@@ -301,13 +302,64 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
             // but stop only the exact managed runtime before changing credentials.
             {
                 let mut app_state = lock(&state);
-                if app_state.science_runtime.is_some() {
-                    stop_sandbox_state(&app, &mut app_state).map_err(|error| error.to_string())?;
-                } else if proc::loopback_port_in_use(
-                    expected_port,
-                    operation::LOCAL_HEALTH_TIMEOUT_MS,
-                ) {
-                    return Err("Science 端口被未知进程占用，已拒绝改写历史身份".into());
+                if let Some(runtime) = app_state.science_runtime.clone() {
+                    let receipt = managed_launch_token_for_runtime(expected_port, &runtime)
+                        .ok_or("历史恢复前无法取得 Science 的精确受管启动身份")?;
+                    let AppState {
+                        sandbox,
+                        sandbox_url,
+                        ..
+                    } = &mut *app_state;
+                    let verified = stop_sandbox(
+                        &app,
+                        sandbox,
+                        sandbox_url,
+                        ScienceStopRequest::exact(
+                            &runtime,
+                            ScienceStopOwnershipReceipt::from_managed_launch(&receipt),
+                        ),
+                    )
+                    .and_then(|verified| verified.require_exact_stop_of(&runtime))
+                    .map_err(|error| error.to_string())?;
+                    app_state.science_confirmed_stopped = verified.confirmed_runtime().cloned();
+                    app_state.science_runtime = None;
+                    let session = app_state
+                        .history_recovery
+                        .as_mut()
+                        .ok_or("历史恢复会话已过期")?;
+                    session.science_quiescence =
+                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime);
+                } else {
+                    let version_cache = app_state.science_version_cache.clone();
+                    let (current_science_state, current_runtime) =
+                        probe_sandbox_runtime_cached(expected_port, &version_cache)
+                            .map_err(|error| error.to_string())?;
+                    if current_science_state != SandboxScienceState::Stopped
+                        || current_runtime.is_some()
+                    {
+                        return Err(
+                            "历史恢复前 Science typed quiescence 复核失败；已拒绝改写历史身份"
+                                .into(),
+                        );
+                    }
+                    match science_quiescence {
+                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(expected) => {
+                            if app_state.science_confirmed_stopped.as_ref() != Some(&expected) {
+                                return Err(
+                                    "历史恢复的 verified-stopped receipt 已变化，本次选择已作废"
+                                        .into(),
+                                );
+                            }
+                        }
+                        crate::HistoryRecoveryScienceQuiescence::NoManagedRuntimeObserved => {
+                            if app_state.science_confirmed_stopped.is_some() {
+                                return Err(
+                                    "历史恢复的 Science quiescence 状态已变化，本次选择已作废"
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
                 }
             }
             #[cfg(test)]

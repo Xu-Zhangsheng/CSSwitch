@@ -115,7 +115,7 @@
       "id": "process.science",
       "kind": "managed-process",
       "durability": "process",
-      "authority": "Managed Claude Science listener/process identity for the isolated data directory; stop callers use a typed request, optional exact ownership receipt, and classified verified/failure outcome.",
+      "authority": "Managed Claude Science listener/process identity for the isolated data directory; stop callers use a typed request, optional exact ownership receipt, and classified verified/failure outcome. Idempotent closed-port success without ownership proof cannot publish confirmed-stopped authority or satisfy exact recovery cleanup.",
       "fields": ["child", "listener", "runtime_identity", "stop_request", "stop_ownership_receipt", "stop_outcome"],
       "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/lifecycle.rs", "symbol": "stop_sandbox"}
     },
