@@ -19,7 +19,8 @@
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
       "docs/architecture/runtime-state-transactions.md",
       "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-E.json",
-      "quality/runtime-mutation-inventory.v1.json"
+      "quality/runtime-mutation-inventory.v1.json",
+      "test/test_profile_pin_contract.py"
     ],
     "requirement_ids": [
       "REQ-083-PATHS",
@@ -66,6 +67,7 @@
         "the initial clean-context review found that unified compensation could overwrite a helper-preserved drifted journal; Journaled and Finalized progress now guard config restore with exact Some(record) or None CAS",
         "the repaired regression crosses the production compensation funnel after checkpoint rejection and preserves drifted config, authority, AppState, and recovery snapshot before any restore effect",
         "a second clean-context review found the guard order and direct-reader inventory incomplete; the candidate now preflights before restore effects and inventories the omitted boundaries",
+        "the first complete source gate exposed one stale profile-pin source assertion; it now binds the mutable full-record progress commit signature",
         "the existing config V1 identity round-trips all eight plain stages and both fingerprint-bearing environment stages without nested schema publication or implicit upgrade",
         "the existing config V2 identity round-trips all eight one-click phases, test-only profile-switch publication, and six interrupted-Gateway recovery outcomes across save/load/save",
         "the transaction source contract binds complete-record progress, checkpoint publication, terminal clear, binding commit, and canonical compensation/Gateway outcomes",
