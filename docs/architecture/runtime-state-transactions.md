@@ -196,6 +196,11 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 - ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与
   `boot_error` 现携带与手动一键同 shape 的 failed DTO；
 - config 的外部并发检测不是跨进程共享锁；
+- Science managed launch 已有 typed runtime identity/token，但
+  `stop_sandbox_with_launch_token` 仍返回 `Result<(), String>`；mode、settings、stop、history、
+  one-click compensation/DB restart 与 native exit 等 caller 尚无共同的 typed stop outcome，
+  因而不能在不新增 ownership/CAS 合同的情况下直接把 stop script、TERM/KILL 与轮询等待移出
+  `AppState` 锁；
 - `stop_all` 持有 `AppState` 锁跨越外部停止与信号等待；
 - 本地 Skill 安装不取得 `Lifecycle`；第二次 runtime-context 复核之后仍可能与
   stop/switch 交错；

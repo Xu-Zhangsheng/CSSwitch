@@ -426,8 +426,10 @@ exact-SHA clean-context completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW，并
 snapshot path / mode / size / content hash 与 evidence 脱敏边界。本文所在 evidence-only seal
 commit 只记录上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。
 R2 全部收口仅建立 source/unit 结论，不外推 artifact、installed/runtime、live provider、
-Science、SSH、签名、公证、Gatekeeper 或 release。下一步强制停止实施，只进入只读的
-Post-R2 Rebaseline；R3-R11 尚未获得新的实施授权。
+Science、SSH、签名、公证、Gatekeeper 或 release。只读 Post-R2 Rebaseline 已在
+`69a0305b5a9f1dfff8e4ee3191df15e9331d5179` 完成；它没有补做产品实现，也没有把
+source closure 外推到更高证据层。旧 R3-R11 顺序已被新的有限路线取代，任何实施仍须
+逐阶段明确授权。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
@@ -437,33 +439,42 @@ Post-R2 Rebaseline；R3-R11 尚未获得新的实施授权。
 | `R2-D` | DONE | interrupted-Gateway recovery typed V2 intent/outcome、canonical compensation、完整记录 CAS、跨重启 drift fail-closed、exact-SHA gate 与独立审查收口 |
 | `R2-E` | DONE | 现有 typed journal 的生产 writer / reader / rollback / clear 与 V1 fail-closed compatibility 矩阵收口；完整记录 CAS、补偿前置 guard、exact-SHA gate 与独立审查完成；checkpoint/F5/StopFailed/operation scope 保持 |
 | `R2-F` | DONE | R2-A-E schema、identity、CAS、recovery、compatibility 总盘点、聚焦矩阵、exact-SHA gate 与最终独立审查收口 |
-| `Post-R2 Rebaseline` | NEXT-READ-ONLY | R2 完成后先停止实施，按实时源码重新规划 R3+；在新路线获明确授权前，R3-R11 均不是实施 `NEXT` |
+| `Post-R2 Rebaseline` | DONE-READ-ONLY | exact HEAD 重新盘点 state owner、caller、长等待、mutation、失败链、typed outcome/receipt 与旧路线依赖 |
+| `S1 Typed Science stop contract` | NEXT-PROPOSED | 唯一建议 NEXT；尚未获得实施授权，只允许在授权后做 behavior-preserving typed stop request/receipt/outcome，不移动锁或改变 stop policy |
 
-### R2 退出与后续路线重规划门
+### Post-R2 Rebaseline 结论与后续门
 
-R2-E 先实时盘点所有生产 writer、reader、upgrade 与 recovery 入口，证明合法 V2
-组合、V1 fail-closed compatibility 和重启读取矩阵已经闭合；如果盘点暴露不一致，只允许
-在 typed journal 现有语义内修正。它不得借机新增 pre-stop durable intent、改变
-`StopFailed` 后的 stage / wait / restart 行为，也不得把 mode、settings、Codex、downgrade
-或 profile revocation 纳入 `runtime_transaction`。
+本次只读审计见
+[2026-08-02 Post-R2 运行架构再基线](../../docs/audits/2026-08-02-post-r2-runtime-rebaseline.md)。
+现场确认 review worktree 为 clean detached HEAD `69a0305b5a9f1dfff8e4ee3191df15e9331d5179`，
+主工作树本地 `next` 指向同一 SHA。该 HEAD 是 R2-F 的 evidence-only seal：真正取得完整
+十五 suite `GATE-SOURCE` completion seal 的 exact candidate 是
+`be961cb27701fd2adfde699c342cdd4dcf8a3d8d`。两者之间只修改本文与 R2-F change record，
+没有 production source、test 或 runtime inventory 差异；不得写成 `69a0305` 自身执行过完整 gate。
 
-R2-F 是 R2 的 source 层总收口：对齐 R2-A-E 的 inventory、schema / identity / CAS
-约束、focused regressions、完整 source gate 和独立审查，明确记录仍保留的 F5 与非
-source 证据缺口。R2-F 不是新功能片，也不外推 artifact、installed/runtime、live、签名、
-公证或 release 结论。
+R0-R2 **不需要补充产品实现或 source closure 才能进入下一阶段**。三阶段的目标、聚焦矩阵、
+exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭合。当前 seal HEAD
+若为了建立“`next@69a0305` 自身也有 exact-HEAD SOURCE-GREEN”而重跑完整 gate，只属于可选的
+证据增强，不是 R0-R2 的缺失退出条件；下一实施候选本来也必须重新取得完整 exact-SHA gate，
+因此默认不做这次重复补跑。artifact、installed/runtime、live provider/Science/SSH、签名、
+公证、Gatekeeper 与公开 release 仍为 `NOT-RUN`，这是阶段非目标，不是 R0-R2 未收口。
 
-R2-F 完成后设置强制停止点，执行一次只读的 **Post-R2 Rebaseline**：
+旧 R3-R11 不再作为当前执行顺序。新的有限路线为：
 
-1. 以当时 exact HEAD 的源码、测试和当前文档为基线，重新盘点 R3-R11 所涉及的 state
-   owner、caller、长等待、mutation 边界、失败链和现有 typed receipt；
-2. 复核依赖图、剩余风险与可独立验收的最小切片，判断 R3 / R4 是否仍应优先，允许调整、
-   合并、拆分、延后或取消旧阶段；
-3. 产出新的有限路线：每阶段写明要消除的不确定性、范围、前置、退出条件与明确非目标；
-4. 经用户明确授权新的唯一 `NEXT` 后才进入实施，不能由 R2 完成自动跳转到 R3。
+1. `S1` typed Science stop contract；
+2. `S2` Science process-local owner 与锁外等待/CAS；
+3. `S3` typed RuntimeMutationLease 与 local Skill race closure；
+4. `S4` ScienceHostAdapter 等价 façade；
+5. `S5` AuthorityTransaction 等价提取；
+6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
+7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-2026-07-31 rebaseline 对 R3-R11 的描述在该停止点仅作为历史架构输入。无论后续路线怎样
-调整，R5 中 `AuthorityTransaction` 的接口等价提取与改变 crash 行为的
-`PriorStopIntent/Outcome` 仍须分开；后者继续要求证据、operation contract 和独立授权。
+唯一建议 `NEXT` 是 `S1`。它只为现有 Science stop caller 建立 typed request、ownership
+receipt 与 `VerifiedStopped / identity drift / signal failure / exit unconfirmed / receipt cleanup
+failure` outcome，保持现有锁时机、command/DTO/text、stop/TERM/KILL/wait 顺序和 native-exit
+best-effort 语义。`S1` 不移动长等待、不拆 `AppState`、不建立 mutation lease，也不新增 F5
+pre-stop durable intent。改变 crash recovery 行为的 `PriorStopIntent/Outcome` 继续与
+`AuthorityTransaction` 接口等价提取分开，要求独立证据、operation contract 与明确授权。
 
 ## 下一轮重构的 P0 前置
 
