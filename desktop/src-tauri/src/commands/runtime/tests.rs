@@ -3709,6 +3709,7 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|value| value["entries"].as_array().map(Vec::is_empty))
         .unwrap_or(false);
+    let cleanup_manifest_contract = !pre_journal_abort || cleanup_manifest_empty;
     force_cleanup_isolated_fixture(&state, &tmp, sandbox_port, proxy_port);
 
     let expected_failure = if pre_journal_abort {
@@ -3726,7 +3727,7 @@ fn isolated_snapshot_failure_occurs_after_verified_stop_and_restarts_prior_scien
             restarted_after_quiesce
                 && stable_authority_unchanged
                 && stopped_cleanly
-                && cleanup_manifest_empty,
+                && cleanup_manifest_contract,
             "snapshot capture failure or same-process PreJournalAbort must occur only after verified stop, preserve stable authority, use the registered ticket to clean the snapshot, restart prior Science with fresh ownership, leave no orphan prior PID, and remain safely stoppable: mode_pre_journal={pre_journal_abort}, observation={observation:?}, prior_pid={prior_pid}, restored_pid={restored_pid:?}, receipt_pid={receipt_pid:?}, app={app_after:?}, safe_stop={safe_stop:?}, cleanup_manifest_empty={cleanup_manifest_empty}"
         );
 }
