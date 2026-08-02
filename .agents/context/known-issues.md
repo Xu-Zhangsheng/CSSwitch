@@ -400,6 +400,25 @@ BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录上述�
 installed/runtime、live provider、Science、SSH、签名、公证或 release。唯一 `NEXT` 前移到
 R2-F；当前不自动进入 R2-F，更不进入 R3。
 
+`R2-F` 当前为 candidate / `UNSEALED`：已对 R2-A–E 的 nested V1/V2 schema、合法
+operation / phase / exposure / compensation / Gateway outcome 组合、candidate fingerprint /
+snapshot ticket / previous binding identity、完整记录 CAS、one-click 与 test-only
+profile-switch writer、interrupted-Gateway recovery、V1 fail-closed compatibility 和重启读取
+矩阵做整体对齐。盘点没有发现需要修改生产源码的新不一致，也没有引入新的 product 或
+crash-recovery 语义。
+
+聚焦矩阵实际执行并 PASS：config V1/V2 reader / round-trip 4 passed、one-click V2
+checkpoint 与完整记录漂移回归 1 passed、transaction source contract 1 passed、test-only
+profile-switch 3 passed、proxy lifecycle module 20 passed / 1 explicitly ignored，其中
+interrupted Gateway recovery identities 为 4 passed / 1 explicitly ignored；
+`cargo check --offline --lib` PASS。受限沙箱中的 recovery identities 有 3 项因动态 loopback /
+process identity 权限失败；按隔离合同在沙箱外重跑后 recovery 为 4 passed / 0 failed /
+1 ignored，完整 proxy lifecycle module 为 20 passed / 0 failed / 1 ignored。
+完整 Rust lib 的首次并行执行有一条不属于 R2 的 Codex cancel 测试失败；该并行结果不作为
+证据，失败 identity 单独串行重跑 PASS，随后完整 lib 单线程重跑为 487 passed / 0 failed /
+41 explicitly ignored。完整十五 suite `GATE-SOURCE` 与 exact-SHA clean-context 最终审查
+仍为 `NOT-RUN` / pending，因此 R2 尚未建立总 source closure，也未进入 Post-R2 Rebaseline。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
@@ -407,7 +426,7 @@ R2-F；当前不自动进入 R2-F，更不进入 R3。
 | `R2-C` | DONE | test-only profile-switch writer typed V2、完整记录 CAS、exact-SHA gate 与独立审查收口；产品选择仍 intent-only |
 | `R2-D` | DONE | interrupted-Gateway recovery typed V2 intent/outcome、canonical compensation、完整记录 CAS、跨重启 drift fail-closed、exact-SHA gate 与独立审查收口 |
 | `R2-E` | DONE | 现有 typed journal 的生产 writer / reader / rollback / clear 与 V1 fail-closed compatibility 矩阵收口；完整记录 CAS、补偿前置 guard、exact-SHA gate 与独立审查完成；checkpoint/F5/StopFailed/operation scope 保持 |
-| `R2-F` | NEXT | 汇总复核 R2-A-E 的 schema、identity、recovery 与 compatibility 证据，完成 R2 source 层总验收；不引入新的产品或 crash-recovery 语义 |
+| `R2-F` | IN-PROGRESS | schema、identity、CAS、recovery、compatibility 总盘点与聚焦矩阵已完成；exact-SHA gate 与最终独立审查 pending |
 | `Post-R2 Rebaseline` | REQUIRED-AFTER-R2 | R2-F 完成后先停止实施，按实时源码重新规划 R3+；在新路线获明确授权前，R3-R11 均不是 `NEXT` |
 
 ### R2 退出与后续路线重规划门
@@ -445,9 +464,11 @@ R2-F 完成后设置强制停止点，执行一次只读的 **Post-R2 Rebaseline
   `bash test/test_launch_science_env_allowlist.sh`。
 - ~~Typed failure projection~~ **已闭合（source，stage）**：`runtime/failure.rs`
   的 `OneClickFailureKind` 在产生点标注；一键与 auto-boot 投影到冻结 coarse
-  stage；生产路径不再用 `science_failure_stage` 扫文案。journal checkpoint 仍为
-  string，但 domain/kind/phase/recovery/environment 已不再从 message、recovery token
-  或中文错误文本反向分类；人读 message 仅作展示。验证：
+  stage；生产路径不再用 `science_failure_stage` 扫文案。journal checkpoint 仍是与 UI
+  stage 分离的持久阶段域，但 one-click、compiled test-only profile-switch 与
+  interrupted-Gateway recovery writer 已写 typed V2，V1 只保留 fail-closed 兼容读取与原
+  wire 序列化；domain/kind/phase/recovery/environment 已不再从 message、recovery token
+  或中文错误文本反向分类，人读 message 仅作展示。验证：
   `cargo test --lib failure::`、
   `science_operation_failures_have_stable_structured_stages`、
   `auto_boot_rejects_structured_runtime_failure`。
