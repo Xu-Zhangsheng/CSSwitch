@@ -117,7 +117,8 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 ## 中断 Gateway 恢复
 
 应用重启后的 Gateway recovery 只接管能够证明为 profile-switch 的事务：当前 V2 必须是
-`profile_switch / start_formal_gateway|recover_interrupted_gateway`，兼容 V1 必须是
+`profile_switch / start_formal_gateway|recover_interrupted_gateway` 且 compensation 必须仍为
+`not_started`，兼容 V1 必须是
 `start_formal_gateway|recover_interrupted_gateway`；one-click snapshot、其他 V1 phase、target
 漂移或同进程仍持有 Child 的路径都不会探测或停止 listener。兼容 V1 一旦需要继续恢复，
 只会原子升级为 V2，不再写回 string stage。
@@ -130,7 +131,8 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 若前次已发布 recovery intent 而重启后 listener 已消失，则写
 `absent_after_attempt`；`stopped|absent_after_attempt` 是终态，后续调用不会因端口重新出现而
 再次探测或停止 listener。任一 CAS 期间的 transaction/target、previous binding/Gateway、
-operation/phase、exposure、compensation 或 outcome 漂移都保留当前记录并 fail-closed；不会
+operation/phase、exposure、compensation 或 outcome 漂移都保留当前记录并 fail-closed；该
+eligibility 在后续重启仍会拒绝 compensation 已漂移的记录，不会
 回滚 stage、重启 prior Gateway 或改变既有 TERM/wait 策略。
 
 ## 历史恢复

@@ -1138,6 +1138,45 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     );
     assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 
+    let drifted_restart_journal =
+        crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+            schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "tx-drifted-recovery-restart".into(),
+            operation: crate::config::RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: no_listener_cfg.active_id.clone(),
+            phase: crate::config::RuntimeTransactionPhase::RecoverInterruptedGateway,
+            runtime_fingerprint: None,
+            environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: None,
+            previous_gateway: None,
+            compensation: crate::config::RuntimeCompensationState::InProgress,
+            gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::Pending,
+        });
+    no_listener_cfg.runtime_transaction = Some(drifted_restart_journal.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    let drifted_restart_before = fs::read(dir.join("config.json")).unwrap();
+    let drifted_restart_error =
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap_err();
+    assert_eq!(
+        drifted_restart_error.kind(),
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot
+    );
+    assert_eq!(
+        fs::read(dir.join("config.json")).unwrap(),
+        drifted_restart_before,
+        "a compensation-drifted recovery record must remain fail-closed after restart"
+    );
+    assert_eq!(
+        crate::config::load_from(&dir).unwrap().runtime_transaction,
+        Some(drifted_restart_journal)
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        ErrorKind::WouldBlock,
+        "restart eligibility must reject compensation drift before listener probing"
+    );
+
     let completed_journal =
         crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
             schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,

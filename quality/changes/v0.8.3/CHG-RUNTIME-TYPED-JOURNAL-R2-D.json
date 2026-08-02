@@ -4,7 +4,7 @@
     "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-D",
     "version": "v0.8.3",
     "title": "Migrate interrupted Gateway recovery to the V2 runtime journal",
-    "summary": "Migrates interrupted profile-switch Gateway recovery from a V1 string stage to typed V2 intent and stop outcomes. The recovery path accepts only provable profile-switch V1/V2 records, upgrades compatibility V1 without writing it back, publishes Pending before the existing exact managed-Gateway stop, and then records Stopped, NotManaged, SignalFailed, or ExitUnconfirmed with complete-record CAS. A previously published recovery intent whose listener later disappears records AbsentAfterAttempt; Stopped and AbsentAfterAttempt are terminal and cannot trigger a later listener stop. Target, snapshot, listener authentication, final identity recheck, TERM/wait, typed frontend projection, no-rollback, and no-prior-restart behavior remain unchanged.",
+    "summary": "Migrates interrupted profile-switch Gateway recovery from a V1 string stage to typed V2 intent and stop outcomes. The recovery path accepts only provable profile-switch V1/V2 records, including canonical NotStarted compensation across restart, upgrades compatibility V1 without writing it back, publishes Pending before the existing exact managed-Gateway stop, and then records Stopped, NotManaged, SignalFailed, or ExitUnconfirmed with complete-record CAS. A previously published recovery intent whose listener later disappears records AbsentAfterAttempt; Stopped and AbsentAfterAttempt are terminal and cannot trigger a later listener stop. Target, snapshot, listener authentication, final identity recheck, TERM/wait, typed frontend projection, no-rollback, and no-prior-restart behavior remain unchanged.",
     "status": "active",
     "owner": "quality-kernel",
     "changed_paths": [
@@ -62,7 +62,7 @@
       "basis": [
         "the focused post-stage identity covers V1 upgrade, current V2 input, Pending-before-recheck ordering, four terminal cleanup outcomes, secret-free serialization, and complete-record drift before intent and outcome publication",
         "the existing isolated signal/wait/retry matrix passes with typed SignalFailed, ExitUnconfirmed, NotManaged, and Stopped persistence while preserving the existing production wait and retry identity behavior",
-        "the mismatch identity preserves mismatched, unsupported, no-journal, same-process, and first-attempt-absent records, converts a prior attempt to AbsentAfterAttempt, and freezes terminal no-retry behavior",
+        "the mismatch identity preserves mismatched, unsupported, restart drift, no-journal, same-process, and first-attempt-absent records before probing; converts prior intent to AbsentAfterAttempt; and freezes terminal no-retry behavior",
         "the transaction source contract binds complete-record CAS, typed intent and terminal outcomes, and the absence of V1 stage mutation",
         "the source runtime boundary binds interrupted recovery to the record-level previous Gateway accessor instead of the removed V1 field expression",
         "metadata, inventory, document governance, quality focused, format, diff, and the complete 528-discovered Desktop Rust lib passed; exact-SHA GATE-SOURCE and clean-context review remain NOT-RUN"

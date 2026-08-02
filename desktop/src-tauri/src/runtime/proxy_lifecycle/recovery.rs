@@ -166,7 +166,8 @@ fn interrupted_gateway_recovery_record(
                     typed.phase,
                     config::RuntimeTransactionPhase::StartFormalGateway
                         | config::RuntimeTransactionPhase::RecoverInterruptedGateway
-                ) =>
+                )
+                && typed.compensation == config::RuntimeCompensationState::NotStarted =>
         {
             typed.clone()
         }
