@@ -2560,8 +2560,11 @@ fn one_click_login_with_options<R: Runtime>(
                                 &launch_runtime,
                                 ScienceStopOwnershipReceipt::from_managed_launch(&first_token),
                             ),
-                        )
-                        .and_then(|verified| verified.require_exact_stop_of(&launch_runtime)),
+                        ),
+                        &rollback_context,
+                    )?;
+                    let verified = one_click_step(
+                        verified.require_exact_stop_of(&launch_runtime),
                         &rollback_context,
                     )?;
                     current.science_runtime = None;

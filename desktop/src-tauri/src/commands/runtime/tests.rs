@@ -4155,6 +4155,12 @@ fn isolated_r0_one_click_history_attention() {
 #[test]
 #[ignore = "explicit Acceptance-boundary history restore command contract; temp HOME, managed fake Science, and loopback only"]
 fn isolated_r0_history_restore_command_contract() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     let oracle =
         env::var("CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE").unwrap_or_else(|_| "success".into());
     assert!(matches!(
@@ -4175,6 +4181,7 @@ fn isolated_r0_history_restore_command_contract() {
 
     let mut env_guard = EnvGuard::new();
     env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
     env_guard.set("SCIENCE_BIN", &fake_science);
     env_guard.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
     env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
