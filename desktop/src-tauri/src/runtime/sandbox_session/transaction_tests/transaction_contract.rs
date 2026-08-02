@@ -239,6 +239,39 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && !gateway_projection.contains(".contains("),
         "interrupted Gateway command projection must map kind and recovery from typed fields"
     );
+    let gateway_recovery_writer = gateway_recovery_source
+        .split("fn interrupted_gateway_recovery_record")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("/// Consume an interrupted profile-switch journal")
+                .next()
+        })
+        .expect("interrupted Gateway typed writer must remain discoverable");
+    let gateway_recovery_finish = gateway_recovery_source
+        .split("fn finish_interrupted_gateway_recovery")
+        .nth(1)
+        .expect("interrupted Gateway outcome writer must remain discoverable");
+    assert!(
+        gateway_recovery_writer.contains("RuntimeTransactionRecord::V2")
+            && gateway_recovery_writer.contains(
+                "current.runtime_transaction.as_ref() != Some(expected)"
+            )
+            && gateway_recovery_writer.contains("RuntimeTransactionOperation::ProfileSwitch")
+            && gateway_recovery_writer.contains("RuntimeTransactionPhase::RecoverInterruptedGateway")
+            && gateway_recovery_writer.contains("RuntimeGatewayStopOutcome::AbsentAfterAttempt")
+            && gateway_recovery_source.contains("interrupted_gateway_recovery_is_complete")
+            && gateway_recovery_finish.contains("RuntimeGatewayStopOutcome::Pending")
+            && gateway_recovery_finish.contains("RuntimeGatewayStopOutcome::Stopped")
+            && gateway_recovery_finish.contains("RuntimeGatewayStopOutcome::NotManaged")
+            && gateway_recovery_finish.contains("RuntimeGatewayStopOutcome::SignalFailed")
+            && gateway_recovery_finish.contains("RuntimeGatewayStopOutcome::ExitUnconfirmed")
+            && gateway_recovery_finish.contains(
+                "publish_interrupted_gateway_recovery_record(dir, &pending, outcome)"
+            )
+            && !gateway_recovery_source.contains(".as_v1_mut()")
+            && !gateway_recovery_source.contains("当前 R2-A 兼容层"),
+        "interrupted Gateway recovery must publish typed V2 intent/outcomes with complete-record CAS and never write a V1 string stage"
+    );
     let ordinary_constructor = source
         .split("fn typed_one_click_err")
         .nth(1)

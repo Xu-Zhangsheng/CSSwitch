@@ -228,18 +228,18 @@
       "format": "RuntimeTransactionJournal embedded in config v4",
       "authority_owner": "config.transaction",
       "fields": ["previous_binding", "previous_gateway", "stage", "target_profile_id", "transaction_id"],
-      "writers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "impl Serialize for RuntimeTransactionRecord"}],
       "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "v1_environment_state"}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"},
-      "known_gap": "Compatibility/Gateway-recovery phases still use the V1 string stage; the record does not cover mode/settings/Codex/downgrade/profile revocation."
+      "known_gap": "Compatibility parsing and unchanged-wire serialization remain, but no runtime operation originates or advances a V1 record after R2-D; the record does not cover mode/settings/Codex/downgrade/profile revocation."
     },
     {
       "id": "record.runtime-transaction-v2",
       "format": "RuntimeTransactionV2 embedded in config v4",
       "authority_owner": "config.transaction",
       "fields": ["compensation", "environment_exposure", "gateway_stop_outcome", "operation", "phase", "previous_binding", "previous_gateway", "runtime_fingerprint", "schema_version", "snapshot_ticket", "target_profile_id", "transaction_id"],
-      "writers": [{"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "apply_candidate_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "write_one_click_checkpoint"}],
-      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "is_expected_profile_switch_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "resolve_profile_switch_handoff"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "commit_healthy_reopen_binding"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "apply_candidate_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "publish_interrupted_gateway_recovery_record"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "write_one_click_checkpoint"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/runtime/profile_switch.rs", "symbol": "is_expected_profile_switch_transaction"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "resolve_profile_switch_handoff"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "commit_healthy_reopen_binding"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionV2"},
       "known_gap": "One-click prior-Science stop can still precede durable intent; a restart with ActiveRecovery but no journal remains manual recovery."
     },
@@ -469,15 +469,16 @@
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "internal-recovery", "name": "recover_interrupted_gateway", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "bundled_callers": ["desktop/src-tauri/src/commands/runtime/one_click.rs::one_click_login_command"]}],
       "state_owners": ["app.gateway", "config.desired", "config.transaction", "process.gateway"],
-      "durable_records": {"reads": ["record.config-v4", "record.runtime-transaction-v1"], "writes": ["record.runtime-transaction-v1"], "clears": []},
-      "ordered_effects": ["validate journal target/stage", "reject same-process ownership or unknown listener", "authenticate secret/health/contract/binary/uid/PID", "write recover_interrupted_gateway stage", "attempt exact managed Gateway stop"],
+      "durable_records": {"reads": ["record.config-v4", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.runtime-transaction-v2"], "clears": []},
+      "ordered_effects": ["validate complete profile-switch journal identity and target", "refuse listener probing after Stopped or AbsentAfterAttempt", "reject snapshot-bearing or unsupported journals, same-process ownership, and unknown listeners", "authenticate path secret and initial public health/contract identity; resolve the packaged binary", "complete-record CAS typed recover_interrupted_gateway/Pending intent", "recheck exact binary/uid/PID and final listener identity; attempt exact managed Gateway stop", "complete-record CAS typed terminal stop outcome"],
       "failure_points": [
-        {"id": "interrupted-recovery.pre-stage", "after_effects": ["no durable change"], "observed_outcome": "Identity mismatch preserves listener and original journal.", "compensation": "none"},
-        {"id": "interrupted-recovery.stop-failed", "after_effects": ["journal stage changed", "TERM/KILL may have been attempted"], "observed_outcome": "Return error without stage rollback or prior Gateway restart; later retry rechecks identity.", "compensation": "none"}
+        {"id": "interrupted-recovery.pre-stage", "after_effects": ["no durable change"], "observed_outcome": "Identity or complete-record mismatch preserves listener and original journal.", "compensation": "none"},
+        {"id": "interrupted-recovery.stop-failed", "after_effects": ["typed Pending intent published", "TERM/KILL may have been attempted"], "observed_outcome": "Persist NotManaged, SignalFailed, or ExitUnconfirmed when the complete Pending record still matches; no stage rollback or prior Gateway restart; later retry rechecks identity.", "compensation": "none"},
+        {"id": "interrupted-recovery.outcome-publication", "after_effects": ["typed Pending intent published", "exact stop result observed"], "observed_outcome": "A write failure or record drift preserves the current record and returns typed failure; process effects are not reversed.", "compensation": "none"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "contract": "Preserve current post-stage StopFailed behavior: no rollback, late-exit wait policy, or prior restart."},
       "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_matrix"],
-      "known_gaps": ["Stop outcome is string/error based and stage update precedes process stop."]
+      "known_gaps": ["The durable Pending intent still precedes process stop; a terminal-outcome CAS or write failure can leave Pending after the process result occurred."]
     },
     {
       "id": "op.start-gateway-only",

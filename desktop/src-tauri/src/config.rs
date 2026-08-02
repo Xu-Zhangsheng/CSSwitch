@@ -660,6 +660,7 @@ pub struct RuntimeTransactionV1 {
 
 /// Source-compatible name for the unversioned journal written before R2.
 /// New code should store it through [`RuntimeTransactionRecord::V1`].
+#[allow(dead_code)]
 pub type RuntimeTransactionJournal = RuntimeTransactionV1;
 
 pub const RUNTIME_TRANSACTION_SCHEMA_VERSION_V2: u32 = 2;
@@ -871,6 +872,7 @@ impl RuntimeTransactionRecord {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_v1(&self) -> Option<&RuntimeTransactionV1> {
         match self {
             Self::V1(journal) => Some(journal),
@@ -878,6 +880,7 @@ impl RuntimeTransactionRecord {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_v1_mut(&mut self) -> Option<&mut RuntimeTransactionV1> {
         match self {
             Self::V1(journal) => Some(journal),
@@ -902,6 +905,7 @@ impl RuntimeTransactionRecord {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn legacy_stage(&self) -> Option<&str> {
         self.as_v1().map(|journal| journal.stage.as_str())
     }

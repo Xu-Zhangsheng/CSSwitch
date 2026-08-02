@@ -12,7 +12,7 @@
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
-| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click 与 compiled test-only profile-switch writer 写 typed V2，兼容与 interrupted-Gateway recovery writer 仍可读写 V1 |
+| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | `science-managed-launch.v1.json` + live listener identity | 持久 receipt 与 live 组合 |
 | virtual login | Science credential files + CSSwitch `virtual-org.v1.json` marker | 分属 Science/CSSwitch |
@@ -69,7 +69,7 @@ Skill 安装不取得 `Lifecycle`，而是在文件选择前后复核相同
 | 阶段域 | 形态 | 用途 |
 |---|---|---|
 | operation trace | typed `OperationStage` | 脱敏运行日志和耗时 |
-| runtime journal | versioned V1/V2；one-click V2 使用 typed `phase` | crash/recovery 的持久 checkpoint |
+| runtime journal | versioned V1/V2；one-click 与 interrupted-Gateway recovery V2 使用 typed `phase` / outcome | crash/recovery 的持久 checkpoint |
 | frontend DTO | coarse string | 用户可见失败定位 |
 
 一键/auto-boot 失败由内部 `runtime/failure.rs` 的 `OneClickFailureKind` 在**产生点**标注，再投影到冻结的 coarse stage（`prepare|science_stop|gateway_start|catalog_verify|science_start`）与 `recovery_status` / `environment_status`。**不得**用用户文案 `contains` 反推 stage。frontend DTO、operation trace 与 runtime journal 仍是三个不同阶段域；one-click V2 的 typed phase 不改变 UI DTO。
@@ -114,6 +114,25 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
   checkpoint，或由 exact healthy-reopen CAS 提交 binding 并清除；当前 journal 消失、回退
   V1 或 retarget 时均保留当前状态并拒绝覆盖。普通 one-click 或重启不会把该记录当作可接管事务。
 
+## 中断 Gateway 恢复
+
+应用重启后的 Gateway recovery 只接管能够证明为 profile-switch 的事务：当前 V2 必须是
+`profile_switch / start_formal_gateway|recover_interrupted_gateway`，兼容 V1 必须是
+`start_formal_gateway|recover_interrupted_gateway`；one-click snapshot、其他 V1 phase、target
+漂移或同进程仍持有 Child 的路径都不会探测或停止 listener。兼容 V1 一旦需要继续恢复，
+只会原子升级为 V2，不再写回 string stage。
+
+通过 path secret、初始公开 Gateway identity/contract 与 packaged binary 可用性检查后，recovery
+先用调用方读取的**完整原记录** CAS 发布
+`profile_switch / recover_interrupted_gateway / gateway_stop_outcome=pending`。既有精确 stop
+随后复核 binary/uid/PID 与最终 listener identity，再尝试信号/wait；
+`stopped|not_managed|signal_failed|exit_unconfirmed` 由第二次完整记录 CAS 持久化。
+若前次已发布 recovery intent 而重启后 listener 已消失，则写
+`absent_after_attempt`；`stopped|absent_after_attempt` 是终态，后续调用不会因端口重新出现而
+再次探测或停止 listener。任一 CAS 期间的 transaction/target、previous binding/Gateway、
+operation/phase、exposure、compensation 或 outcome 漂移都保留当前记录并 fail-closed；不会
+回滚 stage、重启 prior Gateway 或改变既有 TERM/wait 策略。
+
 ## 历史恢复
 
 frontend 只持有一次性 opaque reference。backend 复核 active profile、port、session 后：
@@ -148,9 +167,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 ## 当前架构缺口
 
 - ~~journal/trace/frontend stage 没有统一 typed source~~ 一键/auto-boot UI stage
-  已由 `OneClickFailureKind` 投影；one-click journal 已写 typed V2，但
-  interrupted Gateway compatibility writer 仍保留 V1 string stage；compiled test-only
-  profile-switch writer 已写 typed V2；
+  已由 `OneClickFailureKind` 投影；one-click、compiled test-only profile-switch 与
+  interrupted Gateway recovery writer 均写 typed V2，V1 只保留兼容读取与原 wire 序列化；
 - F5：prior Science 的 verified stop 仍可早于 durable intent；
 - ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
 - ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与

@@ -329,14 +329,33 @@ manifest 含十五个 PASS test result 与十五个 PASS source observation，�
 completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW。本文所在 evidence-only seal commit 只记录
 上述已验证 candidate 与 run，不声称 seal commit 本身执行过完整 gate。R2-C 仅建立 source/unit
 结论，不外推 artifact、installed/runtime、live provider、Science、SSH、签名、公证或 release。
-唯一 `NEXT` 是 `R2-D`；本窗口停止，不提前迁移其他 runtime writer。
+`R2-D` implementation candidate 已完成但尚未收口：interrupted profile-switch Gateway
+recovery 只接受可证明的 `start_formal_gateway|recover_interrupted_gateway` V1 兼容记录或
+对应的 V2 profile-switch 记录；V1 继续恢复时以完整原记录 CAS 原子升级为
+`operation=profile_switch / phase=recover_interrupted_gateway / gateway_stop_outcome=pending`，
+不再写回 string stage。既有 path-secret/health/contract/binary/uid/PID 与最终 listener
+identity recheck 之后，stop 结果以第二次完整记录 CAS 持久化为
+`stopped|not_managed|signal_failed|exit_unconfirmed`；前次 recovery intent 后 listener 已消失
+则记为 `absent_after_attempt`；`stopped|absent_after_attempt` 为终态，不会再次探测或停止
+后来出现的 listener。任一 transaction/target、previous binding/Gateway、
+operation/phase、exposure、compensation 或 outcome 漂移都保留当前记录并 fail-closed。
+
+当前 focused source/unit 已 PASS：post-stage typed outcome / V1 upgrade / V2 continuation /
+complete-record 双 CAS identity、真实测试进程 signal/wait/retry matrix、target/unsupported
+journal/absent-listener identity 与 transaction source contract 均通过；动态 loopback 与测试
+自有进程仅在隔离沙箱外执行，明确避开 8765。`cargo check --offline --lib` PASS。metadata、
+inventory、document governance、quality focused 14/14、format 与 diff check 均 PASS；当前完整
+Desktop Rust lib 为 528 discovered / 487 passed / 0 failed / 41 approved ignored / 0 skipped /
+0 todo / 0 not run。clean-context review、exact-SHA 十五 suite `GATE-SOURCE` 与 completion seal
+仍为 `NOT-RUN`，不得提前声称 R2-D DONE。
+唯一 `NEXT` 是完成 R2-D candidate 验证与独立审查；本窗口不进入 R2-E/F。
 
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
 | `R2-B` | DONE | 八个 one-click checkpoint V2、同一 candidate/ticket identity、PreJournalAbort、exact-SHA gate 与独立审查收口；F5 保留 |
 | `R2-C` | DONE | test-only profile-switch writer typed V2、完整记录 CAS、exact-SHA gate 与独立审查收口；产品选择仍 intent-only |
-| `R2-D` | NEXT（NOT-STARTED） | interrupted-Gateway recovery writer；不在本窗口范围 |
+| `R2-D` | ACTIVE（未收口） | interrupted-Gateway recovery typed V2 intent/outcome、完整记录 CAS；待独立审查与 exact-SHA gate |
 | `R2-E`–`R2-F` | NOT-STARTED | 不在本窗口范围 |
 
 ## 下一轮重构的 P0 前置

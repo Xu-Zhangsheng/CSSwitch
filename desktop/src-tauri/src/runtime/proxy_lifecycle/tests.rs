@@ -51,7 +51,7 @@ impl Drop for TestOwnedChild {
 
 fn r0_interrupted_recovery_fixture(
     label: &str,
-) -> (std::path::PathBuf, crate::config::RuntimeTransactionJournal) {
+) -> (std::path::PathBuf, crate::config::RuntimeTransactionRecord) {
     let dir = std::env::temp_dir().join(format!(
         "csswitch-r0-interrupted-recovery-real-{label}-{}-{}",
         std::process::id(),
@@ -61,17 +61,19 @@ fn r0_interrupted_recovery_fixture(
             .as_nanos()
     ));
     fs::create_dir_all(&dir).unwrap();
-    let journal = crate::config::RuntimeTransactionJournal {
-        transaction_id: format!("tx-real-{label}"),
-        target_profile_id: "fixture-profile".into(),
-        stage: "start_formal_gateway".into(),
-        previous_binding: None,
-        previous_gateway: None,
-    };
+    let journal: crate::config::RuntimeTransactionRecord =
+        crate::config::RuntimeTransactionJournal {
+            transaction_id: format!("tx-real-{label}"),
+            target_profile_id: "fixture-profile".into(),
+            stage: "start_formal_gateway".into(),
+            previous_binding: None,
+            previous_gateway: None,
+        }
+        .into();
     crate::config::save_to(
         &dir,
         &crate::config::Config {
-            runtime_transaction: Some(journal.clone().into()),
+            runtime_transaction: Some(journal.clone()),
             ..Default::default()
         },
     )
@@ -120,15 +122,50 @@ fn spawn_r0_recovery_listener(
 
 fn assert_r0_recovery_stage(
     dir: &std::path::Path,
-    journal: &crate::config::RuntimeTransactionJournal,
+    journal: &crate::config::RuntimeTransactionRecord,
+    expected_outcome: crate::config::RuntimeGatewayStopOutcome,
 ) {
     let current = crate::config::load_from(dir).unwrap();
     let current_journal = current.runtime_transaction.unwrap();
-    assert_eq!(current_journal.transaction_id(), journal.transaction_id);
+    assert_eq!(current_journal.transaction_id(), journal.transaction_id());
     assert_eq!(
-        current_journal.legacy_stage(),
-        Some("recover_interrupted_gateway")
+        current_journal.target_profile_id(),
+        journal.target_profile_id()
     );
+    assert_eq!(
+        current_journal.previous_binding(),
+        journal.previous_binding()
+    );
+    assert_eq!(
+        current_journal.previous_gateway(),
+        journal.previous_gateway()
+    );
+    let typed = current_journal
+        .as_v2()
+        .expect("interrupted Gateway recovery must publish a V2 journal");
+    assert_eq!(
+        typed.operation,
+        crate::config::RuntimeTransactionOperation::ProfileSwitch
+    );
+    assert_eq!(
+        typed.phase,
+        crate::config::RuntimeTransactionPhase::RecoverInterruptedGateway
+    );
+    assert_eq!(
+        typed.environment_exposure,
+        crate::config::RuntimeEnvironmentExposure::NotExposed
+    );
+    assert_eq!(typed.runtime_fingerprint, None);
+    assert_eq!(typed.snapshot_ticket, None);
+    assert_eq!(
+        typed.compensation,
+        crate::config::RuntimeCompensationState::NotStarted
+    );
+    assert_eq!(typed.gateway_stop_outcome, expected_outcome);
+    let encoded = serde_json::to_string(typed).unwrap();
+    for forbidden in ["api_key", "base_url", "credential", "secret", "/Users/"] {
+        assert!(!encoded.contains(forbidden), "journal leaked `{forbidden}`");
+    }
 }
 
 fn health(provider: &str, launch_id: &str, catalog_fp: &str) -> crate::proc::GatewayHealth {
@@ -199,11 +236,12 @@ fn interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity(
 
 #[test]
 fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
-    for (label, cleanup, expected_result) in [
+    for (label, cleanup, expected_result, expected_outcome) in [
         (
             "not-managed",
             ManagedGatewayCleanup::NotManaged,
             Err(InterruptedGatewayRecoveryErrorKind::NotManaged),
+            crate::config::RuntimeGatewayStopOutcome::NotManaged,
         ),
         (
             "signal-failed",
@@ -214,6 +252,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             Err(InterruptedGatewayRecoveryErrorKind::StopUnknown(
                 InterruptedGatewayStopUnknownKind::SignalFailed,
             )),
+            crate::config::RuntimeGatewayStopOutcome::SignalFailed,
         ),
         (
             "exit-unconfirmed",
@@ -224,11 +263,13 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             Err(InterruptedGatewayRecoveryErrorKind::StopUnknown(
                 InterruptedGatewayStopUnknownKind::ExitUnconfirmed,
             )),
+            crate::config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
         ),
         (
             "stopped",
             ManagedGatewayCleanup::Stopped(4242),
             Ok(InterruptedGatewayRecoveryOutcome::Stopped(4242)),
+            crate::config::RuntimeGatewayStopOutcome::Stopped,
         ),
     ] {
         let dir = std::env::temp_dir().join(format!(
@@ -246,12 +287,30 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             catalog_fp: "prior-catalog".into(),
             binding_fp: "prior-binding".into(),
         };
-        let journal = crate::config::RuntimeTransactionJournal {
+        let legacy_journal = crate::config::RuntimeTransactionJournal {
             transaction_id: format!("tx-{label}"),
             target_profile_id: "target-profile".into(),
             stage: "start_formal_gateway".into(),
             previous_binding: Some(previous_binding.clone()),
             previous_gateway: None,
+        };
+        let journal = if label == "stopped" {
+            crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+                schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+                transaction_id: legacy_journal.transaction_id.clone(),
+                operation: crate::config::RuntimeTransactionOperation::ProfileSwitch,
+                target_profile_id: legacy_journal.target_profile_id.clone(),
+                phase: crate::config::RuntimeTransactionPhase::StartFormalGateway,
+                runtime_fingerprint: None,
+                environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+                snapshot_ticket: None,
+                previous_binding: legacy_journal.previous_binding.clone(),
+                previous_gateway: legacy_journal.previous_gateway.clone(),
+                compensation: crate::config::RuntimeCompensationState::NotStarted,
+                gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+            })
+        } else {
+            legacy_journal.into()
         };
         let (model_catalog, default_model_route_id, role_bindings) =
             crate::model_catalog::new_profile_catalog(
@@ -274,7 +333,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             }],
             active_id: "target-profile".into(),
             runtime_binding: Some(previous_binding.clone()),
-            runtime_transaction: Some(journal.clone().into()),
+            runtime_transaction: Some(journal.clone()),
             ..Default::default()
         };
         crate::config::save_to(&dir, &cfg).unwrap();
@@ -298,23 +357,127 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         }
         let after = crate::config::load_from(&dir).unwrap();
         let after_journal = after.runtime_transaction.unwrap();
-        assert_eq!(after_journal.transaction_id(), journal.transaction_id);
-        assert_eq!(after_journal.target_profile_id(), journal.target_profile_id);
+        assert_eq!(after_journal.transaction_id(), journal.transaction_id());
         assert_eq!(
-            after_journal.previous_binding(),
-            journal.previous_binding.as_ref()
+            after_journal.target_profile_id(),
+            journal.target_profile_id()
         );
-        assert_eq!(
-            after_journal.previous_gateway(),
-            journal.previous_gateway.as_ref()
-        );
-        assert_eq!(
-            after_journal.legacy_stage(),
-            Some("recover_interrupted_gateway")
-        );
+        assert_eq!(after_journal.previous_binding(), journal.previous_binding());
+        assert_eq!(after_journal.previous_gateway(), journal.previous_gateway());
+        assert_r0_recovery_stage(&dir, &journal, expected_outcome);
         assert_eq!(after.runtime_binding, Some(previous_binding));
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    let cas_dir = std::env::temp_dir().join(format!(
+        "csswitch-r2-d-interrupted-recovery-cas-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&cas_dir).unwrap();
+    let previous_gateway = crate::config::GatewayRuntimeJournalIdentity {
+        provider: "deepseek".into(),
+        shim: "off".into(),
+        launch_id: "0123456789abcdef0123456789abcdef".into(),
+        provider_contract_id: "deepseek-native".into(),
+        provider_contract_digest: crate::provider_contracts::static_catalog_digest(),
+        catalog_fp: "previous-catalog".into(),
+    };
+    let expected_record =
+        crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+            schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "r2-d-complete-record-cas".into(),
+            operation: crate::config::RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: "target-profile".into(),
+            phase: crate::config::RuntimeTransactionPhase::StartFormalGateway,
+            runtime_fingerprint: None,
+            environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: None,
+            previous_gateway: Some(previous_gateway),
+            compensation: crate::config::RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+        });
+    let mut retargeted = expected_record.clone();
+    retargeted
+        .as_v2_mut()
+        .unwrap()
+        .previous_gateway
+        .as_mut()
+        .unwrap()
+        .launch_id = "fedcba9876543210fedcba9876543210".into();
+    crate::config::save_to(
+        &cas_dir,
+        &crate::config::Config {
+            runtime_transaction: Some(retargeted),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let before_intent_rejection = fs::read(cas_dir.join("config.json")).unwrap();
+    let cleanup_called = std::cell::Cell::new(false);
+    let intent_error = finish_interrupted_gateway_recovery(&cas_dir, &expected_record, || {
+        cleanup_called.set(true);
+        ManagedGatewayCleanup::Stopped(4242)
+    })
+    .unwrap_err();
+    assert_eq!(
+        intent_error.kind(),
+        InterruptedGatewayRecoveryErrorKind::GatewayStart
+    );
+    assert!(!cleanup_called.get());
+    assert_eq!(
+        fs::read(cas_dir.join("config.json")).unwrap(),
+        before_intent_rejection,
+        "same-id field drift before intent publication must preserve exact current bytes"
+    );
+
+    crate::config::save_to(
+        &cas_dir,
+        &crate::config::Config {
+            runtime_transaction: Some(expected_record.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let outcome_error = finish_interrupted_gateway_recovery(&cas_dir, &expected_record, || {
+        crate::config::update(&cas_dir, |current| {
+            current
+                .runtime_transaction
+                .as_mut()
+                .and_then(crate::config::RuntimeTransactionRecord::as_v2_mut)
+                .unwrap()
+                .compensation = crate::config::RuntimeCompensationState::InProgress;
+        })
+        .unwrap();
+        ManagedGatewayCleanup::Stopped(4242)
+    })
+    .unwrap_err();
+    assert_eq!(
+        outcome_error.kind(),
+        InterruptedGatewayRecoveryErrorKind::GatewayStart
+    );
+    let preserved_drift = crate::config::load_from(&cas_dir)
+        .unwrap()
+        .runtime_transaction
+        .unwrap();
+    let preserved_drift = preserved_drift.as_v2().unwrap();
+    assert_eq!(
+        preserved_drift.phase,
+        crate::config::RuntimeTransactionPhase::RecoverInterruptedGateway
+    );
+    assert_eq!(
+        preserved_drift.gateway_stop_outcome,
+        crate::config::RuntimeGatewayStopOutcome::Pending
+    );
+    assert_eq!(
+        preserved_drift.compensation,
+        crate::config::RuntimeCompensationState::InProgress
+    );
+    fs::remove_dir_all(&cas_dir).unwrap();
 
     let dir = std::env::temp_dir().join(format!(
         "csswitch-r0-interrupted-recovery-recheck-{}-{}",
@@ -360,15 +523,17 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         "identity-recheck listener did not become ready"
     );
 
-    let journal = crate::config::RuntimeTransactionJournal {
-        transaction_id: "tx-identity-recheck".into(),
-        target_profile_id: "identity-recheck-profile".into(),
-        stage: "start_formal_gateway".into(),
-        previous_binding: None,
-        previous_gateway: None,
-    };
+    let journal: crate::config::RuntimeTransactionRecord =
+        crate::config::RuntimeTransactionJournal {
+            transaction_id: "tx-identity-recheck".into(),
+            target_profile_id: "identity-recheck-profile".into(),
+            stage: "start_formal_gateway".into(),
+            previous_binding: None,
+            previous_gateway: None,
+        }
+        .into();
     let cfg = crate::config::Config {
-        runtime_transaction: Some(journal.clone().into()),
+        runtime_transaction: Some(journal.clone()),
         ..Default::default()
     };
     crate::config::save_to(&dir, &cfg).unwrap();
@@ -380,8 +545,10 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
                 .runtime_transaction
                 .as_ref()
                 .unwrap()
-                .legacy_stage(),
-            Some("recover_interrupted_gateway"),
+                .as_v2()
+                .unwrap()
+                .gateway_stop_outcome,
+            crate::config::RuntimeGatewayStopOutcome::Pending,
             "durable recovery stage must precede the final process identity recheck"
         );
         super::stop_managed_gateway_on_port(port, &current_exe, || {
@@ -392,8 +559,10 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
                     .runtime_transaction
                     .as_ref()
                     .unwrap()
-                    .legacy_stage(),
-                Some("recover_interrupted_gateway")
+                    .as_v2()
+                    .unwrap()
+                    .gateway_stop_outcome,
+                crate::config::RuntimeGatewayStopOutcome::Pending
             );
             false
         })
@@ -413,6 +582,11 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
     assert!(
         listener_child.try_wait().unwrap().is_none(),
         "identity recheck refusal must not stop the listener"
+    );
+    assert_r0_recovery_stage(
+        &dir,
+        &journal,
+        crate::config::RuntimeGatewayStopOutcome::NotManaged,
     );
     listener_child.stop().unwrap();
     fs::remove_dir_all(&dir).unwrap();
@@ -440,7 +614,11 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
             |pid| {
                 signal_attempts.set(signal_attempts.get() + 1);
                 assert_eq!(pid, signal_pid);
-                assert_r0_recovery_stage(&signal_dir, &signal_journal);
+                assert_r0_recovery_stage(
+                    &signal_dir,
+                    &signal_journal,
+                    crate::config::RuntimeGatewayStopOutcome::Pending,
+                );
                 Err(())
             },
         );
@@ -461,7 +639,11 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
             InterruptedGatewayStopUnknownKind::SignalFailed
         )
         && error.to_string().contains("安全停止失败")));
-    assert_r0_recovery_stage(&signal_dir, &signal_journal);
+    assert_r0_recovery_stage(
+        &signal_dir,
+        &signal_journal,
+        crate::config::RuntimeGatewayStopOutcome::SignalFailed,
+    );
     assert!(
         signal_child.try_wait().unwrap().is_none(),
         "injected signal failure must leave the exact controlled listener alive"
@@ -496,19 +678,28 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         == InterruptedGatewayRecoveryErrorKind::StopUnknown(
             InterruptedGatewayStopUnknownKind::ExitUnconfirmed
         )));
-    assert_r0_recovery_stage(&retry_dir, &retry_journal);
+    assert_r0_recovery_stage(
+        &retry_dir,
+        &retry_journal,
+        crate::config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
+    );
     assert!(retry_child.try_wait().unwrap().is_none());
 
+    let retry_after_first = crate::config::load_from(&retry_dir)
+        .unwrap()
+        .runtime_transaction
+        .unwrap();
     let refused_rechecks = std::cell::Cell::new(0);
     let refused_outcome = std::cell::Cell::new(None);
-    let refused_result = finish_interrupted_gateway_recovery(&retry_dir, &retry_journal, || {
-        let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
-            refused_rechecks.set(refused_rechecks.get() + 1);
-            false
+    let refused_result =
+        finish_interrupted_gateway_recovery(&retry_dir, &retry_after_first, || {
+            let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
+                refused_rechecks.set(refused_rechecks.get() + 1);
+                false
+            });
+            refused_outcome.set(Some(outcome));
+            outcome
         });
-        refused_outcome.set(Some(outcome));
-        outcome
-    });
     assert_eq!(refused_rechecks.get(), 1);
     assert_eq!(
         refused_outcome.get(),
@@ -520,19 +711,28 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
             .to_string()
             .contains("未通过精确 Gateway binary/uid/PID 复核")));
     assert!(retry_child.try_wait().unwrap().is_none());
-    assert_r0_recovery_stage(&retry_dir, &retry_journal);
+    assert_r0_recovery_stage(
+        &retry_dir,
+        &retry_journal,
+        crate::config::RuntimeGatewayStopOutcome::NotManaged,
+    );
 
     fs::write(&allow_retry_exit, b"allow\n").unwrap();
+    let retry_after_refusal = crate::config::load_from(&retry_dir)
+        .unwrap()
+        .runtime_transaction
+        .unwrap();
     let accepted_rechecks = std::cell::Cell::new(0);
     let accepted_outcome = std::cell::Cell::new(None);
-    let accepted_result = finish_interrupted_gateway_recovery(&retry_dir, &retry_journal, || {
-        let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
-            accepted_rechecks.set(accepted_rechecks.get() + 1);
-            true
+    let accepted_result =
+        finish_interrupted_gateway_recovery(&retry_dir, &retry_after_refusal, || {
+            let outcome = super::stop_managed_gateway_on_port(retry_port, &expected_binary, || {
+                accepted_rechecks.set(accepted_rechecks.get() + 1);
+                true
+            });
+            accepted_outcome.set(Some(outcome));
+            outcome
         });
-        accepted_outcome.set(Some(outcome));
-        outcome
-    });
     assert_eq!(accepted_rechecks.get(), 1);
     assert_eq!(
         accepted_outcome.get(),
@@ -542,7 +742,11 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         accepted_result,
         Ok(InterruptedGatewayRecoveryOutcome::Stopped(retry_pid))
     );
-    assert_r0_recovery_stage(&retry_dir, &retry_journal);
+    assert_r0_recovery_stage(
+        &retry_dir,
+        &retry_journal,
+        crate::config::RuntimeGatewayStopOutcome::Stopped,
+    );
     retry_child.stop().unwrap();
     fs::remove_dir_all(retry_dir).unwrap();
 
@@ -568,7 +772,11 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         == InterruptedGatewayRecoveryErrorKind::StopUnknown(
             InterruptedGatewayStopUnknownKind::ExitUnconfirmed
         )));
-    assert_r0_recovery_stage(&late_dir, &late_journal);
+    assert_r0_recovery_stage(
+        &late_dir,
+        &late_journal,
+        crate::config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
+    );
 
     fs::write(&allow_late_exit, b"allow\n").unwrap();
     let mut late_exit_observed = false;
@@ -584,16 +792,21 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         "the controlled Gateway must exit shortly after the timeout result"
     );
 
+    let late_after_first = crate::config::load_from(&late_dir)
+        .unwrap()
+        .runtime_transaction
+        .unwrap();
     let late_retry_rechecks = std::cell::Cell::new(0);
     let late_retry_outcome = std::cell::Cell::new(None);
-    let late_retry_result = finish_interrupted_gateway_recovery(&late_dir, &late_journal, || {
-        let outcome = super::stop_managed_gateway_on_port(late_port, &expected_binary, || {
-            late_retry_rechecks.set(late_retry_rechecks.get() + 1);
-            true
+    let late_retry_result =
+        finish_interrupted_gateway_recovery(&late_dir, &late_after_first, || {
+            let outcome = super::stop_managed_gateway_on_port(late_port, &expected_binary, || {
+                late_retry_rechecks.set(late_retry_rechecks.get() + 1);
+                true
+            });
+            late_retry_outcome.set(Some(outcome));
+            outcome
         });
-        late_retry_outcome.set(Some(outcome));
-        outcome
-    });
     assert_eq!(late_retry_rechecks.get(), 0);
     assert_eq!(
         late_retry_outcome.get(),
@@ -605,7 +818,11 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         late_retry_result.unwrap_err().kind(),
         InterruptedGatewayRecoveryErrorKind::NotManaged
     );
-    assert_r0_recovery_stage(&late_dir, &late_journal);
+    assert_r0_recovery_stage(
+        &late_dir,
+        &late_journal,
+        crate::config::RuntimeGatewayStopOutcome::NotManaged,
+    );
     fs::remove_dir_all(late_dir).unwrap();
 }
 
@@ -822,8 +1039,135 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
     );
     assert_eq!(
         crate::config::load_from(&dir).unwrap().runtime_transaction,
-        Some(managed_journal.into())
+        Some(managed_journal.clone().into())
     );
+
+    let attempted_journal =
+        crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+            schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: managed_journal.transaction_id.clone(),
+            operation: crate::config::RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: managed_journal.target_profile_id.clone(),
+            phase: crate::config::RuntimeTransactionPhase::RecoverInterruptedGateway,
+            runtime_fingerprint: None,
+            environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: managed_journal.previous_binding.clone(),
+            previous_gateway: managed_journal.previous_gateway.clone(),
+            compensation: crate::config::RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
+        });
+    no_listener_cfg.runtime_transaction = Some(attempted_journal.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    assert_eq!(
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
+        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
+    );
+    assert_r0_recovery_stage(
+        &dir,
+        &attempted_journal,
+        crate::config::RuntimeGatewayStopOutcome::AbsentAfterAttempt,
+    );
+
+    let unsupported_legacy: crate::config::RuntimeTransactionRecord =
+        crate::config::RuntimeTransactionJournal {
+            transaction_id: "tx-stale-one-click".into(),
+            target_profile_id: no_listener_cfg.active_id.clone(),
+            stage: "stop_old_science".into(),
+            previous_binding: None,
+            previous_gateway: None,
+        }
+        .into();
+    no_listener_cfg.runtime_transaction = Some(unsupported_legacy.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    let unsupported_before = fs::read(dir.join("config.json")).unwrap();
+    let unsupported_error =
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap_err();
+    assert_eq!(
+        unsupported_error.kind(),
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot
+    );
+    assert_eq!(
+        fs::read(dir.join("config.json")).unwrap(),
+        unsupported_before
+    );
+    assert_eq!(
+        crate::config::load_from(&dir).unwrap().runtime_transaction,
+        Some(unsupported_legacy)
+    );
+
+    let unsupported_one_click =
+        crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+            schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "tx-typed-one-click".into(),
+            operation: crate::config::RuntimeTransactionOperation::OneClick,
+            target_profile_id: no_listener_cfg.active_id.clone(),
+            phase: crate::config::RuntimeTransactionPhase::StartGateway,
+            runtime_fingerprint: Some("a".repeat(64)),
+            environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: Some(
+                crate::config::RuntimeSnapshotTicket::verified(format!(
+                    ".one-click-rollback-{}",
+                    "b".repeat(32)
+                ))
+                .unwrap(),
+            ),
+            previous_binding: None,
+            previous_gateway: None,
+            compensation: crate::config::RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+        });
+    no_listener_cfg.proxy_port = address.port();
+    no_listener_cfg.runtime_transaction = Some(unsupported_one_click.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    let unsupported_v2_before = fs::read(dir.join("config.json")).unwrap();
+    let unsupported_v2_error =
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap_err();
+    assert_eq!(
+        unsupported_v2_error.kind(),
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot
+    );
+    assert_eq!(
+        fs::read(dir.join("config.json")).unwrap(),
+        unsupported_v2_before,
+        "a valid one-click V2 journal must be rejected before listener probing"
+    );
+    assert_eq!(
+        crate::config::load_from(&dir).unwrap().runtime_transaction,
+        Some(unsupported_one_click)
+    );
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+
+    let completed_journal =
+        crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+            schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "tx-completed-recovery".into(),
+            operation: crate::config::RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: no_listener_cfg.active_id.clone(),
+            phase: crate::config::RuntimeTransactionPhase::RecoverInterruptedGateway,
+            runtime_fingerprint: None,
+            environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: None,
+            previous_gateway: None,
+            compensation: crate::config::RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::Stopped,
+        });
+    no_listener_cfg.proxy_port = address.port();
+    no_listener_cfg.runtime_transaction = Some(completed_journal.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    let completed_before = fs::read(dir.join("config.json")).unwrap();
+    assert_eq!(
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
+        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
+    );
+    assert_eq!(fs::read(dir.join("config.json")).unwrap(), completed_before);
+    assert_eq!(
+        crate::config::load_from(&dir).unwrap().runtime_transaction,
+        Some(completed_journal),
+        "a terminal typed recovery must never probe or stop a later listener"
+    );
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
     fs::remove_dir_all(&dir).unwrap();
 }
 

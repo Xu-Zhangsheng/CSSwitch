@@ -128,6 +128,123 @@ fn interrupted_gateway_recovery_error(
     InterruptedGatewayRecoveryError::new(kind, safe_detail)
 }
 
+fn interrupted_gateway_recovery_record(
+    journal: &config::RuntimeTransactionRecord,
+    gateway_stop_outcome: config::RuntimeGatewayStopOutcome,
+) -> Result<config::RuntimeTransactionV2, String> {
+    let mut typed = match journal {
+        config::RuntimeTransactionRecord::V1(legacy)
+            if matches!(
+                legacy.stage.as_str(),
+                "start_formal_gateway" | "recover_interrupted_gateway"
+            ) =>
+        {
+            config::RuntimeTransactionV2 {
+                schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+                transaction_id: journal.transaction_id().to_string(),
+                operation: config::RuntimeTransactionOperation::ProfileSwitch,
+                target_profile_id: journal.target_profile_id().to_string(),
+                phase: config::RuntimeTransactionPhase::RecoverInterruptedGateway,
+                runtime_fingerprint: None,
+                environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
+                snapshot_ticket: None,
+                previous_binding: legacy.previous_binding.clone(),
+                previous_gateway: legacy.previous_gateway.clone(),
+                compensation: config::RuntimeCompensationState::NotStarted,
+                gateway_stop_outcome,
+            }
+        }
+        config::RuntimeTransactionRecord::V1(_) => {
+            return Err(
+                "compatibility runtime journal is not an interrupted profile-switch Gateway transaction"
+                    .into(),
+            );
+        }
+        config::RuntimeTransactionRecord::V2(typed)
+            if typed.operation == config::RuntimeTransactionOperation::ProfileSwitch
+                && matches!(
+                    typed.phase,
+                    config::RuntimeTransactionPhase::StartFormalGateway
+                        | config::RuntimeTransactionPhase::RecoverInterruptedGateway
+                ) =>
+        {
+            typed.clone()
+        }
+        config::RuntimeTransactionRecord::V2(_) => {
+            return Err(
+                "typed runtime journal is not an interrupted profile-switch Gateway transaction"
+                    .into(),
+            );
+        }
+    };
+    typed.phase = config::RuntimeTransactionPhase::RecoverInterruptedGateway;
+    typed.gateway_stop_outcome = gateway_stop_outcome;
+    Ok(typed)
+}
+
+fn publish_interrupted_gateway_recovery_record(
+    dir: &Path,
+    expected: &config::RuntimeTransactionRecord,
+    gateway_stop_outcome: config::RuntimeGatewayStopOutcome,
+) -> Result<config::RuntimeTransactionRecord, InterruptedGatewayRecoveryError> {
+    let next = config::RuntimeTransactionRecord::V2(
+        interrupted_gateway_recovery_record(expected, gateway_stop_outcome).map_err(|error| {
+            interrupted_gateway_recovery_error(
+                InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
+                format!(
+                    "无法证明未完成事务属于可恢复的 profile-switch Gateway；已保留 listener 和事务 journal，拒绝自动恢复：{error}；recovery_status=manual_recovery_required"
+                ),
+            )
+        })?,
+    );
+    config::update_result(dir, |current| {
+        if current.runtime_transaction.as_ref() != Some(expected) {
+            return Err(
+                "runtime transaction retargeted before Gateway recovery journal publication; preserved the current transaction"
+                    .into(),
+            );
+        }
+        current.runtime_transaction = Some(next.clone());
+        Ok(((), true))
+    })
+    .map_err(|error| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::GatewayStart,
+            error.to_string(),
+        )
+    })?;
+    Ok(next)
+}
+
+fn should_record_absent_after_attempt(journal: &config::RuntimeTransactionRecord) -> bool {
+    match journal {
+        config::RuntimeTransactionRecord::V1(legacy) => {
+            legacy.stage == "recover_interrupted_gateway"
+        }
+        config::RuntimeTransactionRecord::V2(typed) => {
+            typed.operation == config::RuntimeTransactionOperation::ProfileSwitch
+                && typed.phase == config::RuntimeTransactionPhase::RecoverInterruptedGateway
+                && !matches!(
+                    typed.gateway_stop_outcome,
+                    config::RuntimeGatewayStopOutcome::Stopped
+                        | config::RuntimeGatewayStopOutcome::AbsentAfterAttempt
+                )
+        }
+    }
+}
+
+fn interrupted_gateway_recovery_is_complete(journal: &config::RuntimeTransactionRecord) -> bool {
+    journal.as_v2().is_some_and(|typed| {
+        typed.operation == config::RuntimeTransactionOperation::ProfileSwitch
+            && typed.phase == config::RuntimeTransactionPhase::RecoverInterruptedGateway
+            && matches!(
+                typed.gateway_stop_outcome,
+                config::RuntimeGatewayStopOutcome::Stopped
+                    | config::RuntimeGatewayStopOutcome::AbsentAfterAttempt
+            )
+    })
+}
+
 /// Consume an interrupted profile-switch journal after an app restart. An
 /// orphan is never adopted. It is stopped only when the persisted path secret
 /// authenticates a formal Rust Gateway, its public launch/catalog identity
@@ -156,12 +273,6 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
     let Some(journal) = cfg.runtime_transaction.as_ref() else {
         return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     };
-    if journal.is_v2() {
-        return Err(interrupted_gateway_recovery_error(
-            InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
-            "检测到 typed runtime journal；当前 R2-A 兼容层拒绝在 recovery writer 迁移前探测、停止或改写其 Gateway；recovery_status=manual_recovery_required",
-        ));
-    }
     if journal.target_profile_id() != cfg.active_id {
         return Err(interrupted_gateway_recovery_error(
             InterruptedGatewayRecoveryErrorKind::GatewayStart,
@@ -173,6 +284,21 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
             InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
             "检测到中断的 Science authority/environment 事务；已保留 Gateway、事务 journal 与恢复快照，拒绝自动探测、停止或改写其身份；recovery_status=manual_recovery_required",
         ));
+    }
+    interrupted_gateway_recovery_record(
+        journal,
+        config::RuntimeGatewayStopOutcome::Pending,
+    )
+    .map_err(|error| {
+        interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
+            format!(
+                "无法证明未完成事务属于可恢复的 profile-switch Gateway；已保留 listener 和事务 journal，拒绝自动恢复：{error}；recovery_status=manual_recovery_required"
+            ),
+        )
+    })?;
+    if interrupted_gateway_recovery_is_complete(journal) {
+        return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     }
     {
         let st = lock(state);
@@ -186,6 +312,13 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
         }
     }
     if !proc::loopback_port_in_use(cfg.proxy_port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
+        if should_record_absent_after_attempt(journal) {
+            publish_interrupted_gateway_recovery_record(
+                dir,
+                journal,
+                config::RuntimeGatewayStopOutcome::AbsentAfterAttempt,
+            )?;
+        }
         return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     }
     if cfg.secret.is_empty() {
@@ -253,10 +386,7 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
             "未找到本次应用打包的 Gateway，无法安全恢复事务",
         )
     })?;
-    let legacy_journal = journal
-        .as_v1()
-        .expect("R2-A rejects V2 before legacy Gateway recovery");
-    finish_interrupted_gateway_recovery(dir, legacy_journal, || {
+    finish_interrupted_gateway_recovery(dir, journal, || {
         let initial_for_probe = initial.clone();
         stop_managed_gateway_on_port(cfg.proxy_port, &binary, || {
             let Some(current) = proc::http_gateway_health(
@@ -286,36 +416,32 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
 
 fn finish_interrupted_gateway_recovery<F>(
     dir: &Path,
-    journal: &config::RuntimeTransactionJournal,
+    journal: &config::RuntimeTransactionRecord,
     cleanup: F,
 ) -> Result<InterruptedGatewayRecoveryOutcome, InterruptedGatewayRecoveryError>
 where
     F: FnOnce() -> ManagedGatewayCleanup,
 {
-    config::update_result(dir, |current| {
-        let Some(current_journal) = current.runtime_transaction.as_mut() else {
-            return Err("runtime transaction disappeared before Gateway recovery intent publication".into());
-        };
-        if current_journal.is_v2()
-            || current_journal.transaction_id() != journal.transaction_id
-            || current_journal.target_profile_id() != journal.target_profile_id
-            || current_journal.requires_snapshot_preservation()
-        {
-            return Err("runtime transaction retargeted before Gateway recovery intent publication; preserved the current transaction".into());
-        }
-        current_journal
-            .as_v1_mut()
-            .expect("V2 is rejected before legacy Gateway recovery")
-            .stage = "recover_interrupted_gateway".into();
-        Ok(((), true))
-    })
-    .map_err(|error| {
-        interrupted_gateway_recovery_error(
-            InterruptedGatewayRecoveryErrorKind::GatewayStart,
-            error.to_string(),
-        )
-    })?;
-    match cleanup() {
+    let pending = publish_interrupted_gateway_recovery_record(
+        dir,
+        journal,
+        config::RuntimeGatewayStopOutcome::Pending,
+    )?;
+    let cleanup = cleanup();
+    let outcome = match cleanup {
+        ManagedGatewayCleanup::Stopped(_) => config::RuntimeGatewayStopOutcome::Stopped,
+        ManagedGatewayCleanup::NotManaged => config::RuntimeGatewayStopOutcome::NotManaged,
+        ManagedGatewayCleanup::StopUnknown {
+            kind: ManagedGatewayStopUnknownKind::SignalFailed,
+            ..
+        } => config::RuntimeGatewayStopOutcome::SignalFailed,
+        ManagedGatewayCleanup::StopUnknown {
+            kind: ManagedGatewayStopUnknownKind::ExitUnconfirmed,
+            ..
+        } => config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
+    };
+    publish_interrupted_gateway_recovery_record(dir, &pending, outcome)?;
+    match cleanup {
         ManagedGatewayCleanup::Stopped(pid) => Ok(InterruptedGatewayRecoveryOutcome::Stopped(pid)),
         ManagedGatewayCleanup::NotManaged => Err(interrupted_gateway_recovery_error(
             InterruptedGatewayRecoveryErrorKind::NotManaged,
