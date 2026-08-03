@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-08-03 H1/H2/H3 implementation candidate 整理
+状态：当前；按 v0.8.4 release source 与 2026-08-03 H1/H2/H3 source seal 整理
 
 最后复核：2026-08-03（Asia/Taipei）
 
@@ -12,9 +12,9 @@
 
 最新只读审计见
 [2026-08-03 Runtime 事务编排再基线](../../docs/audits/2026-08-03-runtime-transaction-orchestration-rebaseline.md)。
-现场起点为 clean `next@5c6623d`。当前 H1/H2/H3 已进入同一 source implementation candidate，
-尚未以 exact-SHA 15-suite seal 与 clean-context completion review 收口，因此本段只说明候选源码，
-不外推 artifact、installed/live、签名、公证或公开 release：
+现场起点为 clean `next@5c6623d`。H1/H2/H3 已在 exact candidate
+`9d7133285c32e8303cc47b6ff91b25e76dccec6f` 完成 source-only 收口；本段不外推
+artifact、installed/live、签名、公证或公开 release：
 
 1. H1：interrupted-Gateway recovery 返回不可序列化的 affine terminal exact-record handoff；
    production command 把该 handoff 交给 one-click，首 checkpoint 仅在完整 V2 record 仍精确相等
@@ -29,10 +29,24 @@
    current active profile 与旧 binding；replay 只接受匹配 entry 或空 `CleanupOnly` manifest，
    完全缺失 manifest 会保留 journal 并 fail closed。
 
-当前唯一 NEXT 是完成候选验证闭环：active ChangeRecord、focused/full tests、clean-context
-independent review、修复闭合、clean exact-candidate 15-suite `GATE-SOURCE` seal、evidence-only
-记录与 clean worktree。该闭环完成前不得把三个 HIGH 写成 release/live fixed；完成后须再次
-code-grounded rebaseline，不能自动执行旧 S7 或后续候选。
+implementation commits 为 `d1a479c207a346ad51a46911728ad3be7b5b4837` 与
+`9d7133285c32e8303cc47b6ff91b25e76dccec6f`。后者的固定 15-suite `GATE-SOURCE`
+run `a3667a108442bfe2ba3ffe701fe6eea5` 为 PASS、runner exit 0；十五个 result 与十五个
+observation 全部 PASS，总计 1368 executed、1324 passed、0 failed、44 approved ignored、
+0 skipped/todo/not-run。clean source snapshot 为 507 entries / 11982535 bytes；completion
+seal、run manifest、evidence manifest 与 source snapshot SHA-256 分别为
+`f54e1db305edf2bac1b23107d4010118dd65bd970dc7e485dff6f7d4f53a9cee`、
+`cb622b9a62ffc108bd4e2baf9c8f2aefc464536150fb7a8a137be5fbd7739475`、
+`6101c0a02a7cecf0bed12b322cd165d244a70b1a161f1fd89a5a3bcbd750ca58` 与
+`96c850c8555c4f728152db05f1558f84415d0a5d7bb48165c370e753cf1e4121`。exact-SHA
+clean-context completion review 为零 BLOCK/HIGH/MEDIUM/LOW，并独立回算 30/30 leaf hashes、
+全部顶层引用与 507 个 snapshot entry。主工作树 ignored data 导致的两次 snapshot 前置失败，
+以及修复旧 source contract 前的 run `ab636ccbaf73aa2541e1eec52f412ad0`，均未用作 closure 且未
+与 PASS run 混合。本文所在 evidence-only seal commit 只记录上述 candidate 与 run，不声称
+自身执行过完整 gate。
+
+当前唯一 NEXT 是在新的 code-grounded rebaseline 后再明确授权一个有限候选；不能自动执行旧
+S7 或后续路线，也不能把本次 source closure 写成 release/live fixed。
 
 后续有限候选路线依次为：operation entry/branch ownership；cold affine receipt chain；
 history/frontend boundary；剩余锁外等待、
@@ -668,10 +682,11 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-`S1`–`S6` 已按上述边界完成。S6 保持 command/DTO/text、binding/journal/compensation
-ownership，不新增 F5 pre-stop durable intent 或 crash-recovery policy。改变 crash recovery
-行为的 `PriorStopIntent/Outcome` 与 S7 coordinator 分片继续要求新的 code-grounded
-rebaseline、独立证据、operation contract 与明确授权。
+`S1`–`S6` 已按上述边界完成。S6 当时保持 command/DTO/text、binding/journal/compensation
+ownership，不新增 F5 pre-stop durable intent 或 crash-recovery policy；其后的
+`PriorStopIntent/Outcome` 与 finalize protocol 已按本文顶部 2026-08-03 决策门独立完成
+source closure。S7 coordinator 分片仍要求新的 code-grounded rebaseline、独立证据、
+operation contract 与明确授权。
 
 ## 下一轮重构的 P0 前置
 

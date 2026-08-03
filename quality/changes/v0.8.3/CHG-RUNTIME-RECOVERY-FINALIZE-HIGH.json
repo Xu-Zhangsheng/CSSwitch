@@ -92,7 +92,7 @@
         "post-stop infrastructure failures carry typed exact-runtime proof before AppState and durable ExactStopped publication",
         "four registered Rust identities cover production paths, authority drift, missing manifests, both finalize faults, and fresh ActiveRecovery/CleanupOnly replay; source contracts bind finalize and the Desktop count",
         "production normal and history prepare-publication and final config-writer failures each return degraded with the finalize journal intact and the next command replays before healthy reopen",
-        "candidate exact-SHA source gate and clean-context completion review are pending and will be recorded only after they execute successfully",
+        "exact candidate 9d7133285c32e8303cc47b6ff91b25e76dccec6f passed 15/15 source suites in run a3667a108442bfe2ba3ffe701fe6eea5; completion review found zero issues and rechecked all 30 leaf hashes and 507 snapshot entries",
         "artifact, installed, live provider or Science, signing, notarization, public release, frontend history intent, and broader coordinator slicing are excluded"
       ]
     },
