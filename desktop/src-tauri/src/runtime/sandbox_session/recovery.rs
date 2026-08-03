@@ -858,6 +858,7 @@ impl OneClickAuthoritySnapshot {
         })?;
         let cleanup_ticket = prepare_registered_authority_cleanup(&self.cleanup_context, ticket)?;
         self.cleanup_ticket = Some(cleanup_ticket);
+        self.cleanup_prepared = true;
         let ticket = self.cleanup_ticket.as_ref().ok_or_else(|| {
             AuthorityCleanupFailure::new(
                 AuthorityCleanupPhase::SnapshotRegistration,
@@ -880,9 +881,8 @@ impl OneClickAuthoritySnapshot {
     ) -> Result<(), AuthorityCleanupFailure> {
         match self.cleanup_when_expendable() {
             Ok(AuthorityCleanupOutcome::Cleared) => Ok(()),
-            Err(error) if error.cleanup_requirement().is_some() => {
+            Err(error) if self.cleanup_prepared && error.cleanup_requirement().is_some() => {
                 self.preserve_recovery = true;
-                self.cleanup_prepared = true;
                 let recovery_path = error
                     .cleanup_requirement()
                     .map(|(path, _)| path)

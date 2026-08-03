@@ -311,12 +311,16 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
                 .contains("let expected_record = progress.journaled_record().cloned()")
             && one_click_writer.contains("journal == expected")
             && one_click_writer.contains("RuntimeTransactionRecord::V2(next.clone())")
-            && one_click_terminal_writers
-                .matches("journal == &expected_record")
-                .count()
-                == 2
-            && one_click_terminal_writers.matches("OneClickJournalProgress::Finalized").count()
-                == 2
+            && one_click_terminal_writers.contains("fn begin_one_click_finalize")
+            && one_click_terminal_writers.contains(
+                "next.finalize = config::RuntimeFinalizeState::Intent"
+            )
+            && one_click_terminal_writers.contains("fn complete_one_click_finalize")
+            && one_click_terminal_writers.contains("fn replay_interrupted_one_click_finalize")
+            && one_click_terminal_writers.contains("replay_finalize_authority_cleanup(state, ticket)")
+            && one_click_terminal_writers.contains("current.runtime_binding = Some(binding.clone())")
+            && one_click_terminal_writers.contains("current.runtime_transaction = None")
+            && one_click_terminal_writers.contains("OneClickJournalProgress::Finalized")
             && source.contains(
                 "journal.compensation == config::RuntimeCompensationState::NotStarted"
             )
@@ -328,7 +332,94 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
                 "current.runtime_transaction.as_ref() != expected.as_ref()"
             )
             && restore_guard < first_restore_effect,
-        "one-click checkpoint, clear, binding commit, and compensation restore must CAS the complete current V2 state and preserve canonical writer fields"
+        "one-click checkpoints, replayable finalize, and compensation restore must CAS the complete current V2 state and preserve canonical writer fields"
+    );
+    assert!(
+        source.contains("fn config_authority_matches(")
+            && source.contains("current.active_id == target_profile_id")
+            && source.contains("current.runtime_binding.as_ref() == previous_binding")
+            && one_click_writer.contains("config_authority_matches(")
+            && one_click_terminal_writers
+                .matches("config_authority_matches(")
+                .count()
+                >= 5
+            && pending_cleanup_source.contains("cleanup_manifest_missing")
+            && pending_cleanup_source.contains("manifest.schema_version == 2")
+            && pending_cleanup_source.contains(
+                "manifest.disposition == Some(PendingCleanupDisposition::CleanupOnly)"
+            )
+            && pending_cleanup_source.contains("cleanup_manifest_incomplete")
+            && !pending_cleanup_source.contains(
+                "else {\n        return Ok(FinalizeAuthorityReplayOutcome::Ready);"
+            ),
+        "handoff/finalize must CAS companion config authority and missing manifest must never count as durable cleanup completion"
+    );
+    let command_recovery = command_projection_source
+        .find("let gateway_recovery =")
+        .expect("production command must retain the typed Gateway recovery outcome");
+    let command_handoff = command_projection_source
+        .find("one_click_login_after_gateway_recovery")
+        .expect("production command must hand recovery authority to one-click");
+    assert!(
+        command_recovery < command_handoff
+            && command_projection_source[command_recovery..command_handoff]
+                .contains("recover_interrupted_gateway"),
+        "the production command must pass the exact interrupted-Gateway terminal handoff into one-click"
+    );
+    assert!(
+        gateway_recovery_source.contains(
+            "#[derive(Debug, Eq, PartialEq)]\npub(crate) struct InterruptedGatewayTerminalHandoff"
+        ) && gateway_recovery_source.contains("fn into_record(self)")
+            && gateway_recovery_source.contains("fn into_terminal_record(self)")
+            && !gateway_recovery_source.contains(
+                "#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct InterruptedGatewayTerminalHandoff"
+            )
+            && !gateway_recovery_source.contains("pub(crate) fn record(&self)"),
+        "the terminal Gateway handoff must remain non-Clone and expose only consuming transfer APIs"
+    );
+    let prior_intent = source
+        .find("let intent = begin_prior_stop_intent")
+        .expect("prior Science durable intent must remain on the production path");
+    let prior_stop = source[prior_intent..]
+        .find("ScienceHostAdapter::stop")
+        .map(|index| index + prior_intent)
+        .expect("prior Science exact stop must remain after durable intent");
+    let prior_outcome = source[prior_stop..]
+        .find("publish_prior_stop_outcome")
+        .map(|index| index + prior_stop)
+        .expect("prior Science typed outcome must be published after the stop effect");
+    assert!(
+        prior_intent < prior_stop && prior_stop < prior_outcome,
+        "durable PriorStopIntent must precede the exact stop and typed outcome publication"
+    );
+    let success_finalize = source
+        .rfind("begin_one_click_finalize(")
+        .expect("success path must publish a finalize intent");
+    let authority_conversion = source[success_finalize..]
+        .find("prepare_success(&mut value)")
+        .map(|index| index + success_finalize)
+        .expect("success finalize must convert authority to cleanup-only");
+    let finalize_completion = source[authority_conversion..]
+        .find("complete_one_click_finalize")
+        .map(|index| index + authority_conversion)
+        .expect("success finalize must atomically commit binding and clear journal");
+    assert!(
+        success_finalize < authority_conversion && authority_conversion < finalize_completion,
+        "success finalize must be intent -> authority conversion -> atomic binding/journal completion"
+    );
+    assert!(
+        source.contains("fn preserve_interrupted_success_finalize(")
+            && source.matches("prepare_success(&mut value).is_err()").count() == 2
+            && source
+                .matches("complete_one_click_finalize(&dir, &mut journal_progress).is_err()")
+                .count()
+                == 2
+            && source
+                .matches("trace.finish(\"degraded=success_finalize_pending\");")
+                .count()
+                == 4
+            && source.matches("return Ok(value);").count() >= 4,
+        "authority conversion or atomic completion failure must preserve the finalize journal and return degraded instead of entering legacy compensation"
     );
     let ordinary_constructor = source
         .split("fn typed_one_click_err")

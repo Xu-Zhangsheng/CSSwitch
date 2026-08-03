@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-08-03 S6 后事务编排再基线整理
+状态：当前；按 v0.8.4 release source 与 2026-08-03 H1/H2/H3 implementation candidate 整理
 
 最后复核：2026-08-03（Asia/Taipei）
 
@@ -12,28 +12,30 @@
 
 最新只读审计见
 [2026-08-03 Runtime 事务编排再基线](../../docs/audits/2026-08-03-runtime-transaction-orchestration-rebaseline.md)。
-现场基线为 clean `next@9a2d65ff1b7996b673f6901df97ac899717b8a44`；本轮只做 source/test/docs
-inspection，没有运行 exact-HEAD 15-suite source gate，也没有进入源码实现。
+现场起点为 clean `next@5c6623d`。当前 H1/H2/H3 已进入同一 source implementation candidate，
+尚未以 exact-SHA 15-suite seal 与 clean-context completion review 收口，因此本段只说明候选源码，
+不外推 artifact、installed/live、签名、公证或公开 release：
 
-旧 `S7 cold/healthy/history coordinator 分片` 已被本次 code-grounded rebaseline 取代，不能
-直接执行。当前三个开放 HIGH：
+1. H1：interrupted-Gateway recovery 返回不可序列化的 affine terminal exact-record handoff；
+   production command 把该 handoff 交给 one-click，首 checkpoint 仅在完整 V2 record 仍精确相等
+   时接管。缺少 handoff、later-listener 或任一字段漂移仍 fail-closed；
+2. H2：one-click 从 managed launch receipt 生成脱敏 durable recipe，在 prior Science stop 前提交
+   `PriorStopIntent`，随后提交 typed `PriorStopOutcome`。post-snapshot checkpoint 只以完整记录 CAS
+   附加 ticket；stop/outcome/restart 不确定均保留 journal；
+3. H3：成功路径先提交 `RuntimeFinalizeState::Intent`，再把 authority manifest 从
+   `ActiveRecovery` 精确转换为 `CleanupOnly`，最后原子提交 binding 并清 journal。fresh process
+   对 conversion 前后两个 crash window 使用同一 finalize intent 重放；转换或最终提交失败
+   均返回 degraded 并保留 journal，不再进入旧 compensation。handoff/finalize CAS 同时复核
+   current active profile 与旧 binding；replay 只接受匹配 entry 或空 `CleanupOnly` manifest，
+   完全缺失 manifest 会保留 journal 并 fail closed。
 
-1. interrupted-Gateway recovery 成功或遇到 pre-existing terminal record 后保留终态 V2，
-   但同一次 command 进入 ordinary one-click 时没有显式 handoff，随后被“任意 V2 需要人工
-   恢复”规则阻断；
-2. prior Science exact stop 仍早于 durable `PriorStopIntent/Outcome`；
-3. runtime binding + journal clear 早于 authority manifest 转 cleanup-only，二者之间 crash
-   会留下错误的 `ActiveRecovery` 阻断态。
+当前唯一 NEXT 是完成候选验证闭环：active ChangeRecord、focused/full tests、clean-context
+independent review、修复闭合、clean exact-candidate 15-suite `GATE-SOURCE` seal、evidence-only
+记录与 clean worktree。该闭环完成前不得把三个 HIGH 写成 release/live fixed；完成后须再次
+code-grounded rebaseline，不能自动执行旧 S7 或后续候选。
 
-唯一建议 NEXT 是 `O0 Interrupted-Gateway terminal handoff`：只建立 terminal exact-record
-从 recovery 到 normal one-click 的显式、process-local handoff，并以完整记录 CAS 接管为首个
-one-click checkpoint；不得无条件 clear journal，不进入 F5、compensation 或 coordinator 大拆分。
-退出必须包含 production command-chain regression、terminal/later-listener 与 drift 矩阵、active
-ChangeRecord、focused tests、clean exact-candidate 15-suite `GATE-SOURCE` seal、文档治理和
-clean-context independent review。O0 完成后再次 rebaseline，才确定下一唯一 NEXT。
-
-后续有限候选路线依次为：operation entry/branch ownership；durable prior-runtime transition 与
-success finalize protocol；cold affine receipt chain；history/frontend boundary；剩余锁外等待、
+后续有限候选路线依次为：operation entry/branch ownership；cold affine receipt chain；
+history/frontend boundary；剩余锁外等待、
 durable compensation 与 update provenance。它们不是并行实施授权。frontend 目标是一个明确
 intent 对应一个 backend operation；history restore 不再自动串联 one-click。backend 目标是
 薄 command + 有限 coordinator + 独立 receipt/transaction，不建立万能事务。

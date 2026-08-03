@@ -332,8 +332,14 @@ class SkillRuntimeBoundary(unittest.TestCase):
             r"(?s)let snapshot_ticket = match authority_transaction\.registered_snapshot_ticket\(\)"
             r".*?let transaction_identity = OneClickTransactionIdentity \{"
             r".*?runtime_fingerprint: candidate_fingerprint,"
-            r".*?snapshot_ticket: snapshot_ticket\.clone\(\),"
-            r".*?let mut journal_progress = OneClickJournalProgress::PreJournalAbort \{"
+            r".*?snapshot_ticket: snapshot_ticket\.clone\(\),",
+        )
+        self.assertIn("let mut journal_progress = match prior_stop_record", one_click_runtime)
+        self.assertRegex(
+            one_click_runtime,
+            r"(?s)Some\(record\) => OneClickJournalProgress::Journaled \{"
+            r".*?record,.*?registered_ticket: snapshot_ticket,.*?"
+            r"None => OneClickJournalProgress::PreJournalAbort \{"
             r".*?registered_ticket: snapshot_ticket,",
         )
         self.assertNotIn("RuntimeTransactionJournal {", one_click_runtime)

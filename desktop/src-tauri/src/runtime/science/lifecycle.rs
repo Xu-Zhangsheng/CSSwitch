@@ -474,7 +474,10 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                         .to_string(),
                 ));
             } else if let Err(error) = clear_managed_launch_identity(&stop_token, runtime) {
-                failure = Some(ScienceStopFailure::receipt_cleanup_failure(error));
+                failure = Some(
+                    ScienceStopFailure::receipt_cleanup_failure(error)
+                        .with_confirmed_runtime(runtime.clone()),
+                );
             }
         }
         #[cfg(test)]
@@ -487,9 +490,12 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                     *thread == std::thread::current().id() && *config_dir == config::default_dir()
                 })
         {
-            failure = Some(ScienceStopFailure::outcome_publication_failure(
-                "test-only post-stop failure after exact process and receipt cleanup",
-            ));
+            failure = Some(
+                ScienceStopFailure::outcome_publication_failure(
+                    "test-only post-stop failure after exact process and receipt cleanup",
+                )
+                .with_confirmed_runtime(runtime.clone()),
+            );
         }
         match failure {
             Some(error) => Err(error),

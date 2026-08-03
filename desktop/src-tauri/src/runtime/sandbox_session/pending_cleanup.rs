@@ -191,6 +191,12 @@ pub(super) enum PendingCleanupRetryOutcome {
     Cleared,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum FinalizeAuthorityReplayOutcome {
+    Ready,
+    CleanupPending(PathBuf),
+}
+
 pub(super) fn cleanup_required_error(
     phase: AuthorityCleanupPhase,
     primary: &str,
@@ -765,6 +771,15 @@ pub(super) fn prepare_registered_authority_cleanup(
         PendingCleanupDisposition::CleanupOnly,
     )
     .map_err(cleanup_failure)?;
+    #[cfg(test)]
+    config::test_pending_cleanup_prepare_publish_attempt().map_err(|_| {
+        cleanup_required_error(
+            AuthorityCleanupPhase::Cleanup,
+            "无法把活动恢复快照原子转换为 cleanup-only",
+            &ticket.entry.path,
+            "cleanup_prepare_failed",
+        )
+    })?;
     config::write_pending_authority_cleanup_manifest(
         &context.config_dir,
         &cleanup_only,
@@ -935,6 +950,82 @@ pub(super) fn retry_pending_authority_cleanup(
     });
     publish_pending_cleanup_clear(state, &config_dir, &manifest_raw, &entry, true)?;
     Ok(PendingCleanupRetryOutcome::Cleared)
+}
+
+pub(super) fn replay_finalize_authority_cleanup(
+    state: &SharedAppState,
+    snapshot_ticket: &config::RuntimeSnapshotTicket,
+) -> Result<FinalizeAuthorityReplayOutcome, AuthorityCleanupFailure> {
+    let config_dir = config::default_dir();
+    let Some(manifest_raw) =
+        config::read_pending_authority_cleanup_manifest(&config_dir).map_err(|_| {
+            retry_failure("cleanup_manifest_read_failed：无法读取 finalize authority 清单。")
+        })?
+    else {
+        return Err(retry_failure(
+            "cleanup_manifest_missing：finalize intent 存在时必须保留 authority 清单完成证据。",
+        ));
+    };
+    let manifest = parse_pending_cleanup_manifest(&manifest_raw).map_err(retry_failure)?;
+    if manifest.entries.is_empty() {
+        return if manifest.schema_version == 2
+            && manifest.disposition == Some(PendingCleanupDisposition::CleanupOnly)
+        {
+            Ok(FinalizeAuthorityReplayOutcome::Ready)
+        } else {
+            Err(retry_failure(
+                "cleanup_manifest_incomplete：只有空的 cleanup-only 清单可证明 finalize authority 已完成。",
+            ))
+        };
+    }
+    if manifest.entries.len() != 1 {
+        return Err(retry_failure(
+            "cleanup_manifest_invalid：finalize authority 清单必须恰好包含一个快照。",
+        ));
+    }
+    let entry = manifest.entries[0].clone();
+    if entry.managed_id != snapshot_ticket.managed_id || entry.marker != entry.managed_id {
+        return Err(retry_failure(
+            "cleanup_manifest_causal_mismatch：finalize intent 与 authority 快照票据不一致。",
+        ));
+    }
+    let sandbox_home_path = sandbox_home();
+    let expected_parent = sandbox_home_path
+        .parent()
+        .ok_or_else(|| retry_failure("cleanup_manifest_invalid：沙箱 HOME 无父目录。"))?
+        .to_path_buf();
+    match validate_pending_cleanup_entry(&entry, &expected_parent)? {
+        PendingCleanupTargetState::Present(actual) if actual == entry => {}
+        PendingCleanupTargetState::Missing if !pending_cleanup_requires_recovery(&manifest) => {}
+        _ => {
+            return Err(AuthorityCleanupFailure::new(
+                AuthorityCleanupPhase::IdentityValidation,
+                "cleanup_identity_changed：finalize authority 快照身份不再匹配。",
+            ))
+        }
+    }
+    if pending_cleanup_requires_recovery(&manifest) {
+        let context = AuthorityCleanupContext {
+            config_dir: config_dir.clone(),
+            expected_snapshot_parent: expected_parent,
+            managed_id: entry.managed_id.clone(),
+            root: entry.path.clone(),
+            expected_root_identity: Some((entry.device, entry.inode)),
+            state: state.clone(),
+        };
+        let registered = RegisteredAuthorityCleanup {
+            manifest_raw,
+            entry: entry.clone(),
+        };
+        prepare_registered_authority_cleanup(&context, &registered)?;
+    }
+    match retry_pending_authority_cleanup(state) {
+        Ok(_) => Ok(FinalizeAuthorityReplayOutcome::Ready),
+        Err(error) if error.cleanup_requirement().is_some() => {
+            Ok(FinalizeAuthorityReplayOutcome::CleanupPending(entry.path))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 // Snapshot root removal (uses authority FS primitives; owned by cleanup lifecycle).

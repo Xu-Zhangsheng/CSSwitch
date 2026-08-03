@@ -238,14 +238,26 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
                     TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
                 })?;
             }
-            crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)
-                .map_err(typed_interrupted_gateway_recovery_error)?;
-            crate::runtime::sandbox_session::one_click_login(
+            crate::runtime::sandbox_session::replay_interrupted_one_click_finalize(&state)
+                .map_err(|error| {
+                    TypedOneClickFailure::new(
+                        OneClickFailureKind::AuthoritySnapshot,
+                        format!(
+                            "检测到未完成的 success finalize，安全重放失败并已保留事务：{error}"
+                        ),
+                    )
+                    .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+                })?;
+            let gateway_recovery =
+                crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)
+                    .map_err(typed_interrupted_gateway_recovery_error)?;
+            crate::runtime::sandbox_session::one_click_login_after_gateway_recovery(
                 app,
                 state,
                 lifecycle.as_ref(),
                 runtime_choice.as_deref(),
                 prepared.as_ref().map(|prepared| prepared.proof()),
+                gateway_recovery,
             )
         },
     ) {

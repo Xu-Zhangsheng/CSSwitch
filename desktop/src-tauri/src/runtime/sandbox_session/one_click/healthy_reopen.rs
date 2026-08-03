@@ -19,6 +19,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
     running_runtime: &ScienceRuntimeIdentity,
     open_surface: bool,
     expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
+    expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
 ) -> Result<Value, TypedOneClickFailure> {
     let app_snapshot = AppAuthoritySnapshot::capture(state);
     let prior_config = cfg.clone();
@@ -44,6 +45,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         if !healthy_reopen_transaction_matches(
             refreshed_cfg.runtime_transaction.as_ref(),
             expected_profile_switch_transaction,
+            expected_gateway_terminal_handoff,
             &refreshed_cfg.active_id,
             refreshed_cfg.runtime_binding.as_ref(),
         ) {
@@ -64,10 +66,13 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             running_runtime,
         )
         .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-        commit_healthy_reopen_binding(dir, expected_profile_switch_transaction, &committed)
-            .map_err(|error| {
-                typed_one_click_err(OneClickFailureKind::Prepare, error.to_string())
-            })?;
+        commit_healthy_reopen_binding(
+            dir,
+            expected_profile_switch_transaction,
+            expected_gateway_terminal_handoff,
+            &committed,
+        )
+        .map_err(|error| typed_one_click_err(OneClickFailureKind::Prepare, error.to_string()))?;
         let installer = match current_skill_install_bridge_key() {
             Ok(installer_key) => {
                 inspect_while_science_running(app, auth_dir, &installer_bridge, &installer_key)

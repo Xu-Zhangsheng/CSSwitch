@@ -158,6 +158,29 @@ impl ScienceStopOwnershipReceipt {
     }
 }
 
+impl ScienceManagedLaunchToken {
+    pub(crate) fn durable_prior_stop_recipe(
+        &self,
+        runtime: &ScienceRuntimeIdentity,
+        port: u16,
+    ) -> Result<config::RuntimePriorScienceRecipe, String> {
+        if self.record.port != port || !record_matches_runtime(&self.record, port, runtime) {
+            return Err("prior Science managed launch identity is not current".into());
+        }
+        let encoded = serde_json::to_vec(&self.record)
+            .map_err(|_| "prior Science managed launch identity cannot be encoded")?;
+        let launch_receipt_digest = format!("{:x}", Sha256::digest(&encoded));
+        Ok(config::RuntimePriorScienceRecipe {
+            port,
+            runtime_path: runtime.path.clone(),
+            runtime_source: runtime.source.code().to_string(),
+            runtime_version: runtime.version.clone(),
+            runtime_fingerprint: runtime.environment_transaction_id(),
+            launch_receipt_digest,
+        })
+    }
+}
+
 /// Typed intent for the existing synchronous Science stop operation.
 ///
 /// `recover` preserves the historical probe-and-acquire path. `exact` is used
@@ -214,6 +237,7 @@ pub(crate) enum ScienceStopFailureKind {
 pub(crate) struct ScienceStopFailure {
     kind: ScienceStopFailureKind,
     message: String,
+    confirmed_runtime: Option<ScienceRuntimeIdentity>,
 }
 
 impl ScienceStopFailure {
@@ -221,7 +245,13 @@ impl ScienceStopFailure {
         Self {
             kind,
             message: message.into(),
+            confirmed_runtime: None,
         }
+    }
+
+    pub(super) fn with_confirmed_runtime(mut self, runtime: ScienceRuntimeIdentity) -> Self {
+        self.confirmed_runtime = Some(runtime);
+        self
     }
 
     pub(crate) fn request_rejected(message: impl Into<String>) -> Self {
@@ -256,6 +286,11 @@ impl ScienceStopFailure {
         self.kind
     }
 
+    pub(crate) fn confirmed_runtime(&self) -> Option<&ScienceRuntimeIdentity> {
+        self.confirmed_runtime.as_ref()
+    }
+
+    #[cfg(test)]
     pub(crate) fn message(&self) -> &str {
         &self.message
     }

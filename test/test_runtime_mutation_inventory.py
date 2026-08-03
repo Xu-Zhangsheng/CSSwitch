@@ -498,22 +498,49 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         )
 
         one_click = operations["op.one-click"]
-        snapshot_index = one_click["ordered_effects"].index("capture authority snapshot")
-        journal_index = one_click["ordered_effects"].index(
-            "attempt first durable runtime-transaction journal write"
+        prior_intent_index = one_click["ordered_effects"].index(
+            "persist prior Science stop intent"
         )
-        self.assertEqual(journal_index, snapshot_index + 1)
+        stop_outcome_index = one_click["ordered_effects"].index(
+            "stop prior managed Science and persist typed outcome"
+        )
+        snapshot_index = one_click["ordered_effects"].index(
+            "capture authority snapshot and attach its ticket"
+        )
+        finalize_index = one_click["ordered_effects"].index("persist finalize intent")
+        cleanup_only_index = one_click["ordered_effects"].index(
+            "convert authority manifest to cleanup-only"
+        )
+        binding_index = one_click["ordered_effects"].index(
+            "atomically commit binding and clear journal"
+        )
+        self.assertLess(prior_intent_index, stop_outcome_index)
+        self.assertLess(stop_outcome_index, snapshot_index)
+        self.assertLess(finalize_index, cleanup_only_index)
+        self.assertLess(cleanup_only_index, binding_index)
         one_click_failures = {item["id"]: item for item in one_click["failure_points"]}
         self.assertIn("one-click.post-stop-pre-snapshot", one_click_failures)
         self.assertEqual(
             one_click_failures["one-click.post-snapshot-pre-journal"]["after_effects"],
-            ["authority snapshot captured", "runtime transaction journal not yet committed"],
+            [
+                "authority snapshot captured",
+                "snapshot ticket not yet attached to the V2 record",
+            ],
         )
         self.assertIn(
             "same-process PreJournalAbort",
             one_click_failures["one-click.post-snapshot-pre-journal"]["observed_outcome"],
         )
-        self.assertIn("F5 remains", one_click["known_gaps"][0])
+        self.assertIn("one-click.success-finalize", one_click_failures)
+        self.assertFalse(any("F5" in gap for gap in one_click["known_gaps"]))
+        self.assertTrue(
+            {
+                "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::h3_finalize_failures_preserve_replayable_intent",
+                "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::o0_gateway_terminal_handoff_reaches_production_one_click",
+                "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::cleanup_recovery::success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows",
+                "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::runtime_journal::gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transitions",
+            }.issubset(one_click["characterization_tests"])
+        )
         self.assertIn(
             "record.runtime-transaction-v2", one_click["durable_records"]["writes"]
         )

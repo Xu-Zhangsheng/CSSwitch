@@ -1,6 +1,274 @@
 use super::*;
 
 #[test]
+fn success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows() {
+    const CHILD_ENV: &str = "CSSWITCH_TEST_FINALIZE_REPLAY_CHILD";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .manage(lifecycle.clone())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let result = crate::commands::runtime::one_click_login_cmd(
+            app.handle().clone(),
+            state.clone(),
+            lifecycle,
+            Some("/definitely/not/a/csswitch-science-runtime".into()),
+        )
+        .expect("production command must project the post-replay runtime selection failure");
+        assert_ne!(result["status"], "success");
+        let replayed = config::load_from(&config::default_dir()).unwrap();
+        assert_eq!(
+            replayed
+                .runtime_binding
+                .as_ref()
+                .map(|binding| binding.profile_id.as_str()),
+            Some("target")
+        );
+        assert!(replayed.runtime_transaction.is_none());
+        retry_pending_authority_cleanup(&state).unwrap();
+        let manifest = config::read_pending_authority_cleanup_manifest(&config::default_dir())
+            .unwrap()
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(0));
+        return;
+    }
+
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let run_fresh_replay = |home: &Path, config_dir: &Path, committed: &RuntimeBindingCommit| {
+        let test_name = "runtime::sandbox_session::transaction_tests::cleanup_recovery::success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows";
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(CHILD_ENV, "1")
+            .env("HOME", home)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .any(|line| line == format!("test {test_name} ... ok")),
+            "fresh production-entry replay failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let replayed = config::load_from(config_dir).unwrap();
+        assert_eq!(replayed.runtime_binding.as_ref(), Some(committed));
+        assert!(replayed.runtime_transaction.is_none());
+        let manifest = config::read_pending_authority_cleanup_manifest(config_dir)
+            .unwrap()
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(0));
+    };
+    for scenario in [
+        "active-recovery",
+        "cleanup-only",
+        "prepare-failure",
+        "missing-manifest",
+    ] {
+        let convert_before_replay = scenario == "cleanup-only";
+        let tmp = isolated_tmpdir(&format!("finalize-{scenario}"));
+        let home = tmp.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let mut env = ScopedEnv::new();
+        env.set("HOME", &home);
+        let config_dir = config::default_dir();
+        let sandbox_home = config_dir.join("sandbox/home");
+        let auth_dir = sandbox_home.join(".claude-science");
+        fs::create_dir_all(&auth_dir).unwrap();
+        fs::write(auth_dir.join("active-org.json"), b"prior-authority\n").unwrap();
+        fs::set_permissions(
+            auth_dir.join("active-org.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let (model_catalog, default_model_route_id, role_bindings) =
+            crate::model_catalog::new_profile_catalog(
+                "deepseek",
+                "anthropic",
+                Some("deepseek-v4-flash"),
+            )
+            .unwrap();
+        let previous = RuntimeBindingCommit {
+            profile_id: "prior".into(),
+            route_fp: "prior-route".into(),
+            catalog_fp: "prior-catalog".into(),
+            binding_fp: "prior-binding".into(),
+        };
+        let cfg = Config {
+            profiles: vec![config::Profile {
+                id: "target".into(),
+                template_id: "deepseek".into(),
+                api_format: "anthropic".into(),
+                model: "deepseek-v4-flash".into(),
+                model_catalog,
+                default_model_route_id,
+                role_bindings,
+                model_policy: crate::provider_contracts::ModelPolicy::SavedCatalog,
+                ..Default::default()
+            }],
+            active_id: "target".into(),
+            runtime_binding: Some(previous.clone()),
+            ..Default::default()
+        };
+        config::save_to(&config_dir, &cfg).unwrap();
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let mut authority =
+            OneClickAuthoritySnapshot::capture(&config_dir, &sandbox_home, &auth_dir, &cfg, &state)
+                .unwrap();
+        let ticket = authority.registered_snapshot_ticket().unwrap();
+        let identity = OneClickTransactionIdentity {
+            target_profile_id: "target".into(),
+            runtime_fingerprint: "a".repeat(64),
+            snapshot_ticket: ticket.clone(),
+            previous_binding: Some(previous.clone()),
+            profile_switch_handoff: None,
+            gateway_terminal_handoff: None,
+            prior_stop: config::RuntimePriorStopState::NotRequired,
+        };
+        let mut progress = OneClickJournalProgress::PreJournalAbort {
+            registered_ticket: ticket,
+        };
+        write_one_click_checkpoint(
+            &config_dir,
+            &identity,
+            &mut progress,
+            config::RuntimeTransactionPhase::VerifyScienceCatalog,
+        )
+        .unwrap();
+        let committed = RuntimeBindingCommit {
+            profile_id: "target".into(),
+            route_fp: "committed-route".into(),
+            catalog_fp: "committed-catalog".into(),
+            binding_fp: "committed-binding".into(),
+        };
+        begin_one_click_finalize(
+            &config_dir,
+            &identity,
+            &mut progress,
+            config::RuntimeFinalizeAction::CommitBinding {
+                binding: committed.clone(),
+            },
+        )
+        .unwrap();
+        if scenario == "missing-manifest" {
+            authority.preserve_recovery = true;
+            drop(authority);
+            let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
+                .unwrap()
+                .unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+            let snapshot = PathBuf::from(manifest["entries"][0]["path"].as_str().unwrap());
+            fs::remove_file(config_dir.join(config::PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE))
+                .unwrap();
+            let before = fs::read(config_dir.join("config.json")).unwrap();
+            assert!(
+                crate::runtime::sandbox_session::replay_interrupted_one_click_finalize(&state)
+                    .is_err()
+            );
+            assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+            assert!(snapshot.is_dir());
+            let invalid_empty_manifests = [
+                br#"{"schema_version":2,"disposition":"active_recovery","entries":[]}"#.to_vec(),
+                br#"{"schema_version":1,"entries":[]}"#.to_vec(),
+            ];
+            let mut expected_before: Option<Vec<u8>> = None;
+            for invalid in invalid_empty_manifests {
+                config::write_pending_authority_cleanup_manifest(
+                    &config_dir,
+                    &invalid,
+                    expected_before.as_deref(),
+                )
+                .unwrap();
+                assert!(
+                    crate::runtime::sandbox_session::replay_interrupted_one_click_finalize(&state)
+                        .is_err(),
+                    "empty ActiveRecovery or legacy manifest must not complete finalize"
+                );
+                assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+                assert!(snapshot.is_dir());
+                expected_before = Some(invalid);
+            }
+            fs::remove_dir_all(tmp).unwrap();
+            continue;
+        }
+        if scenario == "prepare-failure" {
+            let prepare_failure = config::test_arm_pending_cleanup_lifecycle(Some(
+                config::PendingCleanupPublishFault::Prepare,
+            ));
+            let error = authority
+                .prepare_success(&mut serde_json::json!({}))
+                .expect_err("ActiveRecovery to CleanupOnly publication failure must block success");
+            assert!(error.to_string().contains("cleanup_prepare_failed"));
+            let blocked = config::load_from(&config_dir).unwrap();
+            assert_eq!(blocked.runtime_binding.as_ref(), Some(&previous));
+            assert!(matches!(
+                blocked.runtime_transaction,
+                Some(config::RuntimeTransactionRecord::V2(
+                    config::RuntimeTransactionV2 {
+                        finalize: config::RuntimeFinalizeState::Intent { .. },
+                        ..
+                    }
+                ))
+            ));
+            let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
+                .unwrap()
+                .unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+            assert_eq!(manifest["disposition"], "active_recovery");
+            assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(1));
+            authority.preserve_recovery = true;
+            drop(authority);
+            drop(prepare_failure);
+            run_fresh_replay(&home, &config_dir, &committed);
+            fs::remove_dir_all(tmp).unwrap();
+            continue;
+        }
+        if convert_before_replay {
+            let cleanup_only = prepare_registered_authority_cleanup(
+                &authority.cleanup_context,
+                authority.cleanup_ticket.as_ref().unwrap(),
+            )
+            .unwrap();
+            authority.cleanup_ticket = Some(cleanup_only);
+        }
+        authority.preserve_recovery = true;
+        drop(authority);
+
+        let durable_manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
+            .unwrap()
+            .unwrap();
+        let durable_manifest: serde_json::Value =
+            serde_json::from_slice(&durable_manifest).unwrap();
+        assert_eq!(
+            durable_manifest["disposition"],
+            if convert_before_replay {
+                "cleanup_only"
+            } else {
+                "active_recovery"
+            }
+        );
+        assert_eq!(
+            durable_manifest["entries"].as_array().map(Vec::len),
+            Some(1),
+            "both crash fixtures must retain the exact snapshot entry before fresh replay"
+        );
+
+        run_fresh_replay(&home, &config_dir, &committed);
+        fs::remove_dir_all(tmp).unwrap();
+    }
+}
+
+#[test]
 fn one_shot_commit_cleanup_fault_is_retried_before_success() {
     let _env_lock = TEST_ENV_LOCK
         .lock()

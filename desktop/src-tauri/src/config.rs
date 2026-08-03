@@ -98,6 +98,7 @@ pub(crate) enum PendingCleanupLifecycleEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PendingCleanupPublishFault {
     Register,
+    Prepare,
     Clear,
 }
 
@@ -316,6 +317,22 @@ pub(crate) fn test_pending_cleanup_clear_publish_attempt() -> io::Result<()> {
     {
         return Err(io::Error::other(
             "test-only pending cleanup CLEAR publish failure",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn test_pending_cleanup_prepare_publish_attempt() -> io::Result<()> {
+    let seam = PENDING_CLEANUP_LIFECYCLE_SEAM
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if seam
+        .as_ref()
+        .is_some_and(|seam| seam.publish_fault == Some(PendingCleanupPublishFault::Prepare))
+    {
+        return Err(io::Error::other(
+            "test-only pending cleanup PREPARE publish failure",
         ));
     }
     Ok(())
@@ -747,6 +764,57 @@ pub enum RuntimeGatewayStopOutcome {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct RuntimePriorScienceRecipe {
+    pub port: u16,
+    pub runtime_path: PathBuf,
+    pub runtime_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_version: Option<String>,
+    pub runtime_fingerprint: String,
+    pub launch_receipt_digest: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePriorStopOutcome {
+    ExactStopped,
+    NotStopped,
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimePriorStopState {
+    #[default]
+    NotRequired,
+    Intent {
+        recipe: RuntimePriorScienceRecipe,
+    },
+    Outcome {
+        recipe: RuntimePriorScienceRecipe,
+        outcome: RuntimePriorStopOutcome,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeFinalizeAction {
+    ClearJournal,
+    CommitBinding { binding: RuntimeBindingCommit },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeFinalizeState {
+    #[default]
+    NotStarted,
+    Intent {
+        action: RuntimeFinalizeAction,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeTransactionV2 {
     pub schema_version: u32,
     pub transaction_id: String,
@@ -764,6 +832,10 @@ pub struct RuntimeTransactionV2 {
     pub previous_gateway: Option<GatewayRuntimeJournalIdentity>,
     pub compensation: RuntimeCompensationState,
     pub gateway_stop_outcome: RuntimeGatewayStopOutcome,
+    #[serde(default)]
+    pub prior_stop: RuntimePriorStopState,
+    #[serde(default)]
+    pub finalize: RuntimeFinalizeState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -951,6 +1023,26 @@ fn valid_runtime_snapshot_ticket(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+fn valid_hex_digest(value: &str) -> bool {
+    valid_runtime_fingerprint(value)
+}
+
+fn valid_prior_science_recipe(recipe: &RuntimePriorScienceRecipe) -> bool {
+    recipe.port != 0
+        && recipe.port != 8765
+        && recipe.runtime_path.is_absolute()
+        && !recipe.runtime_source.is_empty()
+        && valid_runtime_fingerprint(&recipe.runtime_fingerprint)
+        && valid_hex_digest(&recipe.launch_receipt_digest)
+}
+
+fn valid_runtime_binding(binding: &RuntimeBindingCommit) -> bool {
+    !binding.profile_id.is_empty()
+        && !binding.route_fp.is_empty()
+        && !binding.catalog_fp.is_empty()
+        && !binding.binding_fp.is_empty()
+}
+
 const LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str = "start_science_environment_pending:";
 const LEGACY_AUTHORITY_SNAPSHOT_ACTIVE_STAGE_PREFIX: &str = "authority_snapshot_active:";
 
@@ -1020,15 +1112,53 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
         return Err("runtime_transaction V2 incomplete compensation has no failed step".into());
     }
 
-    let one_click_identity =
-        journal.runtime_fingerprint.is_some() && journal.snapshot_ticket.is_some();
+    let prior_stop_valid = match &journal.prior_stop {
+        RuntimePriorStopState::NotRequired => true,
+        RuntimePriorStopState::Intent { recipe }
+        | RuntimePriorStopState::Outcome { recipe, .. } => valid_prior_science_recipe(recipe),
+    };
+    if !prior_stop_valid {
+        return Err("runtime_transaction V2 prior Science recipe is invalid".into());
+    }
+    let finalize_valid = match &journal.finalize {
+        RuntimeFinalizeState::NotStarted => true,
+        RuntimeFinalizeState::Intent {
+            action: RuntimeFinalizeAction::ClearJournal,
+        } => true,
+        RuntimeFinalizeState::Intent {
+            action: RuntimeFinalizeAction::CommitBinding { binding },
+        } => valid_runtime_binding(binding),
+    };
+    if !finalize_valid {
+        return Err("runtime_transaction V2 finalize action is invalid".into());
+    }
+
+    let one_click_identity = journal.runtime_fingerprint.is_some();
+    let pre_snapshot_prior_stop = journal.snapshot_ticket.is_none()
+        && journal.phase == RuntimeTransactionPhase::StopOldScience
+        && matches!(
+            journal.prior_stop,
+            RuntimePriorStopState::Intent { .. } | RuntimePriorStopState::Outcome { .. }
+        )
+        && journal.finalize == RuntimeFinalizeState::NotStarted;
+    let registered_one_click = journal.snapshot_ticket.is_some()
+        && !matches!(journal.prior_stop, RuntimePriorStopState::Intent { .. })
+        && !matches!(
+            journal.prior_stop,
+            RuntimePriorStopState::Outcome {
+                outcome: RuntimePriorStopOutcome::NotStopped | RuntimePriorStopOutcome::Unknown,
+                ..
+            }
+        );
     let valid_phase = match (journal.operation, journal.phase) {
         (
             RuntimeTransactionOperation::OneClick,
             RuntimeTransactionPhase::StartFormalGateway
             | RuntimeTransactionPhase::RecoverInterruptedGateway,
         ) => false,
-        (RuntimeTransactionOperation::OneClick, _) => one_click_identity,
+        (RuntimeTransactionOperation::OneClick, _) => {
+            one_click_identity && (pre_snapshot_prior_stop || registered_one_click)
+        }
         (
             RuntimeTransactionOperation::ProfileSwitch,
             RuntimeTransactionPhase::StartFormalGateway
@@ -1037,6 +1167,8 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
             journal.runtime_fingerprint.is_none()
                 && journal.snapshot_ticket.is_none()
                 && journal.environment_exposure == RuntimeEnvironmentExposure::NotExposed
+                && journal.prior_stop == RuntimePriorStopState::NotRequired
+                && journal.finalize == RuntimeFinalizeState::NotStarted
         }
         (RuntimeTransactionOperation::ProfileSwitch, _) => false,
     };
@@ -1074,6 +1206,13 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
         };
     if !gateway_outcome_valid {
         return Err("runtime_transaction V2 gateway outcome is invalid for phase".into());
+    }
+    if journal.finalize != RuntimeFinalizeState::NotStarted
+        && (journal.operation != RuntimeTransactionOperation::OneClick
+            || journal.snapshot_ticket.is_none()
+            || journal.compensation != RuntimeCompensationState::NotStarted)
+    {
+        return Err("runtime_transaction V2 finalize intent has invalid ownership".into());
     }
     Ok(())
 }
@@ -3078,6 +3217,8 @@ mod tests {
             }),
             compensation: RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: RuntimePriorStopState::NotRequired,
+            finalize: RuntimeFinalizeState::NotStarted,
         }
     }
 
@@ -3243,6 +3384,8 @@ mod tests {
             previous_gateway: None,
             compensation: RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: RuntimePriorStopState::NotRequired,
+            finalize: RuntimeFinalizeState::NotStarted,
         });
         for outcome in [
             RuntimeGatewayStopOutcome::Pending,
@@ -3265,6 +3408,8 @@ mod tests {
                 previous_gateway: None,
                 compensation: RuntimeCompensationState::NotStarted,
                 gateway_stop_outcome: outcome,
+                prior_stop: RuntimePriorStopState::NotRequired,
+                finalize: RuntimeFinalizeState::NotStarted,
             });
         }
         for record in production_records {

@@ -1,5 +1,309 @@
 use super::*;
 
+fn runtime_journal_test_config(
+    binding: Option<RuntimeBindingCommit>,
+    transaction: Option<config::RuntimeTransactionRecord>,
+) -> Config {
+    let (model_catalog, default_model_route_id, role_bindings) =
+        crate::model_catalog::new_profile_catalog(
+            "deepseek",
+            "anthropic",
+            Some("deepseek-v4-flash"),
+        )
+        .unwrap();
+    Config {
+        profiles: vec![config::Profile {
+            id: "target".into(),
+            template_id: "deepseek".into(),
+            api_format: "anthropic".into(),
+            model: "deepseek-v4-flash".into(),
+            model_catalog,
+            default_model_route_id,
+            role_bindings,
+            model_policy: crate::provider_contracts::ModelPolicy::SavedCatalog,
+            ..Default::default()
+        }],
+        active_id: "target".into(),
+        runtime_binding: binding,
+        runtime_transaction: transaction,
+        ..Default::default()
+    }
+}
+
+fn terminal_gateway_record(binding: Option<RuntimeBindingCommit>) -> config::RuntimeTransactionV2 {
+    config::RuntimeTransactionV2 {
+        schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+        transaction_id: "terminal-gateway-handoff".into(),
+        operation: config::RuntimeTransactionOperation::ProfileSwitch,
+        target_profile_id: "target".into(),
+        phase: config::RuntimeTransactionPhase::RecoverInterruptedGateway,
+        runtime_fingerprint: None,
+        environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
+        snapshot_ticket: None,
+        previous_binding: binding,
+        previous_gateway: None,
+        compensation: config::RuntimeCompensationState::NotStarted,
+        gateway_stop_outcome: config::RuntimeGatewayStopOutcome::Stopped,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
+        finalize: config::RuntimeFinalizeState::NotStarted,
+    }
+}
+
+#[test]
+fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transitions() {
+    let dir = isolated_tmpdir("gateway-prior-finalize-protocol");
+    let previous = RuntimeBindingCommit {
+        profile_id: "prior".into(),
+        route_fp: "prior-route".into(),
+        catalog_fp: "prior-catalog".into(),
+        binding_fp: "prior-binding".into(),
+    };
+    let terminal = terminal_gateway_record(Some(previous.clone()));
+    config::save_to(
+        &dir,
+        &runtime_journal_test_config(
+            Some(previous.clone()),
+            Some(config::RuntimeTransactionRecord::V2(terminal.clone())),
+        ),
+    )
+    .unwrap();
+    let accepted = resolve_gateway_terminal_handoff(
+        config::load_from(&dir)
+            .unwrap()
+            .runtime_transaction
+            .as_ref(),
+        Some(&terminal),
+        "target",
+        Some(&previous),
+    )
+    .unwrap()
+    .expect("exact terminal record must produce a one-shot handoff");
+
+    let recipe = config::RuntimePriorScienceRecipe {
+        port: 8990,
+        runtime_path: PathBuf::from(
+            "/Applications/Claude Science.app/Contents/Resources/bin/claude-science",
+        ),
+        runtime_source: "installed_app".into(),
+        runtime_version: Some("test-only".into()),
+        runtime_fingerprint: "a".repeat(64),
+        launch_receipt_digest: "b".repeat(64),
+    };
+    let replacement = RuntimeBindingCommit {
+        profile_id: "replacement".into(),
+        route_fp: "replacement-route".into(),
+        catalog_fp: "replacement-catalog".into(),
+        binding_fp: "replacement-binding".into(),
+    };
+    assert!(resolve_gateway_terminal_handoff(
+        config::load_from(&dir)
+            .unwrap()
+            .runtime_transaction
+            .as_ref(),
+        Some(&terminal),
+        "target",
+        Some(&replacement),
+    )
+    .is_err());
+    for drift in ["active", "binding"] {
+        config::update(&dir, |current| {
+            if drift == "active" {
+                current.active_id.clear();
+            } else {
+                current.runtime_binding = Some(replacement.clone());
+            }
+        })
+        .unwrap();
+        let drifted = fs::read(dir.join("config.json")).unwrap();
+        assert!(begin_prior_stop_intent(
+            &dir,
+            "target",
+            &"c".repeat(64),
+            Some(&previous),
+            None,
+            Some(&accepted),
+            recipe.clone(),
+        )
+        .is_err());
+        assert_eq!(fs::read(dir.join("config.json")).unwrap(), drifted);
+        config::update(&dir, |current| {
+            current.active_id = "target".into();
+            current.runtime_binding = Some(previous.clone());
+        })
+        .unwrap();
+    }
+    let intent = begin_prior_stop_intent(
+        &dir,
+        "target",
+        &"c".repeat(64),
+        Some(&previous),
+        None,
+        Some(&accepted),
+        recipe.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        config::load_from(&dir)
+            .unwrap()
+            .runtime_transaction
+            .unwrap()
+            .as_v2()
+            .unwrap()
+            .prior_stop,
+        config::RuntimePriorStopState::Intent {
+            recipe: recipe.clone()
+        },
+        "durable intent must exist before the external stop effect"
+    );
+    let stopped =
+        publish_prior_stop_outcome(&dir, &intent, config::RuntimePriorStopOutcome::ExactStopped)
+            .unwrap();
+    let ticket =
+        config::RuntimeSnapshotTicket::verified(format!(".one-click-rollback-{}", "d".repeat(32)))
+            .unwrap();
+    let identity = OneClickTransactionIdentity {
+        target_profile_id: "target".into(),
+        runtime_fingerprint: "c".repeat(64),
+        snapshot_ticket: ticket.clone(),
+        previous_binding: Some(previous.clone()),
+        profile_switch_handoff: None,
+        gateway_terminal_handoff: Some(accepted),
+        prior_stop: stopped.prior_stop.clone(),
+    };
+    let mut progress = OneClickJournalProgress::Journaled {
+        record: stopped,
+        registered_ticket: ticket,
+    };
+    write_one_click_checkpoint(
+        &dir,
+        &identity,
+        &mut progress,
+        config::RuntimeTransactionPhase::StartGateway,
+    )
+    .unwrap();
+    let committed = RuntimeBindingCommit {
+        profile_id: "target".into(),
+        route_fp: "new-route".into(),
+        catalog_fp: "new-catalog".into(),
+        binding_fp: "new-binding".into(),
+    };
+    begin_one_click_finalize(
+        &dir,
+        &identity,
+        &mut progress,
+        config::RuntimeFinalizeAction::CommitBinding {
+            binding: committed.clone(),
+        },
+    )
+    .unwrap();
+    let finalize_cfg = config::load_from(&dir).unwrap();
+    assert_eq!(finalize_cfg.runtime_binding.as_ref(), Some(&previous));
+    assert!(matches!(
+        finalize_cfg
+            .runtime_transaction
+            .as_ref()
+            .and_then(config::RuntimeTransactionRecord::as_v2)
+            .map(|record| &record.finalize),
+        Some(config::RuntimeFinalizeState::Intent { .. })
+    ));
+    let expected_finalize = progress.journaled_record().unwrap().clone();
+    config::update(&dir, |current| {
+        let record = current
+            .runtime_transaction
+            .as_mut()
+            .and_then(config::RuntimeTransactionRecord::as_v2_mut)
+            .unwrap();
+        if let config::RuntimeFinalizeState::Intent {
+            action: config::RuntimeFinalizeAction::CommitBinding { binding },
+        } = &mut record.finalize
+        {
+            binding.binding_fp = "drifted-finalize-binding".into();
+        }
+    })
+    .unwrap();
+    let drifted_finalize_bytes = fs::read(dir.join("config.json")).unwrap();
+    assert!(complete_one_click_finalize(&dir, &mut progress).is_err());
+    assert_eq!(
+        fs::read(dir.join("config.json")).unwrap(),
+        drifted_finalize_bytes,
+        "finalize completion must preserve a drifted complete record"
+    );
+    config::update(&dir, |current| {
+        current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(
+            expected_finalize.clone(),
+        ));
+    })
+    .unwrap();
+    for drift in ["active", "binding"] {
+        config::update(&dir, |current| {
+            if drift == "active" {
+                current.active_id.clear();
+            } else {
+                current.runtime_binding = Some(replacement.clone());
+            }
+        })
+        .unwrap();
+        let drifted = fs::read(dir.join("config.json")).unwrap();
+        assert!(complete_one_click_finalize(&dir, &mut progress).is_err());
+        assert_eq!(
+            fs::read(dir.join("config.json")).unwrap(),
+            drifted,
+            "finalize completion must preserve companion config-authority drift"
+        );
+        config::update(&dir, |current| {
+            current.active_id = "target".into();
+            current.runtime_binding = Some(previous.clone());
+            current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(
+                expected_finalize.clone(),
+            ));
+        })
+        .unwrap();
+    }
+    complete_one_click_finalize(&dir, &mut progress).unwrap();
+    let finalized = config::load_from(&dir).unwrap();
+    assert_eq!(finalized.runtime_binding.as_ref(), Some(&committed));
+    assert!(finalized.runtime_transaction.is_none());
+
+    config::save_to(
+        &dir,
+        &runtime_journal_test_config(
+            Some(previous.clone()),
+            Some(config::RuntimeTransactionRecord::V2(terminal.clone())),
+        ),
+    )
+    .unwrap();
+    let mut drifts = Vec::new();
+    let mut transaction_drift = terminal.clone();
+    transaction_drift.transaction_id = "drifted-terminal".into();
+    drifts.push(transaction_drift);
+    let mut target_drift = terminal.clone();
+    target_drift.target_profile_id = "other-target".into();
+    drifts.push(target_drift);
+    let mut outcome_drift = terminal.clone();
+    outcome_drift.gateway_stop_outcome = config::RuntimeGatewayStopOutcome::ExitUnconfirmed;
+    drifts.push(outcome_drift);
+    let mut binding_drift = terminal.clone();
+    binding_drift.previous_binding.as_mut().unwrap().binding_fp = "drifted-binding".into();
+    drifts.push(binding_drift);
+    for drifted in &drifts {
+        assert!(resolve_gateway_terminal_handoff(
+            config::load_from(&dir)
+                .unwrap()
+                .runtime_transaction
+                .as_ref(),
+            Some(drifted),
+            "target",
+            Some(&previous),
+        )
+        .is_err());
+    }
+    assert_eq!(
+        config::load_from(&dir).unwrap().runtime_transaction,
+        Some(config::RuntimeTransactionRecord::V2(terminal))
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     let dir = std::env::temp_dir().join(format!(
@@ -61,6 +365,8 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: Some(previous.clone()),
         profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
     };
     let mut progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket.clone(),
@@ -251,6 +557,8 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
             previous_gateway: None,
             compensation: config::RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: config::RuntimePriorStopState::NotRequired,
+            finalize: config::RuntimeFinalizeState::NotStarted,
         });
     config::update(&dir, |current| {
         current.runtime_transaction = Some(profile_switch_record.clone());
@@ -360,23 +668,27 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     assert!(healthy_reopen_transaction_matches(
         Some(&profile_switch_record),
         Some(typed_profile_switch),
+        None,
         &identity.target_profile_id,
         identity.previous_binding.as_ref(),
     ));
     assert!(!healthy_reopen_transaction_matches(
         Some(&profile_switch_record),
         Some(&mismatched_profile_switch),
+        None,
         &identity.target_profile_id,
         identity.previous_binding.as_ref(),
     ));
     assert!(!healthy_reopen_transaction_matches(
         None,
         Some(typed_profile_switch),
+        None,
         &identity.target_profile_id,
         identity.previous_binding.as_ref(),
     ));
     assert!(!healthy_reopen_transaction_matches(
         Some(&profile_switch_record),
+        None,
         None,
         &identity.target_profile_id,
         identity.previous_binding.as_ref(),
@@ -450,10 +762,12 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     assert!(healthy_reopen_transaction_matches(
         Some(&legacy_profile_switch),
         None,
+        None,
         &identity.target_profile_id,
         identity.previous_binding.as_ref(),
     ));
     assert!(healthy_reopen_transaction_matches(
+        None,
         None,
         None,
         &identity.target_profile_id,
@@ -481,7 +795,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         binding_fp: "committed-binding-fp".into(),
     };
     let commit_error =
-        commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), &committed_binding)
+        commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), None, &committed_binding)
             .expect_err("same-id drift between healthy read and binding commit must fail closed");
     assert!(commit_error.contains("retargeted healthy reopen"));
     assert_eq!(
@@ -493,7 +807,8 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         current.runtime_transaction = Some(profile_switch_record.clone());
     })
     .unwrap();
-    commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), &committed_binding).unwrap();
+    commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), None, &committed_binding)
+        .unwrap();
     let committed_config = config::load_from(&dir).unwrap();
     assert_eq!(
         committed_config.runtime_binding.as_ref(),
@@ -549,7 +864,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         std::fs::Permissions::from_mode(0o600),
     )
     .unwrap();
-    let compensation_config = Config::default();
+    let compensation_config = runtime_journal_test_config(None, None);
     config::save_to(&compensation_dir, &compensation_config).unwrap();
     let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
     let mut authority_transaction = AuthorityTransaction::capture(
@@ -562,11 +877,13 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     .unwrap();
     let compensation_ticket = authority_transaction.registered_snapshot_ticket().unwrap();
     let compensation_identity = OneClickTransactionIdentity {
-        target_profile_id: "compensation-target".into(),
+        target_profile_id: "target".into(),
         runtime_fingerprint: "c".repeat(64),
         snapshot_ticket: compensation_ticket.clone(),
         previous_binding: None,
         profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
     };
     let mut compensation_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: compensation_ticket,

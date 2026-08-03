@@ -1355,8 +1355,7 @@ fn isolated_ssh_prevalidation_precedes_oauth_mutation() {
             proxy_port,
         );
 
-        let result =
-            sandbox_session::one_click_login(handle, state.clone(), lifecycle.as_ref(), None, None);
+        let result = super::one_click_login_cmd(handle, state.clone(), lifecycle.clone(), None);
         let exact_error = result
             .as_ref()
             .is_err_and(|error| error.to_string().contains(expected_error));
@@ -2938,8 +2937,7 @@ fn run_r0_pre_snapshot_child(oracle: &str, tmp: &Path) {
     if oracle == "prior-stop-error" {
         let _stop_seam = science::test_arm_post_stop_result_failure(config_dir.clone());
         port_reservations.release_one_click_ports();
-        let result =
-            sandbox_session::one_click_login(handle, state.clone(), lifecycle.as_ref(), None, None);
+        let result = super::one_click_login_cmd(handle, state.clone(), lifecycle.clone(), None);
         let config_after = config::load_from(&config_dir).unwrap();
         let app_after = app_authority_projection(&state);
         let snapshot_count = fs::read_dir(config_dir.join("sandbox"))
@@ -2956,25 +2954,44 @@ fn run_r0_pre_snapshot_child(oracle: &str, tmp: &Path) {
         let exact_stopped = process_start_identity_if_alive(prior_pid).is_none()
             && TcpStream::connect(("127.0.0.1", sandbox_port)).is_err()
             && !receipt_path.exists();
-        let no_durable_recovery = config_after.runtime_transaction.is_none()
+        let durable_stop_outcome = config_after
+            .runtime_transaction
+            .as_ref()
+            .and_then(config::RuntimeTransactionRecord::as_v2)
+            .is_some_and(|record| {
+                record.snapshot_ticket.is_none()
+                    && matches!(
+                        record.prior_stop,
+                        config::RuntimePriorStopState::Outcome {
+                            outcome: config::RuntimePriorStopOutcome::ExactStopped,
+                            ..
+                        }
+                    )
+            })
             && config::read_pending_authority_cleanup_manifest(&config_dir)
                 .unwrap()
                 .is_none()
             && snapshot_count == 0;
         force_cleanup_isolated_fixture(&state, tmp, sandbox_port, proxy_port);
         assert!(
-            result.as_ref().is_err_and(|error| error
-                .to_string()
-                .contains("test-only post-stop failure after exact process and receipt cleanup")),
+            result.as_ref().is_ok_and(|value| {
+                value["status"] == "error"
+                    && value["recovery_status"] == "manual_recovery_required"
+                    && value["message"].as_str().is_some_and(|message| {
+                        message.contains(
+                            "test-only post-stop failure after exact process and receipt cleanup",
+                        )
+                    })
+            }),
             "fixture must return the injected post-stop error: {result:?}"
         );
         assert!(
             exact_stopped
                 && no_restart
-                && no_durable_recovery
-                && app_after.science_runtime == Some(prior_runtime)
-                && app_after.science_confirmed_stopped.is_none(),
-            "a stop helper error after real stop/receipt cleanup must not trigger coordinator restart or create snapshot/journal recovery: exact_stopped={exact_stopped}, no_restart={no_restart}, no_durable_recovery={no_durable_recovery}, app={app_after:?}"
+                && durable_stop_outcome
+                && app_after.science_runtime.is_none()
+                && app_after.science_confirmed_stopped == Some(prior_runtime),
+            "a stop helper error after real stop/receipt cleanup must retain a durable exact-stopped outcome without snapshot creation or coordinator restart: exact_stopped={exact_stopped}, no_restart={no_restart}, durable_stop_outcome={durable_stop_outcome}, app={app_after:?}"
         );
         return;
     }
@@ -2989,8 +3006,7 @@ fn run_r0_pre_snapshot_child(oracle: &str, tmp: &Path) {
     let _exit_seam =
         sandbox_session::test_arm_one_click_exit_after_snapshot_capture(config_dir.clone());
     port_reservations.release_one_click_ports();
-    let unexpected =
-        sandbox_session::one_click_login(handle, state, lifecycle.as_ref(), None, None);
+    let unexpected = super::one_click_login_cmd(handle, state, lifecycle, None);
     panic!("snapshot-to-journal exit seam did not terminate the child: {unexpected:?}");
 }
 
@@ -3070,8 +3086,22 @@ fn r0_one_click_snapshot_to_journal_boundary_is_frozen() {
         .unwrap();
     let observation = fs::read_to_string(tmp.join("snapshot-observation.log")).unwrap();
     let receipt_path = config_dir.join("science-managed-launch.v1.json");
+    let durable_prior_stop = config_after
+        .runtime_transaction
+        .as_ref()
+        .and_then(config::RuntimeTransactionRecord::as_v2)
+        .is_some_and(|record| {
+            record.snapshot_ticket.is_none()
+                && matches!(
+                    record.prior_stop,
+                    config::RuntimePriorStopState::Outcome {
+                        outcome: config::RuntimePriorStopOutcome::ExactStopped,
+                        ..
+                    }
+                )
+        });
     let boundary_exact = output.status.code() == Some(86)
-        && config_after.runtime_transaction.is_none()
+        && durable_prior_stop
         && manifest["disposition"] == "active_recovery"
         && manifest["entries"]
             .as_array()
@@ -3089,7 +3119,7 @@ fn r0_one_click_snapshot_to_journal_boundary_is_frozen() {
     let _ = fs::remove_dir_all(&tmp);
     assert!(
         boundary_exact,
-        "exit after durable snapshot capture and before the first runtime journal must leave prior Science stopped, an ActiveRecovery snapshot, and no runtime journal: status={:?}, config_transaction_present={}, manifest={}, observation={observation:?}, stdout={}, stderr={}",
+        "exit after durable snapshot capture and before the first post-snapshot checkpoint must leave prior Science stopped, its durable exact outcome, and an ActiveRecovery snapshot: status={:?}, config_transaction_present={}, manifest={}, observation={observation:?}, stdout={}, stderr={}",
         output.status.code(),
         config_after.runtime_transaction.is_some(),
         manifest,
@@ -3139,6 +3169,34 @@ fn r0_one_click_cold_start_commits_runtime_and_receipts() {
         "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
         &[("CSSWITCH_TEST_R0_COLD_START_ONLY", "1")],
     );
+}
+
+#[test]
+fn o0_gateway_terminal_handoff_reaches_production_one_click() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
+        &[
+            ("CSSWITCH_TEST_GATEWAY_TERMINAL_HANDOFF", "1"),
+            ("CSSWITCH_TEST_R0_COLD_START_ONLY", "1"),
+        ],
+    );
+}
+
+#[test]
+fn h3_finalize_failures_preserve_replayable_intent() {
+    for fault in [
+        "CSSWITCH_TEST_FINALIZE_PREPARE_FAILURE",
+        "CSSWITCH_TEST_FINALIZE_COMPLETION_FAILURE",
+    ] {
+        run_exact_ignored_runtime_characterization(
+            "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
+            &[(fault, "1"), ("CSSWITCH_TEST_R0_COLD_START_ONLY", "1")],
+        );
+        run_exact_ignored_runtime_characterization(
+            "commands::runtime::tests::isolated_r0_one_click_history_attention",
+            &[(fault, "1")],
+        );
+    }
 }
 
 #[test]
@@ -4047,6 +4105,9 @@ fn isolated_r0_one_click_history_attention() {
     let proxy_port = port_reservations.proxy_port;
     let sandbox_port = port_reservations.sandbox_port;
     let science_call_log = tmp.join("science-call.log");
+    let finalize_prepare_failure = env::var_os("CSSWITCH_TEST_FINALIZE_PREPARE_FAILURE").is_some();
+    let finalize_completion_failure =
+        env::var_os("CSSWITCH_TEST_FINALIZE_COMPLETION_FAILURE").is_some();
 
     let mut env_guard = EnvGuard::new();
     env_guard.set("HOME", &home);
@@ -4106,6 +4167,14 @@ fn isolated_r0_one_click_history_attention() {
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
+    let prepare_failure_guard = finalize_prepare_failure.then(|| {
+        config::test_arm_pending_cleanup_lifecycle(Some(
+            config::PendingCleanupPublishFault::Prepare,
+        ))
+    });
+    let completion_failure_guard = finalize_completion_failure.then(|| {
+        sandbox_session::test_arm_one_click_finalize_completion_failure(config_dir.clone())
+    });
     port_reservations.release_one_click_ports();
     let attention = invoke_json(
         &webview,
@@ -4113,6 +4182,50 @@ fn isolated_r0_one_click_history_attention() {
         serde_json::json!({"runtimeChoice": null}),
     )
     .unwrap();
+    if finalize_prepare_failure || finalize_completion_failure {
+        assert_eq!(attention["status"], "degraded");
+        assert_eq!(attention["action"], "history_choice_required");
+        assert_eq!(attention["recovery_status"], "manual_recovery_required");
+        let pending = config::load_from(&config_dir).unwrap();
+        let pending_record = pending
+            .runtime_transaction
+            .as_ref()
+            .and_then(config::RuntimeTransactionRecord::as_v2)
+            .expect("history finalize failure must retain the exact V2 record");
+        assert_eq!(pending_record.target_profile_id, cfg.active_id);
+        assert!(matches!(
+            pending_record.finalize,
+            config::RuntimeFinalizeState::Intent {
+                action: config::RuntimeFinalizeAction::ClearJournal
+            }
+        ));
+        assert!(lock(&state).history_recovery.is_some());
+        let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
+            .unwrap()
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        if finalize_prepare_failure {
+            assert_eq!(manifest["disposition"], "active_recovery");
+            assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(1));
+        } else {
+            assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(0));
+        }
+        drop(prepare_failure_guard);
+        drop(completion_failure_guard);
+        let replayed = invoke_json(
+            &webview,
+            "one_click_login",
+            serde_json::json!({"runtimeChoice": null}),
+        )
+        .expect("next production history command must replay finalize first");
+        assert_eq!(replayed["status"], "attention");
+        let finalized = config::load_from(&config_dir).unwrap();
+        assert!(finalized.runtime_transaction.is_none());
+        assert!(finalized.runtime_binding.is_none());
+        assert!(lock(&state).history_recovery.is_some());
+        fs::remove_dir_all(&tmp).unwrap();
+        return;
+    }
     let returned_references = attention["choices"]
         .as_array()
         .unwrap()
@@ -7158,13 +7271,37 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         },
         ..Default::default()
     };
-    let cfg = Config {
+    let terminal_handoff = env::var_os("CSSWITCH_TEST_GATEWAY_TERMINAL_HANDOFF").is_some();
+    let finalize_prepare_failure = env::var_os("CSSWITCH_TEST_FINALIZE_PREPARE_FAILURE").is_some();
+    let finalize_completion_failure =
+        env::var_os("CSSWITCH_TEST_FINALIZE_COMPLETION_FAILURE").is_some();
+    let mut cfg = Config {
         profiles: vec![profile],
         active_id: "mock-relay".into(),
         proxy_port,
         sandbox_port,
         ..Default::default()
     };
+    if terminal_handoff {
+        cfg.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(
+            config::RuntimeTransactionV2 {
+                schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+                transaction_id: "gateway-terminal-production-handoff".into(),
+                operation: config::RuntimeTransactionOperation::ProfileSwitch,
+                target_profile_id: cfg.active_id.clone(),
+                phase: config::RuntimeTransactionPhase::RecoverInterruptedGateway,
+                runtime_fingerprint: None,
+                environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
+                snapshot_ticket: None,
+                previous_binding: None,
+                previous_gateway: None,
+                compensation: config::RuntimeCompensationState::NotStarted,
+                gateway_stop_outcome: config::RuntimeGatewayStopOutcome::AbsentAfterAttempt,
+                prior_stop: config::RuntimePriorStopState::NotRequired,
+                finalize: config::RuntimeFinalizeState::NotStarted,
+            },
+        ));
+    }
     let config_dir = config::default_dir();
     config::save_to(&config_dir, &cfg).unwrap();
 
@@ -7184,14 +7321,121 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         sandbox_port,
         proxy_port,
     );
-    let first = sandbox_session::one_click_login(
-        handle.clone(),
-        state.clone(),
-        lifecycle.as_ref(),
-        None,
-        None,
-    )
-    .expect("first one-click should start proxy and sandbox");
+    let prepare_failure_guard = finalize_prepare_failure.then(|| {
+        config::test_arm_pending_cleanup_lifecycle(Some(
+            config::PendingCleanupPublishFault::Prepare,
+        ))
+    });
+    let completion_failure_guard = finalize_completion_failure.then(|| {
+        sandbox_session::test_arm_one_click_finalize_completion_failure(config_dir.clone())
+    });
+    let first = if terminal_handoff || finalize_prepare_failure || finalize_completion_failure {
+        super::one_click_login_cmd(handle.clone(), state.clone(), lifecycle.clone(), None)
+            .expect("production command must not return an IPC error")
+    } else {
+        sandbox_session::one_click_login(
+            handle.clone(),
+            state.clone(),
+            lifecycle.as_ref(),
+            None,
+            None,
+        )
+        .expect("first one-click should start proxy and sandbox")
+    };
+    if finalize_prepare_failure || finalize_completion_failure {
+        assert_eq!(first["status"], "degraded");
+        assert_eq!(first["recovery_status"], "manual_recovery_required");
+        let pending = config::load_from(&config_dir).unwrap();
+        assert!(pending.runtime_binding.is_none());
+        let pending_record = pending
+            .runtime_transaction
+            .as_ref()
+            .and_then(config::RuntimeTransactionRecord::as_v2)
+            .expect("finalize failure must retain the exact V2 record");
+        assert_eq!(
+            pending_record.operation,
+            config::RuntimeTransactionOperation::OneClick
+        );
+        assert_eq!(pending_record.target_profile_id, "mock-relay");
+        let pending_binding = match &pending_record.finalize {
+            config::RuntimeFinalizeState::Intent {
+                action: config::RuntimeFinalizeAction::CommitBinding { binding },
+            } => binding,
+            other => panic!("finalize failure retained the wrong action: {other:?}"),
+        };
+        assert_eq!(pending_binding.profile_id, "mock-relay");
+        {
+            let runtime = lock(&state);
+            assert!(runtime.proxy.is_some());
+            assert!(runtime.science_runtime.is_some());
+            assert_eq!(runtime.sandbox_port, sandbox_port);
+            assert!(runtime.sandbox_url.is_some());
+        }
+        let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
+            .unwrap()
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        if finalize_prepare_failure {
+            assert_eq!(manifest["disposition"], "active_recovery");
+            assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(1));
+            let snapshot = PathBuf::from(manifest["entries"][0]["path"].as_str().unwrap());
+            assert!(snapshot.is_dir());
+        } else {
+            assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(0));
+        }
+        drop(prepare_failure_guard);
+        drop(completion_failure_guard);
+        let replacement = config::RuntimeBindingCommit {
+            profile_id: "replacement".into(),
+            route_fp: "replacement-route".into(),
+            catalog_fp: "replacement-catalog".into(),
+            binding_fp: "replacement-binding".into(),
+        };
+        config::update(&config_dir, |current| {
+            current.runtime_binding = Some(replacement.clone());
+        })
+        .unwrap();
+        let drifted = fs::read(config_dir.join("config.json")).unwrap();
+        let rejected =
+            super::one_click_login_cmd(handle.clone(), state.clone(), lifecycle.clone(), None)
+                .expect("fresh finalize authority drift must use the frozen IPC failure DTO");
+        assert_eq!(rejected["status"], "error");
+        assert_eq!(rejected["recovery_status"], "manual_recovery_required");
+        assert!(
+            rejected["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("success finalize")),
+            "{rejected}"
+        );
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), drifted);
+        config::update(&config_dir, |current| {
+            current.runtime_binding = None;
+        })
+        .unwrap();
+        let replayed =
+            super::one_click_login_cmd(handle.clone(), state.clone(), lifecycle.clone(), None)
+                .expect("next production command must replay finalize before healthy reopen");
+        assert_ne!(replayed["status"], "failed");
+        let finalized = config::load_from(&config_dir).unwrap();
+        assert_eq!(
+            finalized
+                .runtime_binding
+                .as_ref()
+                .map(|binding| binding.profile_id.as_str()),
+            Some("mock-relay")
+        );
+        assert!(finalized.runtime_transaction.is_none());
+        let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)
+            .unwrap()
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(0));
+        cleanup
+            .finish()
+            .expect("prepare-failure replay fixture must leave no process residue");
+        return;
+    }
+    assert_ne!(first["status"], "failed", "first one-click must succeed");
     assert_eq!(first["action"], "started");
     assert!(
         first.get("url").is_none(),

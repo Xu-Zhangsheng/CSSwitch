@@ -313,7 +313,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
         (
             "stopped",
             ManagedGatewayCleanup::Stopped(4242),
-            Ok(InterruptedGatewayRecoveryOutcome::Stopped(4242)),
+            Ok(Some(4242)),
             crate::config::RuntimeGatewayStopOutcome::Stopped,
         ),
     ] {
@@ -353,6 +353,8 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
                 previous_gateway: legacy_journal.previous_gateway.clone(),
                 compensation: crate::config::RuntimeCompensationState::NotStarted,
                 gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+                prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+                finalize: crate::config::RuntimeFinalizeState::NotStarted,
             })
         } else {
             legacy_journal.into()
@@ -385,7 +387,13 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
 
         let result = finish_interrupted_gateway_recovery(&dir, &journal, || cleanup);
         assert_eq!(
-            result.as_ref().copied().map_err(|error| error.kind()),
+            result
+                .as_ref()
+                .map(|outcome| match outcome {
+                    InterruptedGatewayRecoveryOutcome::Stopped(pid, _) => Some(*pid),
+                    _ => None,
+                })
+                .map_err(|error| error.kind()),
             expected_result,
             "{label} must keep its exact typed post-stage outcome"
         );
@@ -445,6 +453,8 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             previous_gateway: Some(previous_gateway),
             compensation: crate::config::RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+            finalize: crate::config::RuntimeFinalizeState::NotStarted,
         });
     let mut retargeted = expected_record.clone();
     retargeted
@@ -783,10 +793,10 @@ fn r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_mat
         accepted_outcome.get(),
         Some(ManagedGatewayCleanup::Stopped(retry_pid))
     );
-    assert_eq!(
+    assert!(matches!(
         accepted_result,
-        Ok(InterruptedGatewayRecoveryOutcome::Stopped(retry_pid))
-    );
+        Ok(InterruptedGatewayRecoveryOutcome::Stopped(pid, _)) if pid == retry_pid
+    ));
     assert_r0_recovery_stage(
         &retry_dir,
         &retry_journal,
@@ -1101,13 +1111,17 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
             previous_gateway: managed_journal.previous_gateway.clone(),
             compensation: crate::config::RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
+            prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+            finalize: crate::config::RuntimeFinalizeState::NotStarted,
         });
     no_listener_cfg.runtime_transaction = Some(attempted_journal.clone());
     crate::config::save_to(&dir, &no_listener_cfg).unwrap();
-    assert_eq!(
-        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
-        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
-    );
+    let attempted_outcome =
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap();
+    assert!(matches!(
+        attempted_outcome,
+        InterruptedGatewayRecoveryOutcome::Terminal(_)
+    ));
     assert_r0_recovery_stage(
         &dir,
         &attempted_journal,
@@ -1161,6 +1175,8 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
             previous_gateway: None,
             compensation: crate::config::RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+            finalize: crate::config::RuntimeFinalizeState::NotStarted,
         });
     no_listener_cfg.proxy_port = address.port();
     no_listener_cfg.runtime_transaction = Some(unsupported_one_click.clone());
@@ -1197,6 +1213,8 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
             previous_gateway: None,
             compensation: crate::config::RuntimeCompensationState::InProgress,
             gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::Pending,
+            prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+            finalize: crate::config::RuntimeFinalizeState::NotStarted,
         });
     no_listener_cfg.runtime_transaction = Some(drifted_restart_journal.clone());
     crate::config::save_to(&dir, &no_listener_cfg).unwrap();
@@ -1236,15 +1254,19 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
             previous_gateway: None,
             compensation: crate::config::RuntimeCompensationState::NotStarted,
             gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::Stopped,
+            prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+            finalize: crate::config::RuntimeFinalizeState::NotStarted,
         });
     no_listener_cfg.proxy_port = address.port();
     no_listener_cfg.runtime_transaction = Some(completed_journal.clone());
     crate::config::save_to(&dir, &no_listener_cfg).unwrap();
     let completed_before = fs::read(dir.join("config.json")).unwrap();
-    assert_eq!(
-        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir),
-        Ok(InterruptedGatewayRecoveryOutcome::NotNeeded)
-    );
+    let completed_outcome =
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap();
+    assert!(matches!(
+        completed_outcome,
+        InterruptedGatewayRecoveryOutcome::Terminal(_)
+    ));
     assert_eq!(fs::read(dir.join("config.json")).unwrap(), completed_before);
     assert_eq!(
         crate::config::load_from(&dir).unwrap().runtime_transaction,

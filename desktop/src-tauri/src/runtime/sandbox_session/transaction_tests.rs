@@ -1,8 +1,10 @@
 use super::{
-    cleanup_tombstone_path, clear_one_click_transaction, commit_healthy_reopen_binding,
-    commit_runtime_binding, finalize_registered_authority_cleanup,
+    begin_one_click_finalize, begin_prior_stop_intent, cleanup_tombstone_path,
+    clear_one_click_transaction, commit_healthy_reopen_binding, commit_runtime_binding,
+    complete_one_click_finalize, finalize_registered_authority_cleanup,
     gateway_model_catalog_timeout_ms, healthy_reopen_transaction_matches, one_click_phase_exposure,
-    parse_pending_cleanup_manifest, prevalidate_one_click_system_ssh,
+    parse_pending_cleanup_manifest, prepare_registered_authority_cleanup,
+    prevalidate_one_click_system_ssh, publish_prior_stop_outcome, resolve_gateway_terminal_handoff,
     resolve_profile_switch_handoff, retry_pending_authority_cleanup, science_health_control_error,
     test_arm_authority_cleanup_parent_sync_failure, test_arm_authority_snapshot_capture_failure,
     test_arm_authority_snapshot_cleanup_fault, test_arm_authority_snapshot_clone_errno,

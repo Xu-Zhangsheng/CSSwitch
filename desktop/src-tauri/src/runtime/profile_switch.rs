@@ -95,6 +95,8 @@ fn apply_candidate_transaction(
         previous_gateway,
         compensation: config::RuntimeCompensationState::NotStarted,
         gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
+        finalize: config::RuntimeFinalizeState::NotStarted,
     };
     current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(journal.clone()));
     journal

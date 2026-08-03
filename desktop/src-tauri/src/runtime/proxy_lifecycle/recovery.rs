@@ -49,10 +49,31 @@ fn interrupted_health_matches(
     managed_identity && (target_matches || previous_matches)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct InterruptedGatewayTerminalHandoff {
+    record: config::RuntimeTransactionV2,
+}
+
+impl InterruptedGatewayTerminalHandoff {
+    fn into_record(self) -> config::RuntimeTransactionV2 {
+        self.record
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum InterruptedGatewayRecoveryOutcome {
     NotNeeded,
-    Stopped(u32),
+    Terminal(InterruptedGatewayTerminalHandoff),
+    Stopped(u32, InterruptedGatewayTerminalHandoff),
+}
+
+impl InterruptedGatewayRecoveryOutcome {
+    pub(crate) fn into_terminal_record(self) -> Option<config::RuntimeTransactionV2> {
+        match self {
+            Self::NotNeeded => None,
+            Self::Terminal(handoff) | Self::Stopped(_, handoff) => Some(handoff.into_record()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,6 +173,8 @@ fn interrupted_gateway_recovery_record(
                 previous_gateway: legacy.previous_gateway.clone(),
                 compensation: config::RuntimeCompensationState::NotStarted,
                 gateway_stop_outcome,
+                prior_stop: config::RuntimePriorStopState::NotRequired,
+                finalize: config::RuntimeFinalizeState::NotStarted,
             }
         }
         config::RuntimeTransactionRecord::V1(_) => {
@@ -299,7 +322,13 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
         )
     })?;
     if interrupted_gateway_recovery_is_complete(journal) {
-        return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
+        let record = journal
+            .as_v2()
+            .expect("terminal interrupted Gateway recovery is typed")
+            .clone();
+        return Ok(InterruptedGatewayRecoveryOutcome::Terminal(
+            InterruptedGatewayTerminalHandoff { record },
+        ));
     }
     {
         let st = lock(state);
@@ -314,11 +343,18 @@ fn recover_interrupted_gateway_from_dir<R: Runtime>(
     }
     if !proc::loopback_port_in_use(cfg.proxy_port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
         if should_record_absent_after_attempt(journal) {
-            publish_interrupted_gateway_recovery_record(
+            let terminal = publish_interrupted_gateway_recovery_record(
                 dir,
                 journal,
                 config::RuntimeGatewayStopOutcome::AbsentAfterAttempt,
             )?;
+            let record = terminal
+                .as_v2()
+                .expect("published interrupted Gateway terminal is typed")
+                .clone();
+            return Ok(InterruptedGatewayRecoveryOutcome::Terminal(
+                InterruptedGatewayTerminalHandoff { record },
+            ));
         }
         return Ok(InterruptedGatewayRecoveryOutcome::NotNeeded);
     }
@@ -441,9 +477,17 @@ where
             ..
         } => config::RuntimeGatewayStopOutcome::ExitUnconfirmed,
     };
-    publish_interrupted_gateway_recovery_record(dir, &pending, outcome)?;
+    let terminal = publish_interrupted_gateway_recovery_record(dir, &pending, outcome)?;
+    let handoff = InterruptedGatewayTerminalHandoff {
+        record: terminal
+            .as_v2()
+            .expect("published interrupted Gateway terminal is typed")
+            .clone(),
+    };
     match cleanup {
-        ManagedGatewayCleanup::Stopped(pid) => Ok(InterruptedGatewayRecoveryOutcome::Stopped(pid)),
+        ManagedGatewayCleanup::Stopped(pid) => {
+            Ok(InterruptedGatewayRecoveryOutcome::Stopped(pid, handoff))
+        }
         ManagedGatewayCleanup::NotManaged => Err(interrupted_gateway_recovery_error(
             InterruptedGatewayRecoveryErrorKind::NotManaged,
             "未完成事务的 listener 未通过精确 Gateway binary/uid/PID 复核；已拒绝结束进程。",

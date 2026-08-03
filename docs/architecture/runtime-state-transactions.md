@@ -76,14 +76,20 @@ managed receipt。one-click/coordinator 继续拥有 authority revalidation、SS
 `AppState` publication、DB reverify 与补偿顺序，但不解释 shell exit code 或自行重建 host
 identity。stop 继续返回既有 `ScienceStopOutcome`，Rust proof 与 shell fail-closed 防线均保留。
 
-`AuthorityTransaction` 是 one-click coordinator 使用的 behavior-preserving authority façade。
-它把既有 protected snapshot capture、已登记 `RuntimeSnapshotTicket` 复核、restore 与 typed
-pending-cleanup/commit 接口收拢到同一表面；底层 `OneClickAuthoritySnapshot`、
-`AuthorityTreeSnapshot`、manifest/CAS、owner/mode/device/inode/tombstone 与 bounded remove
-合同不变。coordinator 继续决定 prior Science stop、operation trace、V2 checkpoint、Gateway/
-SSH 顺序、`CompensationOutcome` 聚合、binding commit 与 frontend DTO/text/recovery projection。
-本 façade 不增加 `PriorStopIntent/Outcome`，也不改变 F5 pre-stop durable-intent gap、crash
-recovery 或 host/Gateway/Skill 范围。
+`AuthorityTransaction` 是 one-click coordinator 使用的 authority façade。它把 protected
+snapshot capture、已登记 `RuntimeSnapshotTicket` 复核、restore 与 typed pending-cleanup/commit
+接口收拢到同一表面；底层 `OneClickAuthoritySnapshot`、`AuthorityTreeSnapshot`、manifest/CAS、
+owner/mode/device/inode/tombstone 与 bounded remove 合同不变。成功路径先持久化
+`RuntimeFinalizeState::Intent`，再把匹配 manifest 从 `ActiveRecovery` 转为 `CleanupOnly`，最后按
+完整 V2 record、active profile 与旧 binding authority 的同一 CAS 原子提交 binding 并清 journal。
+fresh process 会重放同一 finalize intent：
+若 manifest 仍为 `ActiveRecovery` 则先精确转换；若已经是 `CleanupOnly` 则直接沿 cleanup retry
+合同继续；转换发布或最终 binding/journal 原子提交失败均返回 degraded 并保留 finalize journal，
+不进入旧 compensation，下一次 production command 会先重放再进入 healthy reopen。空的
+`CleanupOnly` manifest 是 authority 已完成的 durable evidence；manifest 完全缺失时拒绝 finalize，
+避免遗忘 recovery snapshot。两种 crash window 都不会退回 destructive
+recovery。coordinator 仍拥有 operation
+trace、Gateway/SSH 顺序、`CompensationOutcome` 聚合与 frontend DTO/text/recovery projection。
 
 `GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
 health、catalog fingerprint、generation/write-back 与 child ownership 核心，但只在全部接受
@@ -122,10 +128,12 @@ process-local handoff；durable journal 只保存 crash recovery 所需的最小
 冷启动或重启分支的高层顺序：
 
 1. 读取 active profile 与 provider contract，复核端口和 Codex proof；
-2. 进入 Lifecycle 串行区，恢复中断 journal/cleanup；当前 interrupted-Gateway recovery 的
-   terminal record 没有显式交给后续 normal one-click，是开放的 production handoff 缺口；
+2. 进入 Lifecycle 串行区，先重放 one-click success finalize，再恢复 interrupted-Gateway；
+   recovery 的 terminal exact record 由不可序列化、process-local affine handoff 交给同一次
+   one-click，首个 checkpoint 只能用完整记录 CAS 接管；
 3. 若启用 SSH，完成真实 config、alias、wrapper、sidecar/stub 预检；
-4. 确认或精确停止 prior Science；
+4. 从 managed launch receipt 生成脱敏 durable recipe，先持久化 `PriorStopIntent`，再精确停止
+   prior Science，并立即持久化 `PriorStopOutcome`（`ExactStopped|NotStopped|Unknown`）；
 5. 通过 `AuthorityTransaction` 固定 opaque roots、捕获 protected projection，并持久登记
    recovery disposition；
 6. 从同一 candidate Science identity 计算一次 64-hex fingerprint，并从已登记 authority snapshot 取得一次经验证的 `managed_id` ticket；首个 V2 checkpoint 同时携带两者；
@@ -135,9 +143,8 @@ process-local handoff；durable journal 只保存 crash recovery 所需的最小
    listener、binary、data-dir 并提交 managed receipt；
 10. 复核 Science DB/catalog；
 11. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
-12. 计算并提交 runtime binding、按同一 transaction identity 清除 journal，再把 authority
-    manifest 转为 cleanup-only/清理，随后打开 UI。当前 binding+journal clear 与 authority
-    success conversion 不是一个可重放提交；两者之间 crash 会留下错误的 ActiveRecovery 阻断态。
+12. 计算 binding 并持久化 finalize intent；随后 best-effort 打开 UI 并构造成功结果，再把
+    authority manifest 转为 cleanup-only/清理，最后按同一完整 V2 identity 原子提交 binding 并清 journal。
 
 one-click 的八个 checkpoint 时机均写 V2。进程内 progress 保存上一次实际提交的完整
 V2 record；后续 phase 只在磁盘记录与该完整 record 相等时推进 typed `phase` 及其对应
@@ -153,7 +160,11 @@ tree 或 AppState 之前先验证，并在 config commit 时再次 CAS；任一 
 config、authority、运行态与 recovery snapshot，将 authority restore 记为不完整；不会由补偿
 覆盖刚刚拒绝的漂移记录或应用捕获态副作用。
 
-首个 checkpoint 原子提交失败、且 protected mutation 尚未开始时，同一进程只能通过 `PreJournalAbort` 使用内存中的 registered ticket 进入既有补偿。进程在 snapshot 已登记、journal 尚未提交的区间崩溃或重启时，没有这个内存票据；`ActiveRecovery` 仍要求人工恢复，不能自动删除或恢复。F5 也明确保留：verified prior-Science stop 仍可发生在任何 durable intent 之前，本阶段没有把 journal 前移到 destructive stop 之前。
+首个 post-snapshot checkpoint 原子提交失败、且 protected mutation 尚未开始时，同一进程仍可
+通过 `PreJournalAbort` 使用内存中的 registered ticket 进入既有补偿。prior stop 之前已经存在
+不含 snapshot ticket 的 durable one-click record；stop 成功后必须先发布 exact outcome，捕获
+snapshot 后再以完整记录 CAS 附加 ticket。intent/outcome 发布失败、record 漂移或 restart proof
+不完整均保留 journal 并 fail-closed，不能把诊断文案当作恢复权威。
 
 已健康 daemon 的 reuse/reopen 分支顺序不同：它先确保 Gateway、复核 model
 catalog，再提交 runtime binding 并清 journal，之后才检查或 best-effort 修复
@@ -203,12 +214,12 @@ operation/phase、exposure、compensation 或 outcome 漂移都保留当前记�
 eligibility 在后续重启仍会拒绝 compensation 已漂移的记录，不会
 回滚 stage、重启 prior Gateway 或改变既有 TERM/wait 策略。
 
-当前 production command 在 recovery 返回成功后立即进入 ordinary one-click，但 ordinary
-one-click 在没有显式 expected handoff 时拒绝任何 V2 record。由于 terminal recovery record
-又必须保留以阻止 later-listener probe/stop，成功 recovery 会在同一次 command 中被后续
-manual-recovery guard 阻断。唯一当前修复候选是把 exact terminal record 作为不可伪造的
-process-local handoff 交给 one-click，并在首个 checkpoint 用 complete-record CAS 接管；不得
-先无条件清 journal。
+production command 必须保留 recovery 返回的 affine terminal handoff，并传入 one-click；
+ordinary one-click API 不接受调用方伪造 expected record，缺少 handoff 时仍拒绝任意 V2。
+handoff 只承载实际持久化的 terminal complete record；one-click 重新读取 config，逐字段确认
+transaction、target、operation/phase、terminal outcome、binding、prior-stop/finalize 默认状态后，
+才允许首个 checkpoint 用 complete-record、current active profile 与旧 binding 的联合 CAS 接管。terminal record 仍保留到接管时，因此
+later-listener 不会被二次探测或停止；任一漂移都保留原 journal 并 fail-closed。
 
 ## 历史恢复
 
@@ -252,11 +263,13 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 - ~~journal/trace/frontend stage 没有统一 typed source~~ 一键/auto-boot UI stage
   已由 `OneClickFailureKind` 投影；one-click、compiled test-only profile-switch 与
   interrupted Gateway recovery writer 均写 typed V2，V1 只保留兼容读取与原 wire 序列化；
-- F5：prior Science 的 verified stop 仍可早于 durable intent；
-- interrupted-Gateway recovery 的 terminal exact record 没有交给同 command 的 normal
-  one-click；保留 terminal record 会触发 ordinary V2 manual-recovery guard；
-- runtime binding + journal clear 早于 authority manifest 转 cleanup-only，成功 finalize
-  存在 fresh-boot crash window；
+- ~~prior Science 的 verified stop 早于 durable intent~~ 已由脱敏 durable
+  `PriorStopIntent/Outcome` 前移闭合；
+- ~~interrupted-Gateway terminal record 无法进入同 command one-click~~ 已由 affine exact-record
+  handoff 与首 checkpoint complete-record CAS 闭合；
+- ~~binding/journal clear 与 authority cleanup-only 之间存在不可重放 crash window~~ 已由
+  `RuntimeFinalizeState::Intent`、authority manifest 精确转换和原子 binding+journal finalize
+  闭合；
 - V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
 - ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
 - ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与

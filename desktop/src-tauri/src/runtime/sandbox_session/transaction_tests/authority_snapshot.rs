@@ -638,7 +638,28 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
     let config_dir = config::default_dir();
     let sandbox_home = config_dir.join("sandbox/home");
     let auth_dir = sandbox_home.join(".claude-science");
-    let config = Config::default();
+    let (model_catalog, default_model_route_id, role_bindings) =
+        crate::model_catalog::new_profile_catalog(
+            "deepseek",
+            "anthropic",
+            Some("deepseek-v4-flash"),
+        )
+        .unwrap();
+    let config = Config {
+        profiles: vec![config::Profile {
+            id: "snapshot-crash-fixture".into(),
+            template_id: "deepseek".into(),
+            api_format: "anthropic".into(),
+            model: "deepseek-v4-flash".into(),
+            model_catalog,
+            default_model_route_id,
+            role_bindings,
+            model_policy: crate::provider_contracts::ModelPolicy::SavedCatalog,
+            ..Default::default()
+        }],
+        active_id: "snapshot-crash-fixture".into(),
+        ..Default::default()
+    };
     config::save_to(&config_dir, &config).unwrap();
     assert!(
         !sandbox_home.parent().unwrap().exists(),
@@ -675,6 +696,8 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: None,
         profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
     };
     let mut snapshot_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket,
@@ -723,11 +746,13 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
     .unwrap();
     let panic_ticket = panic_snapshot.registered_snapshot_ticket().unwrap();
     let panic_identity = OneClickTransactionIdentity {
-        target_profile_id: "snapshot-panic-fixture".into(),
+        target_profile_id: "snapshot-crash-fixture".into(),
         runtime_fingerprint: runtime_id,
         snapshot_ticket: panic_ticket.clone(),
         previous_binding: None,
         profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
     };
     let mut panic_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: panic_ticket,

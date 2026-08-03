@@ -13,6 +13,7 @@ pub(super) struct SandboxSessionTestSeams {
     pub(super) one_click_capture: Option<(PathBuf, PathBuf, bool, u32, PathBuf)>,
     pub(super) one_click_exit_after_capture: Option<PathBuf>,
     pub(super) one_click_fail_first_journal: Option<PathBuf>,
+    pub(super) one_click_fail_finalize_completion: Option<PathBuf>,
     pub(super) catalog_failure_port: Option<u16>,
     pub(super) catalog_bypass_port: Option<u16>,
     pub(super) prior_restart_post_spawn_failure_port: Option<u16>,
@@ -163,6 +164,17 @@ pub(crate) fn test_arm_one_click_first_journal_failure(
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .one_click_fail_first_journal = Some(config_dir);
+    SandboxSessionTestSeamGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_one_click_finalize_completion_failure(
+    config_dir: PathBuf,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .one_click_fail_finalize_completion = Some(config_dir);
     SandboxSessionTestSeamGuard
 }
 
