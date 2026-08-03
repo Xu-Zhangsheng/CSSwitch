@@ -27,7 +27,7 @@ pub(super) fn start_proxy_inner_cmd<R: tauri::Runtime>(
     )?;
     // 经串行器：与切换/连接编辑/清 key/删/停等 ensure_proxy 竞争串行化，防陈旧读起旧配置代理
     // 又写回运行态（修 P1-a，比照 spec §8.1「ensure_proxy 都经一把 app 级 mutex」）。
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         if let Some(prepared) = prepared.as_ref() {
             prepared.verify_unchanged()?;
         }
@@ -87,7 +87,7 @@ pub(super) async fn fetch_models_command(
             );
             let prepared = crate::commands::codex::prepare_provider_auth(&app, &adapter, target)?;
             lifecycle
-                .with_serialized(|| -> Result<(), String> {
+                .with_observed_context(|| -> Result<(), String> {
                     if let Some(prepared) = prepared.as_ref() {
                         prepared.verify_unchanged()?;
                     }

@@ -1,5 +1,6 @@
 use std::process::Command;
 
+use crate::lifecycle::RuntimeMutationDomain;
 use crate::provider_contracts::AuthMode;
 use crate::runtime::provider::adapter_for_profile;
 use crate::runtime::system::{asset_root, open_in_browser};
@@ -22,7 +23,7 @@ fn run_doctor_cmd<R: tauri::Runtime>(
     lifecycle: &SharedLifecycle,
 ) -> Result<String, String> {
     let mut output = run_doctor_inner_cmd(app)?;
-    let route = lifecycle.with_serialized(|| {
+    let route = lifecycle.with_mutation(RuntimeMutationDomain::HostBridge, |_| {
         crate::runtime::sandbox_session::force_third_party_reconcile(app, state)
     });
     output.push_str("\n[Skill 路由] ");

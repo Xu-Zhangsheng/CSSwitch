@@ -447,7 +447,7 @@
     {
       "id": "op.history-restore",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "restore_history_choice", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, "bundled_callers": ["desktop/src/runtime-controller.js::restoreHistoryChoice"]}],
       "state_owners": ["app.boot", "app.history", "app.science", "authority.private", "config.desired", "config.transaction", "lifecycle.global", "process.science"],
@@ -497,7 +497,7 @@
     {
       "id": "op.set-mode",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "set_mode", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "bundled_callers": ["desktop/src/profile-controller.js::switchMode"]}],
       "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "lifecycle.global", "process.gateway", "process.science"],
@@ -514,7 +514,7 @@
     {
       "id": "op.set-settings",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "set_settings", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "bundled_callers": ["desktop/src/profile-controller.js::persistRuntimeSettings"]}],
       "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "lifecycle.global", "process.gateway", "process.science"],
@@ -532,7 +532,7 @@
     {
       "id": "op.stop-all",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "entrypoints": [{"kind": "tauri-command", "name": "stop_all", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "stop_all_inner_cmd"}, "bundled_callers": ["desktop/src/runtime-controller.js::stopAll"]}],
       "state_owners": ["app.gateway", "app.science", "authority.private", "lifecycle.global", "process.gateway", "process.science"],
       "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
@@ -545,7 +545,7 @@
     {
       "id": "op.quit-command",
       "mutation_kind": "terminal",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "entrypoints": [{"kind": "tauri-command", "name": "quit_app", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "quit_app_command"}, "bundled_callers": ["desktop/src/main.js::wire"]}],
       "state_owners": ["app.gateway", "app.science", "authority.private", "lifecycle.global", "process.gateway", "process.science"],
       "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
@@ -575,7 +575,7 @@
     {
       "id": "op.select-profile",
       "mutation_kind": "intent",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "set_active_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "pin_active_profile_in_dir"}, "bundled_callers": ["desktop/src/profile-controller.js::activate"]}],
       "state_owners": ["app.science", "config.binding", "config.desired", "config.transaction", "lifecycle.global"],
@@ -606,7 +606,7 @@
     {
       "id": "op.sync-preset",
       "mutation_kind": "intent",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "apply_profile_preset_sync", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "apply_profile_preset_sync"}, "bundled_callers": []}],
       "state_owners": ["config.binding", "config.desired", "config.transaction", "lifecycle.global"],
@@ -620,7 +620,7 @@
     {
       "id": "op.revoke-profile",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [
         {"kind": "tauri-command", "name": "clear_profile_key", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key_cmd"}, "bundled_callers": ["desktop/src/profile-controller.js::doClearKey"]},
@@ -761,7 +761,7 @@
     {
       "id": "op.codex-downgrade",
       "mutation_kind": "terminal",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "codex_downgrade_export_all", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_downgrade_export_all"}, "bundled_callers": ["desktop/src/codex-controller.js::doCodexDowngrade"]}],
       "state_owners": ["app.gateway", "app.science", "authority.private", "config.access-gate", "config.binding", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
@@ -779,19 +779,19 @@
     {
       "id": "op.install-local-skill",
       "mutation_kind": "host-bridge",
-      "serialization": "none",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "install_local_skill_package", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "install_local_skill_package"}, "bundled_callers": ["desktop/src/runtime-controller.js::importLocalSkill"]}],
       "state_owners": ["app.science", "authority.private", "config.desired", "process.science", "skill.host"],
       "durable_records": {"reads": ["record.config-v4", "record.operon-skill-attachment-v1", "record.science-receipt-v1", "record.skill-package-v1"], "writes": ["record.operon-skill-attachment-v1", "record.skill-package-v1"], "clears": []},
-      "ordered_effects": ["capture exact healthy Science host context", "wait for local picker outside global lifecycle", "recheck context equality and health", "atomically install package files", "attempt OPERON attach/readback", "report file commit separately from attachment/load verification"],
+      "ordered_effects": ["capture exact healthy Science host context", "wait for local picker outside global lifecycle", "acquire short typed host-bridge mutation lease", "claim matching healthy typed host receipt", "atomically install package files", "attempt OPERON attach/readback under the same lease", "report file commit separately from attachment/load verification"],
       "failure_points": [
         {"id": "skill-install.context-race", "after_effects": ["user selected a path", "no package commit"], "observed_outcome": "Changed runtime context returns NOT_READY without reading/installing the selected package.", "compensation": "none needed"},
         {"id": "skill-install.attach", "after_effects": ["package directory and import origin committed"], "observed_outcome": "Attach failure/uncertainty retains committed files and returns ATTACH_REQUIRED or UNCERTAIN.", "compensation": "retry same package; no automatic file rollback"}
       ],
-      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "attach_result_payload"}, "contract": "Context is double-checked, but no shared runtime mutation lease is held; committed package files survive attachment failure."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_picker_context_change_prevents_package_commit", "desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_attach_failure_retains_committed_files_and_reports_separate_outcomes"],
-      "known_gaps": ["Double-check does not close the race between final context check and package commit/attach."]
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "attach_result_payload"}, "contract": "A short host-bridge lease binds the final typed host receipt through package commit and attach/readback; committed package files still survive attachment failure."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_picker_context_change_prevents_package_commit", "desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_attach_failure_retains_committed_files_and_reports_separate_outcomes", "desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::s3_host_bridge_lease_blocks_package_commit_behind_destructive_mutation"],
+      "known_gaps": ["The process-local Desktop lease does not serialize the Gateway-side external bridge process or provide a cross-process durable transaction."]
     },
     {
       "id": "op.gateway-skill-bridge",
@@ -813,7 +813,7 @@
     {
       "id": "op.doctor-reconcile",
       "mutation_kind": "host-bridge",
-      "serialization": "lifecycle",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "run_doctor", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "run_doctor"}, "bundled_callers": ["desktop/src/runtime-controller.js::runDoctor"]}],
       "state_owners": ["app.gateway", "app.science", "authority.private", "config.desired", "gateway.bridge-key", "lifecycle.global", "process.science", "science.route"],

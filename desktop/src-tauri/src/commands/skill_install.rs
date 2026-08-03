@@ -1,4 +1,5 @@
 use std::fs::{File, OpenOptions};
+use std::marker::PhantomData;
 use std::path::Path;
 
 use csswitch_skill_install_core::{
@@ -10,15 +11,24 @@ use serde_json::{json, Value};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
+use crate::lifecycle::{RuntimeMutationDomain, RuntimeMutationLease};
 use crate::runtime::science::{probe_known_runtime, SandboxScienceState};
-use crate::{config, lock, run_blocking, SharedAppState};
+use crate::{config, lock, run_blocking, SharedAppState, SharedLifecycle};
+
+#[derive(Debug, Eq, PartialEq)]
+struct LocalSkillHostReceipt<'lease, 'guard> {
+    context: ScienceHostContext,
+    _lease: PhantomData<&'lease RuntimeMutationLease<'guard>>,
+}
 
 #[tauri::command]
 pub(crate) async fn install_local_skill_package(
     app: tauri::AppHandle,
     state: State<'_, SharedAppState>,
+    lifecycle: State<'_, SharedLifecycle>,
 ) -> Result<Value, String> {
     let state = state.inner().clone();
+    let lifecycle = lifecycle.inner().clone();
     let before = match current_science_context(&state) {
         Ok(context) => context,
         Err(message) => return Ok(not_ready(&message)),
@@ -56,31 +66,53 @@ pub(crate) async fn install_local_skill_package(
         Ok(path) => path,
         Err(_) => return Ok(local_error("INVALID_ARCHIVE_PATH", "选择结果不是本地文件")),
     };
-    let after =
-        match validate_after_picker(&before, current_science_context(&state), |context| context) {
-            Ok(context) => context,
-            Err(value) => return Ok(value),
-        };
-    run_blocking(move || install_selected_path(&path, &after)).await
+    run_blocking(move || {
+        install_after_picker(
+            lifecycle.as_ref(),
+            &before,
+            &path,
+            || current_science_context(&state),
+            |context| verify_attach_control_ready(context).map_err(|error| error.message),
+        )
+    })
+    .await
 }
 
-fn validate_after_picker<T, F>(
+fn install_after_picker(
+    lifecycle: &crate::lifecycle::Lifecycle,
+    before: &ScienceHostContext,
+    path: &Path,
+    current_context: impl FnOnce() -> Result<ScienceHostContext, String>,
+    verify_ready: impl FnOnce(&ScienceHostContext) -> Result<(), String>,
+) -> Result<Value, String> {
+    lifecycle.with_mutation(RuntimeMutationDomain::HostBridge, |lease| {
+        let receipt = match claim_local_skill_host(before, current_context(), lease, verify_ready) {
+            Ok(receipt) => receipt,
+            Err(value) => return Ok(value),
+        };
+        install_selected_path(path, &receipt)
+    })
+}
+
+fn claim_local_skill_host<'lease, 'guard>(
     before: &ScienceHostContext,
     after: Result<ScienceHostContext, String>,
-    ready: F,
-) -> Result<T, Value>
-where
-    F: FnOnce(ScienceHostContext) -> T,
-{
+    lease: &'lease RuntimeMutationLease<'guard>,
+    verify_ready: impl FnOnce(&ScienceHostContext) -> Result<(), String>,
+) -> Result<LocalSkillHostReceipt<'lease, 'guard>, Value> {
+    assert_eq!(lease.domain(), RuntimeMutationDomain::HostBridge);
     let after = match after {
         Ok(context) if context == *before => context,
         Ok(_) => return Err(not_ready("选择文件期间 Science runtime 已变化")),
         Err(message) => return Err(not_ready(&message)),
     };
-    if let Err(error) = verify_attach_control_ready(&after) {
-        return Err(not_ready(&error.message));
+    if let Err(message) = verify_ready(&after) {
+        return Err(not_ready(&message));
     }
-    Ok(ready(after))
+    Ok(LocalSkillHostReceipt {
+        context: after,
+        _lease: PhantomData,
+    })
 }
 
 fn current_science_context(state: &SharedAppState) -> Result<ScienceHostContext, String> {
@@ -103,14 +135,17 @@ fn current_science_context(state: &SharedAppState) -> Result<ScienceHostContext,
     runtime.skill_install_host_context(port)
 }
 
-fn install_selected_path(path: &Path, context: &ScienceHostContext) -> Result<Value, String> {
+fn install_selected_path(
+    path: &Path,
+    receipt: &LocalSkillHostReceipt<'_, '_>,
+) -> Result<Value, String> {
     let archive_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or("选择的 Skill 包文件名不是 UTF-8")?;
     let mut file = open_regular_nofollow(path).map_err(|message| message.to_string())?;
     let commit = match install_local_package(
-        &context.data_dir,
+        &receipt.context.data_dir,
         LocalArchiveInput {
             file: &mut file,
             archive_name,
@@ -120,8 +155,8 @@ fn install_selected_path(path: &Path, context: &ScienceHostContext) -> Result<Va
         Err(error) => return Ok(install_error_payload(error)),
     };
     Ok(match commit {
-        InstalledPackage::Skill(commit) => attach_result_payload(context, commit),
-        InstalledPackage::Bundle(commit) => attach_bundle_result_payload(context, commit),
+        InstalledPackage::Skill(commit) => attach_result_payload(receipt, commit),
+        InstalledPackage::Bundle(commit) => attach_bundle_result_payload(receipt, commit),
     })
 }
 
@@ -143,8 +178,8 @@ fn open_regular_nofollow(path: &Path) -> Result<File, &'static str> {
     Ok(file)
 }
 
-fn attach_result_payload(context: &ScienceHostContext, commit: InstallCommit) -> Value {
-    let attach = attach_skill(context, &commit.skill_name, &commit.active_org);
+fn attach_result_payload(receipt: &LocalSkillHostReceipt<'_, '_>, commit: InstallCommit) -> Value {
+    let attach = attach_skill(&receipt.context, &commit.skill_name, &commit.active_org);
     let (status, message, attach_required, attach_verified) = match attach.as_ref() {
         Ok(AttachResult::Attached | AttachResult::AlreadyAttached) => (
             "INSTALLED_ATTACHED_VERIFY_REQUIRED",
@@ -199,8 +234,16 @@ fn attach_result_payload(context: &ScienceHostContext, commit: InstallCommit) ->
     })
 }
 
-fn attach_bundle_result_payload(context: &ScienceHostContext, commit: BundleCommit) -> Value {
-    let attach = update_agent_skills(context, &commit.skill_names, &[], &commit.active_org);
+fn attach_bundle_result_payload(
+    receipt: &LocalSkillHostReceipt<'_, '_>,
+    commit: BundleCommit,
+) -> Value {
+    let attach = update_agent_skills(
+        &receipt.context,
+        &commit.skill_names,
+        &[],
+        &commit.active_org,
+    );
     let (status, message, attach_required, attach_verified) = match attach.as_ref() {
         Ok(_) => (
             "BUNDLE_INSTALLED_ATTACHED",
@@ -432,15 +475,53 @@ mod tests {
         let root = temp_root("context-race");
         let before = context(&root, "before");
         let after = context(&root, "after");
+        let lifecycle = crate::lifecycle::Lifecycle::new();
         let commit_sentinel = root.join("package-commit-must-not-run");
-        let result = validate_after_picker(&before, Ok(after), |_| {
-            fs::write(&commit_sentinel, b"committed").unwrap();
-            panic!("changed context must reject before package commit")
-        })
-        .unwrap_err();
+        let result = install_after_picker(
+            &lifecycle,
+            &before,
+            &commit_sentinel,
+            || Ok(after),
+            |_| Ok(()),
+        )
+        .unwrap();
         assert_eq!(result["status"], "SCIENCE_NOT_READY");
         assert_eq!(result["directory_commit"], false);
         assert!(!commit_sentinel.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn s3_host_bridge_lease_blocks_package_commit_behind_destructive_mutation() {
+        let root = temp_root("host-bridge-lease");
+        let host = context(&root, "runtime");
+        fs::write(
+            host.data_dir.join("active-org.json"),
+            br#"{"org_uuid":"org-test"}"#,
+        )
+        .unwrap();
+        let archive = write_skill_archive(&root, "leased-demo");
+        let committed = host
+            .data_dir
+            .join("orgs/org-test/skills/leased-demo/SKILL.md");
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let destructive = lifecycle.acquire_mutation(RuntimeMutationDomain::Destructive);
+        assert!(
+            lifecycle
+                .try_acquire_mutation(RuntimeMutationDomain::HostBridge)
+                .is_none(),
+            "the HostBridge contender must reach and lose the held acquisition boundary"
+        );
+        assert!(
+            !committed.exists(),
+            "package commit must wait for the lease"
+        );
+        drop(destructive);
+        let value =
+            install_after_picker(&lifecycle, &host, &archive, || Ok(host.clone()), |_| Ok(()))
+                .unwrap();
+        assert_eq!(value["directory_commit"], true);
+        assert!(committed.is_file());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -456,7 +537,12 @@ mod tests {
         let archive = write_skill_archive(&root, "demo");
         let skill = context.data_dir.join("orgs/org-test/skills/demo");
         assert!(!skill.exists(), "fixture must begin before package commit");
-        let value = install_selected_path(&archive, &context).unwrap();
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let value = lifecycle.with_mutation(RuntimeMutationDomain::HostBridge, |lease| {
+            let receipt =
+                claim_local_skill_host(&context, Ok(context.clone()), lease, |_| Ok(())).unwrap();
+            install_selected_path(&archive, &receipt).unwrap()
+        });
         assert_eq!(value["status"], "FILES_COMMITTED_ATTACH_REQUIRED");
         assert_eq!(value["directory_commit"], true);
         assert_eq!(value["attach_attempted"], true);

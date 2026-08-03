@@ -47,22 +47,25 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 跨命令变更遵守固定顺序：
 
 ```text
-Lifecycle mutex
+RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
+  -> Lifecycle mutex
   -> AppState mutex
     -> config::update mutex
 ```
 
-- `Lifecycle` 覆盖命令级复合操作，不可重入；
+- `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
+  intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
+  `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
 - `AppState` 只在读写进程内状态时短持有，health probe 刻意在锁外；`stop_all` 也先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 只覆盖 load-modify-save；
 - config 文件提交使用 pinned/no-follow 边界、临时文件、rename、fsync、提交前复核与回滚，但不是跨进程 advisory lock。
 
 Skill bundle、Codex auth 与 SSH bridge 还各有局部锁/CAS/sidecar 事务。生产的本地
-Skill 安装不取得 `Lifecycle`，而是在文件选择前后复核相同
-`ScienceHostContext`，再进入 package commit 与 attach/readback；因此
-`Lifecycle -> AppState -> config::update` 是取得 Lifecycle 的复合运行操作锁序，
-不是所有 Desktop mutation 的全局锁序。
+Skill 安装在文件选择前捕获 `ScienceHostContext`，picker 保持在 lease 外；选择完成后
+取得短 `HostBridge` lease，在 lease 内重新探测并构造 matching typed
+`LocalSkillHostReceipt`，随后用同一 receipt 完成 package commit 与 OPERON
+attach/readback。attach 失败仍保留已提交文件并分别报告，不新增 durable runtime journal。
 
 ## 三个阶段域
 
@@ -212,6 +215,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 - ~~`stop_all` 持有 `AppState` 锁跨越 stop script、TERM/KILL 与轮询等待~~ 已由 S2 的
   process-local owner claim、锁外等待和 generation/identity CAS 闭合；该结论只覆盖
   `stop_all`，不自动迁移 mode/settings/native-exit 等 sibling stop caller，也不建立 S3 mutation lease；
-- 本地 Skill 安装不取得 `Lifecycle`；第二次 runtime-context 复核之后仍可能与
-  stop/switch 交错；
+- ~~本地 Skill 第二次 runtime-context 复核之后仍可能与 stop/switch 交错~~ S3 在
+  picker 之后取得短 `HostBridge` lease，并把 matching typed host receipt 绑定到 package
+  commit 与 attach/readback；picker/download 不进 lease，Gateway bridge 的独立进程事务也
+  不冒充全局 durable journal；
 - MCP 与 SSH 的产品动态 gate 仍开放。

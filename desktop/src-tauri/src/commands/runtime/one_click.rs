@@ -220,32 +220,35 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
         }
         Err(auth @ crate::commands::codex::RuntimeCommandError::Auth(_)) => return Err(auth),
     };
-    match lifecycle.with_serialized(|| -> Result<_, TypedOneClickFailure> {
-        if let Some(candidate_config) = candidate_config.as_ref() {
-            candidate_config.verify_unchanged().map_err(|message| {
-                TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
-            })?;
-        }
-        if let Some(prepared) = prepared.as_ref() {
-            prepared.verify_unchanged().map_err(|message| {
-                TypedOneClickFailure::new(OneClickFailureKind::AuthPreflight, message)
-            })?;
-        }
-        if let Some(prior_gateway) = prior_gateway.as_ref() {
-            prior_gateway.verify_unchanged(&state).map_err(|message| {
-                TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
-            })?;
-        }
-        crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)
-            .map_err(typed_interrupted_gateway_recovery_error)?;
-        crate::runtime::sandbox_session::one_click_login(
-            app,
-            state,
-            lifecycle.as_ref(),
-            runtime_choice.as_deref(),
-            prepared.as_ref().map(|prepared| prepared.proof()),
-        )
-    }) {
+    match lifecycle.with_mutation(
+        RuntimeMutationDomain::Destructive,
+        |_| -> Result<_, TypedOneClickFailure> {
+            if let Some(candidate_config) = candidate_config.as_ref() {
+                candidate_config.verify_unchanged().map_err(|message| {
+                    TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
+                })?;
+            }
+            if let Some(prepared) = prepared.as_ref() {
+                prepared.verify_unchanged().map_err(|message| {
+                    TypedOneClickFailure::new(OneClickFailureKind::AuthPreflight, message)
+                })?;
+            }
+            if let Some(prior_gateway) = prior_gateway.as_ref() {
+                prior_gateway.verify_unchanged(&state).map_err(|message| {
+                    TypedOneClickFailure::new(OneClickFailureKind::PreflightSnapshot, message)
+                })?;
+            }
+            crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)
+                .map_err(typed_interrupted_gateway_recovery_error)?;
+            crate::runtime::sandbox_session::one_click_login(
+                app,
+                state,
+                lifecycle.as_ref(),
+                runtime_choice.as_deref(),
+                prepared.as_ref().map(|prepared| prepared.proof()),
+            )
+        },
+    ) {
         Ok(value) => Ok(value),
         Err(failure) => Ok(project_one_click_failure(failure)),
     }
@@ -260,7 +263,7 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
     run_blocking(move || {
-        lifecycle.with_serialized(|| {
+        lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
             let cfg = config::load_from(&config::default_dir()).map_err(|e| e.to_string())?;
             if cfg.mode != "proxy" {
                 return Err("当前已不是第三方模型模式，本次历史恢复选择已作废".into());

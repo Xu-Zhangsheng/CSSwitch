@@ -534,6 +534,58 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("pub(crate) fn execute_science_stop", science_lifecycle)
         self.assertIn("ScienceStopRequest::exact", science_lifecycle)
 
+    def test_s3_runtime_mutation_domains_and_local_skill_host_receipt_are_typed(self):
+        lifecycle = (ROOT / "desktop/src-tauri/src/lifecycle.rs").read_text()
+        for domain in ("Intent", "Destructive", "HostBridge", "Terminal"):
+            self.assertIn(domain, lifecycle)
+        self.assertIn("pub(crate) struct RuntimeMutationLease", lifecycle)
+        self.assertIn("pub(crate) fn acquire_mutation", lifecycle)
+        self.assertIn("pub(crate) fn with_mutation", lifecycle)
+
+        production_paths = (
+            "desktop/src-tauri/src/commands/codex.rs",
+            "desktop/src-tauri/src/commands/diagnostics.rs",
+            "desktop/src-tauri/src/commands/profiles.rs",
+            "desktop/src-tauri/src/commands/runtime/lifecycle.rs",
+            "desktop/src-tauri/src/commands/runtime/one_click.rs",
+            "desktop/src-tauri/src/commands/runtime/gateway.rs",
+            "desktop/src-tauri/src/commands/skills.rs",
+            "desktop/src-tauri/src/lib.rs",
+        )
+        production = "\n".join(
+            (ROOT / path).read_text().split("#[cfg(test)]", 1)[0]
+            for path in production_paths
+        )
+        self.assertNotIn("with_serialized(", production)
+        for domain in ("Intent", "Destructive", "HostBridge", "Terminal"):
+            self.assertIn(f"RuntimeMutationDomain::{domain}", production)
+
+        local_skill = (
+            ROOT / "desktop/src-tauri/src/commands/skill_install.rs"
+        ).read_text()
+        command = local_skill.split(
+            "pub(crate) async fn install_local_skill_package", 1
+        )[1].split("fn install_after_picker", 1)[0]
+        self.assertLess(command.index("blocking_pick_file"), command.index("install_after_picker"))
+        final_section = local_skill.split("fn install_after_picker", 1)[1].split(
+            "fn current_science_context", 1
+        )[0]
+        self.assertIn("RuntimeMutationDomain::HostBridge", final_section)
+        self.assertIn("LocalSkillHostReceipt", final_section)
+        self.assertIn("PhantomData<&'lease RuntimeMutationLease<'guard>>", local_skill)
+        receipt_decl = local_skill.split("struct LocalSkillHostReceipt", 1)[0].rsplit(
+            "#[derive", 1
+        )[1]
+        self.assertNotIn("Clone", receipt_decl)
+        install_entry = local_skill.split("fn install_selected_path", 1)[1].split("{", 1)[0]
+        self.assertIn("LocalSkillHostReceipt", install_entry)
+        self.assertNotIn("ScienceHostContext", install_entry)
+        self.assertLess(
+            final_section.index("claim_local_skill_host"),
+            final_section.index("install_selected_path"),
+        )
+        self.assertNotIn("runtime_transaction", final_section)
+
     def test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry(self):
         js = (ROOT / "desktop/src/profile-controller.js").read_text()
         html = (ROOT / "desktop/src/index.html").read_text()
@@ -572,8 +624,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         quit_command = lifecycle.split("pub(super) async fn quit_app_command", 1)[1]
         self.assertLess(
-            quit_command.index("stop_all_inner_cmd"), quit_command.index("exit_app.exit(0)")
+            quit_command.index("RuntimeMutationDomain::Terminal"),
+            quit_command.index("exit_app.exit(0)"),
         )
+        self.assertIn("stop_all_inner_with", quit_command)
         quit_handler = js.split('els.quitBtn.addEventListener("click"', 1)[1].split(
             "\n  });", 1
         )[0]

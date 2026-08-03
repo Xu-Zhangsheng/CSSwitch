@@ -8767,6 +8767,7 @@ fn s2_stop_all_wait_releases_read_model_and_stale_result_preserves_replacement()
                 handle,
                 worker_state,
                 worker_lifecycle,
+                crate::lifecycle::RuntimeMutationDomain::Destructive,
                 |runtime| Ok(science::ScienceStopRequest::recover(runtime)),
                 move |_, _| {
                     stop_started_tx.send(()).unwrap();

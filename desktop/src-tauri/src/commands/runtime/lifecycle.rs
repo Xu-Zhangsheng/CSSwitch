@@ -38,7 +38,7 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
     // 经串行器（修 P1-b）：切官方的「拆链路 + 落盘」必须与「一键开始」等互斥，否则一键起到一半时
     // 切官方会先停链路、一键随后又把沙箱/OAuth 起起来 → 显示官方却有第三方沙箱在跑。bump_generation
     // 作废任何在途启动，防被停后又拿旧配置写回运行态。
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         let dir = config::default_dir();
         if mode == "official" {
             lifecycle.bump_generation();
@@ -96,7 +96,7 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
         system_ssh_config_path()?;
         system_ssh_hosts()?;
     }
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         let dir = config::default_dir();
         let old = config::load_from(&dir).map_err(|e| e.to_string())?;
         let teardown = settings_change_needs_teardown(
@@ -157,6 +157,7 @@ pub(super) fn stop_all_inner_cmd<R: tauri::Runtime>(
         app,
         state,
         lifecycle,
+        RuntimeMutationDomain::Destructive,
         claim_science_stop_request,
         |app, request| execute_science_stop(app, request).into_parts(),
     )
@@ -198,6 +199,7 @@ pub(super) fn stop_all_inner_with<R, Claim, Execute>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: SharedLifecycle,
+    domain: RuntimeMutationDomain,
     claim_science: Claim,
     execute_science: Execute,
 ) -> Result<(), String>
@@ -214,7 +216,7 @@ where
         crate::runtime::science::ScienceStopRequest,
     ) -> (crate::runtime::science::ScienceStopOutcome, bool),
 {
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(domain, |_| {
         let generation = lifecycle.bump_generation(); // 作废任何在途启动（防被停后又拿旧 key 复活）
         let (owner, request) = {
             let st = lock(&state);
@@ -261,7 +263,17 @@ pub(super) async fn quit_app_command(
     let exit_app = app.clone();
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
-    let stopped = run_blocking(move || stop_all_inner_cmd(app, state, lifecycle)).await;
+    let stopped = run_blocking(move || {
+        stop_all_inner_with(
+            app,
+            state,
+            lifecycle,
+            RuntimeMutationDomain::Terminal,
+            claim_science_stop_request,
+            |app, request| execute_science_stop(app, request).into_parts(),
+        )
+    })
+    .await;
     exit_after_stop_success(stopped, || exit_app.exit(0))
 }
 

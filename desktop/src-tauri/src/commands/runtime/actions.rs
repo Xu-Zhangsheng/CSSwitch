@@ -62,5 +62,5 @@ pub(super) async fn open_url_command(
 ) -> Result<serde_json::Value, String> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
-    run_blocking(move || lifecycle.with_serialized(|| open_url_inner(&state))).await
+    run_blocking(move || lifecycle.with_observed_context(|| open_url_inner(&state))).await
 }

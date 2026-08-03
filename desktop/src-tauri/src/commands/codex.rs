@@ -14,6 +14,7 @@ use crate::codex_auth_supervisor::{
     AuthPreflightReservation, CodexAuthReadyProof, CodexAuthSupervisor, CodexMutationLease,
     LoginReservation, OperationErrorView, OperationSnapshot, SharedCodexAuthSupervisor,
 };
+use crate::lifecycle::RuntimeMutationDomain;
 use crate::proc::ChildLiveness;
 use crate::runtime::proxy_lifecycle::gateway_bin_path;
 use crate::runtime::science::{
@@ -1795,30 +1796,33 @@ fn start_codex_login_inner<R: tauri::Runtime>(
         &csswitch_codex_network::ResolvedCodexNetworkRoute,
     ) -> Result<ManagedAuthProcess, CodexAuthCommandError>,
 ) -> Result<(LoginReservation, ManagedAuthProcess), RuntimeCommandError> {
-    lifecycle.with_serialized(|| -> Result<_, RuntimeCommandError> {
-        let cfg = config::load_from(&config::default_dir())
-            .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
-        config::require_template_enabled(&cfg, "codex").map_err(RuntimeCommandError::from)?;
-        let route =
-            csswitch_codex_network::resolve_from_process(&cfg.codex_network).map_err(|_| {
-                RuntimeCommandError::from("proxy_config_invalid：Codex 网络代理配置非法。")
-            })?;
-        let reservation = supervisor
-            .begin_login()
-            .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
-        let operation_id = reservation.operation_id.clone();
-        let process = (|| -> Result<_, RuntimeCommandError> {
-            prepare_codex_auth_mutation(app, state, lifecycle)
-                .map_err(RuntimeCommandError::from)?;
-            let process = spawn_sidecar(app, action, &operation_id, &route)
-                .map_err(RuntimeCommandError::from)?;
-            register_login_process(supervisor, &operation_id, process)
-        })();
-        if process.is_err() {
-            supervisor.abort_login_start(&operation_id);
-        }
-        process.map(|process| (reservation, process))
-    })
+    lifecycle.with_mutation(
+        RuntimeMutationDomain::Destructive,
+        |_| -> Result<_, RuntimeCommandError> {
+            let cfg = config::load_from(&config::default_dir())
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            config::require_template_enabled(&cfg, "codex").map_err(RuntimeCommandError::from)?;
+            let route =
+                csswitch_codex_network::resolve_from_process(&cfg.codex_network).map_err(|_| {
+                    RuntimeCommandError::from("proxy_config_invalid：Codex 网络代理配置非法。")
+                })?;
+            let reservation = supervisor
+                .begin_login()
+                .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
+            let operation_id = reservation.operation_id.clone();
+            let process = (|| -> Result<_, RuntimeCommandError> {
+                prepare_codex_auth_mutation(app, state, lifecycle)
+                    .map_err(RuntimeCommandError::from)?;
+                let process = spawn_sidecar(app, action, &operation_id, &route)
+                    .map_err(RuntimeCommandError::from)?;
+                register_login_process(supervisor, &operation_id, process)
+            })();
+            if process.is_err() {
+                supervisor.abort_login_start(&operation_id);
+            }
+            process.map(|process| (reservation, process))
+        },
+    )
 }
 
 fn reject_legacy_login_method(method: Option<&str>) -> Result<(), String> {
@@ -1948,7 +1952,7 @@ fn finalize_login_operation(
 ) -> Result<OperationSnapshot, String> {
     match outcome {
         Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
-            match lifecycle.with_serialized(ensure_profile) {
+            match lifecycle.with_mutation(RuntimeMutationDomain::Intent, |_| ensure_profile()) {
                 Ok(_) => supervisor.finish(operation_id, "succeeded", None),
                 Err(_) => supervisor.finish(
                     operation_id,
@@ -2034,7 +2038,7 @@ fn ensure_codex_profile_command_inner(
     let prepared =
         prepare_auth()?.ok_or_else(|| RuntimeCommandError::from("Codex preflight 未建立。"))?;
     lifecycle
-        .with_serialized(|| -> Result<_, String> {
+        .with_mutation(RuntimeMutationDomain::Intent, |_| -> Result<_, String> {
             prepared.verify_unchanged()?;
             ensure_profile()
         })
@@ -2085,12 +2089,16 @@ fn prepare_codex_logout_inner<R: tauri::Runtime>(
     lifecycle: &crate::lifecycle::Lifecycle,
     supervisor: &SharedCodexAuthSupervisor,
 ) -> Result<CodexMutationLease, RuntimeCommandError> {
-    lifecycle.with_serialized(|| -> Result<_, RuntimeCommandError> {
-        let mutation = CodexAuthSupervisor::begin_mutation(supervisor)
-            .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
-        prepare_codex_auth_mutation(app, state, lifecycle).map_err(RuntimeCommandError::from)?;
-        Ok(mutation)
-    })
+    lifecycle.with_mutation(
+        RuntimeMutationDomain::Destructive,
+        |_| -> Result<_, RuntimeCommandError> {
+            let mutation = CodexAuthSupervisor::begin_mutation(supervisor)
+                .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
+            prepare_codex_auth_mutation(app, state, lifecycle)
+                .map_err(RuntimeCommandError::from)?;
+            Ok(mutation)
+        },
+    )
 }
 
 fn complete_codex_logout_inner(
@@ -2126,20 +2134,24 @@ pub(crate) async fn set_experimental_codex_enabled(
     let lifecycle = lifecycle.inner().clone();
     let supervisor = supervisor.inner().clone();
     crate::run_blocking_typed(move || {
-        lifecycle.with_serialized(|| -> Result<_, RuntimeCommandError> {
-            let _mutation = if enabled {
-                None
-            } else {
-                Some(
-                    CodexAuthSupervisor::begin_mutation(&supervisor)
-                        .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?,
-                )
-            };
-            set_experimental_codex_enabled_at(&config::default_dir(), enabled, || {
-                prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
-            })
-            .map_err(RuntimeCommandError::from)
-        })
+        lifecycle.with_mutation(
+            RuntimeMutationDomain::Destructive,
+            |_| -> Result<_, RuntimeCommandError> {
+                let _mutation = if enabled {
+                    None
+                } else {
+                    Some(
+                        CodexAuthSupervisor::begin_mutation(&supervisor).map_err(|_| {
+                            RuntimeCommandError::from(CodexAuthCommandError::busy())
+                        })?,
+                    )
+                };
+                set_experimental_codex_enabled_at(&config::default_dir(), enabled, || {
+                    prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
+                })
+                .map_err(RuntimeCommandError::from)
+            },
+        )
     })
     .await
 }
@@ -2158,14 +2170,17 @@ pub(crate) async fn set_codex_network(
     let lifecycle = lifecycle.inner().clone();
     let supervisor = supervisor.inner().clone();
     crate::run_blocking_typed(move || {
-        lifecycle.with_serialized(|| -> Result<_, RuntimeCommandError> {
-            let _mutation = CodexAuthSupervisor::begin_mutation(&supervisor)
-                .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
-            set_codex_network_at(&config::default_dir(), settings, &resolved, || {
-                prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
-            })
-            .map_err(RuntimeCommandError::from)
-        })
+        lifecycle.with_mutation(
+            RuntimeMutationDomain::Destructive,
+            |_| -> Result<_, RuntimeCommandError> {
+                let _mutation = CodexAuthSupervisor::begin_mutation(&supervisor)
+                    .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
+                set_codex_network_at(&config::default_dir(), settings, &resolved, || {
+                    prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
+                })
+                .map_err(RuntimeCommandError::from)
+            },
+        )
     })
     .await
 }
@@ -2213,7 +2228,7 @@ pub(crate) async fn codex_downgrade_export_all(
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
     let outcome = run_blocking(move || {
-        lifecycle.with_serialized(|| {
+        lifecycle.with_mutation(RuntimeMutationDomain::Terminal, |_| {
             let dir = config::default_dir();
             let cfg = config::load_from(&dir).map_err(|error| error.to_string())?;
             let actions = downgrade_actions_for_expected(

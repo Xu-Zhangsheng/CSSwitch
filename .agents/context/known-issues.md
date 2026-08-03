@@ -473,6 +473,18 @@ executed、488 passed、0 failed、41 approved ignored、0 skipped/todo/not-run�
 suite，也未与 PASS run 混合。S2 只建立 source/unit 结论，不外推 artifact、installed/runtime、
 live provider、Science、SSH、签名、公证、Gatekeeper 或 release。
 
+`S3` implementation candidate 已完成，尚待独立 candidate review 与 exact-SHA source gate
+收口：`Lifecycle` 新增 intent、destructive、host-bridge、terminal 四种 typed
+`RuntimeMutationDomain`，所有 domain 继续复用同一 process-local mutex，不改变既有互斥与
+generation 语义。production runtime-context mutation 不再直接使用 untyped
+`with_serialized`；非 mutation 的一致 read-model 路径使用独立的 observed-context façade。
+
+本地 Skill picker 继续在 lease 外等待；选择后取得短 `HostBridge` lease，在 lease 内重新探测
+并构造 matching `LocalSkillHostReceipt`，package commit 与 OPERON attach/readback 使用同一
+receipt，因而不能再与同进程 stop/switch 在最终复核之后交错。attach failure/uncertainty 仍保留
+已提交文件并分开投影，command DTO/text 不变；本阶段不新增 durable journal、不把 Gateway
+bridge 的独立进程事务并入 Desktop lease，也不进入 S4。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
@@ -484,6 +496,7 @@ live provider、Science、SSH、签名、公证、Gatekeeper 或 release。
 | `Post-R2 Rebaseline` | DONE-READ-ONLY | exact HEAD 重新盘点 state owner、caller、长等待、mutation、失败链、typed outcome/receipt 与旧路线依赖 |
 | `S1 Typed Science stop contract` | DONE | typed stop request/receipt/outcome 与 recovery-critical exact proof 已覆盖生产 caller；离线 history continuation 以 process-local typed quiescence proof、完整 probe recheck 与可复用 proof advancement 闭合；exact-SHA gate 与最终独立审查 PASS，不移动锁或改变 stop policy |
 | `S2 Science process-local owner` | DONE | `stop_all` 锁内 exact owner/request claim、`AppState` 锁外 wait、generation/identity CAS 与 stale replacement guard；exact-SHA gate 与独立审查 PASS，不推广 sibling caller/Gateway/S3 lease |
+| `S3 RuntimeMutationLease` | CANDIDATE | 四种 typed domain 共用既有 Lifecycle mutex；local Skill picker 锁外，最终 host receipt/package commit/attach 在短 HostBridge lease 内；待 candidate review 与 exact-SHA gate，不新增 durable journal 或进入 S4 |
 
 ### Post-R2 Rebaseline 结论与后续门
 
@@ -512,10 +525,9 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-`S1` 与 `S2` 已按上述边界完成。有限路线中的下一提议项是 `S3` typed
-`RuntimeMutationLease` 与 local Skill race closure，但本次没有自动授权或进入 S3。`S2` 只移动
-`stop_all` 的 `AppState` 锁时机，保持 command/DTO/text、stop/TERM/KILL/wait 顺序和
-native-exit best-effort 语义；不建立 mutation lease，也不新增 F5 pre-stop durable intent。
+`S1` 与 `S2` 已按上述边界完成；S3 已获本轮用户授权并形成 implementation candidate，但只有在
+独立审查与 exact-SHA gate 闭合后才能标为 DONE。S3 保持 command/DTO/text、stop policy、
+native-exit best-effort 与局部 Codex supervisor lease 语义，不新增 F5 pre-stop durable intent。
 改变 crash recovery 行为的
 `PriorStopIntent/Outcome` 继续与 `AuthorityTransaction` 接口等价提取分开，要求独立证据、
 operation contract 与明确授权。

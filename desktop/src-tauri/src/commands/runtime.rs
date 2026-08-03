@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::State;
 
+use crate::lifecycle::RuntimeMutationDomain;
 use crate::runtime::capability_catalog::diagnostics_for_profile;
 use crate::runtime::diagnostics::{
     build_status_response, proxy_status_last_error, science_diagnostics, status_lights,

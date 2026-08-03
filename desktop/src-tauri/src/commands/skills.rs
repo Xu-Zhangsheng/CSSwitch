@@ -340,7 +340,10 @@ pub(crate) async fn reconcile_skills(
         if input.dry_run {
             operation()
         } else {
-            lifecycle.with_serialized(operation)
+            lifecycle.with_mutation(
+                crate::lifecycle::RuntimeMutationDomain::HostBridge,
+                |_| operation(),
+            )
         }
     })
     .await)
@@ -367,10 +370,13 @@ fn with_stopped_science_mutation<T>(
     probe: impl FnOnce() -> SkillResult<SandboxScienceState>,
     operation: impl FnOnce() -> SkillResult<T>,
 ) -> SkillResult<T> {
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(
+        crate::lifecycle::RuntimeMutationDomain::HostBridge,
+        |_| {
         require_science_stopped(probe()?)?;
         operation()
-    })
+        },
+    )
 }
 
 #[tauri::command]

@@ -96,7 +96,9 @@ fn apply_profile_preset_sync_inner_cmd(
     expected_preview_fingerprint: &str,
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
     lifecycle
-        .with_serialized(|| apply_profile_preset_sync_in_dir(dir, id, expected_preview_fingerprint))
+        .with_mutation(lifecycle::RuntimeMutationDomain::Intent, |_| {
+            apply_profile_preset_sync_in_dir(dir, id, expected_preview_fingerprint)
+        })
         .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 
@@ -157,7 +159,7 @@ pub(crate) fn create_profile(
         default_model_route_id,
         role_bindings,
     )?;
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Intent, |_| {
         create_profile_with_catalog_inner(
             &config::default_dir(),
             &template_id,
@@ -177,7 +179,7 @@ pub(crate) fn update_profile_metadata(
     name: String,
     notes: Option<String>,
 ) -> Result<(), String> {
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Intent, |_| {
         update_profile_metadata_inner(&config::default_dir(), &id, &name, notes.as_deref())
     })
 }
@@ -219,7 +221,7 @@ fn clear_profile_key_cmd(
     lifecycle: &lifecycle::Lifecycle,
     id: &str,
 ) -> Result<(), String> {
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Destructive, |_| {
         let cfg = load_without_runtime_transaction(dir)?;
         let was_applied = cfg
             .runtime_binding
@@ -242,7 +244,7 @@ fn delete_profile_cmd(
     lifecycle: &lifecycle::Lifecycle,
     id: &str,
 ) -> Result<(), String> {
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Destructive, |_| {
         let cfg = load_without_runtime_transaction(dir)?;
         let was_applied = cfg
             .runtime_binding
@@ -305,7 +307,7 @@ pub(crate) async fn validate_profile_catalog_model(
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
     let lifecycle = lifecycle.inner().clone();
     run_blocking_typed(move || {
-        lifecycle.with_serialized(|| {
+        lifecycle.with_observed_context(|| {
             let cfg =
                 config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
             let mut candidate = cfg
@@ -446,19 +448,22 @@ where
     let target_adapter = resolve_launch_plan(&preflight_candidate)?.adapter;
     let prepared = prepare(&preflight_candidate, &target_adapter)?;
     lifecycle
-        .with_serialized(|| -> Result<_, String> {
-            verify(&prepared, dir)?;
-            let edit = ConnectionEdit::new(
-                base_url.clone(),
-                api_format.clone(),
-                model.clone(),
-                key.clone(),
-            )
-            .with_catalog(catalog_edit.clone());
-            commit_profile_connection_in_dir(dir, &id, edit, |candidate| {
-                validate(candidate, &prepared)
-            })
-        })
+        .with_mutation(
+            lifecycle::RuntimeMutationDomain::Intent,
+            |_| -> Result<_, String> {
+                verify(&prepared, dir)?;
+                let edit = ConnectionEdit::new(
+                    base_url.clone(),
+                    api_format.clone(),
+                    model.clone(),
+                    key.clone(),
+                )
+                .with_catalog(catalog_edit.clone());
+                commit_profile_connection_in_dir(dir, &id, edit, |candidate| {
+                    validate(candidate, &prepared)
+                })
+            },
+        )
         .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 
@@ -522,7 +527,9 @@ fn set_active_profile_inner_cmd(
     id: String,
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
     lifecycle
-        .with_serialized(|| pin_active_profile_in_dir(&config::default_dir(), &state, &id))
+        .with_mutation(lifecycle::RuntimeMutationDomain::Intent, |_| {
+            pin_active_profile_in_dir(&config::default_dir(), &state, &id)
+        })
         .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 

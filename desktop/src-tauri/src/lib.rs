@@ -292,7 +292,7 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
     let _ = wait_codex(std::time::Duration::from_millis(500));
     let state = app.state::<SharedAppState>().inner().clone();
     let lifecycle = app.state::<SharedLifecycle>().inner().clone();
-    lifecycle.with_serialized(|| {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Terminal, |_| {
         let mut st = lock(&state);
         if let Some(runtime) = st.science_runtime.clone() {
             match stop_science(app, &mut st, &runtime) {
