@@ -755,7 +755,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
             early_exit.count, 0,
             "one-click prevalidation statement and its prefix must be reachable before explicit early-exit control flow"
         );
-    let authority_snapshot_statement = one_click
+    let authority_transaction_statement = one_click
         .block
         .stmts
         .iter()
@@ -763,10 +763,10 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
             matches!(
                 statement,
                 Stmt::Local(local)
-                    if local_name(local).is_some_and(|name| name == "authority_snapshot")
+                    if local_name(local).is_some_and(|name| name == "authority_transaction")
             )
         })
-        .expect("one-click authority snapshot statement must exist");
+        .expect("one-click authority transaction statement must exist");
     let transaction_statement = one_click
         .block
         .stmts
@@ -780,9 +780,9 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         })
         .expect("one-click transaction_result statement must exist");
     assert!(
-        prevalidate_statement < authority_snapshot_statement
-            && authority_snapshot_statement < transaction_statement,
-        "SSH prevalidation must precede authority snapshot and the mutation transaction"
+        prevalidate_statement < authority_transaction_statement
+            && authority_transaction_statement < transaction_statement,
+        "SSH prevalidation must precede authority transaction capture and the mutation transaction"
     );
     assert!(
         one_click.block.stmts[..transaction_statement]
