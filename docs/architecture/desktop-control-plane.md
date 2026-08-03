@@ -117,11 +117,25 @@ wire round-trip。typed journal phase 也不能与 UI coarse stage 无损互映�
 `boot://failed` / `boot_error` 与手动一键共享 failed DTO shape；recovery/environment
 status 从 typed failure/compensation projection 产生，message 只用于展示。
 
+H4 在 one-click DTO 与 consumer publication 之间增加 `finalize_consumer_state`：它只读 canonical
+config，按结构化 `status + recovery_status + action` 与实际 journal/binding readback 返回
+`ready | attention | manual`、`open | cleared`、binding relation，以及仅在 `ready` 时可发布的
+applied profile id / selection pending；`attention/manual` 固定发布 unknown。该命令不迁移配置、
+不 chmod、不清 notice、不返回 journal record、path、credential 或
+其他配置内容。manual UI 与 auto-boot 复用同一个 Rust classifier；journal open、回读失败或
+不一致组合不得发布 applied/`BootState::Ready`，message 仍只参与展示。
+auto-boot 的 failed/attention event 与启动后补读路径也必须把 frontend applied 展示发布为
+unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
+
 ## 选择、应用与诊断语义
 
 - `set_active_profile` 只提交“当前选择”；运行中的 Gateway/Science 不立即切换。下一次一键开始才应用并写 runtime binding。
 - history attention、`restore_history_choice` 与下一次 start 是三个独立产品动作；当前 frontend 在 restore 成功后自动调用 one-click，这是待修的控制面串联，不是长期合同。目标是 frontend 只提交一个明确 intent 并渲染 typed result，由用户显式发起下一次 start。
 - `status` 是轻量状态投影；Science 灯的 HTTP health 不证明 listener/runtime 强身份。
+- `finalize_consumer_state` 是 one-click 完成后的窄、脱敏、只读投影；它不探活、不写配置，也不
+  成为新的 transaction owner。history choice 即使伴随 cleanup warning 也保持 attention；normal
+  cleanup 只有 readback 确认 exact active binding 且 journal cleared 才可发布 ready；attention、
+  manual 或回读失败一律清除 frontend 的 applied 展示并保持 selection pending。
 - `run_doctor` 先执行诊断脚本，再在 Lifecycle 边界强制 reconcile 第三方 Skill
   route；它不是纯只读诊断。Science 健康运行时，该路径可绑定 route Skill 与
   connector、清理旧 connector、解除 `customize` 并更新 managed prompt。Science

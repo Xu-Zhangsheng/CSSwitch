@@ -1831,6 +1831,12 @@ impl SecureDir {
         Self::open_with_policy(path, create, true)
     }
 
+    /// Consumer projections may inspect canonical state, but must not repair
+    /// directory or file permissions as a side effect of that inspection.
+    fn open_read_only(path: &Path) -> io::Result<Self> {
+        Self::open_with_policy(path, false, false)
+    }
+
     /// 用户自己选择的 export 父目录必须已存在，且 CSSwitch 不得擅自 chmod 它。
     fn open_unmanaged(path: &Path) -> io::Result<Self> {
         Self::open_with_policy(path, false, false)
@@ -2171,6 +2177,39 @@ pub fn load_from(dir: &Path) -> io::Result<Config> {
     let access = config_access();
     ensure_config_access_open(&access)?;
     load_from_unlocked(dir)
+}
+
+/// Read the already-canonical config without migration, normalization writes, or
+/// notice clearing. Consumer status projections must never become mutation
+/// owners, so older schemas are rejected instead of upgraded here.
+pub(crate) fn load_current_from_read_only(dir: &Path) -> io::Result<Config> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    assert_not_symlink(dir)?;
+    let secure = match SecureDir::open_read_only(dir) {
+        Ok(secure) => secure,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(error) => return Err(error),
+    };
+    let Some(data) = secure.read_regular("config.json")? else {
+        return Ok(Config::default());
+    };
+    if !matches!(detect_version(&data)?, VersionKind::V4) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "finalize consumer readback requires canonical schema v4",
+        ));
+    }
+    let cfg: Config = serde_json::from_slice(&data).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("v4 config.json 解析失败：{error}"),
+        )
+    })?;
+    let cfg = normalize_active(cfg);
+    validate_loaded_ports(&cfg)?;
+    validate_profile_contracts(&cfg)?;
+    Ok(cfg)
 }
 
 fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
@@ -4573,6 +4612,24 @@ mod tests {
 
         assert!(atomic_rollback_is_uncertain(&error));
         assert!(error.to_string().contains("回滚失败"));
+        let uncertain_bytes = fs::read(config_path(&d)).unwrap();
+        let projection = crate::runtime::finalize_consumer::project_finalize_consumer_state(
+            &d,
+            &serde_json::json!({
+                "status": "degraded",
+                "recovery_status": "manual_recovery_required",
+                "action": "started"
+            }),
+        );
+        assert!(
+            projection.is_err(),
+            "an unreadable atomic outcome must stay manual instead of guessing applied/Ready"
+        );
+        assert_eq!(
+            fs::read(config_path(&d)).unwrap(),
+            uncertain_bytes,
+            "finalize projection must not repair or rewrite an uncertain atomic outcome"
+        );
         let failure = DowngradeError::commit(error);
         assert!(failure.exit_required);
         let outcome = Err(failure);

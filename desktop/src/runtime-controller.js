@@ -70,6 +70,12 @@ function showHistoryRecovery(result) {
   els.historyRecoverySec.hidden = false;
 }
 
+function publishFinalizeUnknown() {
+  getConfigState().selection_pending = true;
+  getConfigState().applied_profile_id = null;
+  renderList();
+}
+
 async function restoreHistoryChoice(reference) {
   if (!reference || isBusy()) return;
   setBusy(true, { kind: "historyRecovery" });
@@ -123,18 +129,36 @@ async function runOneClick(runtimeChoice) {
   startOneClickFeedback();
   try {
     const r = await call("one_click_login", { runtimeChoice: runtimeChoice || null });
-    if (r && r.status === "attention" && r.action === "history_choice_required") {
-      showHistoryRecovery(r);
-      setMsg(r.msg || "请选择要恢复的历史记录。", "err");
+    let consumer;
+    try {
+      consumer = await call("finalize_consumer_state", { outcome: r });
+    } catch (readbackError) {
+      hideHistoryRecovery();
+      publishFinalizeUnknown();
+      setMsg("一键开始已返回，但无法回读最终配置状态；不会把当前选择误报为已应用。请检查配置后重试。", "err");
+      setBrowserFallback(r && r.fallback_url);
       await refreshStatus();
       return;
     }
-    if (r && r.status === "error") {
-      const recovery = r.recovery_status === "degraded"
-        ? "；刷新未完成，安全事务记录已保留，可修正问题后重试"
-        : "";
-      setMsg((r.message || "一键开始未完成") + recovery + "（阶段：" + (r.stage || "unknown") + "）", "err");
-      setBrowserFallback(r.fallback_url);
+    getConfigState().selection_pending = !!consumer.selection_pending;
+    getConfigState().applied_profile_id = consumer.applied_profile_id || null;
+    renderList();
+    if (consumer.disposition === "attention" && r && r.action === "history_choice_required") {
+      showHistoryRecovery(r);
+      const cleanupWarning = consumer.cleanup_required ? "；另有私有事务快照等待安全清理" : "";
+      setMsg((r.msg || "请选择要恢复的历史记录。") + cleanupWarning, "err");
+      await refreshStatus();
+      return;
+    }
+    if (consumer.disposition !== "ready") {
+      hideHistoryRecovery();
+      const recovery = consumer.journal_disposition === "open"
+        ? "；安全事务仍待下次显式一键操作重放"
+        : consumer.cleanup_required
+          ? "；最终状态已回读，但仍有私有事务快照等待安全清理"
+          : "；最终应用状态无法确认，需要人工检查";
+      setMsg(((r && (r.message || r.msg)) || "一键开始未完成") + recovery + "（阶段：" + ((r && r.stage) || "unknown") + "）", "err");
+      setBrowserFallback(r && r.fallback_url);
       await refreshStatus();
       return;
     }
@@ -145,13 +169,15 @@ async function runOneClick(runtimeChoice) {
       els.historyRecoveryText.textContent =
         "已打开所选历史。如果内容不对，可在本次应用运行期间选择另一份；切换前 CSSwitch 会先安全停止隔离 Science。";
     }
-    setMsg(message + (isCodexSource(active)
+    const recoveryWarning = consumer.cleanup_required
+      ? " 私有事务快照仍待安全清理。"
+      : r.recovery_status === "manual_recovery_required"
+        ? " 最终应用状态已通过只读回读确认。"
+        : "";
+    setMsg(message + recoveryWarning + (isCodexSource(active)
       ? " 请在 Science 的 More models 中选择 Codex / … 后再发第一条消息；默认 Claude 壳会被明确拒绝。"
       : ""), "ok");
     setBrowserFallback(r.fallback_url);
-    getConfigState().selection_pending = false;
-    getConfigState().applied_profile_id = getConfigState().active_id || null;
-    renderList();
     await refreshStatus();
   } catch (e) {
     setMsg("一键开始失败：" + runtimeCommandErrorText(e), "err");
@@ -351,6 +377,7 @@ async function refreshStatus() {
     showRuntimeChoice,
     hideHistoryRecovery,
     showHistoryRecovery,
+    publishFinalizeUnknown,
     restoreHistoryChoice,
     runOneClick,
     importLocalSkill,

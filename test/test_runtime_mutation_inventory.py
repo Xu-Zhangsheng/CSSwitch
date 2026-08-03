@@ -126,6 +126,7 @@ EXPECTED_SURFACE_CONTRACT = {
     "create_profile": ("config-nonruntime", "none"),
     "delete_profile": ("runtime-mutation", "op.revoke-profile"),
     "fetch_models": ("runtime-mutation", "op.codex-catalog-mutation"),
+    "finalize_consumer_state": ("read-only", "none"),
     "get_config": ("config-nonruntime", "none"),
     "install_local_skill_package": ("host-bridge-mutation", "op.install-local-skill"),
     "list_installed_skills": ("read-only", "none"),

@@ -292,8 +292,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "async function importLocalSkill", 1
         )[0]
         self.assertLess(
-            one_click.index('r && r.status === "error"'),
+            one_click.index('call("finalize_consumer_state", { outcome: r })'),
             one_click.index('const message = r.msg ||'),
+        )
+        self.assertIn('consumer.disposition !== "ready"', one_click)
+        self.assertNotIn(
+            "getConfigState().applied_profile_id = getConfigState().active_id",
+            one_click,
         )
         self.assertIn("setBusy(false)", one_click)
         self.assertIn("setBrowserFallback(r.fallback_url)", one_click)
@@ -404,10 +409,17 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("journal.previous_gateway()", lifecycle)
         self.assertIn("current == initial_for_probe", lifecycle)
         boot = lib.split("LaunchPath::BootScience", 1)[1].split("// ---------- 入口", 1)[0]
-        self.assertIn("boot_result_error(&value)", boot)
-        self.assertIn("boot_result_needs_attention(&value)", boot)
+        self.assertIn("project_consumer_state(&value)", boot)
+        self.assertIn("FinalizeConsumerDisposition::Ready", boot)
+        self.assertIn("FinalizeConsumerDisposition::Attention", boot)
+        self.assertIn("FinalizeConsumerDisposition::Manual", boot)
         self.assertIn("mark_boot_attention(&app, value)", boot)
-        self.assertIn("mark_boot_failed(&app, failure)", boot)
+        self.assertIn("mark_boot_failed(&app, value)", boot)
+        main = (ROOT / "desktop/src/main.js").read_text(encoding="utf-8")
+        self.assertEqual(
+            main.count("runtimeController.publishFinalizeUnknown();"),
+            4,
+        )
 
     def test_science_runtime_identity_is_reused_for_serve_status_url_and_stop(self):
         session = sandbox_session_source()

@@ -466,15 +466,20 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "profile reconcile must derive recovery and environment from typed variants"
     );
     let auto_boot_projection = auto_boot_source
-        .split("fn boot_result_error")
+        .split("fn run_boot_decision_with")
         .nth(1)
-        .and_then(|tail| tail.split("fn boot_prepare_failure").next())
+        .and_then(|tail| tail.split("fn run_boot_decision(").next())
         .expect("auto-boot projection must remain discoverable");
     assert!(
-        auto_boot_projection.contains("value.clone()")
+        auto_boot_projection.contains("project_consumer_state(&value)")
+            && auto_boot_projection.contains("FinalizeConsumerDisposition::Ready")
+            && auto_boot_projection.contains("FinalizeConsumerDisposition::Attention")
+            && auto_boot_projection.contains("FinalizeConsumerDisposition::Manual")
+            && auto_boot_projection.contains("mark_boot_attention(&app, value)")
+            && auto_boot_projection.contains("mark_boot_failed(&app, value)")
             && !auto_boot_projection.contains("message")
             && !auto_boot_projection.contains(".contains("),
-        "auto-boot must preserve the structured one-click DTO without reclassification"
+        "auto-boot must consume the typed readback projection while preserving the full DTO"
     );
     assert!(
         !source.contains("contains(\"recovery_status=cleanup_required\")")

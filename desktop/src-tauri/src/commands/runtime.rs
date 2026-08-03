@@ -97,6 +97,15 @@ pub(crate) async fn one_click_login<R: tauri::Runtime>(
 }
 
 #[tauri::command]
+pub(crate) fn finalize_consumer_state(outcome: Value) -> Result<Value, String> {
+    crate::runtime::finalize_consumer::project_finalize_consumer_state(
+        &config::default_dir(),
+        &outcome,
+    )
+    .and_then(|state| serde_json::to_value(state).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
 pub(crate) async fn restore_history_choice<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, SharedAppState>,

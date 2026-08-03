@@ -123,6 +123,19 @@ process-local handoff；durable journal 只保存 crash recovery 所需的最小
 
 一键/auto-boot 失败由内部 `runtime/failure.rs` 的 `OneClickFailureKind` 在**产生点**标注，再投影到冻结的 coarse stage（`prepare|science_stop|gateway_start|catalog_verify|science_start`）与 `recovery_status` / `environment_status`。**不得**用用户文案 `contains` 反推 stage。frontend DTO、operation trace 与 runtime journal 仍是三个不同阶段域；one-click V2 的 typed phase 不改变 UI DTO。
 
+finalize consumer 不从 degraded 文案猜测磁盘结果。只读 projection 重新读取 canonical config，
+把 journal 精确投影为 `open|cleared`，把 runtime binding 投影为相对 active profile 的
+`matches_active|different_active|absent`，并据此计算 consumer publication。normal start 只有 journal
+cleared、binding exact match 且 selection 不 pending 时可成为 ready；history action 在 journal
+cleared 时保持 attention；journal open、readback failure、unknown 或矛盾组合一律保持 manual。
+只有 ready 投影可携带 applied profile id；attention、manual 与 readback failure 对 UI 发布
+`applied_profile_id=null`、`selection_pending=true`，避免陈旧 binding 被呈现为本次已应用。
+auto-boot 的 failed/attention event 与 one-shot 补读在渲染 DTO 前执行同一 unknown publication；
+这不改变或包裹原 one-click DTO。
+因此 atomic commit sync 与 rollback 双失败即使返回同一 degraded DTO，也按其后真实可读状态
+分类，不预设一定保留旧 binding 或 journal。projection 不 chmod、不携带 transaction record、
+snapshot ticket、cleanup path、credential 或写能力。
+
 ## 一键开始事务
 
 冷启动或重启分支的高层顺序：

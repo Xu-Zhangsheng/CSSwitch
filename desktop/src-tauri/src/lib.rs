@@ -389,13 +389,6 @@ fn mark_boot_attention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, value: serd
     let _ = app.emit("boot://attention", value);
 }
 
-fn boot_result_error(value: &serde_json::Value) -> Option<serde_json::Value> {
-    (value.get("status").and_then(serde_json::Value::as_str) == Some("error")).then(|| {
-        // Preserve the full failed one-click DTO so auto-boot matches manual invoke.
-        value.clone()
-    })
-}
-
 fn boot_prepare_failure(message: impl Into<String>) -> serde_json::Value {
     crate::runtime::failure::TypedOneClickFailure::new(
         crate::runtime::failure::OneClickFailureKind::Prepare,
@@ -420,10 +413,6 @@ where
     boot();
 }
 
-fn boot_result_needs_attention(value: &serde_json::Value) -> bool {
-    value.get("status").and_then(serde_json::Value::as_str) == Some("attention")
-}
-
 type BootScienceCommand<R> =
     fn(
         tauri::AppHandle<R>,
@@ -436,12 +425,13 @@ fn production_boot_science_command<R: tauri::Runtime>() -> BootScienceCommand<R>
     commands::runtime::one_click_login_cmd::<R>
 }
 
-fn run_boot_decision_with<R, Load, Decide, Open, Boot, Show>(
+fn run_boot_decision_with<R, Load, Decide, Open, Boot, Project, Show>(
     app: tauri::AppHandle<R>,
     load_config: Load,
     decide: Decide,
     open_official: Open,
     boot_science: Boot,
+    project_consumer_state: Project,
     show: Show,
 ) where
     R: tauri::Runtime,
@@ -454,6 +444,8 @@ fn run_boot_decision_with<R, Load, Decide, Open, Boot, Show>(
         SharedLifecycle,
         Option<String>,
     ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError>,
+    Project:
+        Fn(&serde_json::Value) -> Result<runtime::finalize_consumer::FinalizeConsumerState, String>,
     Show: Fn(&tauri::AppHandle<R>),
 {
     let cfg = match load_config() {
@@ -486,15 +478,18 @@ fn run_boot_decision_with<R, Load, Decide, Open, Boot, Show>(
             let lifecycle = app.state::<SharedLifecycle>().inner().clone();
             match boot_science(app.clone(), state_inner, lifecycle, None) {
                 Ok(value) => {
-                    if boot_result_needs_attention(&value) {
-                        mark_boot_attention(&app, value);
-                    } else if let Some(failure) = boot_result_error(&value) {
-                        mark_boot_failed(&app, failure);
-                    } else {
-                        let mut st = lock(state.inner());
-                        st.boot = BootState::Ready;
-                        st.boot_error = None;
-                        st.boot_attention = None;
+                    match project_consumer_state(&value).map(|projection| projection.disposition) {
+                        Ok(runtime::finalize_consumer::FinalizeConsumerDisposition::Ready) => {
+                            let mut st = lock(state.inner());
+                            st.boot = BootState::Ready;
+                            st.boot_error = None;
+                            st.boot_attention = None;
+                        }
+                        Ok(runtime::finalize_consumer::FinalizeConsumerDisposition::Attention) => {
+                            mark_boot_attention(&app, value);
+                        }
+                        Ok(runtime::finalize_consumer::FinalizeConsumerDisposition::Manual)
+                        | Err(_) => mark_boot_failed(&app, value),
                     }
                 }
                 Err(e) => mark_boot_failed(&app, boot_prepare_failure(e.to_string())),
@@ -510,6 +505,12 @@ fn run_boot_decision(app: tauri::AppHandle) {
         decide_launch,
         commands::runtime::open_official,
         production_boot_science_command(),
+        |outcome| {
+            runtime::finalize_consumer::project_finalize_consumer_state(
+                &config::default_dir(),
+                outcome,
+            )
+        },
         show_main_window,
     );
 }
@@ -608,6 +609,7 @@ pub fn run() {
             commands::runtime::fetch_models,
             commands::runtime::stop_all,
             commands::runtime::one_click_login,
+            commands::runtime::finalize_consumer_state,
             commands::runtime::restore_history_choice,
             commands::runtime::science_runtime_preflight,
             commands::runtime::open_science_download_page,
@@ -674,36 +676,87 @@ mod tests {
     use crate::config::{self, Config, Profile};
     use crate::runtime::system::redact;
     use crate::{
-        boot_result_error, boot_result_needs_attention, cleanup_for_exit, cleanup_for_exit_with,
-        decide_launch_with_auto_boot, load_boot_config, lock, production_boot_science_command,
-        production_native_exit_cleanup, run_boot_decision_with, run_native_exit_event_with,
-        run_second_instance_callback_with, run_startup_config_sequence, should_begin_boot,
-        AppState, BootScienceCommand, BootState, LaunchPath, NativeExitCleanup, NativeExitEvent,
-        SharedAppState, SharedLifecycle,
+        cleanup_for_exit, cleanup_for_exit_with, decide_launch_with_auto_boot, load_boot_config,
+        lock, production_boot_science_command, production_native_exit_cleanup,
+        run_boot_decision_with, run_native_exit_event_with, run_second_instance_callback_with,
+        run_startup_config_sequence, should_begin_boot, AppState, BootScienceCommand, BootState,
+        LaunchPath, NativeExitCleanup, NativeExitEvent, SharedAppState, SharedLifecycle,
     };
 
     #[test]
-    fn auto_boot_rejects_structured_runtime_failure() {
-        let failed = serde_json::json!({
-            "action": "failed",
-            "stage": "gateway_start",
-            "status": "error",
-            "recovery_status": "degraded",
-            "environment_status": "not_exposed",
-            "message": "gateway recovery degraded",
+    fn h4_auto_boot_consumes_finalize_projection_without_promoting_degraded_to_ready() {
+        use crate::runtime::finalize_consumer::FinalizeConsumerDisposition;
+
+        let dto = serde_json::json!({
+            "action": "history_choice_required",
+            "stage": "history_recovery",
+            "status": "degraded",
+            "recovery_status": "cleanup_required",
+            "choices": [{"reference": "opaque-reference", "label": "history"}],
             "fallback_url": null,
         });
-        let projected = boot_result_error(&failed).expect("error dto");
-        assert_eq!(projected["message"], "gateway recovery degraded");
-        assert_eq!(projected["stage"], "gateway_start");
-        assert_eq!(projected["recovery_status"], "degraded");
-        assert!(boot_result_error(&serde_json::json!({"status": "ok"})).is_none());
-        assert!(boot_result_needs_attention(
-            &serde_json::json!({"status": "attention", "action": "history_choice_required"})
-        ));
-        assert!(!boot_result_needs_attention(
-            &serde_json::json!({"status": "ok"})
-        ));
+        for (projected, expected_boot) in [
+            (FinalizeConsumerDisposition::Ready, BootState::Ready),
+            (FinalizeConsumerDisposition::Attention, BootState::Idle),
+            (FinalizeConsumerDisposition::Manual, BootState::Failed),
+        ] {
+            let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+            let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let app = tauri::test::mock_builder()
+                .manage(state.clone())
+                .manage(lifecycle)
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            run_boot_decision_with(
+                app.handle().clone(),
+                || Ok(Config::default()),
+                |_| LaunchPath::BootScience,
+                || -> Result<(), String> { unreachable!() },
+                |_, _, _, _| Ok(dto.clone()),
+                |_| {
+                    Ok(crate::runtime::finalize_consumer::test_consumer_state(
+                        projected,
+                    ))
+                },
+                |_| {},
+            );
+            let authority = lock(&state);
+            assert_eq!(authority.boot, expected_boot);
+            match projected {
+                FinalizeConsumerDisposition::Ready => {
+                    assert!(authority.boot_error.is_none());
+                    assert!(authority.boot_attention.is_none());
+                }
+                FinalizeConsumerDisposition::Attention => {
+                    assert_eq!(authority.boot_attention.as_ref(), Some(&dto));
+                    assert!(authority.boot_error.is_none());
+                }
+                FinalizeConsumerDisposition::Manual => {
+                    assert_eq!(authority.boot_error.as_ref(), Some(&dto));
+                    assert!(authority.boot_attention.is_none());
+                }
+            }
+        }
+
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .manage(lifecycle)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        run_boot_decision_with(
+            app.handle().clone(),
+            || Ok(Config::default()),
+            |_| LaunchPath::BootScience,
+            || -> Result<(), String> { unreachable!() },
+            |_, _, _, _| Ok(dto.clone()),
+            |_| Err("controlled readback failure".into()),
+            |_| {},
+        );
+        let authority = lock(&state);
+        assert_eq!(authority.boot, BootState::Failed);
+        assert_eq!(authority.boot_error.as_ref(), Some(&dto));
     }
 
     #[test]
@@ -1218,6 +1271,11 @@ mod tests {
                             command_count.set(command_count.get() + 1);
                             choices.borrow_mut().push(runtime_choice);
                             Ok(serde_json::json!({"status": "ok"}))
+                        },
+                        |_| {
+                            Ok(crate::runtime::finalize_consumer::test_consumer_state(
+                                crate::runtime::finalize_consumer::FinalizeConsumerDisposition::Ready,
+                            ))
                         },
                         |_| show_count.set(show_count.get() + 1),
                     );

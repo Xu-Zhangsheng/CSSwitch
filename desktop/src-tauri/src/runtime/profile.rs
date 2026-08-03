@@ -95,7 +95,7 @@ pub(crate) fn profile_capabilities(p: &config::Profile) -> serde_json::Value {
 }
 
 /// 组装 get_config 返回体：profiles 的 key 只回掩码，全 key 绝不出后端。
-fn selection_pending_from_config(cfg: &config::Config) -> Result<bool, String> {
+pub(crate) fn selection_pending_from_config(cfg: &config::Config) -> Result<bool, String> {
     let Some(profile) = cfg.active_profile() else {
         return Ok(false);
     };

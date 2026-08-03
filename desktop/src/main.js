@@ -87,7 +87,11 @@ function formatBootFailure(payload) {
       ? "；恢复也未完全成功"
       : payload.recovery_status === "environment_uncertain"
         ? "；环境状态不确定"
-        : "";
+        : payload.recovery_status === "cleanup_required"
+          ? "；私有事务快照仍待安全清理"
+          : payload.recovery_status === "manual_recovery_required"
+            ? "；最终状态需要按配置回读或再次显式重试"
+            : "";
     return message + recovery + stage;
   }
   return String(payload);
@@ -558,10 +562,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     await Promise.all([
       listen("boot://failed", (e) => {
+        runtimeController.publishFinalizeUnknown();
         setMsg("自动启动未成功：" + formatBootFailure(e.payload) + "\n可检查配置后点「一键开始」重试。", "err");
         runtimeController.refreshStatus();
       }),
       listen("boot://attention", (e) => {
+        runtimeController.publishFinalizeUnknown();
         if (e.payload && e.payload.action === "history_choice_required") {
           runtimeController.showHistoryRecovery(e.payload);
           setMsg(e.payload.msg || "自动启动需要先选择要恢复的历史记录。", "err");
@@ -574,13 +580,19 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   try {
     const bootError = await call("boot_error");
-    if (bootError) setMsg("自动启动未成功：" + formatBootFailure(bootError) + "\n可检查配置后点「一键开始」重试。", "err");
+    if (bootError) {
+      runtimeController.publishFinalizeUnknown();
+      setMsg("自动启动未成功：" + formatBootFailure(bootError) + "\n可检查配置后点「一键开始」重试。", "err");
+    }
   } catch (e) {}
   try {
     const attention = await call("boot_attention");
-    if (attention && attention.action === "history_choice_required") {
-      runtimeController.showHistoryRecovery(attention);
-      setMsg(attention.msg || "自动启动需要先选择要恢复的历史记录。", "err");
+    if (attention) {
+      runtimeController.publishFinalizeUnknown();
+      if (attention.action === "history_choice_required") {
+        runtimeController.showHistoryRecovery(attention);
+        setMsg(attention.msg || "自动启动需要先选择要恢复的历史记录。", "err");
+      }
     }
   } catch (e) {}
   try { els.verLabel.textContent = "v" + (await call("app_version")); } catch (e) {}

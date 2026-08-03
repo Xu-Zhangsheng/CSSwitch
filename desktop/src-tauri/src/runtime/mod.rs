@@ -2,6 +2,7 @@ pub(crate) mod capability_catalog;
 pub(crate) mod diagnostics;
 pub(crate) mod external_skill_route;
 pub(crate) mod failure;
+pub(crate) mod finalize_consumer;
 pub(crate) mod launch_env;
 pub(crate) mod legacy_proxy;
 pub(crate) mod model_discovery;
