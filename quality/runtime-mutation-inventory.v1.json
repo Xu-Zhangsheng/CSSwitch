@@ -536,11 +536,11 @@
       "entrypoints": [{"kind": "tauri-command", "name": "stop_all", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "stop_all_inner_cmd"}, "bundled_callers": ["desktop/src/runtime-controller.js::stopAll"]}],
       "state_owners": ["app.gateway", "app.science", "authority.private", "lifecycle.global", "process.gateway", "process.science"],
       "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
-      "ordered_effects": ["bump generation", "attempt exact Science stop", "always stop tracked Gateway", "return Science stop result"],
-      "failure_points": [{"id": "stop-all.science", "after_effects": ["generation bumped", "Science stop attempted", "Gateway stopped"], "observed_outcome": "Return error stating Gateway stopped while Science stop failed.", "compensation": "none; explicit stop intentionally retains stopped components"}],
+      "ordered_effects": ["bump generation", "claim exact process-local Science owner and stop request under AppState lock", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity", "always stop tracked Gateway", "return Science stop result"],
+      "failure_points": [{"id": "stop-all.science", "after_effects": ["generation bumped", "Science stop attempted", "Gateway stopped"], "observed_outcome": "Return error stating Gateway stopped while Science stop failed.", "compensation": "none; explicit stop intentionally retains stopped components"}, {"id": "stop-all.owner-cas", "after_effects": ["generation bumped", "exact Science stop attempted", "process-local owner changed before publication", "Gateway stopped"], "observed_outcome": "Reject stale publication and preserve the replacement Science read model.", "compensation": "none; stale stop results cannot clear replacement runtime ownership"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "stop_all_inner_cmd"}, "contract": "Gateway is stopped even when Science stop fails; no restart is attempted."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails"],
-      "known_gaps": ["Long external Science stop occurs while AppState is locked."]
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::s2_stop_all_wait_releases_read_model_and_stale_result_preserves_replacement"],
+      "known_gaps": ["The process-local owner and lock-free wait/CAS slice is limited to stop_all; sibling Science stop callers retain their existing lock timing."]
     },
     {
       "id": "op.quit-command",

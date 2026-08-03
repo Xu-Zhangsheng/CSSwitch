@@ -509,6 +509,30 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )[1]
         self.assertIn(") -> ScienceStopOutcome", stop_contract)
         self.assertNotIn("Result<(), String>", stop_contract)
+        lifecycle_command = runtime_command_module("lifecycle")
+        stop_all = lifecycle_command.split(
+            "pub(super) fn stop_all_inner_cmd", 1
+        )[1].split("pub(super) async fn quit_app_command", 1)[0]
+        self.assertIn("ScienceProcessLocalOwner", stop_all)
+        self.assertIn("claim_science_stop_request", stop_all)
+        self.assertIn("execute_science_stop", stop_all)
+        self.assertIn("owner.still_owns", stop_all)
+        self.assertIn("lifecycle.current_generation()", stop_all)
+        self.assertNotIn("stop_sandbox_state(&app, &mut st)", stop_all)
+        stop_all_flow = lifecycle_command.split(
+            "pub(super) fn stop_all_inner_with", 1
+        )[1].split("pub(super) async fn quit_app_command", 1)[0]
+        self.assertLess(
+            stop_all_flow.index("let st = lock(&state)"),
+            stop_all_flow.index("execute_science(&app, request)"),
+        )
+        self.assertLess(
+            stop_all_flow.index("execute_science(&app, request)"),
+            stop_all_flow.rindex("lock(&state)"),
+        )
+        self.assertIn("pub(crate) fn claim_science_stop_request", science_lifecycle)
+        self.assertIn("pub(crate) fn execute_science_stop", science_lifecycle)
+        self.assertIn("ScienceStopRequest::exact", science_lifecycle)
 
     def test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry(self):
         js = (ROOT / "desktop/src/profile-controller.js").read_text()

@@ -153,10 +153,99 @@ pub(super) fn stop_all_inner_cmd<R: tauri::Runtime>(
     state: SharedAppState,
     lifecycle: SharedLifecycle,
 ) -> Result<(), String> {
+    stop_all_inner_with(
+        app,
+        state,
+        lifecycle,
+        claim_science_stop_request,
+        |app, request| execute_science_stop(app, request).into_parts(),
+    )
+}
+
+#[derive(Clone)]
+struct ScienceProcessLocalOwner {
+    generation: u64,
+    runtime: Option<crate::runtime::science::ScienceRuntimeIdentity>,
+    confirmed_stopped: Option<crate::runtime::science::ScienceRuntimeIdentity>,
+    sandbox_child_pid: Option<u32>,
+    sandbox_port: u16,
+    sandbox_url: Option<String>,
+}
+
+impl ScienceProcessLocalOwner {
+    fn claim(st: &AppState, generation: u64) -> Self {
+        Self {
+            generation,
+            runtime: st.science_runtime.clone(),
+            confirmed_stopped: st.science_confirmed_stopped.clone(),
+            sandbox_child_pid: st.sandbox.as_ref().map(std::process::Child::id),
+            sandbox_port: st.sandbox_port,
+            sandbox_url: st.sandbox_url.clone(),
+        }
+    }
+
+    fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
+        self.generation == current_generation
+            && self.runtime == st.science_runtime
+            && self.confirmed_stopped == st.science_confirmed_stopped
+            && self.sandbox_child_pid == st.sandbox.as_ref().map(std::process::Child::id)
+            && self.sandbox_port == st.sandbox_port
+            && self.sandbox_url == st.sandbox_url
+    }
+}
+
+pub(super) fn stop_all_inner_with<R, Claim, Execute>(
+    app: tauri::AppHandle<R>,
+    state: SharedAppState,
+    lifecycle: SharedLifecycle,
+    claim_science: Claim,
+    execute_science: Execute,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+    Execute: FnOnce(
+        &tauri::AppHandle<R>,
+        crate::runtime::science::ScienceStopRequest,
+    ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+{
     lifecycle.with_serialized(|| {
-        lifecycle.bump_generation(); // 作废任何在途启动（防被停后又拿旧 key 复活）
+        let generation = lifecycle.bump_generation(); // 作废任何在途启动（防被停后又拿旧 key 复活）
+        let (owner, request) = {
+            let st = lock(&state);
+            let owner = ScienceProcessLocalOwner::claim(&st, generation);
+            let request = claim_science(owner.runtime.as_ref());
+            (owner, request)
+        };
+        // The stop script and bounded TERM/KILL waits intentionally run without
+        // the AppState mutex so high-frequency status can copy its read model.
+        let execution = request.map(|request| execute_science(&app, request));
         let mut st = lock(&state);
-        let sandbox_res = stop_sandbox_state(&app, &mut st);
+        let owner_is_current = owner.still_owns(&st, lifecycle.current_generation());
+        let sandbox_res = match execution {
+            Err(error) => Err(error),
+            Ok((_outcome, _clear_tracking)) if !owner_is_current => Err(
+                crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
+                    "Science stop 完成时 process-local owner 已变化；已保留 replacement runtime。",
+                ),
+            ),
+            Ok((outcome, clear_tracking)) => {
+                if clear_tracking {
+                    crate::runtime::system::kill_child(&mut st.sandbox);
+                    st.sandbox_url = None;
+                }
+                if let Ok(verified) = outcome.as_ref() {
+                    st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
+                    st.science_runtime = None;
+                }
+                outcome
+            }
+        };
         st.stop_proxy();
         sandbox_res
             .map(|_| ())

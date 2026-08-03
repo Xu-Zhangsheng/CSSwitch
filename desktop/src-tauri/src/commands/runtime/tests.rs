@@ -8731,6 +8731,103 @@ fn r0_stop_all_stops_gateway_even_when_science_stop_fails() {
 }
 
 #[test]
+fn s2_stop_all_wait_releases_read_model_and_stale_result_preserves_replacement() {
+    let root = tmpdir("s2-stop-all-owner-cas");
+    let prior_binary = root.join("prior-science");
+    let replacement_binary = root.join("replacement-science");
+    fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+    fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let prior = science::test_runtime_identity(prior_binary);
+    let replacement = science::test_runtime_identity(replacement_binary);
+
+    for (case, replace_identity, bump_generation) in [
+        ("generation-only", false, true),
+        ("identity-only", true, false),
+    ] {
+        let mut authority = AppState::default();
+        authority.science_runtime = Some(prior.clone());
+        authority.sandbox_port = 18765;
+        authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+        let state: SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle().clone();
+
+        let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+        let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+        let worker_state = state.clone();
+        let worker_lifecycle = lifecycle.clone();
+        let worker_prior = prior.clone();
+        let worker = thread::spawn(move || {
+            super::lifecycle::stop_all_inner_with(
+                handle,
+                worker_state,
+                worker_lifecycle,
+                |runtime| Ok(science::ScienceStopRequest::recover(runtime)),
+                move |_, _| {
+                    stop_started_tx.send(()).unwrap();
+                    release_stop_rx.recv().unwrap();
+                    (
+                        Ok(science::VerifiedScienceStop {
+                            runtime: Some(worker_prior),
+                            ownership_was_proven: true,
+                        }),
+                        true,
+                    )
+                },
+            )
+        });
+
+        stop_started_rx.recv().unwrap();
+        {
+            let mut read_model = state
+                .try_lock()
+                .expect("Science stop wait must not retain the AppState mutex");
+            assert_eq!(read_model.science_runtime.as_ref(), Some(&prior), "{case}");
+            if replace_identity {
+                read_model.science_runtime = Some(replacement.clone());
+                read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+            }
+        }
+        if bump_generation {
+            lifecycle.bump_generation();
+        }
+        release_stop_tx.send(()).unwrap();
+
+        let stopped = worker.join().unwrap();
+        assert!(
+            stopped
+                .as_ref()
+                .is_err_and(|error| error.contains("process-local owner 已变化")),
+            "{case}: {stopped:?}"
+        );
+        let current = lock(&state);
+        let expected_runtime = if replace_identity {
+            &replacement
+        } else {
+            &prior
+        };
+        let expected_url = if replace_identity {
+            "http://127.0.0.1:18765/replacement"
+        } else {
+            "http://127.0.0.1:18765/prior"
+        };
+        assert_eq!(
+            current.science_runtime.as_ref(),
+            Some(expected_runtime),
+            "{case}"
+        );
+        assert!(current.science_confirmed_stopped.is_none(), "{case}");
+        assert_eq!(current.sandbox_url.as_deref(), Some(expected_url), "{case}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn r0_quit_command_does_not_exit_after_science_stop_error() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",

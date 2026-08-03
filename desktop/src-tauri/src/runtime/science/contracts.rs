@@ -167,6 +167,7 @@ impl ScienceStopOwnershipReceipt {
 pub(crate) struct ScienceStopRequest {
     runtime: Option<ScienceRuntimeIdentity>,
     ownership: Option<ScienceStopOwnershipReceipt>,
+    observed_stopped: bool,
 }
 
 impl ScienceStopRequest {
@@ -174,6 +175,7 @@ impl ScienceStopRequest {
         Self {
             runtime: runtime.cloned(),
             ownership: None,
+            observed_stopped: false,
         }
     }
 
@@ -184,6 +186,15 @@ impl ScienceStopRequest {
         Self {
             runtime: Some(runtime.clone()),
             ownership: Some(ownership),
+            observed_stopped: false,
+        }
+    }
+
+    pub(super) fn observed_stopped() -> Self {
+        Self {
+            runtime: None,
+            ownership: None,
+            observed_stopped: true,
         }
     }
 }

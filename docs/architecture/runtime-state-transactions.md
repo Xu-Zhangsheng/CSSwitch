@@ -53,7 +53,7 @@ Lifecycle mutex
 ```
 
 - `Lifecycle` 覆盖命令级复合操作，不可重入；
-- `AppState` 通常只在读写进程内状态时短持有，health probe 刻意在锁外；但当前 `stop_all` 会持锁跨越 stop script、TERM/KILL 等同步等待，这是状态查询阻塞与锁争用的现有诊断点；
+- `AppState` 只在读写进程内状态时短持有，health probe 刻意在锁外；`stop_all` 也先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 只覆盖 load-modify-save；
 - config 文件提交使用 pinned/no-follow 边界、临时文件、rename、fsync、提交前复核与回滚，但不是跨进程 advisory lock。
@@ -171,9 +171,11 @@ frontend 只持有一次性 opaque reference。backend 复核 active profile、p
 `stop_all`：
 
 1. bump generation，使旧 probe/启动失效；
-2. 精确停止 Science；
-3. 无论 Science 结果如何都停止 Gateway；
-4. 若 Science 未验证停止，返回“Gateway 已停、Science 失败”的部分结果。
+2. 在 `AppState` 锁内 claim exact process-local Science owner 与 stop request；
+3. 释放 `AppState` 后按既有 stop script、TERM/KILL/wait 策略精确停止 Science，使 `status` 可并发复制 read model；
+4. 重新取得 `AppState`，只在 lifecycle generation 与完整 owner identity 均未变化时清理 tracking 并发布 typed stop outcome；陈旧结果必须保留 replacement runtime；
+5. 无论 Science 结果如何都停止 Gateway；
+6. 若 Science 未验证停止，返回“Gateway 已停、Science 失败”的部分结果。
 
 Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener PID、canonical executable、data-dir、launch token 与端口真实关闭；身份漂移时不发送信号。
 
@@ -207,9 +209,9 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   当前 typed state；若期间出现受管 runtime，restore 必须 exact-stop 并把 session proof 推进为
   `ExactStopped` 后才能旋转引用。它不冒充 exact stop receipt。用户可见文本与
   stop/TERM/KILL/wait 顺序保持不变；
-- `stop_all` 仍持有 `AppState` 锁跨越 stop script、TERM/KILL 与轮询等待；S1 没有建立锁外
-  ownership claim、generation/identity CAS 或 replacement-runtime stale-result guard，不能据此直接
-  移出长等待；
+- ~~`stop_all` 持有 `AppState` 锁跨越 stop script、TERM/KILL 与轮询等待~~ 已由 S2 的
+  process-local owner claim、锁外等待和 generation/identity CAS 闭合；该结论只覆盖
+  `stop_all`，不自动迁移 mode/settings/native-exit 等 sibling stop caller，也不建立 S3 mutation lease；
 - 本地 Skill 安装不取得 `Lifecycle`；第二次 runtime-context 复核之后仍可能与
   stop/switch 交错；
 - MCP 与 SSH 的产品动态 gate 仍开放。
