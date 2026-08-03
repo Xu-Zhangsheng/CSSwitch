@@ -78,7 +78,9 @@
         "the local Skill regression proves a destructive mutation blocks package commit until the short host-bridge lease can claim the final matching host context",
         "the source boundary requires production runtime-context mutations to declare a typed domain and binds local package commit plus attach/readback to one host receipt and lease",
         "cargo check and focused Rust/Python source tests pass",
-        "the picker and any future download remain outside the lease, attachment failure still retains committed files, and no global durable journal is introduced"
+        "the picker and any future download remain outside the lease, attachment failure still retains committed files, and no global durable journal is introduced",
+        "exact candidate 8ca3f92eae780cc4093c927613ba7ab73d1bc19f passed all fifteen source-gate suites in run acc53dfd08fd888b8e0b3069cfe57352 with runner exit zero",
+        "the exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings and independently verified the seal, manifests, thirty result or observation hashes, and 499-entry source snapshot"
       ]
     },
     "does_not_claim_fix": true,
