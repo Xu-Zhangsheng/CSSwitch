@@ -29,6 +29,7 @@
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
       "test/quality/test_run_evidence_attempt0_runner.py",
       "test/quality/test_source_gate_runtime.py",
+      "test/test_profile_pin_contract.py",
       "test/test_skill_runtime_boundary.py"
     ],
     "requirement_ids": [

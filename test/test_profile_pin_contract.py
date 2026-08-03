@@ -67,7 +67,11 @@ class ProfilePinContractTests(unittest.TestCase):
         )
         self.assertLess(
             connection_flow.index("let prepared = prepare("),
-            connection_flow.index(".with_serialized("),
+            connection_flow.index(".with_mutation("),
+        )
+        self.assertRegex(
+            connection_flow,
+            r"\.with_mutation\(\s*lifecycle::RuntimeMutationDomain::Intent\s*,",
         )
         self.assertIn("verify(&prepared, dir)?", connection_flow)
         self.assertLess(
