@@ -14,7 +14,6 @@ def sandbox_session_source():
 class ProfilePinContractTests(unittest.TestCase):
     def test_backend_pin_is_local_and_one_click_remains_the_apply_boundary(self):
         profiles = (ROOT / "desktop/src-tauri/src/commands/profiles.rs").read_text()
-        session = sandbox_session_source()
         pin = profiles.split("fn pin_active_profile_in_dir(", 1)[1].split(
             "\n#[cfg(test)]", 1
         )[0]
@@ -40,11 +39,16 @@ class ProfilePinContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, pin)
 
-        one_click = session.split("fn one_click_login_with_options", 1)[1]
+        one_click_source = (
+            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
+        ).read_text()
+        one_click = one_click_source.split("fn one_click_login_with_options", 1)[1]
         self.assertRegex(
             one_click,
-            r"commit_runtime_binding\(\s*&dir,\s*&transaction_identity,\s*"
-            r"&mut journal_progress,\s*committed,\s*\)",
+            r"begin_one_click_finalize\(\s*&dir,\s*&transaction_identity,\s*"
+            r"&mut journal_progress,\s*"
+            r"config::RuntimeFinalizeAction::CommitBinding\s*\{\s*binding:\s*committed\s*\},\s*\)"
+            r"[\s\S]*?complete_one_click_finalize\(\s*&dir,\s*&mut journal_progress\s*\)",
         )
         preset = profiles.split("pub(crate) async fn apply_profile_preset_sync", 1)[1].split(
             "// ---------- profile CRUD", 1
