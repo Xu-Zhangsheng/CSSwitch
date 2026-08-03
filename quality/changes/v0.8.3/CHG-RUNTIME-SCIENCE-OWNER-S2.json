@@ -69,7 +69,12 @@
         "the existing R0 stop-all characterization remains the authority for always stopping the tracked Gateway and returning the existing partial-error surface when Science stop fails",
         "the source boundary binds stop_all to the process-local owner claim, exact typed request, lock-free execution, generation and identity CAS, and the split Science execution facade",
         "cargo check and the focused S2 unit regression passed; restricted-sandbox loopback characterization remains subject to its existing isolated execution contract",
-        "the scope preserves the existing stop script, TERM/KILL/wait sequence, receipt cleanup, command text, sibling stop caller timing, and excludes S3 mutation leases and Gateway ownership changes"
+        "the scope preserves the existing stop script, TERM/KILL/wait sequence, receipt cleanup, command text, sibling stop caller timing, and excludes S3 mutation leases and Gateway ownership changes",
+        "initial clean-context review found one MEDIUM: combined generation and identity drift; repaired tests split both CAS cases and fresh review passed with zero findings",
+        "run 5097c525d34fa7725c0909e2e2abd757 at candidate 6894882c2eed7189a1fab63a79d8a49db6417bf8 remains a separate 14-of-15 FAIL because one contract expected 528 identities",
+        "after syncing 529 and an independent review PASS, candidate a3a8a24f1cc10e8e4be915ba5d6ed60c55e08570 passed all 15 suites in run 1904b5fea86541a0abe7f4f9ae768c83 with runner exit zero",
+        "Desktop closed at 529 discovered and executed, 488 passed, zero failed, 41 approved ignored, and zero skipped, todo, or not run; the clean source snapshot contains 498 tracked entries",
+        "completion-seal manifest and snapshot references were independently rehashed; earlier path-too-long and dirty-main snapshot failures ran no complete suite and were not mixed with PASS"
       ]
     },
     "does_not_claim_fix": true,

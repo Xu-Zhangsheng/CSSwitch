@@ -2,7 +2,7 @@
 
 状态：当前；按 v0.8.4 release source 与 2026-08-01 R0 分片基线整理
 
-最后复核：2026-08-02（Asia/Taipei）
+最后复核：2026-08-03（Asia/Taipei）
 
 失效条件：对应 change/bug record、Science 版本、release source、artifact 或 installed/live 证据改变时，受影响条目立即失效并须按当前版本重审。
 
@@ -450,6 +450,29 @@ evidence-only seal commit 只记录上述已验证 candidate 与 run，不声称
 gate。S1 仅建立 source/unit 结论，不外推 artifact、installed/runtime、live provider、Science、
 SSH、签名、公证、Gatekeeper 或 release，也不移动锁、不改变 stop policy、不进入 S2。
 
+`S2` 已收口（source）：`stop_all` 在 `AppState` 锁内冻结 lifecycle generation 与完整
+process-local Science owner read model，并取得 exact typed stop request/receipt；既有 stop script、
+TERM/KILL 与轮询等待移到 `AppState` 锁外，`status` 可在 stop wait 期间取得 read model。结果只在
+generation 与 runtime/confirmed-stopped/child PID/port/URL identity 均未漂移时发布；任一 CAS
+条件单独漂移都拒绝陈旧 publication，并保留 replacement runtime。Gateway 仍无条件停止，既有
+command text、quit-on-stop-success、receipt cleanup 与 Science stop policy 不变；mode/settings/
+native-exit 等 sibling caller 的锁时机、S3 mutation lease 与 Gateway ownership 均未迁移。
+
+首轮 clean-context candidate review 发现新增测试同时制造 generation 与 identity 漂移，无法分别
+证明双重 CAS，判定 MEDIUM；同一 trusted identity 已扩展为 generation-only 与 identity-only 两个
+场景，新的 clean-context reviewer 复审 PASS，零 BLOCK/HIGH/MEDIUM/LOW。implementation
+candidate `6894882c2eed7189a1fab63a79d8a49db6417bf8` 的首次完整 gate run
+`5097c525d34fa7725c0909e2e2abd757` 为 14/15 FAIL：唯一失败是 run-evidence contract 仍硬编码
+Desktop identity count 528；该 run 不作为 closure 证据。同步为 529 并经独立 gate-fix review
+PASS 后，exact candidate `a3a8a24f1cc10e8e4be915ba5d6ed60c55e08570` 取得完整十五 suite
+`GATE-SOURCE` completion seal PASS：run id `1904b5fea86541a0abe7f4f9ae768c83`、runner exit 0；
+manifest 含十五个 PASS test result 与十五个 PASS source observation，Desktop 为 529 discovered /
+executed、488 passed、0 failed、41 approved ignored、0 skipped/todo/not-run，clean source snapshot
+为 498 个 tracked entry。seal 的 run/evidence/snapshot 三个顶层引用已重算一致。更早两次 runner
+前置失败分别为 output-root path 过长与主工作树 ignored data 导致 snapshot 失败，均未执行完整
+suite，也未与 PASS run 混合。S2 只建立 source/unit 结论，不外推 artifact、installed/runtime、
+live provider、Science、SSH、签名、公证、Gatekeeper 或 release。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
@@ -460,6 +483,7 @@ SSH、签名、公证、Gatekeeper 或 release，也不移动锁、不改变 sto
 | `R2-F` | DONE | R2-A-E schema、identity、CAS、recovery、compatibility 总盘点、聚焦矩阵、exact-SHA gate 与最终独立审查收口 |
 | `Post-R2 Rebaseline` | DONE-READ-ONLY | exact HEAD 重新盘点 state owner、caller、长等待、mutation、失败链、typed outcome/receipt 与旧路线依赖 |
 | `S1 Typed Science stop contract` | DONE | typed stop request/receipt/outcome 与 recovery-critical exact proof 已覆盖生产 caller；离线 history continuation 以 process-local typed quiescence proof、完整 probe recheck 与可复用 proof advancement 闭合；exact-SHA gate 与最终独立审查 PASS，不移动锁或改变 stop policy |
+| `S2 Science process-local owner` | DONE | `stop_all` 锁内 exact owner/request claim、`AppState` 锁外 wait、generation/identity CAS 与 stale replacement guard；exact-SHA gate 与独立审查 PASS，不推广 sibling caller/Gateway/S3 lease |
 
 ### Post-R2 Rebaseline 结论与后续门
 
@@ -488,10 +512,11 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-`S1` 已按上述边界完成。有限路线中的下一提议项是 `S2` Science process-local owner 与锁外
-等待/CAS，但本次没有自动授权或进入 S2。`S1` 保持现有锁时机、command/DTO/text、
-stop/TERM/KILL/wait 顺序和 native-exit best-effort 语义；不拆 `AppState`、不建立 mutation
-lease，也不新增 F5 pre-stop durable intent。改变 crash recovery 行为的
+`S1` 与 `S2` 已按上述边界完成。有限路线中的下一提议项是 `S3` typed
+`RuntimeMutationLease` 与 local Skill race closure，但本次没有自动授权或进入 S3。`S2` 只移动
+`stop_all` 的 `AppState` 锁时机，保持 command/DTO/text、stop/TERM/KILL/wait 顺序和
+native-exit best-effort 语义；不建立 mutation lease，也不新增 F5 pre-stop durable intent。
+改变 crash recovery 行为的
 `PriorStopIntent/Outcome` 继续与 `AuthorityTransaction` 接口等价提取分开，要求独立证据、
 operation contract 与明确授权。
 
