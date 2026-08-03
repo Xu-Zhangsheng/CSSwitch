@@ -80,6 +80,9 @@
         "the transaction source contract preserves the one-click snapshot, checkpoint, compensation, and coordinator ordering while delegating shell wait and health timing",
         "focused Rust transaction, cold-start, receipt-failure compensation, deterministic spawn-failure compensation and retry, post-spawn cleanup, cargo check, and Python boundary tests pass in their required isolated environments",
         "the adapter preserves the existing launch script allowlist, Rust plus shell fail-closed identity checks, post-launch SSH observation, AppState publication timing, visible failure text, and typed Science stop outcome",
+        "exact candidate b36947b8db4dea28a0822189a94803d4a1a01ca7 passed all fifteen source-gate suites in run 55176d489ee78e4656dc088fda672938 with runner exit zero",
+        "the exact gate executed 1362 tests: 1317 passed, 45 were approved ignored, and none failed, skipped, todo, or not-run",
+        "the exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings and independently verified the seal, manifests, thirty result or observation hashes, and 501-entry 11829524-byte source snapshot",
         "S5 authority capture, restore, and cleanup extraction, PriorStopIntent or Outcome, Gateway or Skill changes, host-neutral extension, artifact, installed, live, signing, and release validation are excluded"
       ]
     },
