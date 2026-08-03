@@ -1,8 +1,8 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-08-03 H1/H2/H3 后 production-flow 再基线整理
+状态：当前；按 v0.8.4 release source 与 2026-08-04 post-H4 production-flow 再基线整理
 
-最后复核：2026-08-03（Asia/Taipei）
+最后复核：2026-08-04（Asia/Taipei）
 
 失效条件：对应 change/bug record、Science 版本、release source、artifact 或 installed/live 证据改变时，受影响条目立即失效并须按当前版本重审。
 
@@ -11,11 +11,12 @@
 ## 当前 Runtime 决策门
 
 最新只读审计见
-[2026-08-03 H1–H3 后 production flow 再基线](../../docs/audits/2026-08-03-post-h1-h3-production-flow-rebaseline.md)。
+[2026-08-04 Post-H4 production flow 再基线](../../docs/audits/2026-08-04-post-h4-production-flow-rebaseline.md)。
 原三个 HIGH 的发现基线见
 [2026-08-03 Runtime 事务编排再基线](../../docs/audits/2026-08-03-runtime-transaction-orchestration-rebaseline.md)。
-H1–H3 implementation 现场起点为 clean `next@5c6623d`；本次 post-H1–H3 再基线绑定当前
-`next@7699e89212f2ceaf2c07e7358f6cc2f8bf3a21d2`。H1/H2/H3 已在 exact candidate
+H1–H3 implementation 现场起点为 clean `next@5c6623d`；post-H1–H3 再基线绑定
+`next@7699e89212f2ceaf2c07e7358f6cc2f8bf3a21d2`，当前 post-H4 source closure 绑定
+`next@84c1c6696103f6d57a56e950d2dbb5ef7fbc2de1`。H1/H2/H3 已在 exact candidate
 `9d7133285c32e8303cc47b6ff91b25e76dccec6f` 完成 source-only 收口；本段不外推
 artifact、installed/live、签名、公证或公开 release：
 
@@ -50,47 +51,31 @@ clean-context completion review 为零 BLOCK/HIGH/MEDIUM/LOW，并独立回算 3
 与 PASS run 混合。本文所在 evidence-only seal commit 只记录上述 candidate 与 run，不声称
 自身执行过完整 gate。
 
-H1/H2/H3 后重新复核 cold one-click、healthy reopen、history attention/restore、profile
-selection/apply 与 recovery 五类 product-reachable flow，发现一个新的 HIGH：H3 的 degraded
-outcome 没有被 consumer 按 action/readback 解释。`manual_recovery_required` 在已覆盖 safe failure
-中保留旧 binding + exact journal；`cleanup_required` 在 normal-start `CommitBinding` 可伴随已提交
-binding，在 history-attention `ClearJournal` 却不提交 binding。manual UI 对这些 DTO 都落入 success
-branch、强制发布 `selection_pending=false` / `applied_profile_id=active_id`；auto-boot 也会标成
-`BootState::Ready`。这是 product-reachable 的跨层 read-model 错误，不是 H3 logical CAS 回归。
+H4 已在 source-test 层关闭 H3 degraded consumer HIGH：本地 `next` 的实现 commit
+`84c1c6696103f6d57a56e950d2dbb5ef7fbc2de1` 增加真正不写也不 chmod 的 canonical-v4
+finalize projection，按 typed outcome 与 journal/binding readback 分类。manual UI 和 auto-boot
+的 attention/manual/readback-failed 路径统一发布 unknown，不再从 active selection 或旧 binding
+显示 applied/Ready；normal cleanup 只有 exact ready readback 才可发布 applied。clean-context
+completion review 为零 BLOCK/HIGH/MEDIUM/LOW；exact-SHA 15-suite source run
+`045cb36c38bd926f563a43c2c25843bd` 为 PASS。该结论不外推到 artifact、installed、live、signing
+或 release。
 
-当前另有五个 MEDIUM：healthy/cold branch decision 仍晚于部分 cold/recovery preparation；frontend
-在 history restore 成功后仍自动串联 one-click；explicit history restore 没有 durable
-crash/progress journal；mutation lease 与 config CAS 仍主要是 process-local；final config writer
-没有把 atomic commit sync + rollback 双失败后的 `AtomicRollbackUncertain` 与普通 safe failure
-分开投影，因此不能声称每个 H3 degraded 都必然保留旧 binding/journal。
+post-H4 复核未发现新的 HIGH。当前仍有五个 MEDIUM：healthy/cold branch decision 晚于
+system-SSH/stub capture 与 pending cleanup retry；frontend 在 history restore 成功后自动串联
+one-click；explicit history restore 缺少 durable crash/progress journal；mutation lease 与 config
+CAS 主要是 process-local；final config writer 尚未把 `AtomicRollbackUncertain` 与普通 safe failure
+作 typed 区分。最后一项现在由 H4 readback fail-closed 消费，但底层 writer 合同本身仍未关闭。
 
-当前唯一建议 NEXT 是 `H4 Finalize-degraded consumer contract`：manual UI / auto-boot 必须按
-`status + recovery_status + action + backend readback` 分类，不得猜测 applied binding。
-`manual_recovery_required` 必须先回读 binding/journal：journal 开放才等待下次 replay；
-journal 已清则按 exact binding 与 history action 投影，不得假定仍可 replay。history
-`cleanup_required` 保持 choice/attention + cleanup warning 而不发布 applied/Ready；normal-start
-`cleanup_required` 只有 readback 确认 binding 后才可发布 applied。config readback 失败、
-atomic outcome 不可确认或状态组合不一致时保持 unknown/manual，不能预设旧
-binding/journal。
+当前唯一建议 NEXT 恢复为 `O1-A Typed one-click entry decision`：先建立只读、不可变的 entry
+decision snapshot，在 cold-only system-SSH/stub capture、pending authority cleanup retry 与其他
+branch-specific effect 前决定 healthy reopen / cold-restart / recovery 路由；command 仍只做
+IPC、preflight 与 projection。O1-A 必须保持 H1–H4 handoff/journal/finalize/consumer 合同、一个
+frontend intent 对应一个 backend operation，并用 typed decision 而不是诊断文案控制分支。
 
-H4 只允许 manual/boot DTO classification、真实 read-model refresh、consumer regressions，以及
-一个最小、脱敏、只读的 typed finalize-consumer-state projection；该 projection 只提供
-exact journal disposition / binding relation，不暴露 transaction record、path、credential 或写能力。
-允许对应 ChangeRecord/catalog/inventory/gate 更新。H4 明确排除 H1–H3 one-click outcome
-schema/policy/DTO key 变更、除该最小 read projection 外的 backend surface 扩张、message parsing、
-history 自动串联/持久 journal、O1 branch ownership、cold coordinator
-拆分、durable compensation、跨进程 lock/CAS、剩余锁外等待、Science update provenance 与
-artifact/live/release 层。
-退出必须包含 focused tests、quality/document governance、clean exact-candidate 15-suite
-`GATE-SOURCE`、clean-context independent review 与 attributable clean handoff；完成后再次
-code-grounded rebaseline，并重新判断 `O1-A Typed one-click entry decision`。H4 是有限候选，不是
-本次审计自动授予的实现许可；不能自动执行旧 S7、O1-A 或后续路线，也不能把 H1–H3 source
-closure 写成 release/live fixed。
-
-H4 闭合且重新基线后，后续有限候选才依次是 O1-A、cold affine receipt chain、
-history/frontend boundary，以及剩余锁外等待、durable compensation 与 update provenance；
-它们不是并行实施授权。frontend 目标仍是一个明确 intent 对应一个 backend operation，backend
-目标仍是薄 command + 有限 coordinator + 独立 receipt/transaction，不建立万能事务。
+O1-A 只是一项新的 sole NEXT 选择，不是本任务的实现授权；cold affine receipt chain、history
+frontend boundary、durable compensation、跨进程 lock/CAS、剩余锁外等待、Science update
+provenance 与 artifact/live/release 继续排除。详细证据与进入条件见
+[post-H4 rebaseline](../../docs/audits/2026-08-04-post-h4-production-flow-rebaseline.md)。
 
 Science 更新当前只有受校验的内容寻址 snapshot 身份链，没有通用 predecessor/candidate/adoption
 差异 ledger。CSSwitch source change 继续由 active ChangeRecord 与 exact-SHA evidence 记录；
