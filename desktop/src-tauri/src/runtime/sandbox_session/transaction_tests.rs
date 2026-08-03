@@ -12,7 +12,7 @@ use super::{
     test_arm_authority_snapshot_parent_barrier, test_compensate_one_click_failure,
     validate_system_ssh_wrapper_path, verify_gateway_model_catalog, write_one_click_checkpoint,
     AuthorityCleanupOutcome, AuthorityCleanupPhase, AuthorityCopyBudget, AuthoritySnapshotCategory,
-    AuthoritySnapshotScope, AuthorityTreeSnapshot, OneClickAuthoritySnapshot,
+    AuthoritySnapshotScope, AuthorityTransaction, AuthorityTreeSnapshot, OneClickAuthoritySnapshot,
     OneClickJournalProgress, OneClickTransactionIdentity, PendingCleanupEntry,
     RegisteredAuthorityCleanup, MAX_AUTHORITY_FULL_COPY_FILE_BYTES,
     MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES, MAX_AUTHORITY_SNAPSHOT_ENTRIES,

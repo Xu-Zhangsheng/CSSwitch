@@ -457,10 +457,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             matches!(
                 statement,
                 Stmt::Local(local)
-                    if local_name(local).is_some_and(|name| name == "authority_snapshot")
+                    if local_name(local).is_some_and(|name| name == "authority_transaction")
             )
         })
-        .expect("one-click must capture authority_snapshot before mutation");
+        .expect("one-click must capture AuthorityTransaction before mutation");
     let transaction_index = one_click
         .block
         .stmts
@@ -476,7 +476,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     assert_eq!(
         transaction_index,
         snapshot_index + 4,
-        "authority_snapshot must be followed by the verified ticket, frozen V2 identity, PreJournalAbort progress, and transaction_result"
+        "AuthorityTransaction must be followed by the verified ticket, frozen V2 identity, PreJournalAbort progress, and transaction_result"
     );
     let frozen_identity_locals = one_click.block.stmts[snapshot_index + 1..transaction_index]
         .iter()
@@ -503,7 +503,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             local
         }
         _ => {
-            panic!("authority_snapshot must be followed immediately by let transaction_result")
+            panic!("AuthorityTransaction identity freeze must be followed by transaction_result")
         }
     };
     let mut transaction_locals = TransactionLocalCount::default();
@@ -702,14 +702,14 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
                 && call.args.is_empty()
                 && matches!(
                     peel_expr(&call.receiver),
-                    Expr::Path(path) if path.path.is_ident("authority_snapshot")
+                    Expr::Path(path) if path.path.is_ident("authority_transaction")
                 )
         }
         _ => false,
     };
     assert!(
         direct_commit,
-        "Ok arm must begin with the sole direct authority_snapshot.commit()"
+        "Ok arm must begin with the sole direct authority_transaction.commit()"
     );
     assert!(
         matches!(

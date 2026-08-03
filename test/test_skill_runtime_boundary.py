@@ -327,7 +327,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertEqual(one_click_runtime.count("environment_transaction_id()"), 1)
         self.assertRegex(
             one_click_runtime,
-            r"(?s)let snapshot_ticket = match authority_snapshot\.registered_snapshot_ticket\(\)"
+            r"(?s)let snapshot_ticket = match authority_transaction\.registered_snapshot_ticket\(\)"
             r".*?let transaction_identity = OneClickTransactionIdentity \{"
             r".*?runtime_fingerprint: candidate_fingerprint,"
             r".*?snapshot_ticket: snapshot_ticket\.clone\(\),"
@@ -658,6 +658,88 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "sandbox_url(",
         ):
             self.assertNotIn(bypass, production)
+
+    def test_s5_authority_transaction_owns_capture_restore_cleanup_facade(self):
+        one_click = (
+            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
+        ).read_text()
+        facade = (
+            ROOT
+            / "desktop/src-tauri/src/runtime/sandbox_session/authority_transaction.rs"
+        ).read_text()
+
+        for contract in (
+            "struct AuthorityTransaction",
+            "fn capture(",
+            "fn registered_snapshot_ticket(",
+            "fn preserve_recovery(",
+            "fn recovery_path(",
+            "fn validate_science_restore_root(",
+            "fn science_opaque_bindings_env(",
+            "fn restore<R: Runtime>(",
+            "fn cleanup_when_expendable(",
+            "fn prepare_success(",
+            "fn commit(",
+        ):
+            self.assertIn(contract, facade)
+
+        for delegated_contract in (
+            "OneClickAuthoritySnapshot::capture",
+            "self.snapshot.registered_snapshot_ticket()",
+            "self.snapshot.restore_with_gateway(",
+            "self.snapshot.cleanup_when_expendable()",
+            "self.snapshot.prepare_success(value)",
+            "self.snapshot.commit()",
+        ):
+            self.assertIn(delegated_contract, facade)
+
+        self.assertNotIn("OneClickAuthoritySnapshot", one_click)
+        self.assertNotIn("restore_with_gateway(", one_click)
+        self.assertIn("AuthorityTransaction::capture", one_click)
+        self.assertIn("authority_transaction.restore(", one_click)
+        self.assertIn("authority_transaction.cleanup_when_expendable()", one_click)
+        self.assertRegex(one_click, r"authority_transaction\s*\.prepare_success")
+        self.assertIn("authority_transaction.commit()", one_click)
+
+        coordinator = one_click.split("fn one_click_login_with_options", 1)[1]
+        prior_stop_start = coordinator.index(
+            "if let Some(prior) = prior_science.as_ref()"
+        )
+        prior_stop_end = coordinator.index(
+            "let prior_science_for_compensation", prior_stop_start
+        )
+        prior_stop = coordinator[prior_stop_start:prior_stop_end]
+        self.assertEqual(prior_stop.count("ScienceHostAdapter::stop("), 1)
+        stop_offset = coordinator.index("ScienceHostAdapter::stop(", prior_stop_start)
+        capture_offset = coordinator.index(
+            "capture_authority_after_science_quiesce(", prior_stop_end
+        )
+        ticket_offset = coordinator.index(
+            "authority_transaction.registered_snapshot_ticket()", capture_offset
+        )
+        checkpoint_offset = coordinator.index("write_one_click_checkpoint(", ticket_offset)
+        commit_offset = coordinator.rindex("authority_transaction.commit()")
+        compensation_offset = coordinator.rindex("compensate_one_click_failure(")
+        self.assertLess(stop_offset, capture_offset)
+        self.assertLess(capture_offset, ticket_offset)
+        self.assertLess(ticket_offset, checkpoint_offset)
+        self.assertLess(checkpoint_offset, commit_offset)
+        self.assertLess(checkpoint_offset, compensation_offset)
+
+        self.assertIn("struct CompensationOutcome", one_click)
+        self.assertNotIn("CompensationOutcome", facade)
+        self.assertIn("write_one_click_checkpoint(", one_click)
+        self.assertIn("commit_runtime_binding(", one_click)
+        for forbidden in (
+            "PriorStopIntent",
+            "PriorStopOutcome",
+            "GatewayController",
+            "recovery_status",
+            "environment_status",
+            "write_one_click_checkpoint",
+            "commit_runtime_binding",
+        ):
+            self.assertNotIn(forbidden, facade)
 
     def test_s3_runtime_mutation_domains_and_local_skill_host_receipt_are_typed(self):
         lifecycle = (ROOT / "desktop/src-tauri/src/lifecycle.rs").read_text()

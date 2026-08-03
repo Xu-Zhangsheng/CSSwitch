@@ -32,6 +32,7 @@
 | 一键启动、history recovery 与 UI failure 投影 | `commands/runtime/one_click.rs` |
 | protected projection、journal recovery、route reconcile、SSH preflight 与一键事务 | `runtime/sandbox_session/` |
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
+| one-click authority capture、verified ticket、restore 与 cleanup 接口 | `runtime/sandbox_session/authority_transaction.rs` |
 | healthy daemon reopen 的独立补偿分支 | `runtime/sandbox_session/one_click/healthy_reopen.rs` |
 | Gateway recovery/reuse/spawn/stop | `runtime/proxy_lifecycle.rs` façade及其 `proxy_lifecycle/` 片段 |
 | Science executable、runtime identity、launch/health、managed receipt 与 stop | `runtime/science.rs` façade及其 `science/host_adapter.rs`、其他 `science/` 片段 |
@@ -75,6 +76,15 @@ managed receipt。one-click/coordinator 继续拥有 authority revalidation、SS
 `AppState` publication、DB reverify 与补偿顺序，但不解释 shell exit code 或自行重建 host
 identity。stop 继续返回既有 `ScienceStopOutcome`，Rust proof 与 shell fail-closed 防线均保留。
 
+`AuthorityTransaction` 是 one-click coordinator 使用的 behavior-preserving authority façade。
+它把既有 protected snapshot capture、已登记 `RuntimeSnapshotTicket` 复核、restore 与 typed
+pending-cleanup/commit 接口收拢到同一表面；底层 `OneClickAuthoritySnapshot`、
+`AuthorityTreeSnapshot`、manifest/CAS、owner/mode/device/inode/tombstone 与 bounded remove
+合同不变。coordinator 继续决定 prior Science stop、operation trace、V2 checkpoint、Gateway/
+SSH 顺序、`CompensationOutcome` 聚合、binding commit 与 frontend DTO/text/recovery projection。
+本 façade 不增加 `PriorStopIntent/Outcome`，也不改变 F5 pre-stop durable-intent gap、crash
+recovery 或 host/Gateway/Skill 范围。
+
 ## 三个阶段域
 
 | 阶段域 | 形态 | 用途 |
@@ -93,7 +103,8 @@ identity。stop 继续返回既有 `ScienceStopOutcome`，Rust proof 与 shell f
 2. 进入 Lifecycle 串行区，恢复中断 journal/cleanup；
 3. 若启用 SSH，完成真实 config、alias、wrapper、sidecar/stub 预检；
 4. 确认或精确停止 prior Science；
-5. 固定 opaque roots，捕获 protected projection，并持久登记 recovery disposition；
+5. 通过 `AuthorityTransaction` 固定 opaque roots、捕获 protected projection，并持久登记
+   recovery disposition；
 6. 从同一 candidate Science identity 计算一次 64-hex fingerprint，并从已登记 authority snapshot 取得一次经验证的 `managed_id` ticket；首个 V2 checkpoint 同时携带两者；
 7. 准备 virtual login 与 SSH bridge；
 8. 启动/复用 Gateway，校验 model catalog；

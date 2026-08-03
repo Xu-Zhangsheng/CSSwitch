@@ -32,14 +32,13 @@ use crate::{
 // Sibling modules are owned by the sandbox_session facade.
 #[cfg(test)]
 use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
+use super::authority_transaction::AuthorityTransaction;
 use super::catalog_verify::*;
 use super::pending_cleanup::{
     cleanup_required_error, retry_pending_authority_cleanup, AuthorityCleanupFailure,
     AuthorityCleanupPhase,
 };
-use super::recovery::{
-    AppAuthoritySnapshot, OneClickAuthoritySnapshot, RuntimeTransactionRestoreExpectation,
-};
+use super::recovery::{AppAuthoritySnapshot, RuntimeTransactionRestoreExpectation};
 use super::route_reconcile::configure_third_party_best_effort;
 use super::ssh_preflight::*;
 
@@ -1193,8 +1192,8 @@ fn capture_authority_after_science_quiesce<R: Runtime>(
     auth_dir: &Path,
     config: &config::Config,
     prior_science: Option<&PriorScienceContext>,
-) -> Result<OneClickAuthoritySnapshot, AuthorityCaptureAfterQuiesceError> {
-    match OneClickAuthoritySnapshot::capture(config_dir, sandbox_home, auth_dir, config, state) {
+) -> Result<AuthorityTransaction, AuthorityCaptureAfterQuiesceError> {
+    match AuthorityTransaction::capture(config_dir, sandbox_home, auth_dir, config, state) {
         Ok(snapshot) => Ok(snapshot),
         Err(capture_error) => {
             if let Some(prior) = prior_science {
@@ -1532,7 +1531,7 @@ fn compensate_one_click_failure<R: Runtime>(
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     dir: &Path,
     trace: &OperationTrace,
-    authority_snapshot: &mut OneClickAuthoritySnapshot,
+    authority_transaction: &mut AuthorityTransaction,
     journal_progress: &OneClickJournalProgress,
     prior_science: Option<&PriorScienceContext>,
     failure: OneClickFailure,
@@ -1540,9 +1539,9 @@ fn compensate_one_click_failure<R: Runtime>(
 ) -> Result<Value, TypedOneClickFailure> {
     let original_kind = failure.typed.kind();
     if let OneClickJournalProgress::PreJournalAbort { registered_ticket } = journal_progress {
-        let in_memory_ticket = authority_snapshot.registered_snapshot_ticket();
+        let in_memory_ticket = authority_transaction.registered_snapshot_ticket();
         if in_memory_ticket.as_ref() != Ok(registered_ticket) {
-            authority_snapshot.preserve_recovery = true;
+            authority_transaction.preserve_recovery();
             trace.finish("error=pre_journal_abort_ticket_unverified");
             return Err(TypedOneClickFailure::new(
                 original_kind,
@@ -1624,12 +1623,12 @@ fn compensate_one_click_failure<R: Runtime>(
                 *disposition = PriorScienceDisposition::EnvironmentUncertain;
             }
         }
-        authority_snapshot.preserve_recovery = true;
+        authority_transaction.preserve_recovery();
         trace.finish("error=compensation_restore_blocked_science_cleanup_unproven");
         let cleanup_failure = cleanup_required_error(
             AuthorityCleanupPhase::Cleanup,
             &outcome.render_failure_message(failure.message()),
-            &authority_snapshot.backup_root,
+            authority_transaction.recovery_path(),
             "science_candidate_stop_unproven",
         );
         let phase = cleanup_failure.phase();
@@ -1644,7 +1643,7 @@ fn compensate_one_click_failure<R: Runtime>(
         None => crate::runtime::settings::remove_managed_sandbox_ssh_stub(&sandbox_home()),
     };
     let runtime_transaction_restore = journal_progress.restore_expectation();
-    let rollback = authority_snapshot.restore_with_gateway(
+    let rollback = authority_transaction.restore(
         app,
         dir,
         state,
@@ -1698,14 +1697,14 @@ fn compensate_one_click_failure<R: Runtime>(
         }
     }
     outcome.snapshot_cleanup = if authorities_restored {
-        match authority_snapshot.cleanup_when_expendable() {
+        match authority_transaction.cleanup_when_expendable() {
             Ok(_) => CompensationStepOutcome::Succeeded,
             Err(error) => {
                 CompensationStepOutcome::Failed(CompensationCause::SnapshotCleanup(error))
             }
         }
     } else {
-        authority_snapshot.preserve_recovery = true;
+        authority_transaction.preserve_recovery();
         CompensationStepOutcome::Skipped(CompensationSkipCause::SnapshotPreserved)
     };
     trace.finish(
@@ -1729,7 +1728,7 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
     state: &SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
     dir: &Path,
-    authority_snapshot: &mut OneClickAuthoritySnapshot,
+    authority_transaction: &mut AuthorityTransaction,
     journal_progress: &OneClickJournalProgress,
     launch_runtime: ScienceRuntimeIdentity,
 ) -> Result<Value, TypedOneClickFailure> {
@@ -1756,7 +1755,7 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
         None,
         dir,
         &trace,
-        authority_snapshot,
+        authority_transaction,
         journal_progress,
         None,
         failure,
@@ -2034,7 +2033,7 @@ fn one_click_login_with_options<R: Runtime>(
         OperationStage::AuthoritySnapshot,
         "phase=capture_begin scope=protected_state",
     );
-    let mut authority_snapshot = match capture_authority_after_science_quiesce(
+    let mut authority_transaction = match capture_authority_after_science_quiesce(
         &app,
         &state,
         lifecycle,
@@ -2076,10 +2075,10 @@ fn one_click_login_with_options<R: Runtime>(
             ));
         }
     };
-    let snapshot_ticket = match authority_snapshot.registered_snapshot_ticket() {
+    let snapshot_ticket = match authority_transaction.registered_snapshot_ticket() {
         Ok(ticket) => ticket,
         Err(cause) => {
-            authority_snapshot.preserve_recovery = true;
+            authority_transaction.preserve_recovery();
             return Err(TypedOneClickFailure::new(
                 OneClickFailureKind::AuthoritySnapshot,
                 format!(
@@ -2157,7 +2156,7 @@ fn one_click_login_with_options<R: Runtime>(
         };
         rollback_context.set_kind(OneClickFailureKind::AuthoritySnapshot);
         one_click_step(
-            authority_snapshot.validate_science_restore_root(),
+            authority_transaction.validate_science_restore_root(),
             &rollback_context,
         )?;
         one_click_step(
@@ -2208,7 +2207,7 @@ fn one_click_login_with_options<R: Runtime>(
                     "fallback_url": null
                 });
                 one_click_step(
-                    authority_snapshot
+                    authority_transaction
                         .prepare_success(&mut value)
                         .map_err(String::from),
                     &rollback_context,
@@ -2333,7 +2332,7 @@ fn one_click_login_with_options<R: Runtime>(
             );
         }
         one_click_step(
-            authority_snapshot.validate_science_restore_root(),
+            authority_transaction.validate_science_restore_root(),
             &rollback_context,
         )?;
         #[cfg(test)]
@@ -2366,10 +2365,10 @@ fn one_click_login_with_options<R: Runtime>(
             one_click_step(file.sync_all(), &rollback_context)?;
         }
         one_click_step(
-            authority_snapshot.validate_science_restore_root(),
+            authority_transaction.validate_science_restore_root(),
             &rollback_context,
         )?;
-        let opaque_bindings = authority_snapshot.science_opaque_bindings_env();
+        let opaque_bindings = authority_transaction.science_opaque_bindings_env();
         let ssh_hosts = ssh_hosts.join(" ");
         let attempt = match ScienceHostAdapter::spawn_launch(
             ScienceLaunchSpec::one_click(
@@ -2650,7 +2649,7 @@ fn one_click_login_with_options<R: Runtime>(
         }
         rollback_context.set_kind(OneClickFailureKind::AuthoritySnapshot);
         one_click_step(
-            authority_snapshot
+            authority_transaction
                 .prepare_success(&mut value)
                 .map_err(String::from),
             &rollback_context,
@@ -2659,7 +2658,7 @@ fn one_click_login_with_options<R: Runtime>(
     })();
     match transaction_result {
         Ok(value) => {
-            authority_snapshot.commit();
+            authority_transaction.commit();
             Ok(value)
         }
         Err(failure) => compensate_one_click_failure(
@@ -2669,7 +2668,7 @@ fn one_click_login_with_options<R: Runtime>(
             auth_proof,
             &dir,
             &trace,
-            &mut authority_snapshot,
+            &mut authority_transaction,
             &journal_progress,
             prior_science_for_compensation,
             failure,

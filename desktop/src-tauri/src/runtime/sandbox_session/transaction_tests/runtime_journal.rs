@@ -552,7 +552,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     let compensation_config = Config::default();
     config::save_to(&compensation_dir, &compensation_config).unwrap();
     let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
-    let mut authority_snapshot = OneClickAuthoritySnapshot::capture(
+    let mut authority_transaction = AuthorityTransaction::capture(
         &compensation_dir,
         &sandbox_home,
         &auth_dir,
@@ -560,7 +560,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         &state,
     )
     .unwrap();
-    let compensation_ticket = authority_snapshot.registered_snapshot_ticket().unwrap();
+    let compensation_ticket = authority_transaction.registered_snapshot_ticket().unwrap();
     let compensation_identity = OneClickTransactionIdentity {
         target_profile_id: "compensation-target".into(),
         runtime_fingerprint: "c".repeat(64),
@@ -606,7 +606,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         let mut current = crate::lock(&state);
         current.proxy_port = 4242;
     }
-    let backup_root = authority_snapshot.backup_root.clone();
+    let backup_root = authority_transaction.recovery_path().to_path_buf();
     let science_bin = compensation_tmp.join("fake-science");
     std::fs::write(&science_bin, b"#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&science_bin, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -619,7 +619,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         &state,
         &crate::lifecycle::Lifecycle::default(),
         &compensation_dir,
-        &mut authority_snapshot,
+        &mut authority_transaction,
         &compensation_progress,
         launch_runtime,
     )
@@ -641,6 +641,6 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         "journal mismatch must reject compensation before restoring captured AppState"
     );
     assert!(backup_root.is_dir());
-    drop(authority_snapshot);
+    drop(authority_transaction);
     let _ = std::fs::remove_dir_all(compensation_tmp);
 }

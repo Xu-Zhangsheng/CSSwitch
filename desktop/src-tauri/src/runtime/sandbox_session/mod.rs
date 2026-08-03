@@ -1,4 +1,5 @@
 mod authority_snapshot;
+mod authority_transaction;
 mod catalog_verify;
 mod one_click;
 mod pending_cleanup;
@@ -18,6 +19,8 @@ use authority_snapshot::{
     MAX_AUTHORITY_SNAPSHOT_FILE_BYTES, MAX_AUTHORITY_SNAPSHOT_TOTAL_BYTES,
     SCIENCE_OWNED_OPAQUE_ROOTS,
 };
+#[cfg(test)]
+use authority_transaction::AuthorityTransaction;
 #[cfg(test)]
 use catalog_verify::*;
 #[cfg(test)]

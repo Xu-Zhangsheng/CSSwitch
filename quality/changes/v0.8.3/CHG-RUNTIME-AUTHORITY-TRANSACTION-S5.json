@@ -1,0 +1,76 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-AUTHORITY-TRANSACTION-S5",
+    "version": "v0.8.3",
+    "title": "Extract the behavior-preserving AuthorityTransaction facade",
+    "summary": "Adds the bounded S5 AuthorityTransaction facade over the existing one-click authority capture, verified snapshot ticket, restore, and typed cleanup interfaces. The coordinator retains prior Science handling, operation ordering, V2 checkpoints, Gateway and SSH sequencing, CompensationOutcome aggregation, binding commit, visible DTO and text, and recovery projection.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/runtime/sandbox_session/authority_transaction.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/v0.8.3/CHG-RUNTIME-AUTHORITY-TRANSACTION-S5.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-ORPHAN-SKILL-BOUNDARY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "unknown",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "the candidate source boundary delegates one-click authority capture, verified snapshot-ticket access, restore, cleanup, prepare-success, and commit through AuthorityTransaction",
+        "the existing snapshot filesystem, pending-cleanup manifest and CAS, typed AuthorityCleanupOutcome, and CompensationOutcome contracts are reused without product or crash-recovery changes",
+        "the coordinator retains prior Science stop, operation ordering, checkpoints, Gateway and SSH sequencing, binding commit, compensation funnel, visible DTO and text, and recovery projection",
+        "the exact candidate 15-suite source gate and clean-context completion review remain pending, so this record does not yet claim S5 DONE",
+        "PriorStopIntent or Outcome, S6 GatewayController, Gateway or Skill behavior changes, host-neutral extension, artifact, installed, live, signing, and release validation are excluded"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}
