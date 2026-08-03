@@ -31,6 +31,7 @@
       "quality/changes/v0.8.3/CHG-RUNTIME-SCIENCE-HOST-ADAPTER-S4.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/test_external_skill_install_bridge.py",
       "test/test_skill_runtime_boundary.py"
     ],
     "requirement_ids": [

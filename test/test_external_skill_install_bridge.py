@@ -334,9 +334,9 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             "fn one_click_login_with_options", 1
         )[1]
         registration = one_click.index("register_before_science_start(")
-        launch = one_click.index('let mut launch_cmd = Command::new("zsh")')
+        launch = one_click.index("ScienceHostAdapter::spawn_launch(")
         self.assertLess(registration, launch)
-        self.assertIn(".spawn();", one_click[launch:])
+        self.assertNotIn('Command::new("zsh")', one_click)
         self.assertIn("RegistrationStatus::Warning(error)", one_click)
         self.assertNotIn("register_before_science_start(&app, &auth_dir)?", one_click)
 
@@ -393,11 +393,16 @@ class ExternalSkillInstallBridge(unittest.TestCase):
         self.assertIn('x-operon-csrf', gateway)
         self.assertIn('CSSWITCH_SCIENCE_CONTROL_URL', bridge)
         self.assertNotIn('.arg(control_url)', bridge)
-        self.assertIn("let control_url = sandbox_url(port, runtime);", session)
+        self.assertIn(
+            "let control_url = ScienceHostAdapter::url(port, runtime);", session
+        )
         self.assertIn(
             "configure_third_party_after_science_start(app, &control_url)", session
         )
-        self.assertIn("let url = sandbox_url(sport, &launch_runtime);", one_click)
+        self.assertIn(
+            "let url = ScienceHostAdapter::url(sport, &launch_runtime);",
+            one_click,
+        )
         self.assertIn("let installer = configure_third_party_best_effort(", one_click)
 
     def test_skill_installer_targets_active_org_and_never_version_runtime(self):
