@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-08-01 R0 分片基线整理
+状态：当前；按 v0.8.4 release source 与 2026-08-03 S6 后事务编排再基线整理
 
 最后复核：2026-08-03（Asia/Taipei）
 
@@ -8,7 +8,41 @@
 
 已解决历史放入 CHANGELOG 或 dated evidence，不在这里重复。
 
-## Runtime 架构分片进度
+## 当前 Runtime 决策门
+
+最新只读审计见
+[2026-08-03 Runtime 事务编排再基线](../../docs/audits/2026-08-03-runtime-transaction-orchestration-rebaseline.md)。
+现场基线为 clean `next@9a2d65ff1b7996b673f6901df97ac899717b8a44`；本轮只做 source/test/docs
+inspection，没有运行 exact-HEAD 15-suite source gate，也没有进入源码实现。
+
+旧 `S7 cold/healthy/history coordinator 分片` 已被本次 code-grounded rebaseline 取代，不能
+直接执行。当前三个开放 HIGH：
+
+1. interrupted-Gateway recovery 成功或遇到 pre-existing terminal record 后保留终态 V2，
+   但同一次 command 进入 ordinary one-click 时没有显式 handoff，随后被“任意 V2 需要人工
+   恢复”规则阻断；
+2. prior Science exact stop 仍早于 durable `PriorStopIntent/Outcome`；
+3. runtime binding + journal clear 早于 authority manifest 转 cleanup-only，二者之间 crash
+   会留下错误的 `ActiveRecovery` 阻断态。
+
+唯一建议 NEXT 是 `O0 Interrupted-Gateway terminal handoff`：只建立 terminal exact-record
+从 recovery 到 normal one-click 的显式、process-local handoff，并以完整记录 CAS 接管为首个
+one-click checkpoint；不得无条件 clear journal，不进入 F5、compensation 或 coordinator 大拆分。
+退出必须包含 production command-chain regression、terminal/later-listener 与 drift 矩阵、active
+ChangeRecord、focused tests、clean exact-candidate 15-suite `GATE-SOURCE` seal、文档治理和
+clean-context independent review。O0 完成后再次 rebaseline，才确定下一唯一 NEXT。
+
+后续有限候选路线依次为：operation entry/branch ownership；durable prior-runtime transition 与
+success finalize protocol；cold affine receipt chain；history/frontend boundary；剩余锁外等待、
+durable compensation 与 update provenance。它们不是并行实施授权。frontend 目标是一个明确
+intent 对应一个 backend operation；history restore 不再自动串联 one-click。backend 目标是
+薄 command + 有限 coordinator + 独立 receipt/transaction，不建立万能事务。
+
+Science 更新当前只有受校验的内容寻址 snapshot 身份链，没有通用 predecessor/candidate/adoption
+差异 ledger。CSSwitch source change 继续由 active ChangeRecord 与 exact-SHA evidence 记录；
+CHANGELOG 只记录真实 release，不能把当前 `next` 的 source changes 写成已发布更新。
+
+## 已完成 Runtime 架构分片背景
 
 `R0-0` 已收口：恢复仓库安全边界，并把 runtime mutation inventory
 的完成条件收紧为“每个 characterization 都是 source gate 发现且实际
@@ -602,7 +636,10 @@ installed/runtime、live provider/Science/SSH、签名、公证、Gatekeeper 与
 | `S5 AuthorityTransaction` | DONE | authority capture、verified ticket、restore、typed cleanup/commit façade；exact-SHA gate 与最终独立审查 PASS，coordinator ordering/checkpoint/compensation/DTO/recovery ownership 不变，不进入 PriorStopIntent/Outcome 或 S6 |
 | `S6 GatewayController` | DONE | 移除 registered `start_proxy`，保留私有 formal start/reuse core 与同一 accepted health response 派生的 typed receipt/完整 recipe；exact-SHA gate 与独立审查 PASS，不进入 S7 |
 
-### Post-R2 Rebaseline 结论与后续门
+### Post-R2 Rebaseline 结论与当时后续门（历史）
+
+本节保存 2026-08-02 到 S6 的 evidence lineage；其中 `S1-S7` 顺序已被本文顶部
+2026-08-03 决策门取代，不再是当前实施路线。
 
 本次只读审计见
 [2026-08-02 Post-R2 运行架构再基线](../../docs/audits/2026-08-02-post-r2-runtime-rebaseline.md)。

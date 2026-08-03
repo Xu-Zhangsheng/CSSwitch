@@ -57,7 +57,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
   intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
-- `AppState` 只在读写进程内状态时短持有，health probe 刻意在锁外；`stop_all` 也先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果；
+- `stop_all` 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果；这条“锁外等待”结论只覆盖 `stop_all`。cold prior stop、history、DB recovery、compensation、mode/settings/native-exit 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 只覆盖 load-modify-save；
 - config 文件提交使用 pinned/no-follow 边界、临时文件、rename、fsync、提交前复核与回滚，但不是跨进程 advisory lock。
@@ -94,6 +94,19 @@ remembered Science 时，recipe 保存该 effective runtime，而不是只复制
 `start_proxy` 已移除，Gateway 启动只保留在 cold/healthy/profile-switch/recovery 内部路径；S6
 不改变这些 caller 的 lease、checkpoint、补偿、binding/journal commit、DTO 或可见文案。
 
+三类 receipt/authority 不能合并成一个“统一事务”：
+
+| 证明 | 建立的控制权 | 当前 consumer | 明确不拥有 |
+|---|---|---|---|
+| `GatewayReceipt` | process-local start/reuse 的 route、accepted health/catalog 与完整 recipe | cold/healthy/profile-switch/recovery caller | crash journal、rollback、binding commit |
+| Science launch/stop receipt | executable/data-dir/listener/PID/process-start/runtime SHA 与 managed record 的 exact live ownership | prior/history/DB/compensation stop 与 fresh restart | authority tree before-image 或跨进程 lease |
+| `AuthorityTransaction` | protected projection capture、verified ticket、restore、cleanup/commit | one-click coordinator | prior stop、Gateway/SSH、journal、DTO 与全局编排 |
+
+authority snapshot 会捕获 managed receipt 文件的 before-image，但这不把
+`AuthorityTransaction` 变成 Science live stop authority。长期控制权交接应使用小型、affine 的
+process-local handoff；durable journal 只保存 crash recovery 所需的最小 identity/outcome，不能
+把 receipt 全量序列化或让诊断 DTO 参与控制流。
+
 ## 三个阶段域
 
 | 阶段域 | 形态 | 用途 |
@@ -109,7 +122,8 @@ remembered Science 时，recipe 保存该 effective runtime，而不是只复制
 冷启动或重启分支的高层顺序：
 
 1. 读取 active profile 与 provider contract，复核端口和 Codex proof；
-2. 进入 Lifecycle 串行区，恢复中断 journal/cleanup；
+2. 进入 Lifecycle 串行区，恢复中断 journal/cleanup；当前 interrupted-Gateway recovery 的
+   terminal record 没有显式交给后续 normal one-click，是开放的 production handoff 缺口；
 3. 若启用 SSH，完成真实 config、alias、wrapper、sidecar/stub 预检；
 4. 确认或精确停止 prior Science；
 5. 通过 `AuthorityTransaction` 固定 opaque roots、捕获 protected projection，并持久登记
@@ -121,7 +135,9 @@ remembered Science 时，recipe 保存该 effective runtime，而不是只复制
    listener、binary、data-dir 并提交 managed receipt；
 10. 复核 Science DB/catalog；
 11. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
-12. 计算并提交 runtime binding、按同一 transaction identity 清除 journal，随后打开 UI。
+12. 计算并提交 runtime binding、按同一 transaction identity 清除 journal，再把 authority
+    manifest 转为 cleanup-only/清理，随后打开 UI。当前 binding+journal clear 与 authority
+    success conversion 不是一个可重放提交；两者之间 crash 会留下错误的 ActiveRecovery 阻断态。
 
 one-click 的八个 checkpoint 时机均写 V2。进程内 progress 保存上一次实际提交的完整
 V2 record；后续 phase 只在磁盘记录与该完整 record 相等时推进 typed `phase` 及其对应
@@ -187,6 +203,13 @@ operation/phase、exposure、compensation 或 outcome 漂移都保留当前记�
 eligibility 在后续重启仍会拒绝 compensation 已漂移的记录，不会
 回滚 stage、重启 prior Gateway 或改变既有 TERM/wait 策略。
 
+当前 production command 在 recovery 返回成功后立即进入 ordinary one-click，但 ordinary
+one-click 在没有显式 expected handoff 时拒绝任何 V2 record。由于 terminal recovery record
+又必须保留以阻止 later-listener probe/stop，成功 recovery 会在同一次 command 中被后续
+manual-recovery guard 阻断。唯一当前修复候选是把 exact terminal record 作为不可伪造的
+process-local handoff 交给 one-click，并在首个 checkpoint 用 complete-record CAS 接管；不得
+先无条件清 journal。
+
 ## 历史恢复
 
 frontend 只持有一次性 opaque reference。backend 复核 active profile、port、session 后：
@@ -194,9 +217,13 @@ frontend 只持有一次性 opaque reference。backend 复核 active profile、p
 1. 精确停止当前受管 Science；
 2. 恢复用户选择的历史组织；
 3. 清理一次性 reference；
-4. 重新进入一键开始。
+4. 返回本次 restore 的结果；下一次 start 是独立产品动作。
 
 组织 UUID、真实路径与敏感凭证不跨 invoke 边界。
+
+当前 frontend 在 restore 成功后仍自动调用 one-click；这是待修的控制面串联，不是长期事务
+合同。目标是 frontend 一个明确 intent 对应一个 backend operation，并由用户显式发起下一次
+start；不能把 history restore、cold start 和 recovery 合并成更大的万能事务。
 
 ## 停止
 
@@ -226,6 +253,11 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   已由 `OneClickFailureKind` 投影；one-click、compiled test-only profile-switch 与
   interrupted Gateway recovery writer 均写 typed V2，V1 只保留兼容读取与原 wire 序列化；
 - F5：prior Science 的 verified stop 仍可早于 durable intent；
+- interrupted-Gateway recovery 的 terminal exact record 没有交给同 command 的 normal
+  one-click；保留 terminal record 会触发 ordinary V2 manual-recovery guard；
+- runtime binding + journal clear 早于 authority manifest 转 cleanup-only，成功 finalize
+  存在 fresh-boot crash window；
+- V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
 - ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
 - ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与
   `boot_error` 现携带与手动一键同 shape 的 failed DTO；

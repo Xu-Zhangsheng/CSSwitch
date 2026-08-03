@@ -4,7 +4,10 @@
 
 当前已提供 source/unit 级的 metadata、impact-pr 和 impact-release validator、隔离 focused tests，以及分阶段落地的 run-evidence 合同和存储原语。`source-test` / `source-green` 只表示当前源码和机器元数据验证，不表示 artifact、installed、live provider/Science、signing/notarization 或 public release。
 
-旧 `test/run_all.sh` / S0 门仍登记为 `legacy-known-unreliable`，在后续节点切换前不能被本页或 quality kernel 重新命名为 release-ready。产品问题与质量体系缺陷分别登记；任何 `open-not-fixed` 记录都不能写成 fixed。
+`GATE-S0-LEGACY` 已在机器事实中 retired；当前完整 source policy 由 active
+`GATE-SOURCE` 承担，`test/run_all.sh` 是其固定 CLI wrapper。source gate 无论是否 PASS 都不能
+重新命名为 release-ready，也不能外推 artifact、installed/live、签名、公证或公开 release。
+产品问题与质量体系缺陷分别登记；任何 `open-not-fixed` 记录都不能写成 fixed。
 
 `impact-pr` 必须显式给出 target ref，并以 Git merge-base 计算影响范围；`impact-release` 固定使用 lineage 中 v0.8.2 annotated tag 的 peeled commit，并要求 clean、非 shallow、祖先关系和生产路径闭合。audit baseline 只用于审计参照，不能作为 release impact base。
 

@@ -22,7 +22,7 @@ WebView
   -> Tauri command
   -> command-specific boundary
      -> Lifecycle serializer（runtime/profile/mode/doctor reconcile）
-     -> runtime-context recheck + Skill package transaction（本地 Skill 安装）
+     -> picker 后短 HostBridge lease + typed host receipt + Skill package transaction（本地 Skill 安装）
   -> Config / AppState / package-private state / Gateway / Science
 
 Tauri backend
@@ -66,11 +66,11 @@ Tauri backend
 | diagnostics | doctor（含第三方 Skill 路由 reconcile）、版本、release/issue/log 入口 |
 
 大多数 runtime/profile/mode 复合 mutation 进入 `Lifecycle`，但这不是所有 Desktop
-写操作的统一锁。生产 `install_local_skill_package` 不接收 `SharedLifecycle`；
-它在文件 picker 前后两次复核 `ScienceHostContext`，随后依赖 Skill package
-commit 与 Science attach/readback 的局部边界。第二次复核不是互斥锁；其后仍可能
-与 stop/switch 等 runtime mutation 交错，这是当前并发缺口，不能把“双重复核”
-写成全操作串行化。
+写操作的统一锁。生产 `install_local_skill_package` 让文件 picker 保持在 lease 外；
+选择完成后取得短 `HostBridge` mutation lease，重新探测 matching
+`ScienceHostContext` 并构造 lease-bound `LocalSkillHostReceipt`，再用同一 receipt
+完成 package commit 与 Science attach/readback。该合同闭合的是本地 Skill 的
+最终 runtime-context race，不把 picker/download 放进锁，也不建立跨进程或全局 durable journal。
 
 以下 command 已注册但没有当前生产 frontend caller：
 
@@ -111,16 +111,16 @@ frontend 启动时同时读取 `boot_error` / `boot_attention` command，并监�
 4. Codex typed auth 等 command error：invoke rejection，由 frontend `catch` 处理。
 
 内部 operation trace、持久 journal 与 frontend stage 不是同一枚举。frontend
-coarse stage 由 `OneClickFailureKind` 在产生点投影，不扫描 message 文案；journal
-checkpoint 仍是 recovery 用的自由字符串，不能与 UI stage 无损互映。auto-boot 的
-`boot://failed` / `boot_error` 与手动一键共享 failed DTO shape。
-`recovery_status` 仍可能消费 message 内的诊断码（`recovery_status=…` /
-`environment_uncertain`）作为过渡；后续应在补偿点直接写入
-`ProjectedRecovery`。
+coarse stage 由 `OneClickFailureKind` 在产生点投影，不扫描 message 文案；当前 runtime
+journal writer 使用 typed V2 operation/phase/outcome，V1 只保留 fail-closed 兼容读取与原
+wire round-trip。typed journal phase 也不能与 UI coarse stage 无损互映。auto-boot 的
+`boot://failed` / `boot_error` 与手动一键共享 failed DTO shape；recovery/environment
+status 从 typed failure/compensation projection 产生，message 只用于展示。
 
 ## 选择、应用与诊断语义
 
 - `set_active_profile` 只提交“当前选择”；运行中的 Gateway/Science 不立即切换。下一次一键开始才应用并写 runtime binding。
+- history attention、`restore_history_choice` 与下一次 start 是三个独立产品动作；当前 frontend 在 restore 成功后自动调用 one-click，这是待修的控制面串联，不是长期合同。目标是 frontend 只提交一个明确 intent 并渲染 typed result，由用户显式发起下一次 start。
 - `status` 是轻量状态投影；Science 灯的 HTTP health 不证明 listener/runtime 强身份。
 - `run_doctor` 先执行诊断脚本，再在 Lifecycle 边界强制 reconcile 第三方 Skill
   route；它不是纯只读诊断。Science 健康运行时，该路径可绑定 route Skill 与
@@ -145,4 +145,4 @@ checkpoint 仍是 recovery 用的自由字符串，不能与 UI stage 无损互�
 - 新增/删除 command 时，同时检查 `lib.rs::run` 注册、`main.js` 及其生产动态导入模块中的 caller、preview mock 和 DTO。
 - 新增 event 时，明确 payload schema、冷启动丢事件的补读策略和敏感字段。
 - “有 command”“有 mock”“有测试”不得写成“UI 可达”。
-- 公共错误阶段应来自结构化源字段；在产品修复前，文档必须保留字符串推断缺口。
+- 公共错误阶段与 recovery/environment 状态必须来自结构化源字段；message 只用于展示，不能参与控制流。

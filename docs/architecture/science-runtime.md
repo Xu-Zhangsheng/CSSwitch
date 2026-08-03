@@ -96,6 +96,13 @@ starter Conda Python/R 环境、跨项目复用的 named task environment、sess
 
 `official_updated` 只读取并快照 updater 固定路径中的单个 executable；该路径已观察到 standalone updater 与 App-seeded 两种精确 identity，当前源码只接受枚举的 exact identifier + Team ID 组合。具体字符串、hash、版本与 `source-fixed-product-pending` 结论留在日期化 audit；它们不能写成 final artifact、installed/live 或公开 release 已证明。
 
+内容寻址 snapshot 只证明被采用 executable 的稳定字节身份，不等于一份可比较的 Science
+更新 provenance ledger。当前源码没有通用的 predecessor/candidate manifest、normalized
+CLI/route/capability diff 或 adoption decision record；历史版本的日期化兼容性调查不能替代该
+机制。未来差异记录只能读取受校验 executable 的版本、SHA-256、embedded identity、来源与
+所选 snapshot 等元数据，不能读取或 diff Science 用户账号、组织、对话、project 或其他
+opaque data。
+
 snapshot 位于 `<CSSwitch data root>/runtime-snapshots/science/`，不在 Science data-dir 内。CSSwitch 不扫描、复制或读取真实 Science 账号、组织、配置、`conda`、`runtime` 或 `seed-assets`，不下载 Science、不调用 updater，也不覆盖 Science cache。检测到候选但本地校验失败时会显式报错，不静默回退旧 App。
 
 embedded identifier / Team ID 只作为格式与误选防护，不声称密码学证明文件来自 Anthropic。该路径沿用 CSSwitch 已有的“信任当前用户安装的本地 Science”边界；复制前后复核同一 source inode/metadata，snapshot 以完整 SHA-256 命名并进入 host-context fingerprint。启动、恢复和停止等强控制路径会重新验证 snapshot，内容变化时 fail closed；高频 UI `status` 是下文明确的轻量例外，只投影 HTTP health 与已有 metadata。`sandbox_url()` 也不是独立的强身份边界：runtime 不再 current 或 CLI URL 获取失败时，它会回退到裸 `http://127.0.0.1:<port>`；手动打开入口会先验证 listener/runtime，但冷启动与 reuse 路径依赖调用它之前已经完成的身份检查。updater 随后替换 source 不会改变已运行 daemon 的 executable 身份。为支持 CSSwitch 自身重启后的接管，恢复探测会在私有 snapshot 目录中重新验证已有的内容寻址 executable；历史 snapshot 只参与现有 daemon 的身份恢复，不改变 stopped-to-started 的新启动选择顺序。

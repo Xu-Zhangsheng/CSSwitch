@@ -25,7 +25,7 @@ Desktop WebView
   -> Tauri command / event
      -> command-specific mutation boundary
         -> Lifecycle serializer（runtime/profile/mode/doctor reconcile）
-        -> picker 前后 runtime-context recheck + Skill package transaction（本地 Skill 安装）
+        -> picker 后短 HostBridge lease + typed host receipt + Skill package transaction（本地 Skill 安装）
         -> Config + AppState / package-private state
         -> Rust Gateway
            -> provider / Codex upstream
@@ -51,7 +51,7 @@ Science remote compute
 
 ### 状态与事务
 
-`AppState` 拥有进程内 Gateway child、Gateway/Science identity、boot refs、Science version observation cache 和 pending authority cleanup 的重试镜像；持久 cleanup manifest 才是跨重启权威。当前产品启动脚本退出后不在 `AppState.sandbox` 保存 Science daemon child，daemon ownership 依赖 runtime identity、managed receipt 与 live listener。`Config` 持久化 profile、端口、mode、binding 与 journal。`Lifecycle` 串行化 runtime/profile/mode 等复合变更和 doctor route reconcile，但生产的本地 Skill 安装不取得该锁，而是依靠文件 picker 前后两次 runtime-context 复核、Skill package commit 以及 Science attach/readback 的局部边界；安装/attach 完成后没有第三次 context 复核。authority snapshot、managed receipt、Skill/SSH/Codex 各有局部状态。锁序、启动/切换/恢复/停止和补偿见[运行时状态与事务](runtime-state-transactions.md)。
+`AppState` 拥有进程内 Gateway child、Gateway/Science identity、boot refs、Science version observation cache 和 pending authority cleanup 的重试镜像；持久 cleanup manifest 才是跨重启权威。当前产品启动脚本退出后不在 `AppState.sandbox` 保存 Science daemon child，daemon ownership 依赖 runtime identity、managed receipt 与 live listener。`Config` 持久化 profile、端口、mode、binding 与 journal。`Lifecycle` 串行化 runtime/profile/mode 等复合变更和 doctor route reconcile；本地 Skill picker 保持在 lease 外，选择完成后取得短 `HostBridge` lease，在同一 lease-bound typed host receipt 下完成最终 context 复核、package commit 与 Science attach/readback。authority snapshot、managed receipt、Skill/SSH/Codex 各有局部状态。锁序、启动/切换/恢复/停止和补偿见[运行时状态与事务](runtime-state-transactions.md)。
 
 ### Rust Gateway
 
