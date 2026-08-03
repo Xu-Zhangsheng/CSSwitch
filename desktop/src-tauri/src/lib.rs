@@ -104,7 +104,7 @@ pub(crate) struct AppState {
     pub(crate) key_fp: u64,
     /// The exact in-memory launch recipe for the currently tracked Gateway.
     /// It may contain profile credentials, so it is never serialized or logged.
-    pub(crate) gateway_launch_context: Option<GatewayLaunchContext>,
+    pub(crate) gateway_launch_context: Option<runtime::proxy_lifecycle::GatewayLaunchRecipe>,
     pub(crate) sandbox: Option<Child>,
     pub(crate) sandbox_port: u16,
     pub(crate) sandbox_url: Option<String>,
@@ -125,12 +125,6 @@ pub(crate) struct AppState {
     /// legacy plain-message object; never used for stage inference from text.
     pub(crate) boot_error: Option<serde_json::Value>,
     pub(crate) boot_attention: Option<serde_json::Value>,
-}
-
-#[derive(Clone, PartialEq)]
-pub(crate) struct GatewayLaunchContext {
-    pub(crate) profile: config::Profile,
-    pub(crate) science_runtime: Option<runtime::science::ScienceRuntimeIdentity>,
 }
 
 #[derive(Clone)]
@@ -611,7 +605,6 @@ pub fn run() {
             commands::profiles::clear_profile_key,
             commands::profiles::delete_profile,
             commands::profiles::set_active_profile,
-            commands::runtime::start_proxy,
             commands::runtime::fetch_models,
             commands::runtime::stop_all,
             commands::runtime::one_click_login,

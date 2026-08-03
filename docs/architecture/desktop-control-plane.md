@@ -78,9 +78,12 @@ commit 与 Science attach/readback 的局部边界。第二次复核不是互斥
 - `validate_profile_catalog_model`
 - `preview_profile_preset_sync`
 - `apply_profile_preset_sync`
-- `start_proxy`
 
 它们可能是预留面或遗留面，当前统一标为 `dormant registered / UNKNOWN`。注册本身不构成产品能力。
+
+S6 已移除无 bundled caller 的 `start_proxy` Tauri command；formal Gateway 只能由现有
+cold/healthy/profile-switch/recovery 内部流程经 `GatewayController` 启动或复用，不再暴露
+独立的 Gateway-only invoke mutation。
 
 生产 frontend 没有发现 literal command 调用未在 Tauri 注册的反向缺口。
 

@@ -23,7 +23,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
     let app_snapshot = AppAuthoritySnapshot::capture(state);
     let prior_config = cfg.clone();
     let attempt = (|| -> Result<Value, TypedOneClickFailure> {
-        let (_pport, secret, proxy_action) = ensure_proxy(
+        let gateway = GatewayController::ensure_active(
             app,
             state,
             lifecycle,
@@ -32,6 +32,8 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             auth_proof,
         )
         .map_err(|message| typed_one_click_err(OneClickFailureKind::GatewayStart, message))?;
+        let secret = gateway.route_secret;
+        let proxy_action = gateway.action;
         verify_gateway_model_catalog_traced(trace, cfg.proxy_port, &secret, active_profile)
             .map_err(|message| typed_one_click_err(OneClickFailureKind::CatalogVerify, message))?;
         let installer_bridge = skill_install_bridge_dir(&secret)

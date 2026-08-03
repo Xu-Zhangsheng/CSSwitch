@@ -1,32 +1,4 @@
-/// Ensure the active profile's proxy is running and healthy.
-pub(crate) fn ensure_proxy<R: Runtime>(
-    app: &tauri::AppHandle<R>,
-    state: &SharedAppState,
-    lifecycle: &lifecycle::Lifecycle,
-    science_runtime: Option<&crate::runtime::science::ScienceRuntimeIdentity>,
-    trace: Option<&OperationTrace>,
-    auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
-) -> Result<(u16, String, ProxyAction), String> {
-    let cfg = config::load_from(&config::default_dir()).map_err(|e| e.to_string())?;
-    let profile = cfg
-        .active_profile()
-        .cloned()
-        .ok_or("未配置生效 profile，请先在面板选择或新建一条配置。")?;
-    start_proxy_for(
-        app,
-        state,
-        lifecycle,
-        &profile,
-        science_runtime,
-        trace,
-        auth_proof,
-    )
-}
-
-/// Start or reuse a proxy for a specific profile, without reading the active profile.
-///
-/// This function does not take the command serializer lock; callers own that boundary.
-pub(crate) fn start_proxy_for<R: Runtime>(
+fn start_proxy_for_inner<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
@@ -34,7 +6,7 @@ pub(crate) fn start_proxy_for<R: Runtime>(
     science_runtime: Option<&crate::runtime::science::ScienceRuntimeIdentity>,
     trace: Option<&OperationTrace>,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
-) -> Result<(u16, String, ProxyAction), String> {
+) -> Result<GatewayReceipt, String> {
     assert_format_supported(profile)?;
     let resolved = proxy_args_for(profile)?;
     let mut launch = resolved.formal();
@@ -65,8 +37,11 @@ pub(crate) fn start_proxy_for<R: Runtime>(
     let shim_mode = current_shim_mode_for_adapter(&launch.adapter);
     let gateway_kind = "rust";
     let port = cfg.proxy_port;
-    let science_context = match science_runtime {
-        Some(runtime) => Some(runtime.skill_install_host_context(cfg.sandbox_port)?),
+    let (science_context, effective_science_runtime) = match science_runtime {
+        Some(runtime) => (
+            Some(runtime.skill_install_host_context(cfg.sandbox_port)?),
+            Some(runtime.clone()),
+        ),
         None => {
             let remembered = {
                 let st = lock(state);
@@ -79,16 +54,29 @@ pub(crate) fn start_proxy_for<R: Runtime>(
                     (runtime, port)
                 })
             };
-            remembered.and_then(|(runtime, sandbox_port)| {
-                (sandbox_port == cfg.sandbox_port
-                    && crate::runtime::science::ScienceHostAdapter::probe_known(
-                        sandbox_port,
-                        &runtime,
-                    ) == crate::runtime::science::SandboxScienceState::RunningHealthy)
-                    .then(|| runtime.skill_install_host_context(sandbox_port).ok())
-                    .flatten()
-            })
+            remembered
+                .and_then(|(runtime, sandbox_port)| {
+                    (sandbox_port == cfg.sandbox_port
+                        && crate::runtime::science::ScienceHostAdapter::probe_known(
+                            sandbox_port,
+                            &runtime,
+                        ) == crate::runtime::science::SandboxScienceState::RunningHealthy)
+                        .then(|| {
+                            runtime
+                                .skill_install_host_context(sandbox_port)
+                                .ok()
+                                .map(|context| (context, runtime))
+                        })
+                        .flatten()
+                })
+                .map_or((None, None), |(context, runtime)| {
+                    (Some(context), Some(runtime))
+                })
         }
+    };
+    let recipe = GatewayLaunchRecipe {
+        profile: profile.clone(),
+        science_runtime: effective_science_runtime,
     };
     let key_fp = proxy_fingerprint_with_science_context(
         proxy_fingerprint_with_runtime(profile, &launch, gateway_kind, shim_mode),
@@ -119,38 +107,35 @@ pub(crate) fn start_proxy_for<R: Runtime>(
     let (mut child, launch_id) = {
         let mut st = lock(state);
         let tracked_child_running = proc::tracked_child_is_running(&mut st.proxy);
-        if tracked_child_running
+        let accepted_reuse_health = (tracked_child_running
             && st.proxy_port == port
             && st.provider == launch.adapter
             && st.gateway_kind == gateway_kind
             && st.shim_mode == shim_mode
-            && st.key_fp == key_fp
-            && proc::http_health_gateway(
-                port,
-                Some(&st.secret),
-                operation::PROXY_REUSE_HEALTH_TIMEOUT_MS,
-                proc::GatewayHealthExpectation {
-                    gateway: gateway_kind,
-                    provider: Some(&launch.adapter),
-                    shim: Some(st.shim_mode.as_str()),
-                    launch_id: Some(st.launch_id.as_str()),
-                    provider_contract_id: Some(&launch.contract_id),
-                    provider_contract_digest: Some(&launch.contract_digest),
-                },
-            )
-            && proc::http_gateway_health(
-                port,
-                Some(&st.secret),
-                operation::PROXY_REUSE_HEALTH_TIMEOUT_MS,
-            )
-            .is_some_and(|health| {
-                health.intent == "formal"
-                    && expected_catalog_fp
-                        .as_deref()
-                        .map(|expected| health.catalog_fp == expected)
-                        .unwrap_or(health.catalog_fp.is_empty())
+            && st.key_fp == key_fp)
+            .then(|| {
+                proc::http_gateway_health(
+                    port,
+                    Some(&st.secret),
+                    operation::PROXY_REUSE_HEALTH_TIMEOUT_MS,
+                )
+                .filter(|health| {
+                    accepted_gateway_health(
+                        health,
+                        proc::GatewayHealthExpectation {
+                            gateway: gateway_kind,
+                            provider: Some(&launch.adapter),
+                            shim: Some(st.shim_mode.as_str()),
+                            launch_id: Some(st.launch_id.as_str()),
+                            provider_contract_id: Some(&launch.contract_id),
+                            provider_contract_digest: Some(&launch.contract_digest),
+                        },
+                        expected_catalog_fp.as_deref(),
+                    )
+                })
             })
-        {
+            .flatten();
+        if let Some(accepted_health) = accepted_reuse_health {
             if let Some(t) = trace {
                 t.stage(
                     OperationStage::ProxyHealth,
@@ -160,7 +145,15 @@ pub(crate) fn start_proxy_for<R: Runtime>(
                     ),
                 );
             }
-            return Ok((port, st.secret.clone(), ProxyAction::Reused));
+            st.gateway_launch_context = Some(recipe.clone());
+            return Ok(GatewayReceipt::verified(
+                port,
+                st.secret.clone(),
+                ProxyAction::Reused,
+                &accepted_health,
+                expected_catalog_fp.clone(),
+                recipe,
+            ));
         }
 
         st.stop_proxy();
@@ -244,7 +237,7 @@ pub(crate) fn start_proxy_for<R: Runtime>(
         (child, launch_id)
     };
 
-    let mut ok = false;
+    let mut accepted_health = None;
     let mut early_exit = None;
     for _ in 0..(operation::PROXY_HEALTH_BUDGET_MS / POLL_INTERVAL_MS) {
         std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
@@ -263,38 +256,37 @@ pub(crate) fn start_proxy_for<R: Runtime>(
                 break;
             }
         }
-        if proc::http_health_gateway(
-            port,
-            Some(&secret),
-            operation::LOCAL_HEALTH_TIMEOUT_MS,
-            proc::GatewayHealthExpectation {
-                gateway: gateway_kind,
-                provider: Some(&launch.adapter),
-                shim: Some(shim_mode),
-                launch_id: Some(&launch_id),
-                provider_contract_id: Some(&launch.contract_id),
-                provider_contract_digest: Some(&launch.contract_digest),
-            },
-        ) && proc::http_gateway_health(port, Some(&secret), operation::LOCAL_HEALTH_TIMEOUT_MS)
-            .is_some_and(|health| {
-                health.intent == "formal"
-                    && expected_catalog_fp
-                        .as_deref()
-                        .map(|expected| health.catalog_fp == expected)
-                        .unwrap_or(health.catalog_fp.is_empty())
-            })
-        {
-            ok = true;
+        accepted_health =
+            proc::http_gateway_health(port, Some(&secret), operation::LOCAL_HEALTH_TIMEOUT_MS)
+                .filter(|health| {
+                    accepted_gateway_health(
+                        health,
+                        proc::GatewayHealthExpectation {
+                            gateway: gateway_kind,
+                            provider: Some(&launch.adapter),
+                            shim: Some(shim_mode),
+                            launch_id: Some(&launch_id),
+                            provider_contract_id: Some(&launch.contract_id),
+                            provider_contract_digest: Some(&launch.contract_digest),
+                        },
+                        expected_catalog_fp.as_deref(),
+                    )
+                });
+        if accepted_health.is_some() {
             break;
         }
     }
     if let Some(t) = trace {
         t.stage(
             OperationStage::ProxyHealth,
-            if ok { "ready" } else { "not_ready" },
+            if accepted_health.is_some() {
+                "ready"
+            } else {
+                "not_ready"
+            },
         );
     }
-    if !ok {
+    if accepted_health.is_none() {
         let _ = child.kill();
         let _ = child.wait();
         let tail = redact(&tail_file(&log_path("proxy.log"), 500), &secret);
@@ -316,6 +308,7 @@ pub(crate) fn start_proxy_for<R: Runtime>(
         }
         return Err(details.join("\n"));
     }
+    let accepted_health = accepted_health.expect("checked accepted Gateway health");
 
     {
         let mut st = lock(state);
@@ -353,12 +346,16 @@ pub(crate) fn start_proxy_for<R: Runtime>(
         st.provider = launch.adapter.clone();
         st.gateway_kind = gateway_kind.to_string();
         st.shim_mode = shim_mode.to_string();
-        st.launch_id = launch_id;
+        st.launch_id = launch_id.clone();
         st.key_fp = key_fp;
-        st.gateway_launch_context = Some(crate::GatewayLaunchContext {
-            profile: profile.clone(),
-            science_runtime: science_runtime.cloned(),
-        });
+        st.gateway_launch_context = Some(recipe.clone());
     }
-    Ok((port, secret, ProxyAction::Restarted))
+    Ok(GatewayReceipt::verified(
+        port,
+        secret,
+        ProxyAction::Restarted,
+        &accepted_health,
+        expected_catalog_fp,
+        recipe,
+    ))
 }

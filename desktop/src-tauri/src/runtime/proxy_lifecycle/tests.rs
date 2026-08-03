@@ -1,7 +1,7 @@
 use super::{
-    configure_managed_proxy_command, find_gateway_in, finish_interrupted_gateway_recovery,
-    formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
-    recover_interrupted_gateway_from_dir, skill_install_bridge_token,
+    accepted_gateway_health, configure_managed_proxy_command, find_gateway_in,
+    finish_interrupted_gateway_recovery, formal_proxy_env, gateway_bin_path_from,
+    interrupted_health_matches, recover_interrupted_gateway_from_dir, skill_install_bridge_token,
     InterruptedGatewayRecoveryErrorKind, InterruptedGatewayRecoveryOutcome,
     InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
 };
@@ -184,6 +184,51 @@ fn health(provider: &str, launch_id: &str, catalog_fp: &str) -> crate::proc::Gat
         catalog_fp: catalog_fp.into(),
         intent: "formal".into(),
     }
+}
+
+#[test]
+fn gateway_acceptance_binds_one_health_response_to_identity_intent_and_catalog() {
+    let launch_id = "0123456789abcdef0123456789abcdef";
+    let static_health = health("deepseek", launch_id, "static-catalog");
+    let contract_digest = crate::provider_contracts::static_catalog_digest();
+    let expected = crate::proc::GatewayHealthExpectation {
+        gateway: "rust",
+        provider: Some("deepseek"),
+        shim: Some("off"),
+        launch_id: Some(launch_id),
+        provider_contract_id: Some("deepseek-native"),
+        provider_contract_digest: Some(&contract_digest),
+    };
+    assert!(accepted_gateway_health(
+        &static_health,
+        expected,
+        Some("static-catalog")
+    ));
+
+    let dynamic_health = health("deepseek", launch_id, "");
+    assert!(accepted_gateway_health(&dynamic_health, expected, None));
+
+    let mut identity_drift = static_health.clone();
+    identity_drift.provider_contract_id = "other-contract".into();
+    assert!(!accepted_gateway_health(
+        &identity_drift,
+        expected,
+        Some("static-catalog")
+    ));
+
+    let mut intent_drift = static_health.clone();
+    intent_drift.intent = "scratch".into();
+    assert!(!accepted_gateway_health(
+        &intent_drift,
+        expected,
+        Some("static-catalog")
+    ));
+    assert!(!accepted_gateway_health(
+        &static_health,
+        expected,
+        Some("other-catalog")
+    ));
+    assert!(!accepted_gateway_health(&static_health, expected, None));
 }
 
 #[test]

@@ -109,7 +109,7 @@
       "durability": "process",
       "authority": "Formal Rust Gateway listener authenticated by path secret and launch/binary/process identity.",
       "fields": ["child", "listener", "public_health_identity"],
-      "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/lifecycle.rs", "symbol": "start_proxy_for"}
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/controller.rs", "symbol": "GatewayController"}
     },
     {
       "id": "process.science",
@@ -479,20 +479,6 @@
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "contract": "Preserve current post-stage StopFailed behavior: no rollback, late-exit wait policy, or prior restart."},
       "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_matrix"],
       "known_gaps": ["The durable Pending intent still precedes process stop; a terminal-outcome CAS or write failure can leave Pending after the process result occurred."]
-    },
-    {
-      "id": "op.start-gateway-only",
-      "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
-      "implicit_operation_ids": ["op.startup-config-migration"],
-      "entrypoints": [{"kind": "tauri-command", "name": "start_proxy", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/gateway.rs", "symbol": "start_proxy_inner_cmd"}, "bundled_callers": []}],
-      "state_owners": ["app.gateway", "app.science", "codex.auth", "codex.supervisor", "config.desired", "gateway.bridge-key", "lifecycle.global", "process.gateway"],
-      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4"], "writes": ["record.config-v4", "record.gateway-bridge-key-v1"], "clears": []},
-      "ordered_effects": ["load selected profile", "obtain provider auth proof if needed", "serialize and recheck proof", "create/retain path secret and rotate Skill bridge key as needed", "reuse/restart/spawn Gateway using effective Science context", "return port without committing runtime binding or journal"],
-      "failure_points": [{"id": "start-gateway-only.launch", "after_effects": ["path secret or bridge key may already be durable", "prior Gateway may have been replaced"], "observed_outcome": "Error is returned; binding/journal stay unchanged and Science is retained.", "compensation": "Gateway lifecycle performs only its local start cleanup; no operation receipt restores every durable side effect"}],
-      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/lifecycle.rs", "symbol": "start_proxy_for"}, "contract": "Local child cleanup only; command has no binding commit and no full prior/new Gateway receipt."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_failure_matrix_preserves_current_partial_effects", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_keeps_binding_and_science_but_records_secret_effect", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_reloads_selected_profile_after_serializer_wait", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_remembered_science_context_is_lost_on_cold_restore", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_success_matrix_freezes_role_science_and_action"],
-      "known_gaps": ["Registered command has no bundled caller.", "Persisted launch recipe can omit derived Science host context."]
     },
     {
       "id": "op.set-mode",
@@ -867,7 +853,6 @@
     {"name": "clear_profile_key", "classification": "runtime-mutation", "operation_id": "op.revoke-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Config-first credential revoke stops Gateway when runtime_binding marks the profile applied."},
     {"name": "delete_profile", "classification": "runtime-mutation", "operation_id": "op.revoke-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Config-first delete stops Gateway when runtime_binding marks the profile applied."},
     {"name": "set_active_profile", "classification": "intent-mutation", "operation_id": "op.select-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "set_active_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Commits selected intent while preserving applied/live state."},
-    {"name": "start_proxy", "classification": "runtime-mutation", "operation_id": "op.start-gateway-only", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "start_proxy"}, "bundled_callers": [], "reason": "Starts/replaces formal Gateway without a binding/journal commit."},
     {"name": "fetch_models", "classification": "runtime-mutation", "operation_id": "op.codex-catalog-mutation", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "fetch_models"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Uses an isolated scratch Gateway, but Codex discovery shares the formal Gateway durable catalog cache/invalidation epoch and may perform a generation-guarded OAuth refresh."},
     {"name": "stop_all", "classification": "runtime-mutation", "operation_id": "op.stop-all", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "stop_all"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Stops managed Science and Gateway and bumps generation."},
     {"name": "one_click_login", "classification": "runtime-mutation", "operation_id": "op.one-click", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "one_click_login"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Primary cross-owner runtime transaction."},

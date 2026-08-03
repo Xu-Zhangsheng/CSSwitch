@@ -12,13 +12,12 @@ use crate::runtime::diagnostics::{
     ScienceDiagnosticsInput, StatusProbeInput,
 };
 use crate::runtime::failure::{OneClickFailureKind, ProjectedRecovery, TypedOneClickFailure};
-use crate::runtime::operation::{self, OperationKind, OperationTrace};
+use crate::runtime::operation;
 use crate::runtime::profile::profile_capabilities;
 use crate::runtime::provider::{
     current_shim_mode_for_adapter, gateway_kind_for_adapter, resolve_launch_plan,
     status_upstream_endpoint,
 };
-use crate::runtime::proxy_lifecycle::ensure_proxy;
 use crate::runtime::science::{
     science_runtime_preflight as runtime_preflight, settings_change_needs_teardown,
     SandboxScienceState, ScienceHostAdapter, ScienceStopOwnershipReceipt, ScienceStopRequest,
@@ -67,15 +66,6 @@ pub(crate) async fn set_settings(
     cfg: UiSettings,
 ) -> Result<(), String> {
     lifecycle::set_settings_command(app, state, lifecycle, cfg).await
-}
-
-#[tauri::command]
-pub(crate) async fn start_proxy<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: State<'_, SharedAppState>,
-    lifecycle: State<'_, SharedLifecycle>,
-) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    gateway::start_proxy_command(app, state, lifecycle).await
 }
 
 #[tauri::command]
@@ -162,8 +152,6 @@ pub(crate) async fn quit_app(
 
 #[cfg(test)]
 use actions::{manual_open_result, open_url_inner};
-#[cfg(test)]
-use gateway::start_proxy_inner_cmd;
 #[cfg(test)]
 use one_click::project_one_click_failure;
 #[cfg(test)]

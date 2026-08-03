@@ -25,6 +25,80 @@ use std::{
 };
 use tauri::{Listener, Manager};
 
+fn start_internal_gateway<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    profile: &Profile,
+) -> Result<proxy_lifecycle::GatewayReceipt, crate::commands::codex::RuntimeCommandError> {
+    let adapter = crate::runtime::provider::resolve_launch_plan(profile)?.adapter;
+    let prepared = crate::commands::codex::prepare_provider_auth(
+        app,
+        &adapter,
+        crate::commands::codex::CodexPreflightTarget::Profile(profile.id.clone()),
+    )?;
+    if let Some(prepared) = prepared.as_ref() {
+        prepared.verify_unchanged()?;
+    }
+    proxy_lifecycle::GatewayController::start_for(
+        app,
+        state,
+        lifecycle,
+        profile,
+        None,
+        None,
+        prepared.as_ref().map(|prepared| prepared.proof()),
+    )
+    .map_err(Into::into)
+}
+
+fn start_internal_active_gateway<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+) -> Result<proxy_lifecycle::GatewayReceipt, crate::commands::codex::RuntimeCommandError> {
+    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
+    let profile = cfg
+        .active_profile()
+        .cloned()
+        .ok_or("missing active profile")?;
+    start_internal_gateway(app, state, lifecycle, &profile)
+}
+
+fn assert_complete_gateway_receipt(
+    receipt: &proxy_lifecycle::GatewayReceipt,
+    profile: &Profile,
+    science_runtime: Option<&science::ScienceRuntimeIdentity>,
+) {
+    let formal = crate::runtime::provider::resolve_launch_plan(profile)
+        .unwrap()
+        .formal();
+    assert_ne!(receipt.port, 0);
+    assert!(!receipt.route_secret.is_empty());
+    assert_eq!(receipt.health.gateway_kind, "rust");
+    assert_eq!(receipt.health.provider, formal.adapter);
+    assert_eq!(
+        receipt.health.shim_mode,
+        crate::runtime::provider::current_shim_mode_for_adapter(&formal.adapter)
+    );
+    assert!(!receipt.health.launch_id.is_empty());
+    assert_eq!(receipt.health.provider_contract_id, formal.contract_id);
+    assert_eq!(
+        receipt.health.provider_contract_digest,
+        formal.contract_digest
+    );
+    assert_eq!(receipt.health.intent, "formal");
+    match receipt.catalog.expected_fingerprint.as_deref() {
+        Some(expected) => {
+            assert!(!expected.is_empty());
+            assert_eq!(receipt.catalog.accepted_fingerprint, expected);
+        }
+        None => assert!(receipt.catalog.accepted_fingerprint.is_empty()),
+    }
+    assert_eq!(&receipt.recipe.profile, profile);
+    assert_eq!(receipt.recipe.science_runtime.as_ref(), science_runtime);
+}
+
 #[test]
 fn config_last_error_json_preserves_typed_config_error() {
     let err = config_last_error_json(&"bad config");
@@ -1608,7 +1682,6 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
         .manage(lifecycle.clone())
         .manage(codex_auth_supervisor.clone())
         .invoke_handler(tauri::generate_handler![
-            super::start_proxy,
             super::one_click_login,
             super::status,
             super::boot_error,
@@ -1668,26 +1741,12 @@ exec '{}' "$@"
         } else {
             before.active_profile().unwrap().clone()
         };
-        if codex_gateway_oracle {
-            let started = invoke_json(&webview, "start_proxy", serde_json::json!({}))
-                .expect("real start_proxy IPC must establish the prior Codex Gateway");
-            assert!(started["port"].as_u64().is_some());
-        } else {
-            let (_, _, action) = proxy_lifecycle::start_proxy_for(
-                &handle,
-                &state,
-                lifecycle.as_ref(),
-                &prior_profile,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-            assert!(matches!(
-                action,
-                crate::runtime::proxy::ProxyAction::Restarted
-            ));
-        }
+        let receipt = start_internal_gateway(&handle, &state, lifecycle.as_ref(), &prior_profile)
+            .expect("internal Gateway core must establish the prior managed Gateway");
+        assert!(matches!(
+            receipt.action,
+            crate::runtime::proxy::ProxyAction::Restarted
+        ));
         let mut authority = lock(&state);
         assert!(authority.proxy.is_some());
         prior_gateway_pid = authority.proxy.as_ref().map(std::process::Child::id);
@@ -2639,7 +2698,6 @@ fn isolated_real_ipc_rechecks_union_proof_after_serializer_wait() {
         .manage(lifecycle.clone())
         .manage(supervisor)
         .invoke_handler(tauri::generate_handler![
-            super::start_proxy,
             super::one_click_login,
             super::status,
             super::boot_error,
@@ -2669,9 +2727,17 @@ exec '{}' "$@"
         ),
     );
     env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway_wrapper);
-    let started = invoke_json(&webview, "start_proxy", serde_json::json!({}))
-        .expect("real start_proxy IPC must establish prior Codex");
-    assert!(started["port"].as_u64().is_some());
+    let prior_profile = config::load_from(&config_dir)
+        .unwrap()
+        .active_profile()
+        .unwrap()
+        .clone();
+    let started = start_internal_gateway(&handle, &state, lifecycle.as_ref(), &prior_profile)
+        .expect("internal Gateway core must establish prior Codex");
+    assert_complete_gateway_receipt(&started, &prior_profile, None);
+    assert!(started.catalog.expected_fingerprint.is_none());
+    assert!(started.catalog.accepted_fingerprint.is_empty());
+    assert_eq!(started.port, proxy_port);
     let prior = app_authority_projection(&state);
     let prior_pid = lock(&state).proxy.as_ref().map(std::process::Child::id);
     let prior_context = lock(&state).gateway_launch_context.clone();
@@ -3337,7 +3403,7 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
         .unwrap();
     let handle = app.handle().clone();
     let prior_profile = cfg.active_profile().unwrap().clone();
-    let (_, _, prior_gateway_action) = proxy_lifecycle::start_proxy_for(
+    let prior_gateway = proxy_lifecycle::GatewayController::start_for(
         &handle,
         &state,
         lifecycle.as_ref(),
@@ -3347,6 +3413,7 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
         None,
     )
     .unwrap();
+    let prior_gateway_action = prior_gateway.action;
     assert!(matches!(
         prior_gateway_action,
         crate::runtime::proxy::ProxyAction::Restarted
@@ -4521,17 +4588,21 @@ fn r0_start_gateway_only_failure_matrix_preserves_current_partial_effects() {
 }
 
 #[test]
-fn r0_start_gateway_only_reloads_selected_profile_after_serializer_wait() {
-    run_exact_ignored_runtime_characterization(
-        "commands::runtime::tests::isolated_r0_start_gateway_only_serializer_recheck",
-        &[],
-    );
+fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
+    let registration = include_str!("../../lib.rs")
+        .splitn(2, ".invoke_handler(tauri::generate_handler![")
+        .nth(1)
+        .expect("invoke handler must exist")
+        .splitn(2, "])\n")
+        .next()
+        .unwrap();
+    assert!(!registration.contains("commands::runtime::start_proxy"));
 }
 
 #[test]
-fn r0_start_gateway_only_remembered_science_context_is_lost_on_cold_restore() {
+fn s6_gateway_receipt_preserves_remembered_science_context_on_cold_restore() {
     run_exact_ignored_runtime_characterization(
-        "commands::runtime::tests::isolated_r0_start_gateway_only_remembered_context_loss",
+        "commands::runtime::tests::isolated_s6_gateway_receipt_preserves_remembered_context",
         &[],
     );
 }
@@ -4593,8 +4664,12 @@ exit 23
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
 
-    let result =
-        super::gateway::start_proxy_inner_cmd(app.handle().clone(), state.clone(), lifecycle);
+    let profile = config::load_from(&config_dir)
+        .unwrap()
+        .active_profile()
+        .unwrap()
+        .clone();
+    let result = start_internal_gateway(app.handle(), &state, lifecycle.as_ref(), &profile);
     assert!(
         result.is_err(),
         "the fake Gateway must fail before publication"
@@ -4627,7 +4702,7 @@ exit 23
 }
 
 #[test]
-#[ignore = "explicit Acceptance-boundary registered start_proxy success matrix; temp HOME, managed fake Science, real local Gateway, and dynamic loopback only"]
+#[ignore = "explicit Acceptance-boundary internal Gateway receipt success matrix; temp HOME, managed fake Science, real local Gateway, and dynamic loopback only"]
 fn isolated_r0_start_gateway_only_success_matrix() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -4665,7 +4740,11 @@ fn isolated_r0_start_gateway_only_success_matrix() {
     cfg.reuse_system_ssh = false;
     cfg.secret = config::new_id();
     let applied_profile_id = cfg.active_id.clone();
-    let mut selected_profile = cfg.active_profile().unwrap().clone();
+    let applied_profile = cfg.active_profile().unwrap().clone();
+    let applied_adapter = crate::runtime::provider::resolve_launch_plan(&applied_profile)
+        .unwrap()
+        .adapter;
+    let mut selected_profile = applied_profile.clone();
     selected_profile.id = "r0-selected-profile".into();
     selected_profile.name = "R0 selected profile".into();
     selected_profile.api_key = "r0-selected-profile-fake-key-never-log".into();
@@ -4692,13 +4771,9 @@ fn isolated_r0_start_gateway_only_success_matrix() {
     let app = tauri::test::mock_builder()
         .manage(state.clone())
         .manage(lifecycle.clone())
-        .invoke_handler(tauri::generate_handler![super::start_proxy])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let handle = app.handle().clone();
-    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
-        .unwrap();
     let cleanup = RuntimeSmokeCleanup::new(
         handle.clone(),
         state.clone(),
@@ -4707,8 +4782,26 @@ fn isolated_r0_start_gateway_only_success_matrix() {
         proxy_port,
     );
 
-    let first = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
-    assert_eq!(first["port"], proxy_port);
+    let first = start_internal_active_gateway(&handle, &state, lifecycle.as_ref()).unwrap();
+    assert_complete_gateway_receipt(&first, &applied_profile, None);
+    assert_eq!(first.port, proxy_port);
+    assert!(matches!(
+        first.action,
+        crate::runtime::proxy::ProxyAction::Restarted
+    ));
+    assert_eq!(first.health.gateway_kind, "rust");
+    assert_eq!(first.health.provider, applied_adapter);
+    assert_eq!(first.health.shim_mode, "off");
+    assert_eq!(first.health.intent, "formal");
+    assert!(!first.health.launch_id.is_empty());
+    assert!(!first.health.provider_contract_id.is_empty());
+    assert!(!first.health.provider_contract_digest.is_empty());
+    assert_eq!(
+        first.catalog.expected_fingerprint.as_deref(),
+        Some(first.catalog.accepted_fingerprint.as_str())
+    );
+    assert_eq!(first.recipe.profile.id, applied_profile_id);
+    assert!(first.recipe.science_runtime.is_none());
     wait_http_health(proxy_port);
     let first_pid = lock(&state).proxy.as_ref().unwrap().id();
     let first_launch_id = lock(&state).launch_id.clone();
@@ -4721,8 +4814,28 @@ fn isolated_r0_start_gateway_only_success_matrix() {
         Some(journal.clone().into())
     );
 
-    let reused = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
-    assert_eq!(reused["port"], proxy_port);
+    let reused = start_internal_active_gateway(&handle, &state, lifecycle.as_ref()).unwrap();
+    assert_complete_gateway_receipt(&reused, &applied_profile, None);
+    assert_eq!(reused.port, proxy_port);
+    assert!(matches!(
+        reused.action,
+        crate::runtime::proxy::ProxyAction::Reused
+    ));
+    assert_eq!(reused.health.launch_id, first_launch_id);
+    assert_eq!(
+        reused.health.provider_contract_id,
+        first.health.provider_contract_id
+    );
+    assert_eq!(
+        reused.health.provider_contract_digest,
+        first.health.provider_contract_digest
+    );
+    assert_eq!(
+        reused.catalog.accepted_fingerprint,
+        first.catalog.accepted_fingerprint
+    );
+    assert_eq!(reused.recipe.profile.id, applied_profile_id);
+    assert!(reused.recipe.science_runtime.is_none());
     let reused_pid = lock(&state).proxy.as_ref().unwrap().id();
     assert_eq!(
         reused_pid, first_pid,
@@ -4765,8 +4878,24 @@ fn isolated_r0_start_gateway_only_success_matrix() {
         authority.science_confirmed_stopped = None;
     }
 
-    let restarted = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
-    assert_eq!(restarted["port"], proxy_port);
+    let restarted = start_internal_active_gateway(&handle, &state, lifecycle.as_ref()).unwrap();
+    assert_complete_gateway_receipt(&restarted, &applied_profile, Some(&prior_runtime));
+    assert_eq!(restarted.port, proxy_port);
+    assert!(matches!(
+        restarted.action,
+        crate::runtime::proxy::ProxyAction::Restarted
+    ));
+    assert_eq!(restarted.health.provider, applied_adapter);
+    assert_eq!(restarted.health.intent, "formal");
+    assert_eq!(
+        restarted.catalog.expected_fingerprint.as_deref(),
+        Some(restarted.catalog.accepted_fingerprint.as_str())
+    );
+    assert_eq!(restarted.recipe.profile.id, applied_profile_id);
+    assert_eq!(
+        restarted.recipe.science_runtime.as_ref(),
+        Some(&prior_runtime)
+    );
     wait_http_health(proxy_port);
     let running_science_pid = listener_pid_if_unique(sandbox_port);
     let restarted_pid = lock(&state).proxy.as_ref().unwrap().id();
@@ -4787,8 +4916,8 @@ fn isolated_r0_start_gateway_only_success_matrix() {
             .gateway_launch_context
             .as_ref()
             .is_some_and(|context| context.profile.id == applied_profile_id
-                && context.science_runtime.is_none()),
-        "registered start_proxy must retain the selected profile but persist recipe science_runtime=None"
+                && context.science_runtime.as_ref() == Some(&prior_runtime)),
+        "internal Gateway receipt must retain the effective Science runtime in its exact recipe"
     );
 
     config::update(&config_dir, |current| {
@@ -4796,8 +4925,20 @@ fn isolated_r0_start_gateway_only_success_matrix() {
     })
     .unwrap();
     let before_selected_mismatch = config::load_from(&config_dir).unwrap();
-    let mismatch = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
-    assert_eq!(mismatch["port"], proxy_port);
+    let mismatch = start_internal_active_gateway(&handle, &state, lifecycle.as_ref()).unwrap();
+    assert_complete_gateway_receipt(&mismatch, &selected_profile, Some(&prior_runtime));
+    assert_eq!(mismatch.port, proxy_port);
+    assert!(matches!(
+        mismatch.action,
+        crate::runtime::proxy::ProxyAction::Restarted
+    ));
+    assert_eq!(mismatch.health.provider, applied_adapter);
+    assert_eq!(mismatch.health.intent, "formal");
+    assert_eq!(mismatch.recipe.profile.id, "r0-selected-profile");
+    assert_eq!(
+        mismatch.recipe.science_runtime.as_ref(),
+        Some(&prior_runtime)
+    );
     wait_http_health(proxy_port);
     let mismatch_pid = lock(&state).proxy.as_ref().unwrap().id();
     let after_selected_mismatch = config::load_from(&config_dir).unwrap();
@@ -4815,12 +4956,12 @@ fn isolated_r0_start_gateway_only_success_matrix() {
         before_selected_mismatch.runtime_transaction
     );
     assert_eq!(listener_pid_if_unique(sandbox_port), Some(science_pid));
-    assert_eq!(lock(&state).science_runtime, Some(prior_runtime));
+    assert_eq!(lock(&state).science_runtime, Some(prior_runtime.clone()));
     assert!(lock(&state)
         .gateway_launch_context
         .as_ref()
         .is_some_and(|context| context.profile.id == "r0-selected-profile"
-            && context.science_runtime.is_none()));
+            && context.science_runtime.as_ref() == Some(&prior_runtime)));
     assert_eq!(
         fs::read_to_string(&publish_log).unwrap().lines().count(),
         first_publish_count + 2,
@@ -4833,7 +4974,7 @@ fn isolated_r0_start_gateway_only_success_matrix() {
 }
 
 #[test]
-#[ignore = "explicit Acceptance-boundary registered start_proxy failure matrix; temp HOME, controlled fake Gateway, retained fake Science child, and dynamic loopback only"]
+#[ignore = "explicit Acceptance-boundary internal Gateway core failure matrix; temp HOME, controlled fake Gateway, retained fake Science child, and dynamic loopback only"]
 fn isolated_r0_start_gateway_only_failure_matrix() {
     let oracle = env::var("CSSWITCH_TEST_R0_START_GATEWAY_FAILURE").unwrap();
     assert!(matches!(oracle.as_str(), "spawn-error" | "health-failure"));
@@ -4916,11 +5057,7 @@ exit 23
     let app = tauri::test::mock_builder()
         .manage(state.clone())
         .manage(lifecycle.clone())
-        .invoke_handler(tauri::generate_handler![super::start_proxy])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap();
-    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
         .unwrap();
 
     let mut prior_pid = None;
@@ -4928,7 +5065,7 @@ exit 23
     if oracle == "health-failure" {
         let real_gateway = proxy_lifecycle::gateway_bin_path(app.handle()).unwrap();
         env_guard.set("CSSWITCH_GATEWAY_BIN", &real_gateway);
-        invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
+        start_internal_active_gateway(app.handle(), &state, lifecycle.as_ref()).unwrap();
         wait_http_health(proxy_port);
         prior_pid = lock(&state).proxy.as_ref().map(std::process::Child::id);
         prior_key = Some(fs::read(config_dir.join("runtime/skill-install-bridge.key")).unwrap());
@@ -4939,10 +5076,10 @@ exit 23
     }
     env_guard.set("CSSWITCH_GATEWAY_BIN", &failing_gateway);
     let before_failure = config::load_from(&config_dir).unwrap();
-    let failure = invoke_json(&webview, "start_proxy", serde_json::json!({}));
+    let failure = start_internal_active_gateway(app.handle(), &state, lifecycle.as_ref());
     assert!(
         failure.is_err(),
-        "{oracle} must surface a command error: {failure:?}"
+        "{oracle} must surface an internal Gateway error"
     );
 
     let after_failure = config::load_from(&config_dir).unwrap();
@@ -4997,148 +5134,8 @@ exit 23
 }
 
 #[test]
-#[ignore = "explicit Acceptance-boundary registered start_proxy serializer recheck; temp HOME, fake Codex auth, and dynamic loopback only"]
-fn isolated_r0_start_gateway_only_serializer_recheck() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let tmp = tmpdir("r0-start-gateway-serializer-recheck");
-    let home = tmp.join("home");
-    let bin_dir = tmp.join("bin");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&bin_dir).unwrap();
-    let mock_upstream = start_mock_upstream();
-    let (proxy_port, sandbox_port) = ssh_fixture_ports();
-    let auth_log = tmp.join("codex-auth.log");
-    let publish_log = tmp.join("gateway-publish.log");
-    fs::write(&auth_log, b"").unwrap();
-    fs::write(&publish_log, b"").unwrap();
-
-    let mut env_guard = EnvGuard::new();
-    env_guard.set("HOME", &home);
-    env_guard.set("CSSWITCH_REPO", &root);
-    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
-    env_guard.set("CSSWITCH_TEST_GATEWAY_PUBLISH_LOG", &publish_log);
-
-    let config_dir = config::default_dir();
-    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
-    let selected_after_wait = cfg.active_id.clone();
-    cfg.experimental_codex_enabled = true;
-    cfg.secret = config::new_id();
-    cfg.profiles.push(Profile {
-        id: "r0-serializer-codex".into(),
-        name: "R0 serializer Codex".into(),
-        template_id: "codex".into(),
-        category: "experimental".into(),
-        api_format: "openai_responses".into(),
-        credential_source: crate::provider_contracts::CredentialSource::CsswitchOauth,
-        credential_ref: Some("csswitch:codex:default".into()),
-        model_policy: crate::provider_contracts::ModelPolicy::DynamicCatalog,
-        ..Default::default()
-    });
-    cfg.active_id = "r0-serializer-codex".into();
-    let binding = config::RuntimeBindingCommit {
-        profile_id: "r0-applied-before-serializer".into(),
-        route_fp: "serializer-route".into(),
-        catalog_fp: "serializer-catalog".into(),
-        binding_fp: "serializer-binding".into(),
-    };
-    let journal = config::RuntimeTransactionJournal {
-        transaction_id: "r0-start-gateway-serializer-journal".into(),
-        target_profile_id: binding.profile_id.clone(),
-        stage: "start_gateway".into(),
-        previous_binding: Some(binding.clone()),
-        previous_gateway: None,
-    };
-    cfg.runtime_binding = Some(binding.clone());
-    cfg.runtime_transaction = Some(journal.clone().into());
-    config::save_to(&config_dir, &cfg).unwrap();
-
-    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
-    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
-    let supervisor = Arc::new(crate::codex_auth_supervisor::CodexAuthSupervisor::default());
-    let app = tauri::test::mock_builder()
-        .manage(state.clone())
-        .manage(lifecycle.clone())
-        .manage(supervisor)
-        .invoke_handler(tauri::generate_handler![super::start_proxy])
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap();
-    let handle = app.handle().clone();
-    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
-        .unwrap();
-    let real_gateway = proxy_lifecycle::gateway_bin_path(&handle).unwrap();
-    let gateway_wrapper = bin_dir.join("csswitch-gateway-r0-serializer-wrapper");
-    write_executable(
-        &gateway_wrapper,
-        &format!(
-            r#"#!/bin/sh
-printf '%s %s\n' "$1" "$2" >> '{}'
-if [ "$1" = "codex-auth" ] && [ "$2" = "status" ]; then
-  printf '%s\n' '{{"schema_version":3,"ok":true,"command":"status","status":{{"authenticated":true,"reason":"ready","account_hash":"abababababababababababababababab","expiry_state":"valid","expires_at":2000000000,"auth_epoch":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","auth_generation":1}}}}'
-  exit 0
-fi
-exec '{}' "$@"
-"#,
-            auth_log.display(),
-            real_gateway.display()
-        ),
-    );
-    env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway_wrapper);
-
-    let worker_webview = webview.clone();
-    let auth_log_wait = auth_log.clone();
-    let config_dir_drift = config_dir.clone();
-    let (worker, preflight_seen) = lifecycle.with_serialized(|| {
-        let worker = thread::spawn(move || {
-            invoke_json(&worker_webview, "start_proxy", serde_json::json!({}))
-        });
-        let mut seen = false;
-        for _ in 0..200 {
-            if fs::read_to_string(&auth_log_wait)
-                .unwrap_or_default()
-                .lines()
-                .any(|line| line == "codex-auth status")
-            {
-                seen = true;
-                break;
-            }
-            thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let mut drifted = config::load_from(&config_dir_drift).unwrap();
-        drifted.active_id = selected_after_wait.clone();
-        config::save_to(&config_dir_drift, &drifted).unwrap();
-        (worker, seen)
-    });
-    let response = worker.join().unwrap();
-    let surface = response
-        .as_ref()
-        .map(serde_json::Value::to_string)
-        .unwrap_or_else(|error| error.clone());
-    let after = config::load_from(&config_dir).unwrap();
-    assert!(
-        preflight_seen,
-        "Codex proof must be prepared before the serializer wait"
-    );
-    assert!(
-        response.is_err() && surface.contains("config_changed_retry"),
-        "selected profile drift must be rejected before ensure_proxy: {response:?}"
-    );
-    assert_eq!(after.active_id, selected_after_wait);
-    assert_eq!(after.runtime_binding, Some(binding));
-    assert_eq!(after.runtime_transaction, Some(journal.into()));
-    assert!(lock(&state).proxy.is_none());
-    assert!(fs::read_to_string(&publish_log).unwrap().is_empty());
-    fs::remove_dir_all(&tmp).unwrap();
-}
-
-#[test]
-#[ignore = "explicit Acceptance-boundary registered start_proxy remembered Science context rollback; temp HOME, managed fake Science, real local Gateway, and dynamic loopback only"]
-fn isolated_r0_start_gateway_only_remembered_context_loss() {
+#[ignore = "explicit Acceptance-boundary typed Gateway receipt remembered Science context rollback; temp HOME, managed fake Science, real local Gateway, and dynamic loopback only"]
+fn isolated_s6_gateway_receipt_preserves_remembered_context() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -5217,10 +5214,7 @@ fn isolated_r0_start_gateway_only_remembered_context_loss() {
     let app = tauri::test::mock_builder()
         .manage(state.clone())
         .manage(lifecycle.clone())
-        .invoke_handler(tauri::generate_handler![
-            super::start_proxy,
-            super::one_click_login
-        ])
+        .invoke_handler(tauri::generate_handler![super::one_click_login])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let handle = app.handle().clone();
@@ -5248,8 +5242,8 @@ exec '{}' "$@"
     env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway_wrapper);
     port_reservations.release_proxy();
 
-    let started = invoke_json(&webview, "start_proxy", serde_json::json!({})).unwrap();
-    assert_eq!(started["port"], proxy_port);
+    let started = start_internal_active_gateway(&handle, &state, lifecycle.as_ref()).unwrap();
+    assert_eq!(started.port, proxy_port);
     wait_http_health(proxy_port);
     let prior_gateway_pid = lock(&state).proxy.as_ref().unwrap().id();
     let prior_gateway_health = crate::proc::http_gateway_health(
@@ -5264,14 +5258,14 @@ exec '{}' "$@"
             .lines()
             .collect::<Vec<_>>(),
         vec!["present"],
-        "registered start_proxy must derive host context from healthy remembered Science"
+        "internal Gateway core must derive host context from healthy remembered Science"
     );
     assert!(
         lock(&state)
             .gateway_launch_context
             .as_ref()
-            .is_some_and(|context| context.science_runtime.is_none()),
-        "registered start_proxy must persist recipe science_runtime=None"
+            .is_some_and(|context| context.science_runtime.as_ref() == Some(&prior_runtime)),
+        "typed Gateway receipt must persist the effective Science runtime recipe"
     );
 
     science::test_reset_managed_launch_commit_failure_once();
@@ -5314,21 +5308,15 @@ exec '{}' "$@"
     );
     assert!(process_start_identity_if_alive(prior_science_pid).is_none());
     assert!(candidate_science_pid.is_some_and(|pid| process_start_identity_if_alive(pid).is_none()));
-    assert!(restored_gateway_pid.is_some_and(|pid| pid != prior_gateway_pid));
-    // The cold candidate already has the prior profile but no Science context.
-    // Current compensation may therefore reuse that healthy child while restoring
-    // the prior route instead of spawning a third Gateway. In both cases the
-    // final tracked Gateway is the context-free child observed after `present`.
+    assert!(restored_gateway_pid.is_some());
     assert!(
-        contexts.len() >= 2
-            && contexts.first().is_some_and(|value| value == "present")
-            && contexts[1..].iter().all(|value| value == "absent"),
-        "the final compensated Gateway must be the child that lost remembered host context: {contexts:?}"
+        !contexts.is_empty() && contexts.iter().all(|value| value == "present"),
+        "a reused or restarted compensated Gateway must retain the exact effective host context: prior_pid={prior_gateway_pid}, restored_pid={restored_gateway_pid:?}, contexts={contexts:?}"
     );
     assert!(lock(&state)
         .gateway_launch_context
         .as_ref()
-        .is_some_and(|context| context.science_runtime.is_none()));
+        .is_some_and(|context| context.science_runtime.as_ref() == Some(&prior_runtime)));
     assert!(restored_health.as_ref().is_some_and(|health| {
         health.provider == prior_gateway_health.provider
             && health.provider_contract_id == prior_gateway_health.provider_contract_id
@@ -5466,7 +5454,7 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
     let handle = app.handle().clone();
     let mut prior_profile = cfg.active_profile().unwrap().clone();
     prior_profile.api_key = "prior-gateway-different-fake-key".into();
-    let (_, _, prior_action) = proxy_lifecycle::start_proxy_for(
+    let prior_gateway = proxy_lifecycle::GatewayController::start_for(
         &handle,
         &state,
         lifecycle.as_ref(),
@@ -5476,6 +5464,7 @@ fn isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway() {
         None,
     )
     .unwrap();
+    let prior_action = prior_gateway.action;
     assert!(matches!(
         prior_action,
         crate::runtime::proxy::ProxyAction::Restarted
@@ -8073,10 +8062,9 @@ fn isolated_manual_actions_recover_dead_proxy_with_fake_science() {
     );
     assert_eq!(down_status["last_error"]["port"], proxy_port);
 
-    let start_proxy_recovered =
-        super::start_proxy_inner_cmd(handle.clone(), state.clone(), lifecycle.clone())
-            .expect("start_proxy should manually recover a dead proxy");
-    assert_eq!(start_proxy_recovered["port"], proxy_port);
+    let start_proxy_recovered = start_internal_active_gateway(&handle, &state, lifecycle.as_ref())
+        .expect("internal Gateway core should manually recover a dead proxy");
+    assert_eq!(start_proxy_recovered.port, proxy_port);
     wait_http_health(proxy_port);
 
     let start_proxy_status = super::status(app.state::<SharedAppState>());
@@ -8226,7 +8214,6 @@ fn isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait() {
         .manage(lifecycle.clone())
         .manage(supervisor)
         .invoke_handler(tauri::generate_handler![
-            super::start_proxy,
             super::one_click_login,
             super::status,
             super::boot_error,
@@ -8270,9 +8257,14 @@ exec '{}' "$@"
         ),
     );
     env_guard.set("CSSWITCH_GATEWAY_BIN", &gateway_wrapper);
-    let started = invoke_json(&webview, "start_proxy", serde_json::json!({}))
-        .expect("real start_proxy IPC must establish the prior Codex Gateway");
-    assert!(started["port"].as_u64().is_some());
+    let prior_profile = config::load_from(&config_dir)
+        .unwrap()
+        .active_profile()
+        .unwrap()
+        .clone();
+    let started = start_internal_gateway(&handle, &state, lifecycle.as_ref(), &prior_profile)
+        .expect("internal Gateway core must establish the prior Codex Gateway");
+    assert_eq!(started.port, proxy_port);
 
     let prior_authority = app_authority_projection(&state);
     let prior_pid = lock(&state).proxy.as_ref().map(std::process::Child::id);

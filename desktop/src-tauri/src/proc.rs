@@ -270,7 +270,10 @@ pub fn http_health_gateway(
     gateway_health_matches(&actual, expected)
 }
 
-fn gateway_health_matches(actual: &GatewayHealth, expected: GatewayHealthExpectation<'_>) -> bool {
+pub(crate) fn gateway_health_matches(
+    actual: &GatewayHealth,
+    expected: GatewayHealthExpectation<'_>,
+) -> bool {
     let contract_matches = match (
         expected.provider_contract_id,
         expected.provider_contract_digest,

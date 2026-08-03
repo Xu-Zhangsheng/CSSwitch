@@ -21,7 +21,7 @@ struct OneClickGatewayPreflightSnapshot {
     shim_mode: String,
     launch_id: String,
     key_fp: u64,
-    launch_context: crate::GatewayLaunchContext,
+    launch_context: crate::runtime::proxy_lifecycle::GatewayLaunchRecipe,
 }
 
 pub(super) fn typed_interrupted_gateway_recovery_error(

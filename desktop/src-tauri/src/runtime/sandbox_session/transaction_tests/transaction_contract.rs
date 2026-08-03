@@ -542,7 +542,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "ensure_virtual_login",
         "prepare_science_ssh_bridge",
         "revoke_science_ssh_bridge",
-        "ensure_proxy",
+        "ensure_active",
         "spawn_launch",
         "accept_launch_script",
         "verify_health",

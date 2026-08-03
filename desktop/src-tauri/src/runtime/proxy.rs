@@ -1,4 +1,4 @@
-/// 本次 ensure_proxy 对代理做了什么（供一键据实提示）。
+/// 本次 GatewayController 调用对代理做了什么（供一键据实提示）。
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum ProxyAction {
     Reused,    // 端口+adapter+key 指纹一致且健康，原样复用

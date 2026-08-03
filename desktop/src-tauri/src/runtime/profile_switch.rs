@@ -5,7 +5,7 @@ use crate::runtime::profile::{nonactive_probe_verdict, probe_kind_for, Connectio
 use crate::runtime::provider::{
     assert_format_supported, is_native_adapter, proxy_args_for, reject_openai_custom_anthropic_base,
 };
-use crate::runtime::proxy_lifecycle::start_proxy_for;
+use crate::runtime::proxy_lifecycle::GatewayController;
 use crate::runtime::transaction::{rollback_status_clause, skip_scratch_verify};
 use crate::{config, lifecycle, lock, scratch, SharedAppState};
 
@@ -372,7 +372,7 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
     };
 
     lifecycle.bump_generation();
-    if let Err(error) = start_proxy_for(
+    if let Err(error) = GatewayController::start_for(
         app,
         state,
         lifecycle,
@@ -580,7 +580,8 @@ fn restore_proxy_for_active<R: tauri::Runtime>(
                 lock(state).stop_proxy();
                 return false;
             }
-            start_proxy_for(app, state, lifecycle, old, None, trace, auth_proof).is_ok()
+            GatewayController::start_for(app, state, lifecycle, old, None, trace, auth_proof)
+                .is_ok()
         }
         None => false,
     }

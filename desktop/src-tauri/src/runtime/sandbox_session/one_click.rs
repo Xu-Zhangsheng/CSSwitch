@@ -13,7 +13,7 @@ use crate::runtime::operation::{
 };
 use crate::runtime::proxy::ProxyAction;
 use crate::runtime::proxy_lifecycle::{
-    current_skill_install_bridge_key, ensure_proxy, skill_install_bridge_dir,
+    current_skill_install_bridge_key, skill_install_bridge_dir, GatewayController,
 };
 use crate::runtime::science::{
     sandbox_home, select_science_runtime_cached, SandboxScienceState, ScienceEnvironmentExposure,
@@ -2275,8 +2275,8 @@ fn one_click_login_with_options<R: Runtime>(
             }
         }
         rollback_context.set_kind(OneClickFailureKind::GatewayStart);
-        let (pport, secret, proxy_action) = one_click_step(
-            ensure_proxy(
+        let gateway = one_click_step(
+            GatewayController::ensure_active(
                 &app,
                 &state,
                 lifecycle,
@@ -2286,6 +2286,9 @@ fn one_click_login_with_options<R: Runtime>(
             ),
             &rollback_context,
         )?;
+        let pport = gateway.port;
+        let secret = gateway.route_secret;
+        let proxy_action = gateway.action;
         rollback_context.proxy_action = proxy_action;
         rollback_context.set_kind(OneClickFailureKind::CatalogVerify);
         one_click_step(

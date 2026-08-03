@@ -1,50 +1,5 @@
 use super::*;
 
-pub(super) async fn start_proxy_command<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: State<'_, SharedAppState>,
-    lifecycle: State<'_, SharedLifecycle>,
-) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    let state = state.inner().clone();
-    let lifecycle = lifecycle.inner().clone();
-    run_blocking_typed(move || start_proxy_inner_cmd(app, state, lifecycle)).await
-}
-
-pub(super) fn start_proxy_inner_cmd<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: SharedAppState,
-    lifecycle: SharedLifecycle,
-) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
-    let active = cfg
-        .active_profile()
-        .ok_or("未配置生效 profile，请先在面板选择或新建一条配置。")?;
-    let adapter = resolve_launch_plan(active)?.adapter;
-    let prepared = crate::commands::codex::prepare_provider_auth(
-        &app,
-        &adapter,
-        crate::commands::codex::CodexPreflightTarget::ActiveProfile,
-    )?;
-    // 经串行器：与切换/连接编辑/清 key/删/停等 ensure_proxy 竞争串行化，防陈旧读起旧配置代理
-    // 又写回运行态（修 P1-a，比照 spec §8.1「ensure_proxy 都经一把 app 级 mutex」）。
-    lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
-        if let Some(prepared) = prepared.as_ref() {
-            prepared.verify_unchanged()?;
-        }
-        let trace = OperationTrace::start(OperationKind::StartProxy, "command=start_proxy");
-        let (port, _secret, _action) = ensure_proxy(
-            &app,
-            &state,
-            lifecycle.as_ref(),
-            None,
-            Some(&trace),
-            prepared.as_ref().map(|prepared| prepared.proof()),
-        )?;
-        trace.finish(format!("ok port={port}"));
-        Ok(json!({ "port": port }))
-    })
-}
-
 #[derive(Deserialize)]
 pub(crate) struct FetchModelsReq {
     /// 模板 id（决定 builtin / base_url 可编辑性 / 默认 base_url）。

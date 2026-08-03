@@ -34,7 +34,7 @@
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
 | one-click authority capture、verified ticket、restore 与 cleanup 接口 | `runtime/sandbox_session/authority_transaction.rs` |
 | healthy daemon reopen 的独立补偿分支 | `runtime/sandbox_session/one_click/healthy_reopen.rs` |
-| Gateway recovery/reuse/spawn/stop | `runtime/proxy_lifecycle.rs` façade及其 `proxy_lifecycle/` 片段 |
+| Gateway recovery/reuse/spawn/stop 与 typed acceptance receipt | `runtime/proxy_lifecycle.rs` façade及其 `proxy_lifecycle/controller.rs`、其他片段 |
 | Science executable、runtime identity、launch/health、managed receipt 与 stop | `runtime/science.rs` façade及其 `science/host_adapter.rs`、其他 `science/` 片段 |
 | 持久配置、runtime binding 与 journal schema | `desktop/src-tauri/src/config.rs` |
 
@@ -84,6 +84,15 @@ pending-cleanup/commit 接口收拢到同一表面；底层 `OneClickAuthoritySn
 SSH 顺序、`CompensationOutcome` 聚合、binding commit 与 frontend DTO/text/recovery projection。
 本 façade 不增加 `PriorStopIntent/Outcome`，也不改变 F5 pre-stop durable-intent gap、crash
 recovery 或 host/Gateway/Skill 范围。
+
+`GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
+health、catalog fingerprint、generation/write-back 与 child ownership 核心，但只在全部接受
+条件通过后返回非序列化 `GatewayReceipt`。receipt 同时绑定 route、`Reused/Restarted`、health
+identity、catalog fingerprint 与完整 `GatewayLaunchRecipe`；当 host context 来自健康的
+remembered Science 时，recipe 保存该 effective runtime，而不是只复制 caller 的显式参数。
+`AppState.gateway_launch_context` 与 receipt 使用同一 recipe。无 bundled caller 的 registered
+`start_proxy` 已移除，Gateway 启动只保留在 cold/healthy/profile-switch/recovery 内部路径；S6
+不改变这些 caller 的 lease、checkpoint、补偿、binding/journal commit、DTO 或可见文案。
 
 ## 三个阶段域
 

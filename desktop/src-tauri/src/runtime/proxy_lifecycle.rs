@@ -34,6 +34,9 @@ use crate::{config, lifecycle, lock, proc, SharedAppState};
 #[path = "proxy_lifecycle/binary.rs"]
 mod format_binary;
 #[cfg(any())]
+#[path = "proxy_lifecycle/controller.rs"]
+mod format_controller;
+#[cfg(any())]
 #[path = "proxy_lifecycle/launch_contract.rs"]
 mod format_launch_contract;
 #[cfg(any())]
@@ -50,6 +53,7 @@ include!("proxy_lifecycle/recovery.rs");
 include!("proxy_lifecycle/launch_contract.rs");
 include!("proxy_lifecycle/skill_bridge.rs");
 include!("proxy_lifecycle/binary.rs");
+include!("proxy_lifecycle/controller.rs");
 include!("proxy_lifecycle/lifecycle.rs");
 
 #[cfg(test)]

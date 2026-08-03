@@ -14,7 +14,7 @@ use crate::proc;
 #[cfg(test)]
 use crate::runtime::operation;
 use crate::runtime::proxy::ProxyAction;
-use crate::runtime::proxy_lifecycle::start_proxy_for;
+use crate::runtime::proxy_lifecycle::GatewayController;
 use crate::runtime::science::ScienceRuntimeIdentity;
 use crate::{lifecycle, lock, HistoryRecoverySession, SharedAppState};
 
@@ -45,7 +45,7 @@ pub(super) struct AppAuthoritySnapshot {
     pub(super) shim_mode: String,
     pub(super) launch_id: String,
     pub(super) key_fp: u64,
-    pub(super) gateway_launch_context: Option<crate::GatewayLaunchContext>,
+    pub(super) gateway_launch_context: Option<crate::runtime::proxy_lifecycle::GatewayLaunchRecipe>,
     pub(super) sandbox_present: bool,
     pub(super) sandbox_port: u16,
     pub(super) sandbox_url: Option<String>,
@@ -127,7 +127,7 @@ impl AppAuthoritySnapshot {
                 .gateway_launch_context
                 .as_ref()
                 .ok_or("late-failure 补偿缺少先前 Gateway 内存启动上下文")?;
-            start_proxy_for(
+            GatewayController::start_for(
                 app,
                 state,
                 lifecycle,

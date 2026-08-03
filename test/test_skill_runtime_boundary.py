@@ -85,12 +85,14 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )[1]
         state_check = one_click.index("let (science_state, running_runtime)")
         self.assertLess(one_click.index("config::load_from(&dir)"), state_check)
-        self.assertNotIn("ensure_proxy(", one_click[:state_check])
+        self.assertNotIn("GatewayController::ensure_active(", one_click[:state_check])
 
         runtime_selection = one_click.index("let launch_runtime: ScienceRuntimeIdentity")
         self.assertGreater(runtime_selection, state_check)
         launch_check = one_click.index("if !launch.is_file()")
-        normal_proxy = one_click.index("let (pport, secret, proxy_action) =", state_check)
+        normal_proxy = one_click.index(
+            "GatewayController::ensure_active(", state_check
+        )
         self.assertGreater(normal_proxy, launch_check)
 
     def test_launcher_never_clones_or_implicitly_selects_data_dir_runtime(self):
@@ -792,6 +794,87 @@ class SkillRuntimeBoundary(unittest.TestCase):
             final_section.index("install_selected_path"),
         )
         self.assertNotIn("runtime_transaction", final_section)
+
+    def test_s6_gateway_controller_receipt_and_removed_start_proxy_surface(self):
+        lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
+        runtime_command = (
+            ROOT / "desktop/src-tauri/src/commands/runtime.rs"
+        ).read_text()
+        gateway_command = (
+            ROOT / "desktop/src-tauri/src/commands/runtime/gateway.rs"
+        ).read_text()
+        controller = (
+            ROOT
+            / "desktop/src-tauri/src/runtime/proxy_lifecycle/controller.rs"
+        ).read_text()
+        lifecycle = (
+            ROOT
+            / "desktop/src-tauri/src/runtime/proxy_lifecycle/lifecycle.rs"
+        ).read_text()
+
+        registration = lib.split(
+            ".invoke_handler(tauri::generate_handler![", 1
+        )[1].split("])\n", 1)[0]
+        self.assertNotIn("commands::runtime::start_proxy", registration)
+        self.assertNotIn("pub(crate) async fn start_proxy", runtime_command)
+        self.assertNotIn("start_proxy_command", gateway_command)
+        self.assertNotIn("start_proxy_inner_cmd", gateway_command)
+
+        for contract in (
+            "pub(crate) struct GatewayController",
+            "pub(crate) struct GatewayReceipt",
+            "pub(crate) struct GatewayHealthReceipt",
+            "pub(crate) struct GatewayCatalogReceipt",
+            "pub(crate) struct GatewayLaunchRecipe",
+            "pub(crate) fn ensure_active",
+            "pub(crate) fn start_for",
+            "route_secret: String",
+            "action: ProxyAction",
+            "health: GatewayHealthReceipt",
+            "catalog: GatewayCatalogReceipt",
+            "recipe: GatewayLaunchRecipe",
+            "provider_contract_id: String",
+            "provider_contract_digest: String",
+            "intent: String",
+            "expected_fingerprint: Option<String>",
+            "accepted_fingerprint: String",
+            "accepted_health: &proc::GatewayHealth",
+        ):
+            self.assertIn(contract, controller)
+
+        receipt_decl = controller.split("pub(crate) struct GatewayReceipt", 1)[0].rsplit(
+            "///", 1
+        )[1]
+        for forbidden in ("Debug", "Serialize", "Deserialize"):
+            self.assertNotIn(forbidden, receipt_decl)
+        self.assertIn("fn start_proxy_for_inner", lifecycle)
+        self.assertNotIn("pub(crate) fn start_proxy_for_inner", lifecycle)
+        self.assertIn("effective_science_runtime", lifecycle)
+        self.assertIn("science_runtime: effective_science_runtime", lifecycle)
+        self.assertNotIn("http_health_gateway", lifecycle)
+        self.assertEqual(lifecycle.count("proc::http_gateway_health("), 2)
+        self.assertEqual(lifecycle.count("accepted_gateway_health("), 2)
+        self.assertEqual(
+            lifecycle.count("st.gateway_launch_context = Some(recipe.clone())"), 2
+        )
+
+        caller_paths = (
+            "desktop/src-tauri/src/runtime/profile_switch.rs",
+            "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs",
+            "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+            "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs",
+        )
+        callers = "\n".join((ROOT / path).read_text() for path in caller_paths)
+        self.assertIn("GatewayController::ensure_active", callers)
+        self.assertIn("GatewayController::start_for", callers)
+        self.assertNotIn("ensure_proxy(", callers)
+        self.assertNotIn("start_proxy_for(", callers)
+
+        inventory = (
+            ROOT / "quality/runtime-mutation-inventory.v1.json"
+        ).read_text()
+        self.assertNotIn('"op.start-gateway-only"', inventory)
+        self.assertNotIn('"name": "start_proxy"', inventory)
 
     def test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry(self):
         js = (ROOT / "desktop/src/profile-controller.js").read_text()
