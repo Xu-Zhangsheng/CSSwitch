@@ -14,6 +14,7 @@
       "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/ssh_contract.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
       "docs/architecture/runtime-state-transactions.md",
       "quality/changes/v0.8.3/CHG-RUNTIME-AUTHORITY-TRANSACTION-S5.json",
@@ -49,7 +50,7 @@
         "metadata"
       ]
     },
-    "claim_state": "unknown",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -66,7 +67,9 @@
         "the candidate source boundary delegates one-click authority capture, verified snapshot-ticket access, restore, cleanup, prepare-success, and commit through AuthorityTransaction",
         "the existing snapshot filesystem, pending-cleanup manifest and CAS, typed AuthorityCleanupOutcome, and CompensationOutcome contracts are reused without product or crash-recovery changes",
         "the coordinator retains prior Science stop, operation ordering, checkpoints, Gateway and SSH sequencing, binding commit, compensation funnel, visible DTO and text, and recovery projection",
-        "the exact candidate 15-suite source gate and clean-context completion review remain pending, so this record does not yet claim S5 DONE",
+        "exact candidate 9001f272f731842919aeac005b1152553ecb8d2f passed all 15 source-gate suites in run cfa02239eea33bd1c6c82a6be5bd39b0 with runner exit 0 and a clean 503-entry, 11843041-byte source snapshot",
+        "the exact-SHA clean-context completion review returned PASS with zero BLOCK, HIGH, MEDIUM, or LOW findings after independently validating the manifests, 30 result and observation hashes, and snapshot contents",
+        "this evidence-only seal records the gated candidate and does not claim that the seal commit itself ran the 15-suite source gate",
         "PriorStopIntent or Outcome, S6 GatewayController, Gateway or Skill behavior changes, host-neutral extension, artifact, installed, live, signing, and release validation are excluded"
       ]
     },

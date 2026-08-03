@@ -513,6 +513,31 @@ fail-closed 校验；adapter 不成为 host-neutral extension，也不改变 sto
 receipt cleanup、command/DTO/text 或 crash recovery。S5 authority capture/restore/cleanup 接口、
 `PriorStopIntent/Outcome`、Gateway/Skill、artifact/live/release 均未进入本阶段。
 
+`S5` 已收口（source）：私有 `AuthorityTransaction` façade 行为保持地收拢既有 one-click
+authority capture、verified snapshot ticket、restore、typed cleanup、prepare-success 与 commit。
+coordinator 继续控制 prior Science 处置、operation ordering、八个 V2 checkpoint、Gateway/SSH
+顺序、binding commit、`CompensationOutcome` funnel、可见 DTO/text 与 recovery projection；既有
+snapshot filesystem、pending-cleanup manifest/CAS 与 crash recovery 未改。
+
+首轮 clean-context candidate review 发现新增 source contract 的 prior-stop 定位可被无关 helper
+假阳性满足，一个 MEDIUM；收窄到 `one_click_login_with_options` 内的唯一 stop/capture/ticket/
+checkpoint/commit-compensation 顺序后，新 reviewer 以零 finding PASS。implementation commit
+`c35830b619d633bc1be99a381113ebeea06607e5` 的完整 gate 暴露一条旧 AST 合同仍绑定
+`authority_snapshot`；test-only gate-fix commit
+`9001f272f731842919aeac005b1152553ecb8d2f` 将其同步为 `authority_transaction`，精确复跑
+PASS。最终 exact candidate `9001f272f731842919aeac005b1152553ecb8d2f` 取得完整十五 suite
+`GATE-SOURCE` completion seal PASS：run id `cfa02239eea33bd1c6c82a6be5bd39b0`、runner
+exit 0；总计 1363 discovered / executed、1318 passed、45 approved ignored、0
+failed/skipped/todo/not-run，Desktop 为 530 discovered / executed、489 passed、0 failed、41
+approved ignored，clean source snapshot 为 503 个 tracked entry、11843041 bytes。exact-SHA
+clean-context completion review PASS，零 BLOCK/HIGH/MEDIUM/LOW，并重算三层 manifest、全部三十个
+result/observation 引用哈希与 snapshot 内容。默认 sandbox 的 loopback 权限失败 run 与修复前
+AST 合同失败 run 均保持独立，未用于 closure。本文所在 evidence-only seal commit 只记录上述
+candidate 与 run，不声称自身执行过完整 gate。`PriorStopIntent/Outcome`、F5/pre-stop durable
+intent、S6 `GatewayController`、host-neutral extension、Gateway/Skill/UI 行为均未进入本阶段；
+结论仅限 source/source-test，不外推 artifact、installed/runtime、live provider、Science、SSH、
+签名、公证、Gatekeeper 或 release。
+
 首轮 clean-context candidate review 发现 recovery absolute deadline 起点、product-reachable
 preflight probe bypass、spawn-failure characterization 三个 MEDIUM；修复后第二轮 review 又发现
 inline `#[cfg(test)]` 截断会让 anti-bypass scan 漏掉 production 后半文件。完整 production Rust
@@ -545,6 +570,7 @@ installed/runtime、live provider、Science、SSH、签名、公证、Gatekeeper
 | `S2 Science process-local owner` | DONE | `stop_all` 锁内 exact owner/request claim、`AppState` 锁外 wait、generation/identity CAS 与 stale replacement guard；exact-SHA gate 与独立审查 PASS，不推广 sibling caller/Gateway/S3 lease |
 | `S3 RuntimeMutationLease` | DONE | 四种 typed domain 共用既有 Lifecycle mutex；local Skill picker 锁外，最终 host receipt/package commit/attach 在短 HostBridge lease 内；exact-SHA gate 与最终独立审查 PASS，不新增 durable journal 或进入 S4 |
 | `S4 ScienceHostAdapter` | DONE | typed launch spec/exposure/health/listener identity/managed receipt 与 stop/probe façade；exact-SHA gate 与最终独立审查 PASS，保留 Rust + shell 双层 fail-closed，不进入 S5 或 host-neutral extension |
+| `S5 AuthorityTransaction` | DONE | authority capture、verified ticket、restore、typed cleanup/commit façade；exact-SHA gate 与最终独立审查 PASS，coordinator ordering/checkpoint/compensation/DTO/recovery ownership 不变，不进入 PriorStopIntent/Outcome 或 S6 |
 
 ### Post-R2 Rebaseline 结论与后续门
 
