@@ -557,6 +557,35 @@ suite；所有失败 seal 与最终 PASS run 保持独立。本文所在 evidenc
 candidate 与 run，不声称自身执行过完整 gate。结论仅限 source/source-test，不外推 artifact、
 installed/runtime、live provider、Science、SSH、签名、公证、Gatekeeper 或 release。
 
+`S6` 已收口（source）：无 bundled caller 的 registered `start_proxy` Tauri command、
+command wrapper、`OperationKind::StartProxy` 与 runtime inventory operation 已移除；formal
+Gateway 启动/复用核心保留在私有 `GatewayController`。成功路径返回 process-local、非
+Debug/serde/DTO 的 `GatewayReceipt`，绑定 route、started/reused action、同一份 accepted
+health response 的 gateway/provider/shim/launch/contract/intent identity、静态或动态 catalog
+结果，以及实际用于 fingerprint 与 child environment 的 profile/effective Science recipe。
+
+cold one-click、healthy reopen、profile switch/rollback、late-failure recovery 继续持有既有
+mutation lease、ordering、checkpoint、binding、journal、compensation、DTO 与可见文案；
+remembered healthy Science runtime 现在进入 recipe，避免补偿重启丢失既有 Skill host context。
+前两轮 clean-context review 分别发现 receipt identity/contract 字段与分支断言不足，以及二次
+health 请求造成 accepted identity 与 receipt 脱节；修复后第三轮 clean-context candidate review
+以零 BLOCK/HIGH/MEDIUM/LOW finding PASS。
+
+implementation exact SHA `a37b2416ddb9170296919fcee99e331072d97aa0` 取得完整十五 suite
+`GATE-SOURCE` completion seal PASS：run id `79eb9fe174155af153cfa47d51db6a2f`、
+runner exit 0；总计 1364 discovered/executed、1320 passed、44 approved ignored、0
+failed/skipped/todo/not-run，Desktop 为 530 discovered/executed、490 passed、0 failed、
+40 approved ignored；clean source snapshot 为 505 个 tracked entry、11856489 bytes。
+completion seal、run manifest、evidence manifest 与 source snapshot SHA-256 分别为
+`4140759ce978227b77d94e08527b868bacfee82d2e3a7437c241d10ecef13559`、
+`833f96882e03850eb12b7e0bd87676ade14282aafd8d475cce5db162cf095511`、
+`85335422248b6c62cbf81daff08d78d6f380e1a986a2ab859dadde725f47aaf4` 与
+`05bd6e7861ab6b7ada86ebc497d5ab377dc0f208f7a77b1242f2a9b07e2e7548`。
+首次 runner 调用仅因 output-root path 过长在 suite 执行前 exit 12，未与 PASS run 混合。
+本文所在 evidence-only seal commit 只记录上述 candidate 与 run，不声称自身执行过完整 gate。
+S7 coordinator 分片、PriorStopIntent/Outcome、新 durable Gateway journal、artifact、
+installed/runtime、live provider/Science/SSH、签名、公证、Gatekeeper 与 release 均未进入。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
@@ -571,6 +600,7 @@ installed/runtime、live provider、Science、SSH、签名、公证、Gatekeeper
 | `S3 RuntimeMutationLease` | DONE | 四种 typed domain 共用既有 Lifecycle mutex；local Skill picker 锁外，最终 host receipt/package commit/attach 在短 HostBridge lease 内；exact-SHA gate 与最终独立审查 PASS，不新增 durable journal 或进入 S4 |
 | `S4 ScienceHostAdapter` | DONE | typed launch spec/exposure/health/listener identity/managed receipt 与 stop/probe façade；exact-SHA gate 与最终独立审查 PASS，保留 Rust + shell 双层 fail-closed，不进入 S5 或 host-neutral extension |
 | `S5 AuthorityTransaction` | DONE | authority capture、verified ticket、restore、typed cleanup/commit façade；exact-SHA gate 与最终独立审查 PASS，coordinator ordering/checkpoint/compensation/DTO/recovery ownership 不变，不进入 PriorStopIntent/Outcome 或 S6 |
+| `S6 GatewayController` | DONE | 移除 registered `start_proxy`，保留私有 formal start/reuse core 与同一 accepted health response 派生的 typed receipt/完整 recipe；exact-SHA gate 与独立审查 PASS，不进入 S7 |
 
 ### Post-R2 Rebaseline 结论与后续门
 
@@ -599,11 +629,10 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-`S1`、`S2`、`S3` 与 `S4` 已按上述边界完成。S4 保持 command/DTO/text、stop policy、
-native-exit best-effort 与局部 Codex supervisor lease 语义，不新增 F5 pre-stop durable intent。
-改变 crash recovery 行为的
-`PriorStopIntent/Outcome` 继续与 `AuthorityTransaction` 接口等价提取分开，要求独立证据、
-operation contract 与明确授权。
+`S1`–`S6` 已按上述边界完成。S6 保持 command/DTO/text、binding/journal/compensation
+ownership，不新增 F5 pre-stop durable intent 或 crash-recovery policy。改变 crash recovery
+行为的 `PriorStopIntent/Outcome` 与 S7 coordinator 分片继续要求新的 code-grounded
+rebaseline、独立证据、operation contract 与明确授权。
 
 ## 下一轮重构的 P0 前置
 

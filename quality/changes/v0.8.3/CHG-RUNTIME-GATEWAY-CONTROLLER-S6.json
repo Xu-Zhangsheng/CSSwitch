@@ -8,6 +8,7 @@
     "status": "active",
     "owner": "quality-kernel",
     "changed_paths": [
+      ".agents/context/known-issues.md",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/commands/runtime/gateway.rs",
       "desktop/src-tauri/src/commands/runtime/one_click.rs",
@@ -64,7 +65,7 @@
         "metadata"
       ]
     },
-    "claim_state": "unknown",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -82,7 +83,10 @@
         "GatewayController returns a non-serializable GatewayReceipt only after reuse or spawn identity, health, and catalog acceptance and binds the exact effective Science launch recipe used for fingerprinting and child environment",
         "remembered healthy Science context is now preserved in the in-memory recipe used by AppState and compensation instead of being omitted when the caller passed no explicit runtime",
         "cold, healthy, profile-switch, recovery, binding, journal, compensation, DTO, text, and interrupted-orphan recovery policy remain owned by their existing callers",
-        "the exact candidate 15-suite source gate and clean-context completion review remain pending, so this record does not yet claim S6 DONE",
+        "exact candidate a37b2416ddb9170296919fcee99e331072d97aa0 passed all 15 source-gate suites in run 79eb9fe174155af153cfa47d51db6a2f with runner exit 0, 1320 passed, 44 approved ignored, and zero failed, skipped, todo, or not-run identities",
+        "the clean 505-entry, 11856489-byte source snapshot is bound to the exact candidate; completion seal, run manifest, evidence manifest, and source snapshot hashes were independently recomputed",
+        "the clean-context candidate review returned PASS with zero BLOCK, HIGH, MEDIUM, or LOW findings after two earlier review rounds drove receipt completeness, full branch coverage, and same-response health acceptance fixes",
+        "this evidence-only seal records the gated candidate and does not claim that the seal commit itself ran the 15-suite source gate",
         "S7 coordinator slicing, PriorStopIntent or Outcome, new durable Gateway journal semantics, artifact, installed, live, signing, and release validation are excluded"
       ]
     },
