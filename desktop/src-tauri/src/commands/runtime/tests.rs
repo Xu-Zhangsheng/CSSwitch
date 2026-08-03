@@ -1531,6 +1531,14 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
         env_guard.set("CSSWITCH_FAKE_SCIENCE_DB_HEALTH", "io-errors");
     } else if failure_edge == "db-health-missing-kind" {
         env_guard.set("CSSWITCH_FAKE_SCIENCE_DB_HEALTH", "missing-kind");
+    } else if failure_edge == "spawn-error" {
+        let fake_state = science_data.join("fake-science");
+        fs::create_dir_all(&fake_state).unwrap();
+        fs::write(
+            fake_state.join("call-log-path"),
+            science_call_log.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
     } else if matches!(
         failure_edge.as_str(),
         "db-restart-no-listener" | "db-restart-launch-blocks"
@@ -1739,9 +1747,8 @@ exec '{}' "$@"
     )
     .then(|| sandbox_session::test_arm_gateway_catalog_bypass(proxy_port));
 
-    if failure_edge == "spawn-error" {
-        env::set_var("PATH", bin_dir.as_os_str());
-    }
+    let mut science_spawn_failure_seam =
+        (failure_edge == "spawn-error").then(science::test_arm_science_launch_spawn_failure);
     port_reservations.release_one_click_ports();
     let operation_started = Instant::now();
     let failed: Result<serde_json::Value, String> = if codex_gateway_oracle {
@@ -2249,13 +2256,7 @@ exec '{}' "$@"
     } else if failure_edge == "db-health-skipped" {
         env::remove_var("CSSWITCH_FAKE_SCIENCE_DB_HEALTH");
     } else if failure_edge == "spawn-error" {
-        env::set_var(
-            "PATH",
-            format!(
-                "{}:/usr/bin:/bin:/usr/sbin:/sbin",
-                bin_dir.to_string_lossy()
-            ),
-        );
+        drop(science_spawn_failure_seam.take());
     } else if failure_edge == "serve-mutates-then-exits" {
         fs::remove_file(&failure_control).unwrap();
     } else {

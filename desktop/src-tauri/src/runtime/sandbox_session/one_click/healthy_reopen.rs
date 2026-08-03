@@ -80,7 +80,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             running_runtime,
             false,
         );
-        let url = sandbox_url(sport, running_runtime);
+        let url = ScienceHostAdapter::url(sport, running_runtime);
         {
             let mut current = lock(state);
             current.sandbox_port = sport;

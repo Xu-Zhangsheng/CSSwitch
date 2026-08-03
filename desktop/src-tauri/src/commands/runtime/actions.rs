@@ -46,13 +46,13 @@ pub(super) fn open_url_inner(state: &SharedAppState) -> Result<serde_json::Value
             .ok_or("隔离 Science 尚未运行，请先「一键开始」。")?;
         (st.sandbox_port, runtime)
     };
-    if sandbox_port == 0 || !sandbox_listener_matches_runtime(sandbox_port, &runtime) {
+    if sandbox_port == 0 || !ScienceHostAdapter::listener_matches(sandbox_port, &runtime) {
         return Err("隔离 Science 尚未就绪，请重新点击「一键开始」。".into());
     }
     // Science 的控制地址可能是短期、一次性的。每次手动打开都重新获取，
     // 不复用 one-click 已消费的内存 URL。成功时不返回 URL；只有系统
     // opener 失败时才把同一次新 URL 交给 UI，供用户复制或再次打开。
-    let url = sandbox_url(sandbox_port, &runtime);
+    let url = ScienceHostAdapter::url(sandbox_port, &runtime);
     Ok(manual_open_result(url.clone(), open_in_browser(&url)))
 }
 

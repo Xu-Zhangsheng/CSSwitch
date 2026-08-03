@@ -17,9 +17,7 @@ use crate::codex_auth_supervisor::{
 use crate::lifecycle::RuntimeMutationDomain;
 use crate::proc::ChildLiveness;
 use crate::runtime::proxy_lifecycle::gateway_bin_path;
-use crate::runtime::science::{
-    probe_known_runtime, probe_sandbox_runtime_cached, SandboxScienceState,
-};
+use crate::runtime::science::{SandboxScienceState, ScienceHostAdapter};
 use crate::runtime::system::kill_child;
 use crate::{config, lock, proc, run_blocking, AppState, SharedAppState, SharedLifecycle};
 
@@ -567,12 +565,12 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
 
     let (science_state, detected_runtime) = match remembered_runtime.clone() {
         Some(runtime) => {
-            let science_state = probe_known_runtime(cfg.sandbox_port, &runtime);
+            let science_state = ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime);
             let detected =
                 (science_state == SandboxScienceState::RunningHealthy).then_some(runtime);
             (science_state, detected)
         }
-        None => probe_sandbox_runtime_cached(cfg.sandbox_port, &version_cache)?,
+        None => ScienceHostAdapter::probe_cached(cfg.sandbox_port, &version_cache)?,
     };
     let action =
         resolve_science_runtime_action(proxy_action, active_profile_is_codex, science_state)?;

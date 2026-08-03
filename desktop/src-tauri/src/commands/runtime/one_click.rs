@@ -306,14 +306,14 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
             {
                 let mut app_state = lock(&state);
                 if let Some(runtime) = app_state.science_runtime.clone() {
-                    let receipt = managed_launch_token_for_runtime(expected_port, &runtime)
+                    let receipt = ScienceHostAdapter::managed_receipt(expected_port, &runtime)
                         .ok_or("历史恢复前无法取得 Science 的精确受管启动身份")?;
                     let AppState {
                         sandbox,
                         sandbox_url,
                         ..
                     } = &mut *app_state;
-                    let verified = stop_sandbox(
+                    let verified = ScienceHostAdapter::stop(
                         &app,
                         sandbox,
                         sandbox_url,
@@ -335,7 +335,7 @@ pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
                 } else {
                     let version_cache = app_state.science_version_cache.clone();
                     let (current_science_state, current_runtime) =
-                        probe_sandbox_runtime_cached(expected_port, &version_cache)
+                        ScienceHostAdapter::probe_cached(expected_port, &version_cache)
                             .map_err(|error| error.to_string())?;
                     if current_science_state != SandboxScienceState::Stopped
                         || current_runtime.is_some()

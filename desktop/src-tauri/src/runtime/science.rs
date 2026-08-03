@@ -62,6 +62,9 @@ mod format_contracts;
 #[path = "science/executable.rs"]
 mod format_executable;
 #[cfg(any())]
+#[path = "science/host_adapter.rs"]
+mod format_host_adapter;
+#[cfg(any())]
 #[path = "science/lifecycle.rs"]
 mod format_lifecycle;
 #[cfg(any())]
@@ -76,6 +79,7 @@ include!("science/executable.rs");
 include!("science/runtime_state.rs");
 include!("science/managed_launch.rs");
 include!("science/lifecycle.rs");
+include!("science/host_adapter.rs");
 
 #[cfg(test)]
 pub(crate) fn test_runtime_identity(path: PathBuf) -> ScienceRuntimeIdentity {

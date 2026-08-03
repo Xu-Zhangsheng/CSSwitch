@@ -239,8 +239,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
         command = actions.split("fn open_url_inner", 1)[1].split(
             "pub(super) async fn open_url_command", 1
         )[0]
-        self.assertIn("sandbox_listener_matches_runtime", command)
-        self.assertIn("sandbox_url(sandbox_port, &runtime)", command)
+        self.assertIn("ScienceHostAdapter::listener_matches", command)
+        self.assertIn("ScienceHostAdapter::url(sandbox_port, &runtime)", command)
         self.assertNotIn("st.sandbox_url.clone()", command)
         self.assertIn("manual_open_result(url.clone(), open_in_browser(&url))", command)
         self.assertIn("CSSWITCH_FAKE_OPEN_FAIL_ONCE_FILE", runtime_tests)
@@ -297,7 +297,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("setBrowserFallback(r.fallback_url)", one_click)
 
         gateway_ready = one_click_runtime.index("verify_gateway_model_catalog_traced(")
-        science_spawn = one_click_runtime.index('Command::new("zsh")', gateway_ready)
+        science_spawn = one_click_runtime.index(
+            "ScienceHostAdapter::spawn_launch", gateway_ready
+        )
         self.assertLess(gateway_ready, science_spawn)
         self.assertEqual(one_click_runtime.count("write_one_click_checkpoint("), 8)
         checkpoint_stages = re.findall(
@@ -408,21 +410,27 @@ class SkillRuntimeBoundary(unittest.TestCase):
         science_lifecycle = (
             ROOT / "desktop/src-tauri/src/runtime/science/lifecycle.rs"
         ).read_text()
+        science_host = (
+            ROOT / "desktop/src-tauri/src/runtime/science/host_adapter.rs"
+        ).read_text()
         launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
         runtime = runtime_command_source()
         one_click = sandbox_session_one_click_source().split(
             "fn one_click_login_with_options", 1
         )[1]
-        self.assertIn("science_bin: Path::new(&launch_runtime.path)", session)
-        self.assertIn("proxy_url: &proxy_url", session)
+        self.assertIn("science_bin: Path::new(&spec.runtime.path)", science_host)
+        self.assertIn("ScienceLaunchSpec::one_click(", session)
+        self.assertIn("&proxy_url,", session)
         self.assertIn('"SCIENCE_BIN".into(), cfg.science_bin.display().to_string()', launch_env)
         self.assertIn('"CSSWITCH_PROXY_URL".into(), cfg.proxy_url.into()', launch_env)
         self.assertNotIn('.arg(&proxy_url)', session)
         self.assertIn("current.science_runtime = Some(launch_runtime.clone())", one_click)
-        self.assertIn("probe_known_runtime(sport, &runtime)", session)
-        self.assertIn("sandbox_listener_matches_runtime(sport, &launch_runtime)", session)
-        self.assertIn("sandbox_url(sport, &launch_runtime)", session)
-        self.assertIn("runtime_identity_is_current(&launch_runtime)", session)
+        self.assertIn("ScienceHostAdapter::probe_known(sport, &runtime)", session)
+        self.assertIn("sandbox_listener_matches_runtime(healthy.port", science_host)
+        self.assertIn("ScienceHostAdapter::url(sport, &launch_runtime)", session)
+        self.assertIn(
+            "ScienceHostAdapter::validate_launch_runtime(&launch_runtime)", session
+        )
         self.assertIn("configure_science_stop_script_command(", science)
         self.assertIn("Path::new(&runtime.path)", science)
         self.assertIn('"source": runtime.source.code()', runtime)
@@ -464,7 +472,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ExactStopped(expected)", history_restore)
         self.assertIn("NoManagedRuntimeObserved", history_restore)
         self.assertIn("science_quiescence.clone()", history_restore)
-        self.assertIn("probe_sandbox_runtime_cached", history_restore)
+        self.assertIn("ScienceHostAdapter::probe_cached", history_restore)
         self.assertIn("current_science_state != SandboxScienceState::Stopped", history_restore)
         self.assertIn(
             "session.science_quiescence =\n                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime)",
@@ -514,8 +522,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "pub(super) fn stop_all_inner_cmd", 1
         )[1].split("pub(super) async fn quit_app_command", 1)[0]
         self.assertIn("ScienceProcessLocalOwner", stop_all)
-        self.assertIn("claim_science_stop_request", stop_all)
-        self.assertIn("execute_science_stop", stop_all)
+        self.assertIn("ScienceHostAdapter::claim_stop", stop_all)
+        self.assertIn("ScienceHostAdapter::execute_stop", stop_all)
         self.assertIn("owner.still_owns", stop_all)
         self.assertIn("lifecycle.current_generation()", stop_all)
         self.assertNotIn("stop_sandbox_state(&app, &mut st)", stop_all)
@@ -533,6 +541,123 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("pub(crate) fn claim_science_stop_request", science_lifecycle)
         self.assertIn("pub(crate) fn execute_science_stop", science_lifecycle)
         self.assertIn("ScienceStopRequest::exact", science_lifecycle)
+
+    def test_s4_science_host_adapter_owns_launch_health_receipt_and_stop_facade(self):
+        one_click = sandbox_session_one_click_source()
+        runtime_lifecycle = runtime_command_module("lifecycle")
+        host = (
+            ROOT / "desktop/src-tauri/src/runtime/science/host_adapter.rs"
+        ).read_text()
+
+        for contract in (
+            "ScienceHostAdapter",
+            "ScienceLaunchSpec",
+            "ScienceEnvironmentExposure",
+            "ScienceLaunchAttempt",
+            "ScienceHealthyLaunch",
+            "ScienceVerifiedLaunch",
+            "ScienceLaunchReceipt",
+            "ScienceLaunchFailureKind",
+        ):
+            self.assertIn(contract, host)
+
+        self.assertNotIn('Command::new("zsh")', one_click)
+        self.assertNotIn("configure_science_launch_script_command", one_click)
+        self.assertNotIn("SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE", one_click)
+        self.assertIn(
+            "launch_environment: ScienceEnvironmentExposure", one_click
+        )
+        self.assertNotIn("launch_attempted: bool", one_click)
+        self.assertIn('Command::new("zsh")', host)
+        self.assertIn("configure_science_launch_script_command", host)
+        self.assertIn("SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE", host)
+
+        initial = one_click.split("let opaque_bindings =", 1)[1].split(
+            "rollback_context.set_kind(OneClickFailureKind::ScienceDbReverify)", 1
+        )[0]
+        ordered_initial = (
+            "ScienceHostAdapter::spawn_launch",
+            "transaction.observe_after_launch",
+            "ScienceHostAdapter::accept_launch_script",
+            "current.science_runtime = Some(launch_runtime.clone())",
+            "ScienceHostAdapter::verify_health",
+            'trace.stage(OperationStage::SandboxHealth, "ready")',
+            "ScienceHostAdapter::verify_identity",
+            "ScienceHostAdapter::commit_launch",
+        )
+        offsets = [initial.index(fragment) for fragment in ordered_initial]
+        self.assertEqual(offsets, sorted(offsets))
+
+        ordered_host = (
+            'Command::new("zsh")',
+            "configure_science_launch_script_command",
+            ".spawn()",
+            "proc::http_health",
+            "sandbox_listener_matches_runtime",
+            "uncommitted_managed_science_launch_token",
+            "record_managed_science_launch",
+        )
+        offsets = [host.index(fragment) for fragment in ordered_host]
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertGreater(
+            host.index("SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE", offsets[2]),
+            offsets[2],
+        )
+        self.assertIn("managed_launch_token_is_current_for_runtime", host)
+
+        self.assertIn("ScienceHostAdapter::claim_stop", runtime_lifecycle)
+        self.assertIn("ScienceHostAdapter::execute_stop", runtime_lifecycle)
+        self.assertIn("ScienceHostAdapter::stop", runtime_lifecycle)
+        self.assertIn("claim_science_stop_request(runtime)", host)
+        self.assertIn("execute_science_stop(app, request)", host)
+        self.assertIn("stop_sandbox(app, sandbox, sandbox_url, request)", host)
+
+        rust_root = ROOT / "desktop/src-tauri/src"
+        low_level_owner_paths = {
+            rust_root / "runtime/science/host_adapter.rs",
+            rust_root / "runtime/science/lifecycle.rs",
+            rust_root / "runtime/science/managed_launch.rs",
+        }
+        production_paths = sorted(
+            path
+            for path in rust_root.rglob("*.rs")
+            if path not in low_level_owner_paths
+            and path.name != "tests.rs"
+            and "transaction_tests" not in path.parts
+        )
+        production_sources = {
+            path: path.read_text() for path in production_paths
+        }
+        production = "\n".join(production_sources.values())
+        executable_path = rust_root / "runtime/science/executable.rs"
+        one_click_path = rust_root / "runtime/sandbox_session/one_click.rs"
+        self.assertIn(
+            "pub(crate) fn science_runtime_preflight",
+            production_sources[executable_path],
+        )
+        self.assertIn(
+            "ScienceHostAdapter::probe_cached",
+            production_sources[executable_path],
+        )
+        self.assertIn(
+            "ScienceHostAdapter::spawn_launch",
+            production_sources[one_click_path],
+        )
+        for bypass in (
+            "probe_known_runtime(",
+            "probe_sandbox_runtime_cached(",
+            "claim_science_stop_request(",
+            "execute_science_stop(",
+            "stop_sandbox(",
+            "record_managed_science_launch(",
+            "uncommitted_managed_science_launch_token(",
+            "managed_launch_token_for_runtime(",
+            "managed_launch_token_is_current_for_runtime(",
+            "managed_launch_token_process_is_alive(",
+            "sandbox_listener_matches_runtime(",
+            "sandbox_url(",
+        ):
+            self.assertNotIn(bypass, production)
 
     def test_s3_runtime_mutation_domains_and_local_skill_host_receipt_are_typed(self):
         lifecycle = (ROOT / "desktop/src-tauri/src/lifecycle.rs").read_text()
@@ -619,7 +744,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
             cleanup_flow.index("stop_science("), cleanup_flow.index("stop_gateway(")
         )
         self.assertLess(
-            production_cleanup.index("stop_sandbox("),
+            production_cleanup.index("ScienceHostAdapter::stop("),
             production_cleanup.index("AppState::stop_proxy"),
         )
         quit_command = lifecycle.split("pub(super) async fn quit_app_command", 1)[1]

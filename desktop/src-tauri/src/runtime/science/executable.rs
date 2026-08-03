@@ -750,7 +750,7 @@ pub(crate) fn science_runtime_preflight(
     _confirmed_stopped: Option<&ScienceRuntimeIdentity>,
 ) -> Result<Value, String> {
     if let Ok(cfg) = config::load_from(&config::default_dir()) {
-        let (state, runtime) = probe_sandbox_runtime_cached(cfg.sandbox_port, version_cache)?;
+        let (state, runtime) = ScienceHostAdapter::probe_cached(cfg.sandbox_port, version_cache)?;
         if state == SandboxScienceState::RunningHealthy {
             let runtime = runtime.ok_or("Science 状态为运行中，但无法确认其 binary 身份")?;
             return Ok(json!({

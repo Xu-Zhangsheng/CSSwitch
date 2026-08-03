@@ -81,8 +81,10 @@ pub(crate) fn start_proxy_for<R: Runtime>(
             };
             remembered.and_then(|(runtime, sandbox_port)| {
                 (sandbox_port == cfg.sandbox_port
-                    && crate::runtime::science::probe_known_runtime(sandbox_port, &runtime)
-                        == crate::runtime::science::SandboxScienceState::RunningHealthy)
+                    && crate::runtime::science::ScienceHostAdapter::probe_known(
+                        sandbox_port,
+                        &runtime,
+                    ) == crate::runtime::science::SandboxScienceState::RunningHealthy)
                     .then(|| runtime.skill_install_host_context(sandbox_port).ok())
                     .flatten()
             })

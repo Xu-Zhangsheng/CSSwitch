@@ -60,6 +60,7 @@
         "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_manual_science_open_refreshes_url_and_has_visible_feedback",
         "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_production_startup_has_no_skill_manager_dependency",
         "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_s3_runtime_mutation_domains_and_local_skill_host_receipt_are_typed",
+        "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_s4_science_host_adapter_owns_launch_health_receipt_and_stop_facade",
         "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_science_runtime_identity_is_reused_for_serve_status_url_and_stop",
         "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_simple_model_inputs_and_one_click_failures_are_visible_and_structured",
         "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_system_ssh_bridge_is_opt_in_and_replaces_tunnel_entry",

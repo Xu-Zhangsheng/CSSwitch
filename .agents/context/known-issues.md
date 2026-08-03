@@ -502,6 +502,18 @@ snapshot 内容。此前同 SHA 两条 14/15 FAIL run 分别落在不同的既�
 结论仅限 source/source-test，不外推 artifact、installed/runtime、live provider、Science、SSH、
 签名、公证、Gatekeeper 或 release。
 
+`S4` implementation candidate 已完成，尚待独立 candidate review 与 exact-SHA source gate
+收口：`ScienceHostAdapter` 以 typed launch spec、environment exposure、launch/healthy/verified
+receipt phase 和既有 typed stop outcome 包住 Rust + shell host 边界。one-click 与 DB recovery
+restart 不再自行拼接 Science shell command、解释 exit code、执行 health/listener proof 或提交
+managed launch receipt；原有 authority revalidation、SSH post-launch observation、`AppState`
+publication、DB reverify、补偿与用户可见文案顺序保持不变。
+
+shell 继续承担 `env -i`、canonical executable/data-dir、proxy/SSH/opaque binding 等双层
+fail-closed 校验；adapter 不成为 host-neutral extension，也不改变 stop script、TERM/KILL/wait、
+receipt cleanup、command/DTO/text 或 crash recovery。S5 authority capture/restore/cleanup 接口、
+`PriorStopIntent/Outcome`、Gateway/Skill、artifact/live/release 均未进入本阶段。
+
 | 阶段 | 状态 | 边界 |
 |---|---|---|
 | `R2-A` | DONE | nested V1/V2 schema、V1 只读兼容、fail-closed typed accessor、exact-SHA gate 与独立审查；仍写 V1 |
@@ -514,6 +526,7 @@ snapshot 内容。此前同 SHA 两条 14/15 FAIL run 分别落在不同的既�
 | `S1 Typed Science stop contract` | DONE | typed stop request/receipt/outcome 与 recovery-critical exact proof 已覆盖生产 caller；离线 history continuation 以 process-local typed quiescence proof、完整 probe recheck 与可复用 proof advancement 闭合；exact-SHA gate 与最终独立审查 PASS，不移动锁或改变 stop policy |
 | `S2 Science process-local owner` | DONE | `stop_all` 锁内 exact owner/request claim、`AppState` 锁外 wait、generation/identity CAS 与 stale replacement guard；exact-SHA gate 与独立审查 PASS，不推广 sibling caller/Gateway/S3 lease |
 | `S3 RuntimeMutationLease` | DONE | 四种 typed domain 共用既有 Lifecycle mutex；local Skill picker 锁外，最终 host receipt/package commit/attach 在短 HostBridge lease 内；exact-SHA gate 与最终独立审查 PASS，不新增 durable journal 或进入 S4 |
+| `S4 ScienceHostAdapter` | CANDIDATE | typed launch spec/exposure/health/managed receipt 与 stop façade；待 candidate review 与 exact-SHA gate，保留 Rust + shell 双层 fail-closed，不进入 S5 或 host-neutral extension |
 
 ### Post-R2 Rebaseline 结论与后续门
 
@@ -542,7 +555,8 @@ exact-SHA 15-suite gate、clean-context review 与 source-only 边界均已闭�
 6. `S6` GatewayController receipt 与 registered `start_proxy` 去留；
 7. `S7` cold/healthy/history coordinator 分片，之后再次 rebaseline。
 
-`S1`、`S2` 与 `S3` 已按上述边界完成。S3 保持 command/DTO/text、stop policy、
+`S1`、`S2` 与 `S3` 已按上述边界完成；S4 已获本轮用户授权并形成 implementation candidate，
+只有在独立审查与 exact-SHA gate 闭合后才能标为 DONE。S4 保持 command/DTO/text、stop policy、
 native-exit best-effort 与局部 Codex supervisor lease 语义，不新增 F5 pre-stop durable intent。
 改变 crash recovery 行为的
 `PriorStopIntent/Outcome` 继续与 `AuthorityTransaction` 接口等价提取分开，要求独立证据、

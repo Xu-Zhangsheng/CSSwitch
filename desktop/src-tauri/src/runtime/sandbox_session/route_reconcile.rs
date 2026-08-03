@@ -3,8 +3,8 @@ use tauri::Runtime;
 
 use crate::runtime::proxy_lifecycle::{current_skill_install_bridge_key, skill_install_bridge_dir};
 use crate::runtime::science::{
-    probe_known_runtime, probe_sandbox_runtime_cached, runtime_identity_is_current,
-    sandbox_data_dir, sandbox_url, SandboxScienceState, ScienceRuntimeIdentity,
+    runtime_identity_is_current, sandbox_data_dir, SandboxScienceState, ScienceHostAdapter,
+    ScienceRuntimeIdentity,
 };
 use crate::runtime::skill_install_bridge::{
     configure_third_party_after_science_start, inspect_while_science_running,
@@ -27,7 +27,7 @@ pub(super) fn configure_third_party_best_effort<R: Runtime>(
         runtime.version.as_deref(),
         force,
         || {
-            let control_url = sandbox_url(port, runtime);
+            let control_url = ScienceHostAdapter::url(port, runtime);
             configure_third_party_after_science_start(app, &control_url)
         },
     )
@@ -200,13 +200,13 @@ pub(crate) fn force_third_party_reconcile<R: Runtime>(
                 );
             }
             runtime.version = Some(refreshed);
-            let science_state = probe_known_runtime(cfg.sandbox_port, &runtime);
+            let science_state = ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime);
             let running = (science_state == SandboxScienceState::RunningHealthy).then_some(runtime);
             (science_state, running)
         }
         None => {
             version_cache.clear();
-            probe_sandbox_runtime_cached(cfg.sandbox_port, &version_cache)?
+            ScienceHostAdapter::probe_cached(cfg.sandbox_port, &version_cache)?
         }
     };
 

@@ -12,7 +12,7 @@ use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::lifecycle::{RuntimeMutationDomain, RuntimeMutationLease};
-use crate::runtime::science::{probe_known_runtime, SandboxScienceState};
+use crate::runtime::science::{SandboxScienceState, ScienceHostAdapter};
 use crate::{config, lock, run_blocking, SharedAppState, SharedLifecycle};
 
 #[derive(Debug, Eq, PartialEq)]
@@ -128,7 +128,7 @@ fn current_science_context(state: &SharedAppState) -> Result<ScienceHostContext,
         state_port
     };
     if port != cfg.sandbox_port
-        || probe_known_runtime(port, &runtime) != SandboxScienceState::RunningHealthy
+        || ScienceHostAdapter::probe_known(port, &runtime) != SandboxScienceState::RunningHealthy
     {
         return Err("Science 未处于 RunningHealthy，未导入任何文件".into());
     }

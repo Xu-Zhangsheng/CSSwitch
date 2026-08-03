@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 use runtime::{
-    science::{stop_sandbox, ScienceStopRequest},
+    science::{ScienceHostAdapter, ScienceStopRequest},
     system::kill_child,
 };
 
@@ -332,7 +332,7 @@ fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             }
         },
         |app, st, runtime| {
-            stop_sandbox(
+            ScienceHostAdapter::stop(
                 app,
                 &mut st.sandbox,
                 &mut st.sandbox_url,

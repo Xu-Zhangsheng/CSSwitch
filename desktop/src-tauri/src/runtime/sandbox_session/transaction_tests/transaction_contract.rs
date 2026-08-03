@@ -543,7 +543,11 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "prepare_science_ssh_bridge",
         "revoke_science_ssh_bridge",
         "ensure_proxy",
-        "record_managed_science_launch",
+        "spawn_launch",
+        "accept_launch_script",
+        "verify_health",
+        "verify_identity",
+        "commit_launch",
     ] {
         assert!(
             transaction.calls.iter().any(|call| call == required),
@@ -551,10 +555,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         );
     }
     assert!(
-            transaction.methods.iter().any(|method| method == "spawn")
-                && transaction.methods.iter().any(|method| method == "wait")
+            !transaction.methods.iter().any(|method| method == "spawn")
+                && !transaction.methods.iter().any(|method| method == "wait")
                 && !transaction.methods.iter().any(|method| method == "status"),
-            "the single mutation closure must own explicit shell spawn/wait and distinguish spawn from wait failure"
+            "the one-click coordinator must use the typed ScienceHostAdapter instead of interpreting shell process methods"
         );
     assert!(
             transaction
@@ -567,29 +571,78 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         );
     let mut recovery_restart_flow = FlowFacts::default();
     recovery_restart_flow.visit_item_fn(recovery_restart);
-    assert!(
+    for required in [
+        "spawn_launch",
+        "accept_launch_script",
+        "verify_health",
+        "verify_identity",
+        "commit_launch",
+    ] {
+        assert!(
             recovery_restart_flow
+                .calls
+                .iter()
+                .any(|call| call == required),
+            "DB recovery restart must use the ScienceHostAdapter {required} phase"
+        );
+    }
+    assert!(
+        !recovery_restart_flow
+            .methods
+            .iter()
+            .any(|method| method == "spawn")
+            && !recovery_restart_flow
                 .methods
                 .iter()
-                .any(|method| method == "spawn")
-                && recovery_restart_flow
-                    .methods
-                    .iter()
-                    .any(|method| method == "try_wait")
-                && recovery_restart_flow
-                    .methods
-                    .iter()
-                    .any(|method| method == "saturating_duration_since")
-                && recovery_restart_flow
-                    .calls
-                    .iter()
-                    .any(|call| call == "http_health")
-                && !recovery_restart_flow
-                    .methods
-                    .iter()
-                    .any(|method| method == "status"),
-            "DB recovery restart must enforce one absolute deadline across explicit shell try_wait and remaining-time-capped health"
-        );
+                .any(|method| method == "try_wait")
+            && !recovery_restart_flow
+                .calls
+                .iter()
+                .any(|call| call == "http_health")
+            && !recovery_restart_flow
+                .methods
+                .iter()
+                .any(|method| method == "status"),
+        "DB recovery coordinator must delegate shell wait and health timing to ScienceHostAdapter"
+    );
+    let host_adapter_source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/runtime/science/host_adapter.rs"),
+    )
+    .expect("ScienceHostAdapter source must be readable");
+    let spawn_launch = host_adapter_source
+        .splitn(2, "pub(crate) fn spawn_launch")
+        .nth(1)
+        .expect("ScienceHostAdapter must define spawn_launch")
+        .splitn(2, "pub(crate) fn accept_launch_script")
+        .next()
+        .expect("spawn_launch must precede accept_launch_script");
+    let deadline_offset = spawn_launch
+        .find("let deadline =")
+        .expect("recovery launch must freeze one absolute deadline");
+    let command_offset = spawn_launch
+        .find("Command::new")
+        .expect("adapter must construct the Science launch command");
+    let spawn_offset = spawn_launch
+        .find(".spawn()")
+        .expect("adapter must spawn the Science launch command");
+    assert!(
+        deadline_offset < command_offset && command_offset < spawn_offset,
+        "the recovery absolute deadline must begin before command setup and cover spawn/wait"
+    );
+    let verify_health = host_adapter_source
+        .splitn(2, "pub(crate) fn verify_health")
+        .nth(1)
+        .expect("ScienceHostAdapter must define verify_health")
+        .splitn(2, "pub(crate) fn verify_identity")
+        .next()
+        .expect("verify_health must precede verify_identity");
+    assert!(
+        verify_health.contains("Some(deadline)")
+            && verify_health.contains("saturating_duration_since")
+            && verify_health.contains("remaining.as_millis()"),
+        "the same recovery deadline must cap health polling and each remaining probe timeout"
+    );
     assert!(
         !transaction.methods.iter().any(|method| method == "commit")
             && !transaction

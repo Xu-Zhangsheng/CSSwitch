@@ -6,7 +6,7 @@ pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
 ) -> crate::runtime::science::ScienceStopOutcome {
     let runtime = st.science_runtime.clone();
     let request = crate::runtime::science::ScienceStopRequest::recover(runtime.as_ref());
-    let result = stop_sandbox(app, &mut st.sandbox, &mut st.sandbox_url, request);
+    let result = ScienceHostAdapter::stop(app, &mut st.sandbox, &mut st.sandbox_url, request);
     if let Ok(verified) = result.as_ref() {
         st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
         st.science_runtime = None;
@@ -158,8 +158,8 @@ pub(super) fn stop_all_inner_cmd<R: tauri::Runtime>(
         state,
         lifecycle,
         RuntimeMutationDomain::Destructive,
-        claim_science_stop_request,
-        |app, request| execute_science_stop(app, request).into_parts(),
+        ScienceHostAdapter::claim_stop,
+        |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
     )
 }
 
@@ -269,8 +269,8 @@ pub(super) async fn quit_app_command(
             state,
             lifecycle,
             RuntimeMutationDomain::Terminal,
-            claim_science_stop_request,
-            |app, request| execute_science_stop(app, request).into_parts(),
+            ScienceHostAdapter::claim_stop,
+            |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
         )
     })
     .await;

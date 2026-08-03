@@ -34,7 +34,7 @@
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
 | healthy daemon reopen 的独立补偿分支 | `runtime/sandbox_session/one_click/healthy_reopen.rs` |
 | Gateway recovery/reuse/spawn/stop | `runtime/proxy_lifecycle.rs` façade及其 `proxy_lifecycle/` 片段 |
-| Science executable、runtime identity、managed receipt 与 stop | `runtime/science.rs` façade及其 `science/` 片段 |
+| Science executable、runtime identity、launch/health、managed receipt 与 stop | `runtime/science.rs` façade及其 `science/host_adapter.rs`、其他 `science/` 片段 |
 | 持久配置、runtime binding 与 journal schema | `desktop/src-tauri/src/config.rs` |
 
 这些路径是当前维护映射，不改变上表的 source of truth。`runtime.rs`、
@@ -67,6 +67,14 @@ Skill 安装在文件选择前捕获 `ScienceHostContext`，picker 保持在 lea
 `LocalSkillHostReceipt`，随后用同一 receipt 完成 package commit 与 OPERON
 attach/readback。attach 失败仍保留已提交文件并分别报告，不新增 durable runtime journal。
 
+`ScienceHostAdapter` 是当前 macOS Rust + shell host 边界，不是 host-neutral extension。
+typed `ScienceLaunchSpec` 只携带已选择的 runtime、端口、proxy/SSH/opaque binding 与既有
+budget；adapter 内部编码 shell argv 和 allowlisted environment，并依次投影 environment
+exposure、script acceptance、health、listener/runtime identity、未提交 ownership 与 durable
+managed receipt。one-click/coordinator 继续拥有 authority revalidation、SSH observation、
+`AppState` publication、DB reverify 与补偿顺序，但不解释 shell exit code 或自行重建 host
+identity。stop 继续返回既有 `ScienceStopOutcome`，Rust proof 与 shell fail-closed 防线均保留。
+
 ## 三个阶段域
 
 | 阶段域 | 形态 | 用途 |
@@ -89,7 +97,8 @@ attach/readback。attach 失败仍保留已提交文件并分别报告，不新�
 6. 从同一 candidate Science identity 计算一次 64-hex fingerprint，并从已登记 authority snapshot 取得一次经验证的 `managed_id` ticket；首个 V2 checkpoint 同时携带两者；
 7. 准备 virtual login 与 SSH bridge；
 8. 启动/复用 Gateway，校验 model catalog；
-9. 启动 Science，校验 health、listener、binary、data-dir 与 managed receipt；
+9. 通过 `ScienceHostAdapter` 启动 Science，按 typed exposure/health/identity phase 校验
+   listener、binary、data-dir 并提交 managed receipt；
 10. 复核 Science DB/catalog；
 11. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
 12. 计算并提交 runtime binding、按同一 transaction identity 清除 journal，随后打开 UI。
@@ -219,4 +228,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   picker 之后取得短 `HostBridge` lease，并把 matching typed host receipt 绑定到 package
   commit 与 attach/readback；picker/download 不进 lease，Gateway bridge 的独立进程事务也
   不冒充全局 durable journal；
+- ~~Science launch/health/managed receipt 由 one-click coordinator 直接解释 shell process~~
+  S4 以 `ScienceHostAdapter` 收拢 typed launch spec、environment exposure、health、listener
+  identity、managed receipt 与 stop façade；保留现有 Rust + shell 双层 fail-closed、用户可见
+  行为与 operation ordering，不实现 host-neutral extension；
 - MCP 与 SSH 的产品动态 gate 仍开放。

@@ -8,9 +8,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::runtime::external_skill_route;
-use crate::runtime::science::{
-    probe_sandbox_runtime_cached, sandbox_data_dir, SandboxScienceState,
-};
+use crate::runtime::science::{sandbox_data_dir, SandboxScienceState, ScienceHostAdapter};
 use crate::{lock, run_blocking, SharedAppState};
 
 const LIST_SCHEMA_VERSION: u64 = 1;
@@ -122,7 +120,7 @@ fn build_skill_list(state: &SharedAppState) -> Result<SkillListResponse, String>
     if sandbox_port == 0 {
         response.science_state = ScienceState::Unverified;
     } else {
-        match probe_sandbox_runtime_cached(sandbox_port, &version_cache) {
+        match ScienceHostAdapter::probe_cached(sandbox_port, &version_cache) {
             Ok((SandboxScienceState::RunningHealthy, Some(runtime))) => {
                 response.science_state = ScienceState::RunningHealthy;
                 if let Some(snapshot) = snapshot.as_ref() {

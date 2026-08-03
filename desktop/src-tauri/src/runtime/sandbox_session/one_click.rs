@@ -1,7 +1,6 @@
 #[cfg(test)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use csswitch_skill_install_core::{open_science_health_session_before, ScienceHealthSession};
@@ -17,9 +16,8 @@ use crate::runtime::proxy_lifecycle::{
     current_skill_install_bridge_key, ensure_proxy, skill_install_bridge_dir,
 };
 use crate::runtime::science::{
-    managed_launch_token_for_runtime, probe_known_runtime, probe_sandbox_runtime_cached,
-    runtime_identity_is_current, sandbox_home, sandbox_listener_matches_runtime, sandbox_url,
-    select_science_runtime_cached, stop_sandbox, SandboxScienceState, ScienceManagedLaunchToken,
+    sandbox_home, select_science_runtime_cached, SandboxScienceState, ScienceEnvironmentExposure,
+    ScienceHostAdapter, ScienceLaunchFailureKind, ScienceLaunchSpec, ScienceManagedLaunchToken,
     ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopOwnershipReceipt, ScienceStopRequest,
 };
 use crate::runtime::skill_install_bridge::{
@@ -55,7 +53,7 @@ fn stop_sandbox_state<R: Runtime>(
     st: &mut AppState,
 ) -> crate::runtime::science::ScienceStopOutcome {
     let runtime = st.science_runtime.clone();
-    let result = stop_sandbox(
+    let result = ScienceHostAdapter::stop(
         app,
         &mut st.sandbox,
         &mut st.sandbox_url,
@@ -231,10 +229,10 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
         )
     };
     match remembered {
-        Some(runtime) => match probe_known_runtime(cfg.sandbox_port, &runtime) {
+        Some(runtime) => match ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime) {
             SandboxScienceState::RunningHealthy => {
                 let mut st = lock(&state);
-                let receipt = managed_launch_token_for_runtime(cfg.sandbox_port, &runtime)
+                let receipt = ScienceHostAdapter::managed_receipt(cfg.sandbox_port, &runtime)
                     .ok_or_else(|| {
                         typed_one_click_err(
                             OneClickFailureKind::ScienceStop,
@@ -246,7 +244,7 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                     sandbox_url,
                     ..
                 } = &mut *st;
-                let verified = stop_sandbox(
+                let verified = ScienceHostAdapter::stop(
                     &app,
                     sandbox,
                     sandbox_url,
@@ -706,15 +704,13 @@ struct OneClickRollbackContext {
     sandbox_port: u16,
     launch_runtime: ScienceRuntimeIdentity,
     launch_token: Option<ScienceManagedLaunchToken>,
-    launch_attempted: bool,
+    launch_environment: ScienceEnvironmentExposure,
     launch_confirmed_stopped: bool,
     candidate_stop_proof: ManagedScienceCandidateStopProof,
     ssh_stub_transaction: Option<crate::runtime::settings::ManagedSshStubTransaction>,
     /// Produce-site failure kind for UI projection; updated at phase boundaries.
     current_kind: OneClickFailureKind,
 }
-
-const SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE: i32 = 70;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ManagedScienceCandidateStopProof {
@@ -850,7 +846,7 @@ fn open_authenticated_science_health_session(
     token: &ScienceManagedLaunchToken,
     deadline: Instant,
 ) -> Result<ScienceHealthSession, String> {
-    if !crate::runtime::science::managed_launch_token_is_current_for_runtime(token, runtime) {
+    if !ScienceHostAdapter::receipt_is_current(token, runtime) {
         return Err("science_db_listener_identity_changed".into());
     }
     let context = runtime
@@ -858,7 +854,7 @@ fn open_authenticated_science_health_session(
         .map_err(|_| "science_api_health_control_context_invalid".to_string())?;
     let session = open_science_health_session_before(&context, deadline)
         .map_err(science_health_control_error)?;
-    if !crate::runtime::science::managed_launch_token_is_current_for_runtime(token, runtime) {
+    if !ScienceHostAdapter::receipt_is_current(token, runtime) {
         return Err("science_db_listener_identity_changed".into());
     }
     Ok(session)
@@ -926,14 +922,12 @@ fn wait_for_science_db_reverify(
         if remaining.is_zero() {
             return Err("science_db_reverify_timeout".into());
         }
-        if !crate::runtime::science::managed_launch_token_is_current_for_runtime(token, runtime) {
+        if !ScienceHostAdapter::receipt_is_current(token, runtime) {
             return Err("science_db_listener_identity_changed".into());
         }
         match authenticated_science_db_health(&session, remaining.min(Duration::from_secs(5))) {
             Ok(state) => {
-                if !crate::runtime::science::managed_launch_token_is_current_for_runtime(
-                    token, runtime,
-                ) {
+                if !ScienceHostAdapter::receipt_is_current(token, runtime) {
                     return Err("science_db_listener_identity_changed".into());
                 }
                 match state {
@@ -1036,7 +1030,7 @@ fn restart_managed_science_with_budget<R: Runtime>(
     if cfg.sandbox_port != prior.port {
         return Err("恢复 prior Science 时沙箱端口已变化".into());
     }
-    if !runtime_identity_is_current(&prior.runtime) {
+    if ScienceHostAdapter::validate_launch_runtime(&prior.runtime).is_err() {
         return Err("恢复 prior Science 时 runtime 身份已变化".into());
     }
     if proc::loopback_port_in_use(prior.port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
@@ -1063,102 +1057,60 @@ fn restart_managed_science_with_budget<R: Runtime>(
     let logf = open_log("sandbox.log").map_err(|error| error.to_string())?;
     let logf2 = logf.try_clone().map_err(|error| error.to_string())?;
     let proxy_url = format!("http://127.0.0.1:{proxy_port}/{secret}");
-    let deadline = Instant::now() + Duration::from_millis(health_budget_ms.max(POLL_INTERVAL_MS));
-    let mut launch_cmd = Command::new("zsh");
-    launch_cmd
-        .arg(&launch)
-        .arg("--port")
-        .arg(prior.port.to_string())
-        .arg("--skip-oauth-forge");
-    crate::runtime::launch_env::configure_science_launch_script_command(
-        &mut launch_cmd,
-        &crate::runtime::launch_env::ScienceLaunchScriptEnv {
-            sandbox_home: &sandbox_home(),
-            science_bin: Path::new(&prior.runtime.path),
-            proxy_url: &proxy_url,
-            reuse_system_ssh: cfg.reuse_system_ssh,
-            system_ssh_hosts: &ssh_hosts.join(" "),
-            opaque_bindings: None,
-            runtime_version_prechecked: true,
-        },
-    );
-    let mut launch_child = launch_cmd
-        .stdout(Stdio::from(logf))
-        .stderr(Stdio::from(logf2))
-        .spawn()
-        .map_err(|error| {
-            ManagedScienceRestartError::before_spawn(format!(
-                "恢复 prior Science 启动失败：{error}"
-            ))
-        })?;
-    let status = loop {
-        match launch_child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(
-                    Duration::from_millis(POLL_INTERVAL_MS)
-                        .min(deadline.saturating_duration_since(Instant::now())),
-                );
-            }
-            Ok(None) => {
-                let _ = launch_child.kill();
-                let _ = launch_child.wait();
-                return Err(ManagedScienceRestartError::after_spawn_unproven(
-                    "恢复 prior Science 启动脚本超过 absolute deadline",
-                ));
-            }
-            Err(error) => {
-                let _ = launch_child.kill();
-                let _ = launch_child.wait();
-                return Err(ManagedScienceRestartError::after_spawn_unproven(format!(
-                    "恢复 prior Science 启动脚本状态未知：{error}"
-                )));
-            }
-        }
-    };
-    if !status.success() {
-        return Err(ManagedScienceRestartError::after_spawn_unproven(format!(
-            "恢复 prior Science 启动脚本非零退出（{:?}）",
-            status.code()
-        )));
-    }
-    let mut healthy = false;
-    while Instant::now() < deadline {
-        std::thread::sleep(
-            Duration::from_millis(POLL_INTERVAL_MS)
-                .min(deadline.saturating_duration_since(Instant::now())),
-        );
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let probe_timeout_ms = operation::LOCAL_HEALTH_TIMEOUT_MS.min(
-            u64::try_from(remaining.as_millis())
-                .unwrap_or(u64::MAX)
-                .max(1),
-        );
-        if proc::http_health(prior.port, None, probe_timeout_ms) {
-            healthy = true;
-            break;
-        }
-    }
-    if !healthy
-        || Instant::now() > deadline
-        || !sandbox_listener_matches_runtime(prior.port, &prior.runtime)
-    {
-        return Err(ManagedScienceRestartError::after_spawn_unproven(
-            "恢复 prior Science 后 listener 健康或 runtime 身份不一致",
-        ));
-    }
-    let _candidate_token = crate::runtime::science::uncommitted_managed_science_launch_token(
-        prior.port,
-        &prior.runtime,
+    let ssh_hosts = ssh_hosts.join(" ");
+    let attempt = ScienceHostAdapter::spawn_launch(
+        ScienceLaunchSpec::recovery(
+            &launch,
+            &prior.runtime,
+            prior.port,
+            &proxy_url,
+            cfg.reuse_system_ssh,
+            &ssh_hosts,
+            health_budget_ms,
+            POLL_INTERVAL_MS,
+            operation::LOCAL_HEALTH_TIMEOUT_MS,
+        ),
+        logf,
+        logf2,
     )
-    .ok_or_else(|| {
+    .map_err(|error| match error.kind() {
+        ScienceLaunchFailureKind::RuntimeDrift | ScienceLaunchFailureKind::SpawnFailed => {
+            ManagedScienceRestartError::before_spawn(format!(
+                "恢复 prior Science 启动失败：{}",
+                error.message()
+            ))
+        }
+        _ => ManagedScienceRestartError::after_spawn_unproven(format!(
+            "恢复 prior Science {}",
+            error.message()
+        )),
+    })?;
+    let attempt = ScienceHostAdapter::accept_launch_script(attempt).map_err(|error| {
+        ManagedScienceRestartError::after_spawn_unproven(format!(
+            "恢复 prior Science {}",
+            error.message()
+        ))
+    })?;
+    let healthy = ScienceHostAdapter::verify_health(attempt).map_err(|_| {
         ManagedScienceRestartError::after_spawn_unproven(
-            "恢复 prior Science 后无法建立精确的未提交启动身份",
+            "恢复 prior Science 后 listener 健康或 runtime 身份不一致",
         )
     })?;
+    let verified =
+        ScienceHostAdapter::verify_identity(healthy).map_err(|error| match error.kind() {
+            ScienceLaunchFailureKind::OwnershipUnavailable => {
+                ManagedScienceRestartError::after_spawn_unproven(
+                    "恢复 prior Science 后无法建立精确的未提交启动身份",
+                )
+            }
+            _ => ManagedScienceRestartError::after_spawn_unproven(
+                "恢复 prior Science 后 listener 健康或 runtime 身份不一致",
+            ),
+        })?;
+    let _candidate_token = verified
+        .ownership()
+        .expect("recovery launch must carry uncommitted ownership proof")
+        .clone();
     #[cfg(test)]
     {
         let mut seams = SANDBOX_SESSION_TEST_SEAMS
@@ -1174,7 +1126,7 @@ fn restart_managed_science_with_budget<R: Runtime>(
             drop(seams);
             let mut sandbox = None;
             let mut url = None;
-            let cleanup = stop_sandbox(
+            let cleanup = ScienceHostAdapter::stop(
                 app,
                 &mut sandbox,
                 &mut url,
@@ -1189,58 +1141,39 @@ fn restart_managed_science_with_budget<R: Runtime>(
             ));
         }
     }
-    let token =
-        match crate::runtime::science::record_managed_science_launch(prior.port, &prior.runtime) {
-            Ok(token) => token,
-            Err(error) => {
-                let mut sandbox = None;
-                let mut url = None;
-                let token_present = error.token().is_some();
-                let request = error
-                    .token()
-                    .map(|token| {
-                        ScienceStopRequest::exact(
-                            &prior.runtime,
-                            ScienceStopOwnershipReceipt::from_managed_launch(token),
-                        )
-                    })
-                    .unwrap_or_else(|| ScienceStopRequest::recover(Some(&prior.runtime)));
-                let cleanup = stop_sandbox(app, &mut sandbox, &mut url, request);
-                let message = format!(
+    let _token = match ScienceHostAdapter::commit_launch(verified) {
+        Ok(receipt) => receipt.ownership().clone(),
+        Err(error) => {
+            let mut sandbox = None;
+            let mut url = None;
+            let token_present = error.ownership().is_some();
+            let request = error
+                .ownership()
+                .map(|token| {
+                    ScienceStopRequest::exact(
+                        &prior.runtime,
+                        ScienceStopOwnershipReceipt::from_managed_launch(token),
+                    )
+                })
+                .unwrap_or_else(|| ScienceStopRequest::recover(Some(&prior.runtime)));
+            let cleanup = ScienceHostAdapter::stop(app, &mut sandbox, &mut url, request);
+            let message = match error.kind() {
+                ScienceLaunchFailureKind::ReceiptIdentityDrift => {
+                    "恢复 prior Science 后 fresh managed receipt 回读不一致".to_string()
+                }
+                _ => format!(
                     "恢复 prior Science 时 fresh managed receipt 提交失败：{}",
                     error.message()
-                );
-                return Err(if token_present {
-                    ManagedScienceRestartError::after_exact_cleanup(
-                        message,
-                        &prior.runtime,
-                        cleanup,
-                    )
-                } else {
-                    ManagedScienceRestartError::after_spawn_unproven(message)
-                });
-            }
-        };
-    if !crate::runtime::science::managed_launch_token_is_current_for_runtime(&token, &prior.runtime)
-    {
-        let mut sandbox = None;
-        let mut url = None;
-        let cleanup = stop_sandbox(
-            app,
-            &mut sandbox,
-            &mut url,
-            ScienceStopRequest::exact(
-                &prior.runtime,
-                ScienceStopOwnershipReceipt::from_managed_launch(&token),
-            ),
-        );
-        return Err(ManagedScienceRestartError::after_exact_cleanup(
-            "恢复 prior Science 后 fresh managed receipt 回读不一致",
-            &prior.runtime,
-            cleanup,
-        ));
-    }
-    let url = sandbox_url(prior.port, &prior.runtime);
+                ),
+            };
+            return Err(if token_present {
+                ManagedScienceRestartError::after_exact_cleanup(message, &prior.runtime, cleanup)
+            } else {
+                ManagedScienceRestartError::after_spawn_unproven(message)
+            });
+        }
+    };
+    let url = ScienceHostAdapter::url(prior.port, &prior.runtime);
     let mut current = lock(state);
     current.sandbox_port = prior.port;
     current.sandbox_url = Some(url);
@@ -1468,13 +1401,16 @@ pub(super) enum CompensationEnvironment {
 }
 
 impl CompensationEnvironment {
-    fn from_launch(launch_attempted: bool, cross_runtime: bool) -> Self {
+    fn from_launch(environment: ScienceEnvironmentExposure, cross_runtime: bool) -> Self {
         if cross_runtime {
             Self::CrossRuntimeExposed
-        } else if launch_attempted {
-            Self::CandidateExposed
         } else {
-            Self::NotExposed
+            match environment {
+                ScienceEnvironmentExposure::NotExposed => Self::NotExposed,
+                ScienceEnvironmentExposure::Exposed | ScienceEnvironmentExposure::Uncertain => {
+                    Self::CandidateExposed
+                }
+            }
         }
     }
 
@@ -1615,19 +1551,21 @@ fn compensate_one_click_failure<R: Runtime>(
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
     }
-    let cross_runtime_environment = failure.rollback.launch_attempted
+    let cross_runtime_environment = failure.rollback.launch_environment.may_be_exposed()
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
     let environment = CompensationEnvironment::from_launch(
-        failure.rollback.launch_attempted,
+        failure.rollback.launch_environment,
         cross_runtime_environment,
     );
-    let science_cleanup_required =
-        failure.rollback.launch_attempted || failure.rollback.launch_token.is_some();
+    let science_cleanup_required = failure.rollback.launch_environment.may_be_exposed()
+        || failure.rollback.launch_token.is_some();
     let cleanup = if failure.rollback.candidate_stop_proof
         == ManagedScienceCandidateStopProof::Unproven
     {
         Err("code=science_candidate_stop_unproven".into())
-    } else if !failure.rollback.launch_attempted && failure.rollback.launch_token.is_none() {
+    } else if !failure.rollback.launch_environment.may_be_exposed()
+        && failure.rollback.launch_token.is_none()
+    {
         Ok(())
     } else if failure.rollback.launch_confirmed_stopped {
         let receipt = dir.join("science-managed-launch.v1.json");
@@ -1638,7 +1576,7 @@ fn compensate_one_click_failure<R: Runtime>(
             .rollback
             .launch_token
             .as_ref()
-            .is_some_and(crate::runtime::science::managed_launch_token_process_is_alive)
+            .is_some_and(ScienceHostAdapter::receipt_process_is_alive)
             || receipt.exists()
         {
             Err("DB recovery restart 前已停止的 Science 身份重新出现；拒绝恢复 authority".into())
@@ -1652,7 +1590,7 @@ fn compensate_one_click_failure<R: Runtime>(
             sandbox_url,
             ..
         } = &mut *current;
-        let result = stop_sandbox(
+        let result = ScienceHostAdapter::stop(
             app,
             sandbox,
             sandbox_url,
@@ -1804,7 +1742,7 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
         sandbox_port: 0,
         launch_runtime,
         launch_token: None,
-        launch_attempted: false,
+        launch_environment: ScienceEnvironmentExposure::NotExposed,
         launch_confirmed_stopped: false,
         candidate_stop_proof: ManagedScienceCandidateStopProof::NotRequired,
         ssh_stub_transaction: None,
@@ -1911,7 +1849,7 @@ fn one_click_login_with_options<R: Runtime>(
     let remembered_runtime_was_present = remembered_runtime.is_some();
     let (science_state, running_runtime) = match remembered_runtime {
         Some(runtime) => {
-            let science_state = probe_known_runtime(sport, &runtime);
+            let science_state = ScienceHostAdapter::probe_known(sport, &runtime);
             let running_runtime =
                 (science_state == SandboxScienceState::RunningHealthy).then_some(runtime);
             (science_state, running_runtime)
@@ -1923,7 +1861,7 @@ fn one_click_login_with_options<R: Runtime>(
         {
             (SandboxScienceState::Stopped, None)
         }
-        None => probe_sandbox_runtime_cached(sport, &version_cache)
+        None => ScienceHostAdapter::probe_cached(sport, &version_cache)
             .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStart, message))?,
     };
     let mut running_runtime_to_stop = None;
@@ -2034,7 +1972,7 @@ fn one_click_login_with_options<R: Runtime>(
         sandbox_port: sport,
         launch_runtime: launch_runtime.clone(),
         launch_token: None,
-        launch_attempted: false,
+        launch_environment: ScienceEnvironmentExposure::NotExposed,
         launch_confirmed_stopped: false,
         candidate_stop_proof: ManagedScienceCandidateStopProof::NotRequired,
         ssh_stub_transaction,
@@ -2044,13 +1982,12 @@ fn one_click_login_with_options<R: Runtime>(
         Some(runtime) => Some(PriorScienceContext {
             runtime: runtime.clone(),
             port: sport,
-            launch_token: crate::runtime::science::managed_launch_token_for_runtime(sport, runtime)
-                .ok_or_else(|| {
-                    typed_one_click_err(
-                        OneClickFailureKind::ScienceStop,
-                        "prior Science managed launch 身份无法确认，拒绝停止或快照",
-                    )
-                })?,
+            launch_token: ScienceHostAdapter::managed_receipt(sport, runtime).ok_or_else(|| {
+                typed_one_click_err(
+                    OneClickFailureKind::ScienceStop,
+                    "prior Science managed launch 身份无法确认，拒绝停止或快照",
+                )
+            })?,
         }),
         None => None,
     };
@@ -2062,7 +1999,7 @@ fn one_click_login_with_options<R: Runtime>(
                 sandbox_url,
                 ..
             } = &mut *current;
-            let verified = stop_sandbox(
+            let verified = ScienceHostAdapter::stop(
                 &app,
                 sandbox,
                 sandbox_url,
@@ -2080,7 +2017,7 @@ fn one_click_login_with_options<R: Runtime>(
         }
         let receipt = dir.join("science-managed-launch.v1.json");
         if proc::loopback_port_in_use(sport, operation::LOCAL_HEALTH_TIMEOUT_MS)
-            || crate::runtime::science::managed_launch_token_process_is_alive(&prior.launch_token)
+            || ScienceHostAdapter::receipt_process_is_alive(&prior.launch_token)
             || receipt.exists()
         {
             let restart = restart_prior_science(&app, &state, lifecycle, auth_proof, prior);
@@ -2390,7 +2327,7 @@ fn one_click_login_with_options<R: Runtime>(
         }
         let logf2 = one_click_step(logf.try_clone(), &rollback_context)?;
         trace.stage(OperationStage::SandboxLaunch, format!("port={sport}"));
-        if !runtime_identity_is_current(&launch_runtime) {
+        if ScienceHostAdapter::validate_launch_runtime(&launch_runtime).is_err() {
             return Err(
                 rollback_context.failure("Science runtime 在预检后发生变化；已拒绝启动，请重试")
             );
@@ -2432,89 +2369,81 @@ fn one_click_login_with_options<R: Runtime>(
             authority_snapshot.validate_science_restore_root(),
             &rollback_context,
         )?;
-        let mut launch_cmd = Command::new("zsh");
-        launch_cmd
-            .arg(&launch)
-            .arg("--port")
-            .arg(sport.to_string())
-            .arg("--skip-oauth-forge");
         let opaque_bindings = authority_snapshot.science_opaque_bindings_env();
-        crate::runtime::launch_env::configure_science_launch_script_command(
-            &mut launch_cmd,
-            &crate::runtime::launch_env::ScienceLaunchScriptEnv {
-                sandbox_home: &sandbox_home(),
-                science_bin: Path::new(&launch_runtime.path),
-                proxy_url: &proxy_url,
-                reuse_system_ssh: cfg.reuse_system_ssh,
-                system_ssh_hosts: &ssh_hosts.join(" "),
-                opaque_bindings: Some(opaque_bindings.as_str()),
-                runtime_version_prechecked: true,
-            },
-        );
-        let launch_child = launch_cmd
-            .stdout(Stdio::from(logf))
-            .stderr(Stdio::from(logf2))
-            .spawn();
-        let status = match launch_child {
-            Ok(mut child) => match child.wait() {
-                Ok(status) => status,
-                Err(error) => {
-                    rollback_context.launch_attempted = true;
+        let ssh_hosts = ssh_hosts.join(" ");
+        let attempt = match ScienceHostAdapter::spawn_launch(
+            ScienceLaunchSpec::one_click(
+                &launch,
+                &launch_runtime,
+                sport,
+                &proxy_url,
+                cfg.reuse_system_ssh,
+                &ssh_hosts,
+                Some(opaque_bindings.as_str()),
+                operation::SANDBOX_HEALTH_BUDGET_MS,
+                POLL_INTERVAL_MS,
+                operation::LOCAL_HEALTH_TIMEOUT_MS,
+            ),
+            logf,
+            logf2,
+        ) {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                rollback_context.launch_environment = error.environment();
+                if error.kind() == ScienceLaunchFailureKind::WaitFailed {
                     rollback_context.candidate_stop_proof =
                         ManagedScienceCandidateStopProof::Unproven;
                     return Err(rollback_context.failure(format!(
-                        "起沙箱状态未知：{error}；code=science_candidate_stop_unproven"
+                        "起沙箱状态未知：{}；code=science_candidate_stop_unproven",
+                        error.message()
                     )));
                 }
-            },
-            Err(error) => {
-                return Err(rollback_context.failure(format!("起沙箱失败：{error}")));
+                return Err(rollback_context.failure(format!("起沙箱失败：{}", error.message())));
             }
         };
-        rollback_context.launch_attempted = status.success()
-            || status.code() == Some(SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE)
-            || status.code().is_none();
+        rollback_context.launch_environment = attempt.environment();
         if let Some(transaction) = rollback_context.ssh_stub_transaction.as_mut() {
             transaction.observe_after_launch(&sbx_home);
         }
-        if !status.success() {
-            let tail = redact(&tail_file(&log_path("sandbox.log"), 600), &secret);
-            return Err(rollback_context.failure(format!("起沙箱脚本失败。\n{tail}")));
-        }
+        let attempt = match ScienceHostAdapter::accept_launch_script(attempt) {
+            Ok(attempt) => attempt,
+            Err(_) => {
+                let tail = redact(&tail_file(&log_path("sandbox.log"), 600), &secret);
+                return Err(rollback_context.failure(format!("起沙箱脚本失败。\n{tail}")));
+            }
+        };
         {
             let mut current = lock(&state);
             current.sandbox_port = sport;
             current.science_runtime = Some(launch_runtime.clone());
             current.science_confirmed_stopped = None;
         }
-        let mut healthy = false;
-        for _ in 0..(operation::SANDBOX_HEALTH_BUDGET_MS / POLL_INTERVAL_MS) {
-            std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-            if proc::http_health(sport, None, operation::LOCAL_HEALTH_TIMEOUT_MS) {
-                healthy = true;
-                break;
-            }
-        }
         rollback_context.set_kind(OneClickFailureKind::SandboxHealth);
-        trace.stage(
-            OperationStage::SandboxHealth,
-            if healthy { "ready" } else { "not_ready" },
-        );
-        if !healthy {
-            let tail = redact(&tail_file(&log_path("sandbox.log"), 600), &secret);
-            return Err(
-                rollback_context.failure(format!("沙箱起后探活超时（端口 {sport}）。\n{tail}"))
-            );
-        }
-        if !sandbox_listener_matches_runtime(sport, &launch_runtime) {
-            return Err(rollback_context.failure(format!(
+        let healthy = match ScienceHostAdapter::verify_health(attempt) {
+            Ok(healthy) => {
+                trace.stage(OperationStage::SandboxHealth, "ready");
+                healthy
+            }
+            Err(_) => {
+                trace.stage(OperationStage::SandboxHealth, "not_ready");
+                let tail = redact(&tail_file(&log_path("sandbox.log"), 600), &secret);
+                return Err(
+                    rollback_context.failure(format!("沙箱起后探活超时（端口 {sport}）。\n{tail}"))
+                );
+            }
+        };
+        let verified = match ScienceHostAdapter::verify_identity(healthy) {
+            Ok(verified) => verified,
+            Err(_) => {
+                return Err(rollback_context.failure(format!(
                 "端口 {sport} 有服务响应，但按 data-dir 确认不是本沙箱 Science（疑似被其它服务占用）。"
             )));
-        }
-        match crate::runtime::science::record_managed_science_launch(sport, &launch_runtime) {
-            Ok(token) => rollback_context.launch_token = Some(token),
+            }
+        };
+        match ScienceHostAdapter::commit_launch(verified) {
+            Ok(receipt) => rollback_context.launch_token = Some(receipt.ownership().clone()),
             Err(error) => {
-                rollback_context.launch_token = error.token().cloned();
+                rollback_context.launch_token = error.ownership().cloned();
                 return Err(rollback_context.failure(format!(
                     "Science 已启动但受管启动身份无法安全提交：{}",
                     error.message()
@@ -2552,7 +2481,7 @@ fn one_click_login_with_options<R: Runtime>(
                         ..
                     } = &mut *current;
                     let verified = one_click_step(
-                        stop_sandbox(
+                        ScienceHostAdapter::stop(
                             &app,
                             sandbox,
                             sandbox_url,
@@ -2572,7 +2501,7 @@ fn one_click_login_with_options<R: Runtime>(
                 }
                 rollback_context.launch_confirmed_stopped = true;
                 if proc::loopback_port_in_use(sport, operation::LOCAL_HEALTH_TIMEOUT_MS)
-                    || crate::runtime::science::managed_launch_token_process_is_alive(&first_token)
+                    || ScienceHostAdapter::receipt_process_is_alive(&first_token)
                     || dir.join("science-managed-launch.v1.json").exists()
                 {
                     return Err(rollback_context
@@ -2607,11 +2536,8 @@ fn one_click_login_with_options<R: Runtime>(
                     return Err(rollback_context.failure(error.to_string()));
                 }
                 let second_token = one_click_step(
-                    crate::runtime::science::managed_launch_token_for_runtime(
-                        sport,
-                        &launch_runtime,
-                    )
-                    .ok_or("Science DB recovery restart 缺少 fresh managed receipt"),
+                    ScienceHostAdapter::managed_receipt(sport, &launch_runtime)
+                        .ok_or("Science DB recovery restart 缺少 fresh managed receipt"),
                     &rollback_context,
                 )?;
                 rollback_context.launch_token = Some(second_token.clone());
@@ -2629,10 +2555,8 @@ fn one_click_login_with_options<R: Runtime>(
                     wait_for_science_db_reverify(sport, &launch_runtime, &second_token),
                     &rollback_context,
                 )?;
-                if !crate::runtime::science::managed_launch_token_is_current_for_runtime(
-                    &second_token,
-                    &launch_runtime,
-                ) || second_state != proc::ScienceDbHealth::Ready
+                if !ScienceHostAdapter::receipt_is_current(&second_token, &launch_runtime)
+                    || second_state != proc::ScienceDbHealth::Ready
                 {
                     return Err(rollback_context.failure(format!(
                         "Science DB recovery 的第二次启动未达到 clear/clear：{second_state:?}"
@@ -2658,7 +2582,7 @@ fn one_click_login_with_options<R: Runtime>(
             &launch_runtime,
             false,
         );
-        let url = sandbox_url(sport, &launch_runtime);
+        let url = ScienceHostAdapter::url(sport, &launch_runtime);
         {
             let mut current = lock(&state);
             current.sandbox_port = sport;

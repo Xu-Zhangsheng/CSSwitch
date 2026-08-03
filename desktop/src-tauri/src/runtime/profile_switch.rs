@@ -235,7 +235,10 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
     let science_runtime_before = { lock(state).science_runtime.clone() };
     let science_was_running = match science_runtime_before.as_ref() {
         Some(runtime) => {
-            match crate::runtime::science::probe_known_runtime(cfg.sandbox_port, runtime) {
+            match crate::runtime::science::ScienceHostAdapter::probe_known(
+                cfg.sandbox_port,
+                runtime,
+            ) {
                 crate::runtime::science::SandboxScienceState::RunningHealthy => true,
                 crate::runtime::science::SandboxScienceState::Stopped => false,
                 crate::runtime::science::SandboxScienceState::Unknown => {
@@ -440,11 +443,11 @@ pub(crate) fn set_active_profile_txn<R: tauri::Runtime>(
                     .is_some_and(|prior_runtime| {
                         let current_runtime = { lock(state).science_runtime.clone() };
                         current_runtime.as_ref() == Some(prior_runtime)
-                            && crate::runtime::science::probe_known_runtime(
+                            && crate::runtime::science::ScienceHostAdapter::probe_known(
                                 cfg.sandbox_port,
                                 prior_runtime,
                             ) == crate::runtime::science::SandboxScienceState::RunningHealthy
-                            && crate::runtime::science::managed_launch_token_for_runtime(
+                            && crate::runtime::science::ScienceHostAdapter::managed_receipt(
                                 cfg.sandbox_port,
                                 prior_runtime,
                             )
