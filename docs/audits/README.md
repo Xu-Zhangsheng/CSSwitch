@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [O1-A typed runtime entry owner closure（2026-08-04）](2026-08-04-o1-a-runtime-entry-owner.md)：唯一 production runtime entry owner、typed recovery / route ordering、独立审查与 exact-SHA source gate closure。
 - [F1-0 history boundary guard closure（2026-08-04）](2026-08-04-f1-0-history-boundary-guard.md)：restore 成功后保持 stopped、显式后续启动、独立审查与 exact-SHA source gate closure。
 - [Post-Q0 Runtime 后续路线再基线（2026-08-04）](2026-08-04-post-q0-runtime-roadmap-rebaseline.md)：F1-0 前的 source-only 优先级与依赖输入；首阶段已完成，后续顺序不再自动有效。
 - [Q0-A source-candidate lineage closure（2026-08-04）](2026-08-04-q0-a-source-candidate-lineage.md)：v0.8.4 / `next` lineage、immutable source record、exact-C review 与 source gate closure。

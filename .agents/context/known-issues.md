@@ -1,31 +1,29 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 2026-08-04 O1-A source candidate 整理
+状态：当前；按 2026-08-04 O1-A source closure 整理
 
 最后复核：2026-08-04（Asia/Taipei）
 
 失效条件：quality lineage、Doctor / one-click / history / config / boot read model、Science runtime provenance、release source、artifact、installed/live 或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A 与 F1-0 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
+本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0 与 O1-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
 ## 当前 source candidate closure
 
-最近 implementation closure 是 [F1-0 history boundary guard](../../docs/audits/2026-08-04-f1-0-history-boundary-guard.md)：history restore 成功后 frontend 只保留 restore 结果并保持 stopped，不再自动串联第二次 `one_click_login`；用户必须再次显式点击「一键开始」。
+最近 implementation closure 是 [O1-A typed runtime entry owner](../../docs/audits/2026-08-04-o1-a-runtime-entry-owner.md)：production one-click command 只保留 runtime-owned preflight 调用、锁外 auth、destructive lease 与 typed projection，runtime façade 独占 interrupted finalize / cleanup、Gateway recovery 与 route decision；healthy reopen 不再继承 cold / recovery 的 pending cleanup、SSH mutating preflight 或 managed-stub capture 失败面。
 
-F1-0 已在 source/unit 层完成：
+O1-A 已在 source/unit 层完成：
 
-- implementation candidate 是 `b731c84355f78d187831e53a5b1075deb576cc3f`；最终独立审查绑定与 commit diff 相同的 staged fingerprint，结论 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0`；
-- exact-SHA 15-suite `GATE-SOURCE` run `4f1ad659a1aeb767e43f7dabc5008a1b` 为 `PASS`；首次受限 sandbox run 的 loopback/子进程失败不用于 closure；
-- backend history restore、失败路径与 DTO 未改；完整 F1 durable transaction、O1-A、C1、read model、artifact、installed/live、签名、公证和 public release 均未由此建立。
+- implementation candidate 是 `8e2c069efbf086bd44aec652a817f75f7a8e09b3`；最终独立审查绑定与 commit diff 相同的 staged fingerprint，结论 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0`；
+- exact-SHA 15-suite `GATE-SOURCE` run `f6382f1a67831c856998964fdf877599` 为 `PASS`；首次过长输出路径在执行 suite 前 fail-closed，不用于 closure；
+- F1-0 的 stopped history boundary 保持有效；giant coordinator、完整 F1 durable transaction、C1、read model、artifact、installed/live、签名、公证和 public release 均未由 O1-A 建立。
 
-本轮只读再基线已把 **O1-A typed runtime entry owner** 选为获授权的 sole NEXT。当前 implementation、focused tests 与治理变更正在形成 source candidate：runtime-owned preflight 与唯一 entry façade 收拢 production one-click；entry recovery 每次只执行一个 pure decision 选出的 effect，并在 effect 后重采 facts；coordinator 在 SSH stub / pending-cleanup 等 branch-specific effect 前先区分 healthy 与 mutating route，只有实际 cleanup 后才重采 facts 继续。
-
-O1-A 尚未取得最终 clean-context review 与 exact-SHA 15-suite `GATE-SOURCE`，因此还不是 source PASS。它不拆分 giant coordinator，不建立跨进程 writer fence、完整 F1 durable history transaction 或 read-model/boot sequence，也不授权进入 C1、F1-A、F1-R、U1 或 release qualification。
+O1-A 完成后没有自动继承的新 implementation sole NEXT。若继续，必须先按实时源码重新比较 giant coordinator、C1、完整 F1-A / F1-R、read model / boot sequence、Science provenance 与其他候选；旧路线表不能自动授权后续实现。
 
 ## 仍开放的源码与架构问题
 
 - **Runtime MEDIUM**：F1 history 的 backend restore 仍跨 exact stop 与多文件 restore；用户随后可选的显式 one-click 是另一个 destructive operation，两者没有共同 durable journal。read model 仍由 `get_config` 隐式 ack notice，boot event / pull 没有统一 sequence。
-- **Runtime MEDIUM**：O1-A candidate 已收拢 production one-click entry owner 与 effect ordering，但尚待独立审查和 exact-SHA source gate；giant coordinator、config typed / cross-process boundary 仍未收敛。
+- **Runtime MEDIUM**：O1-A 已收拢 production one-click entry owner 与 effect ordering，但 giant coordinator、config typed / cross-process boundary 仍未收敛。
 - **Science update MEDIUM**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
 Post-Q0 表格只保留 F1-0 前的日期化规划事实。F1-0 已改变其首阶段状态，后续范围、非目标与顺序必须重新比较；旧 R3–R11、S7、Post-D0/Post-Q0 表格或 ignored plan 都不能自动授权后续实现。
