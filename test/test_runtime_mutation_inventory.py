@@ -50,6 +50,7 @@ EXPECTED_STATE_OWNERS = {
     "config.desired",
     "config.migration-backups",
     "config.transaction",
+    "config.writer-fence",
     "gateway.bridge-key",
     "lifecycle.global",
     "process.gateway",

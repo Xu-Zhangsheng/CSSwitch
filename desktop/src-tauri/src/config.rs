@@ -37,6 +37,8 @@ static CONFIG_ACCESS: std::sync::Mutex<ConfigAccessState> =
         downgrade_terminal: false,
     });
 
+const CONFIG_WRITER_LOCK_FILE: &str = ".config.writer.lock";
+
 #[cfg(test)]
 pub(crate) const PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE: &str =
     "pending-authority-cleanup.v1.json";
@@ -1826,6 +1828,18 @@ struct SecureDir {
     normalize_file_permissions: bool,
 }
 
+struct ConfigWriterFence {
+    file: fs::File,
+}
+
+impl Drop for ConfigWriterFence {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 impl SecureDir {
     fn open(path: &Path, create: bool) -> io::Result<Self> {
         Self::open_with_policy(path, create, true)
@@ -1997,6 +2011,94 @@ impl SecureDir {
         Ok(unsafe { fs::File::from_raw_fd(fd) })
     }
 
+    fn acquire_config_writer_fence(&self) -> io::Result<ConfigWriterFence> {
+        let name = Self::name(CONFIG_WRITER_LOCK_FILE)?;
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_CREAT
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC
+                    | libc::O_NONBLOCK,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "拒绝 config writer lock 符号链接",
+                ));
+            }
+            return Err(error);
+        }
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "config writer lock 必须是单链接普通文件",
+            ));
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+
+        #[cfg(test)]
+        if let Some(marker) = std::env::var_os("CSSWITCH_C1A_EXPECT_LOCK_CONTENTION_MARKER") {
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result == 0 {
+                unsafe {
+                    libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+                }
+                return Err(io::Error::other(
+                    "test-only expected an already-held config writer fence",
+                ));
+            }
+            let error = io::Error::last_os_error();
+            let raw_error = error.raw_os_error();
+            if raw_error != Some(libc::EWOULDBLOCK) && raw_error != Some(libc::EAGAIN) {
+                return Err(error);
+            }
+            fs::write(marker, b"contended")?;
+        }
+
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+
+        // A cooperating writer must keep one stable, persistent lock inode.
+        // Re-open the directory entry after acquisition and reject replacement
+        // instead of letting two writer populations proceed on different inodes.
+        let verify_fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if verify_fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let verify = unsafe { fs::File::from_raw_fd(verify_fd) };
+        let verified = verify.metadata()?;
+        if !verified.is_file()
+            || verified.nlink() != 1
+            || verified.dev() != metadata.dev()
+            || verified.ino() != metadata.ino()
+        {
+            return Err(io::Error::other("config writer lock 在获取期间被替换"));
+        }
+        Ok(ConfigWriterFence { file })
+    }
+
     fn rename(&self, from: &str, to: &str) -> io::Result<()> {
         let from = Self::name(from)?;
         let to = Self::name(to)?;
@@ -2057,6 +2159,12 @@ impl SecureDir {
         let right = other.file.metadata()?;
         Ok(left.dev() == right.dev() && left.ino() == right.ino())
     }
+}
+
+fn open_config_writer(dir: &Path, create: bool) -> io::Result<(SecureDir, ConfigWriterFence)> {
+    let secure = SecureDir::open(dir, create)?;
+    let fence = secure.acquire_config_writer_fence()?;
+    Ok((secure, fence))
 }
 
 // ---------- 备份 ----------
@@ -2145,15 +2253,15 @@ fn write_versioned_backup_bytes_in(
 pub fn write_rolling_backup(dir: &Path) -> io::Result<()> {
     let access = config_access();
     ensure_config_access_open(&access)?;
-    write_rolling_backup_unlocked(dir)
+    let (secure, _fence) = open_config_writer(dir, false)?;
+    write_rolling_backup_in(&secure)
 }
 
-fn write_rolling_backup_unlocked(dir: &Path) -> io::Result<()> {
-    let secure = SecureDir::open(dir, false)?;
+fn write_rolling_backup_in(secure: &SecureDir) -> io::Result<()> {
     let data = secure
         .read_regular("config.json")?
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "config.json 不存在"))?;
-    atomic_write_named_bytes_in(&secure, "config.json.bak", &data, None, |secure| {
+    atomic_write_named_bytes_in(secure, "config.json.bak", &data, None, |secure| {
         secure.sync()
     })
 }
@@ -2164,7 +2272,7 @@ pub fn drop_rolling_backup(dir: &Path) {
     if ensure_config_access_open(&access).is_err() {
         return;
     }
-    if let Ok(secure) = SecureDir::open(dir, false) {
+    if let Ok((secure, _fence)) = open_config_writer(dir, false) {
         let _ = secure.unlink("config.json.bak");
         let _ = secure.sync();
     }
@@ -2176,7 +2284,13 @@ pub fn drop_rolling_backup(dir: &Path) {
 pub fn load_from(dir: &Path) -> io::Result<Config> {
     let access = config_access();
     ensure_config_access_open(&access)?;
-    load_from_unlocked(dir)
+    assert_not_symlink(dir)?;
+    let (secure, _fence) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(error) => return Err(error),
+    };
+    load_from_secure(&secure)
 }
 
 /// Read the already-canonical config without migration, normalization writes, or
@@ -2212,14 +2326,7 @@ pub(crate) fn load_current_from_read_only(dir: &Path) -> io::Result<Config> {
     Ok(cfg)
 }
 
-fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
-    // 目录本身也不许是符号链接：否则攻击者把 ~/.csswitch 换成软链就能让读取跟随到别处。
-    assert_not_symlink(dir)?;
-    let secure = match SecureDir::open(dir, false) {
-        Ok(secure) => secure,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
-        Err(error) => return Err(error),
-    };
+fn load_from_secure(secure: &SecureDir) -> io::Result<Config> {
     let data = match secure.read_regular("config.json")? {
         Some(data) => data,
         None => return Ok(Config::default()),
@@ -2247,9 +2354,9 @@ fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
             let cfg = normalize_active(migrate_v3_to_v4(migrate_v2_to_v3(v2)?)?);
             validate_loaded_ports(&cfg)?;
             validate_profile_contracts(&cfg)?;
-            write_versioned_backup_bytes_in(&secure, 1, &data)?;
-            write_versioned_backup_bytes_in(&secure, 2, &canonical_v2)?;
-            commit_migrated_config(&secure, &data, &cfg)?;
+            write_versioned_backup_bytes_in(secure, 1, &data)?;
+            write_versioned_backup_bytes_in(secure, 2, &canonical_v2)?;
+            commit_migrated_config(secure, &data, &cfg)?;
             Ok(cfg)
         }
         VersionKind::V2 => {
@@ -2269,8 +2376,8 @@ fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
             let cfg = normalize_active(migrate_v3_to_v4(migrate_v2_to_v3(v2)?)?);
             validate_loaded_ports(&cfg)?;
             validate_profile_contracts(&cfg)?;
-            write_versioned_backup_bytes_in(&secure, 2, &canonical_v2)?;
-            commit_migrated_config(&secure, &data, &cfg)?;
+            write_versioned_backup_bytes_in(secure, 2, &canonical_v2)?;
+            commit_migrated_config(secure, &data, &cfg)?;
             Ok(cfg)
         }
         VersionKind::V3 => {
@@ -2284,8 +2391,8 @@ fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
             let cfg = normalize_active(migrate_v3_to_v4(v3)?);
             validate_loaded_ports(&cfg)?;
             validate_profile_contracts(&cfg)?;
-            write_versioned_backup_bytes_in(&secure, 3, &data)?;
-            commit_migrated_config(&secure, &data, &cfg)?;
+            write_versioned_backup_bytes_in(secure, 3, &data)?;
+            commit_migrated_config(secure, &data, &cfg)?;
             Ok(cfg)
         }
         VersionKind::V4 => {
@@ -2592,11 +2699,7 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
 pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
     let access = config_access();
     ensure_config_access_open(&access)?;
-    save_to_unlocked(dir, cfg)
-}
-
-fn save_to_unlocked(dir: &Path, cfg: &Config) -> io::Result<()> {
-    let secure = SecureDir::open(dir, true)?;
+    let (secure, _fence) = open_config_writer(dir, true)?;
     save_to_secure(&secure, cfg)
 }
 
@@ -2619,9 +2722,8 @@ fn save_to_secure(secure: &SecureDir, cfg: &Config) -> io::Result<()> {
     atomic_write_named_bytes_in(secure, "config.json", &json, None, |secure| secure.sync())
 }
 
-fn atomic_write_config_bytes(dir: &Path, json: &[u8]) -> io::Result<()> {
-    let secure = SecureDir::open(dir, true)?;
-    atomic_write_named_bytes_in(&secure, "config.json", json, None, |secure| secure.sync())
+fn atomic_write_config_bytes_in(secure: &SecureDir, json: &[u8]) -> io::Result<()> {
+    atomic_write_named_bytes_in(secure, "config.json", json, None, |secure| secure.sync())
 }
 
 #[derive(Debug)]
@@ -3018,7 +3120,9 @@ fn downgrade_to_v2_unlocked(
     export_destination: Option<&Path>,
     expected_fingerprint: Option<&str>,
 ) -> Result<Option<PathBuf>, DowngradeError> {
-    let cfg = load_from_unlocked(dir).map_err(|error| DowngradeError::safe(error.to_string()))?;
+    let (secure, _fence) =
+        open_config_writer(dir, true).map_err(|error| DowngradeError::safe(error.to_string()))?;
+    let cfg = load_from_secure(&secure).map_err(|error| DowngradeError::safe(error.to_string()))?;
     let preview = prepare_downgrade_to_v2(&cfg, actions)?;
     if expected_fingerprint
         .is_some_and(|expected| expected.is_empty() || expected != preview.fingerprint)
@@ -3072,7 +3176,7 @@ fn downgrade_to_v2_unlocked(
     };
 
     // 所有 action、序列化与必需 export 先完整完成；之后才允许写 v2 config。
-    write_rolling_backup_unlocked(dir).map_err(|error| format!("降级滚动备份失败：{error}"))?;
+    write_rolling_backup_in(&secure).map_err(|error| format!("降级滚动备份失败：{error}"))?;
     #[cfg(test)]
     {
         let failure = DOWNGRADE_COMMIT_FAILURE
@@ -3088,7 +3192,7 @@ fn downgrade_to_v2_unlocked(
             });
         }
     }
-    atomic_write_config_bytes(dir, &v2_bytes).map_err(DowngradeError::commit)?;
+    atomic_write_config_bytes_in(&secure, &v2_bytes).map_err(DowngradeError::commit)?;
     Ok(export_path)
 }
 
@@ -3097,7 +3201,8 @@ fn downgrade_to_v2_unlocked(
 pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     let access = config_access();
     ensure_config_access_open(&access)?;
-    let mut cfg = load_from_unlocked(dir)?;
+    let (secure, _fence) = open_config_writer(dir, true)?;
+    let mut cfg = load_from_secure(&secure)?;
     f(&mut cfg);
     #[cfg(test)]
     if CONFIG_UPDATE_COMMIT_FAILURE
@@ -3110,7 +3215,7 @@ pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     {
         return Err(io::Error::other("test-only config update commit failure"));
     }
-    save_to_unlocked(dir, &cfg)?;
+    save_to_secure(&secure, &cfg)?;
     Ok(cfg)
 }
 
@@ -3122,10 +3227,11 @@ where
 {
     let access = config_access();
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
-    let mut cfg = load_from_unlocked(dir).map_err(|error| error.to_string())?;
+    let (secure, _fence) = open_config_writer(dir, true).map_err(|error| error.to_string())?;
+    let mut cfg = load_from_secure(&secure).map_err(|error| error.to_string())?;
     let (result, changed) = f(&mut cfg)?;
     if changed {
-        save_to_unlocked(dir, &cfg).map_err(|error| error.to_string())?;
+        save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
     }
     Ok(result)
 }
@@ -3139,11 +3245,12 @@ where
 {
     let access = config_access();
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
-    let mut cfg = load_from_unlocked(dir).map_err(|error| error.to_string())?;
+    let (secure, _fence) = open_config_writer(dir, true).map_err(|error| error.to_string())?;
+    let mut cfg = load_from_secure(&secure).map_err(|error| error.to_string())?;
     let (result, changed) = f(&mut cfg)?;
     if changed {
-        let _ = write_rolling_backup_unlocked(dir);
-        save_to_unlocked(dir, &cfg).map_err(|error| error.to_string())?;
+        let _ = write_rolling_backup_in(&secure);
+        save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
     }
     Ok(result)
 }
@@ -3180,6 +3287,30 @@ mod tests {
 
     fn mode_of(p: &Path) -> u32 {
         fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    fn wait_for_test_path(path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn assert_exact_child_passed(output: std::process::Output, label: &str) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success()
+                && stdout.lines().any(|line| line == "running 1 test")
+                && stdout.contains("config::tests::c1_a_config_writer_child ... ok")
+                && stdout.contains("1 passed"),
+            "{label} did not execute the exact config writer child:\nstdout={stdout}\nstderr={stderr}"
+        );
     }
 
     fn saved_profile(id: &str, template_id: &str, api_format: &str, upstream: &str) -> Profile {
@@ -4009,6 +4140,197 @@ mod tests {
         save_to(&d, &Config::default()).unwrap();
         assert_eq!(mode_of(&d), 0o700, "dir must be 0700");
         assert_eq!(mode_of(&config_path(&d)), 0o600, "file must be 0600");
+        assert_eq!(
+            mode_of(&d.join(CONFIG_WRITER_LOCK_FILE)),
+            0o600,
+            "writer fence must be private"
+        );
+    }
+
+    #[test]
+    fn c1_a_config_writer_child() {
+        let Some(role) = std::env::var_os("CSSWITCH_C1A_WRITER_ROLE") else {
+            return;
+        };
+        let root = PathBuf::from(std::env::var_os("CSSWITCH_C1A_WRITER_ROOT").unwrap());
+        let dir = root.join("config");
+        match role.to_string_lossy().as_ref() {
+            "a" => {
+                update(&dir, |cfg| {
+                    cfg.secret = "writer-a".into();
+                    fs::write(root.join("a-loaded"), b"ready").unwrap();
+                    wait_for_test_path(&root.join("release-a"));
+                })
+                .unwrap();
+                fs::write(root.join("a-committed"), b"done").unwrap();
+            }
+            "b" => {
+                update(&dir, |cfg| {
+                    fs::write(root.join("b-entered-update"), b"entered").unwrap();
+                    cfg.reuse_system_ssh = true;
+                })
+                .unwrap();
+                fs::write(root.join("b-committed"), b"done").unwrap();
+            }
+            "replace-b" => {
+                let error = update(&dir, |cfg| cfg.reuse_system_ssh = true).unwrap_err();
+                assert!(error
+                    .to_string()
+                    .contains("config writer lock 在获取期间被替换"));
+                fs::write(root.join("b-rejected-replacement"), b"rejected").unwrap();
+            }
+            other => panic!("unexpected writer role {other}"),
+        }
+    }
+
+    #[test]
+    fn c1_a_cross_process_writer_fence_prevents_lost_update() {
+        let root = tmpdir().join("c1-a-cross-process-writers");
+        let dir = root.join("config");
+        fs::create_dir_all(&root).unwrap();
+        save_to(&dir, &Config::default()).unwrap();
+
+        let spawn = |role: &str| {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .arg("--exact")
+                .arg("config::tests::c1_a_config_writer_child")
+                .arg("--nocapture")
+                .arg("--test-threads=1")
+                .env("CSSWITCH_C1A_WRITER_ROLE", role)
+                .env("CSSWITCH_C1A_WRITER_ROOT", &root)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if role != "a" {
+                command.env(
+                    "CSSWITCH_C1A_EXPECT_LOCK_CONTENTION_MARKER",
+                    root.join("b-contended"),
+                );
+            }
+            command.spawn().unwrap()
+        };
+
+        let writer_a = spawn("a");
+        wait_for_test_path(&root.join("a-loaded"));
+        let writer_b = spawn("b");
+        wait_for_test_path(&root.join("b-contended"));
+        let writer_b_entered_early = root.join("b-entered-update").exists();
+        fs::write(root.join("release-a"), b"release").unwrap();
+
+        assert_exact_child_passed(writer_a.wait_with_output().unwrap(), "writer A");
+        assert_exact_child_passed(writer_b.wait_with_output().unwrap(), "writer B");
+        assert!(root.join("a-committed").is_file());
+        assert!(root.join("b-committed").is_file());
+        assert!(
+            !writer_b_entered_early,
+            "writer B entered its read-modify-write closure while writer A held the cross-process fence"
+        );
+
+        let final_config = load_from(&dir).unwrap();
+        assert_eq!(final_config.secret, "writer-a");
+        assert!(
+            final_config.reuse_system_ssh,
+            "the second writer must load writer A's commit instead of overwriting it from a stale snapshot"
+        );
+    }
+
+    #[test]
+    fn config_writer_fence_rejects_symlink_without_touching_target() {
+        let root = tmpdir().join("c1-a-writer-lock-symlink");
+        let dir = root.join("config");
+        fs::create_dir_all(&dir).unwrap();
+        let target = root.join("elsewhere");
+        fs::write(&target, b"user-owned").unwrap();
+        symlink(&target, dir.join(CONFIG_WRITER_LOCK_FILE)).unwrap();
+
+        let error = save_to(&dir, &Config::default()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read(&target).unwrap(), b"user-owned");
+        assert!(!config_path(&dir).exists());
+    }
+
+    #[test]
+    fn config_writer_fence_rejects_hardlink_without_touching_target() {
+        let root = tmpdir().join("c1-a-writer-lock-hardlink");
+        let dir = root.join("config");
+        fs::create_dir_all(&dir).unwrap();
+        let target = root.join("elsewhere");
+        fs::write(&target, b"user-owned").unwrap();
+        fs::hard_link(&target, dir.join(CONFIG_WRITER_LOCK_FILE)).unwrap();
+
+        let error = save_to(&dir, &Config::default()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read(&target).unwrap(), b"user-owned");
+        assert_eq!(fs::metadata(&target).unwrap().nlink(), 2);
+        assert!(!config_path(&dir).exists());
+    }
+
+    #[test]
+    fn config_writer_fence_rejects_replacement_while_waiting() {
+        let root = tmpdir().join("c1-a-writer-lock-replacement");
+        let dir = root.join("config");
+        fs::create_dir_all(&root).unwrap();
+        save_to(&dir, &Config::default()).unwrap();
+
+        let spawn = |role: &str| {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .arg("--exact")
+                .arg("config::tests::c1_a_config_writer_child")
+                .arg("--nocapture")
+                .arg("--test-threads=1")
+                .env("CSSWITCH_C1A_WRITER_ROLE", role)
+                .env("CSSWITCH_C1A_WRITER_ROOT", &root)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if role != "a" {
+                command.env(
+                    "CSSWITCH_C1A_EXPECT_LOCK_CONTENTION_MARKER",
+                    root.join("b-contended"),
+                );
+            }
+            command.spawn().unwrap()
+        };
+
+        let writer_a = spawn("a");
+        wait_for_test_path(&root.join("a-loaded"));
+        let writer_b = spawn("replace-b");
+        wait_for_test_path(&root.join("b-contended"));
+
+        fs::remove_file(dir.join(CONFIG_WRITER_LOCK_FILE)).unwrap();
+        fs::write(dir.join(CONFIG_WRITER_LOCK_FILE), b"").unwrap();
+        fs::set_permissions(
+            dir.join(CONFIG_WRITER_LOCK_FILE),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(root.join("release-a"), b"release").unwrap();
+
+        assert_exact_child_passed(writer_a.wait_with_output().unwrap(), "writer A");
+        assert_exact_child_passed(writer_b.wait_with_output().unwrap(), "writer B");
+        assert!(root.join("b-rejected-replacement").is_file());
+        let final_config = load_from(&dir).unwrap();
+        assert_eq!(final_config.secret, "writer-a");
+        assert!(!final_config.reuse_system_ssh);
+    }
+
+    #[test]
+    fn read_only_current_config_does_not_create_writer_fence() {
+        let dir = tmpdir().join("c1-a-read-only-no-writer-lock");
+        fs::create_dir_all(&dir).unwrap();
+        let bytes = serde_json::to_vec_pretty(&Config::default()).unwrap();
+        fs::write(config_path(&dir), &bytes).unwrap();
+        fs::set_permissions(config_path(&dir), fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert_eq!(
+            load_current_from_read_only(&dir).unwrap(),
+            Config::default()
+        );
+        assert_eq!(fs::read(config_path(&dir)).unwrap(), bytes);
+        assert!(
+            !dir.join(CONFIG_WRITER_LOCK_FILE).exists(),
+            "a read-only consumer must not create or acquire the writer fence"
+        );
     }
 
     #[test]

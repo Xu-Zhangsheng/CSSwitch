@@ -52,6 +52,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
   -> Lifecycle mutex
   -> AppState mutex
     -> config::update mutex
+      -> persistent config writer fence
 ```
 
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
@@ -59,8 +60,15 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
 - `stop_all` 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果；这条“锁外等待”结论只覆盖 `stop_all`。cold prior stop、history、DB recovery、compensation、mode/settings/native-exit 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
-- `config::update` 只覆盖 load-modify-save；
-- config 文件提交使用 pinned/no-follow 边界、临时文件、rename、fsync、提交前复核与回滚，但不是跨进程 advisory lock。
+- `config::update` 的进程内 mutex 只覆盖 load-modify-save；所有可能发布 canonical
+  config、迁移、降级或滚动备份的公开入口还会在 pinned config 目录内取得同一
+  `.config.writer.lock` advisory fence，再执行 load / modify / save。lock inode 持久保留、
+  `0600`、single-link、no-follow，并在取得后复核目录项 identity；因此两个 CSSwitch
+  进程不会从同一旧 snapshot 各自提交覆盖。纯 `load_current_from_read_only` 不创建或取得
+  writer fence；
+- config 文件提交继续使用 pinned/no-follow 边界、临时文件、rename、fsync、提交前复核与
+  回滚；writer fence 只收敛 cooperating config writer，不把 sibling multi-file operation
+  升级成共同事务，也不替代 expected-record CAS。
 
 Skill bundle、Codex auth 与 SSH bridge 还各有局部锁/CAS/sidecar 事务。生产的本地
 Skill 安装在文件选择前捕获 `ScienceHostContext`，picker 保持在 lease 外；选择完成后
@@ -280,7 +288,9 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 ## 当前架构缺口
 
 - V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
-- config 的外部并发检测不是跨进程共享锁；
+- canonical config writer 已有跨进程 advisory fence；但直接 full-snapshot restore 仍未统一成
+  typed commit outcome + expected-record CAS，跨 config / history / authority 的 multi-file crash
+  boundary 也仍未形成共同 durable transaction；
 - history restore 与用户随后可选的显式一键开始仍是两个 destructive operation，没有共同 durable journal；
 - `stop_all` 已锁外等待，但 mode/settings/native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
 - MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。

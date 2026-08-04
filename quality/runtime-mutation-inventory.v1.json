@@ -190,6 +190,14 @@
       "authority": "Process-global config access gate whose downgrade_terminal latch permanently rejects subsequent config reads and writes after committed or uncertain downgrade publication.",
       "fields": ["downgrade_terminal"],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "struct ConfigAccessState"}
+    },
+    {
+      "id": "config.writer-fence",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Persistent credential-free single-link lock inode that serializes cooperating canonical config writers across CSSwitch processes after the process-local config access gate.",
+      "fields": ["lock_inode", "lock_mode", "writer_lease"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "struct ConfigWriterFence"}
     }
   ],
   "durable_records": [
