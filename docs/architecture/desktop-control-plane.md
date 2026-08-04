@@ -63,7 +63,7 @@ Tauri backend
 | model / provider | 模型发现与连接验证所需的生产调用 |
 | Codex | 开关、网络、auth operation、profile、logout 与 downgrade export |
 | Skill | 本地包安装与已安装 Skill 列表 |
-| diagnostics | doctor（含第三方 Skill 路由 reconcile）、版本、release/issue/log 入口 |
+| diagnostics | 只读 doctor、显式 Skill route repair、版本、release/issue/log 入口 |
 
 大多数 runtime/profile/mode 复合 mutation 进入 `Lifecycle`，但这不是所有 Desktop
 写操作的统一锁。生产 `install_local_skill_package` 让文件 picker 保持在 lease 外；
