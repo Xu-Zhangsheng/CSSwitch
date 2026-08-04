@@ -72,21 +72,28 @@ override，不读取真实 Science HOME，也不为诊断启动受管 Science/�
 review 为零 BLOCK/HIGH/MEDIUM/LOW；15-suite run `79a6b4ca17076464e4bbd02ebbdd42cd`
 为 PASS。该结论不外推 artifact、installed/live、signing 或 release。
 
-剩余候选与已知缺口：
+Post-D0 最新只读重基线见
+[2026-08-04 Post-D0 只读重新基线](../../docs/audits/2026-08-04-post-d0-rebaseline.md)。本次没有继承
+旧路线；按当前源码、本地 Git identity 与只读 validator 重新比较后，唯一建议 NEXT 是
+**Q0-A Current release baseline and source-candidate lineage**，尚未授权实施：
 
-1. **变更治理 HIGH 候选 Q0**：`quality/release-lineage.v1.json` 仍停在
-   `v0.8.3 <- v0.8.2`，ChangeRecord 只提供 active path coverage，没有机器绑定
-   base/exact candidate/run/seal/release；它必须保持 CHANGELOG 只记录真实 release；
-2. **Runtime MEDIUM**：healthy/cold decision 晚于 SSH/stub/pending cleanup；command/runtime 共同
-   拥有 entry recovery；one-click 仍是 giant coordinator；frontend history restore 串联第二个
-   destructive operation且无 durable journal；mutation lease/config CAS 主要 process-local；
-   compensation progress 未持久化；`AtomicRollbackUncertain` 未向 orchestration typed 暴露；
-3. **Update MEDIUM**：Science 只有受校验内容寻址 snapshot 身份链，没有通用
-   predecessor/candidate/adoption diff ledger。
+1. **变更治理 HIGH**：`quality/release-lineage.v1.json` 与 validator 仍停在
+   `v0.8.3 <- v0.8.2`，D0 等公开 `v0.8.4` 后的新 source change 继续复用旧 namespace；本轮
+   `metadata` PASS，但 `impact-release` 因过旧 base 累计历史删除、未知 policy path 与无 matching
+   ChangeRecord 等错误实际 FAIL；
+2. **Q0-A 边界**：同步冻结的 `v0.8.4` local tag identity 与显式 development source line，保留
+   ChangeRecord 的 intent/risk/test-impact 语义，新增 immutable SourceCandidateRecord 绑定 base、
+   exact candidate、当前 change set 与 run/seal/snapshot/evidence digest，并复用现有
+   ReleaseCandidateV1 建立 fail-closed promotion edge；不得把 source evidence 提升为 release；
+3. **Runtime MEDIUM**：F1-history 仍跨 exact-stop/多文件 restore/第二个 destructive IPC；F1 read
+   model 仍由 `get_config` 隐式 ack notice，boot event/pull 无统一 sequence；O1-A decision 晚于
+   SSH/stub/pending cleanup；command/runtime entry owner、giant coordinator、config typed/cross-process
+   boundary 仍未收敛；
+4. **Update MEDIUM**：Science 已有受校验内容寻址 snapshot、managed identity/receipt、healthy defer
+   与 cross-runtime rollback guard，但没有通用 predecessor/candidate/adoption diff ledger。
 
-当前没有新的 sole NEXT。必须在全新窗口从 D0 后最新源码执行只读重新基线，重新比较 Q0、O1-A、
-F1 与新发现后只选择一个；不得自动继承旧路线或执行整条路线。详细旧候选、文档影响与停止条件见
-[全量重构摸排](../../docs/audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)，D0 完成证据见
+Q0-A 完成后必须停下重新基线；不得自动进入 F1、O1-A、config、Science provenance 或 release。
+详细范围、不变量、排除项、验证门和停止条件以 Post-D0 审计为准。D0 完成证据仍见
 [D0 source closure](../../docs/audits/2026-08-04-d0-doctor-intent-split.md)。
 
 ## 已完成 Runtime 架构分片背景

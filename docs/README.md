@@ -45,6 +45,7 @@
 - [2026-08-04 Post-H4 production flow 再基线](audits/2026-08-04-post-h4-production-flow-rebaseline.md)：绑定 H4 source closure 与 exact-SHA seal，复核 degraded consumer HIGH、剩余 MEDIUM，并选择 O1-A 为新的 sole NEXT（未授权实现）。
 - [2026-08-04 Post-H4 全量重构摸排](audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)：在窄 production-flow 复核之外覆盖 doctor intent、frontend/IPC ownership、one-click 编排、CSSwitch source/release lineage 与 Science update provenance，并重排后续 sole NEXT（未授权实现）。
 - [2026-08-04 D0 Doctor intent split source closure](audits/2026-08-04-d0-doctor-intent-split.md)：绑定 D0 implementation SHA、focused/governance checks、零 finding clean-context review 与 15-suite exact-SHA seal；不选择 Post-D0 sole NEXT。
+- [2026-08-04 Post-D0 只读重新基线](audits/2026-08-04-post-d0-rebaseline.md)：绑定 D0 evidence-only HEAD，重查 Doctor、frontend/IPC、one-click/history/config、quality lineage 与 Science update provenance，并只选择 Q0-A 为新的 sole NEXT（未授权实现）。
 - [v0.8.3 测试系统审计](audits/v083-test-system-audit.md)：记录当时的 BLOCK、入口清单与证据分层，不代表当前 gate 结果。
 - [v0.8.2 变更审计](audits/v082-change-audit.md)、[v0.8.1](audits/v081-change-audit.md)、[v0.8.0](audits/v080-change-audit.md)：回答各版本候选的日期化变更审查。
 - [发布证据](evidence/releases/README.md)：按版本记录最终 artifact 与分发结果。
