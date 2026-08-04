@@ -15,7 +15,8 @@ Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agent
 
 ## 最新基线
 
-- [2026-08-04 Q0-A source-candidate lineage closure](audits/2026-08-04-q0-a-source-candidate-lineage.md)：最新 source-only closure；下一步先做新的只读再基线，不自动进入后续实现。
+- [2026-08-04 Post-Q0 Runtime 后续路线再基线](audits/2026-08-04-post-q0-runtime-roadmap-rebaseline.md)：当前 source-only 优先级、唯一建议实施目标与后续依赖顺序；每阶段仍需单独授权。
+- [2026-08-04 Q0-A source-candidate lineage closure](audits/2026-08-04-q0-a-source-candidate-lineage.md)：最近 source-only closure；其后的实施优先级由上方 Post-Q0 再基线重新判断。
 - [2026-08-04 Post-D0 只读重新基线](audits/2026-08-04-post-d0-rebaseline.md)：Q0-A 前的 source-only 架构与治理输入；后续决策以实时复核后的 [known issues](../.agents/context/known-issues.md) 为准。
 - [2026-08-04 D0 Doctor intent split source closure](audits/2026-08-04-d0-doctor-intent-split.md)：最近 implementation closure 的 focused、独立审查与 exact-SHA source gate 证据。
 - [v0.8.4 发布证据](evidence/releases/v0.8.4.md)：分开记录 source、artifact、installed identity、signing 与 public 层；未列层不得补写为 PASS。

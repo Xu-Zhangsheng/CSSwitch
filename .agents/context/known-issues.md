@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 2026-08-04 Q0-A source-only closure 整理
+状态：当前；按 2026-08-04 Post-Q0 Runtime 后续路线再基线整理
 
 最后复核：2026-08-04（Asia/Taipei）
 
@@ -8,7 +8,7 @@
 
 本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0 与 Q0-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
-## 当前唯一决策门
+## 当前唯一建议实施目标
 
 最近 implementation closure 是 [Q0-A source-candidate lineage](../../docs/audits/2026-08-04-q0-a-source-candidate-lineage.md)；其输入是 [Post-D0 重新基线](../../docs/audits/2026-08-04-post-d0-rebaseline.md)。两者只建立 source / test / review 结论，不外推 artifact、installed/live、签名、公证或公开 release。
 
@@ -18,7 +18,9 @@ Q0-A 已在 source/unit 层完成：
 - immutable SourceCandidateRecord 已绑定 exact implementation candidate、canonical current change set、change IDs 与完整 source gate digest；ReleaseCandidate / ReleaseEvidence promotion edge fail closed；
 - exact-C source gate 与 clean-context review 已闭合。artifact、installed/live、签名、公证和 public release 仍未由此建立。
 
-**当前没有获授权的 implementation sole NEXT。** 下一动作只做一次新的只读再基线，重新比较 F1 history、read-model/boot、O1-A、config concurrency、Science provenance 等窄候选；不得沿用 Post-D0 表格顺序自动进入任何阶段。
+新的[Post-Q0 Runtime 后续路线再基线](../../docs/audits/2026-08-04-post-q0-runtime-roadmap-rebaseline.md)已完成上述比较。当前唯一建议实施目标是 **F1-0 history boundary guard**：删除 history restore 成功后的前端自动第二次 `one_click_login`，明确保持 stopped 并要求用户再次显式启动。
+
+F1-0 仍需单独 implementation 授权。它不建立 restore + one-click 原子事务，也不自动授权 O1-A、C1、完整 F1-A 或后续阶段；完成后必须重新基线。
 
 ## 仍开放的源码与架构问题
 
@@ -26,7 +28,7 @@ Q0-A 已在 source/unit 层完成：
 - **Runtime MEDIUM**：O1-A entry decision 晚于 SSH / stub / pending cleanup；command / runtime entry owner、giant coordinator、config typed / cross-process boundary 仍未收敛。
 - **Science update MEDIUM**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
-这些问题的范围、非目标和建议顺序以 [Post-D0 重新基线](../../docs/audits/2026-08-04-post-d0-rebaseline.md) 为准；旧 R3–R11、S7 或 ignored plan 不能自动授权后续实现。
+这些问题的范围、非目标和当前建议顺序以 [Post-Q0 Runtime 后续路线再基线](../../docs/audits/2026-08-04-post-q0-runtime-roadmap-rebaseline.md) 为准；旧 R3–R11、S7、Post-D0 表格或 ignored plan 不能自动授权后续实现。
 
 ## 当前产品与 live 证据缺口
 
