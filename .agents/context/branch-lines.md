@@ -1,6 +1,6 @@
 # 分支线角色（工程约定）
 
-最后复核：2026-08-03（Asia/Taipei）
+最后复核：2026-08-04（Asia/Taipei）
 
 失效条件：`main` / `next` / 发布 tag 的角色约定变更时立即失效。
 
@@ -11,10 +11,9 @@
 | `next` | 工程直线 | 切片 FF 合入；可逐刀 revert；**不是**当前 release 身份 |
 | `codex/<slice>` | 单刀工作分支 | 从 `next` 开出，审完 FF 回 `next` |
 
-当前 `next` 已推进到 `7699e89212f2ceaf2c07e7358f6cc2f8bf3a21d2`；它包含 environment
-allowlist 之后的 R0-R2、S1-S6 与 H1/H2/H3 source-only closure，仍不是 release 身份。H1–H3
-tested candidate 为 `9d7133285c32e8303cc47b6ff91b25e76dccec6f`；从该 candidate 到当前
-HEAD 只有后续 evidence-only seal。当前 implementation 顺序必须先参考
-[2026-08-03 H1–H3 后 production flow 再基线](../../docs/audits/2026-08-03-post-h1-h3-production-flow-rebaseline.md)，不得只按历史首段、旧 S7 或 pre-H1–H3 路线推断。
+`next` 会随 source-only 工程切片推进，本文不再复制易漂移的 HEAD、tested candidate 或 sole NEXT。
+实时 commit/worktree 必须现场复核；当前缺口、证据层与唯一建议 NEXT 从
+[known issues](known-issues.md) 进入，日期化 source 结论从该页链接的最新 audit 进入。无论 `next`
+领先多少 commit，都不能把它称为公开 release 身份。
 
 历史治理/调查分支与 worktree 多数已被 `main` 吸收，默认不必继续使用；删除前须用户明确授权。

@@ -241,13 +241,12 @@ frontend 只持有一次性 opaque reference。backend 复核 active profile、p
 1. 精确停止当前受管 Science；
 2. 恢复用户选择的历史组织；
 3. 清理一次性 reference；
-4. 返回本次 restore 的结果；下一次 start 是独立产品动作。
+4. 返回本次 restore 的结果；当前 frontend 随后自动发起另一次 one-click start。
 
 组织 UUID、真实路径与敏感凭证不跨 invoke 边界。
 
-当前 frontend 在 restore 成功后仍自动调用 one-click；这是待修的控制面串联，不是长期事务
-合同。目标是 frontend 一个明确 intent 对应一个 backend operation，并由用户显式发起下一次
-start；不能把 history restore、cold start 和 recovery 合并成更大的万能事务。
+restore 与随后 one-click 各自取得 destructive lease，且没有覆盖两次 operation 的共同 durable
+journal。它们不能被解释成一个原子事务，也不能与 cold start、recovery 合并成万能事务。
 
 ## 停止
 

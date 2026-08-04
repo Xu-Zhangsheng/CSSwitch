@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-08-04 post-H4 production-flow 再基线整理
+状态：当前；按 v0.8.4 release source 与 2026-08-04 post-H4 全量重构摸排整理
 
 最后复核：2026-08-04（Asia/Taipei）
 
@@ -8,9 +8,11 @@
 
 已解决历史放入 CHANGELOG 或 dated evidence，不在这里重复。
 
-## 当前 Runtime 决策门
+## 当前重构决策门
 
 最新只读审计见
+[2026-08-04 Post-H4 全量重构摸排](../../docs/audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)。
+较窄的 H4 production-flow 结论见
 [2026-08-04 Post-H4 production flow 再基线](../../docs/audits/2026-08-04-post-h4-production-flow-rebaseline.md)。
 原三个 HIGH 的发现基线见
 [2026-08-03 Runtime 事务编排再基线](../../docs/audits/2026-08-03-runtime-transaction-orchestration-rebaseline.md)。
@@ -60,26 +62,25 @@ completion review 为零 BLOCK/HIGH/MEDIUM/LOW；exact-SHA 15-suite source run
 `045cb36c38bd926f563a43c2c25843bd` 为 PASS。该结论不外推到 artifact、installed、live、signing
 或 release。
 
-post-H4 复核未发现新的 HIGH。当前仍有五个 MEDIUM：healthy/cold branch decision 晚于
-system-SSH/stub capture 与 pending cleanup retry；frontend 在 history restore 成功后自动串联
-one-click；explicit history restore 缺少 durable crash/progress journal；mutation lease 与 config
-CAS 主要是 process-local；final config writer 尚未把 `AtomicRollbackUncertain` 与普通 safe failure
-作 typed 区分。最后一项现在由 H4 readback fail-closed 消费，但底层 writer 合同本身仍未关闭。
+窄 post-H4 production-flow 复核没有发现新的 runtime HIGH；全量摸排随后发现两个不同证据层的
+HIGH，旧的 O1-A sole NEXT 排序已失效：
 
-当前唯一建议 NEXT 恢复为 `O1-A Typed one-click entry decision`：先建立只读、不可变的 entry
-decision snapshot，在 cold-only system-SSH/stub capture、pending authority cleanup retry 与其他
-branch-specific effect 前决定 healthy reopen / cold-restart / recovery 路由；command 仍只做
-IPC、preflight 与 projection。O1-A 必须保持 H1–H4 handoff/journal/finalize/consumer 合同、一个
-frontend intent 对应一个 backend operation，并用 typed decision 而不是诊断文案控制分支。
+1. **产品信任 HIGH**：状态页声称“运行自检”不会改变 Skill/MCP 配置，但 `run_doctor` 实际取得
+   `HostBridge` mutation lease，并强制 reconcile、失效或重写第三方 Skill route 状态。当前唯一
+   建议 NEXT 改为 `D0 Doctor intent split`：纯 read-only doctor 与显式 repair intent 分离；
+2. **变更治理 HIGH**：`quality/release-lineage.v1.json` 仍停在 `v0.8.3 <- v0.8.2`，ChangeRecord
+   只提供 active path coverage，没有机器绑定 base/exact candidate/run/seal/release。D0 后的首个
+   候选是 Q0 source/release ledger；它必须保持 CHANGELOG 只记录真实 release；
+3. **Runtime MEDIUM**：healthy/cold decision 晚于 SSH/stub/pending cleanup；command/runtime 共同
+   拥有 entry recovery；one-click 仍是 giant coordinator；frontend history restore 串联第二个
+   destructive operation且无 durable journal；mutation lease/config CAS 主要 process-local；
+   compensation progress 未持久化；`AtomicRollbackUncertain` 未向 orchestration typed 暴露；
+4. **Update MEDIUM**：Science 只有受校验内容寻址 snapshot 身份链，没有通用
+   predecessor/candidate/adoption diff ledger。
 
-O1-A 只是一项新的 sole NEXT 选择，不是本任务的实现授权；cold affine receipt chain、history
-frontend boundary、durable compensation、跨进程 lock/CAS、剩余锁外等待、Science update
-provenance 与 artifact/live/release 继续排除。详细证据与进入条件见
-[post-H4 rebaseline](../../docs/audits/2026-08-04-post-h4-production-flow-rebaseline.md)。
-
-Science 更新当前只有受校验的内容寻址 snapshot 身份链，没有通用 predecessor/candidate/adoption
-差异 ledger。CSSwitch source change 继续由 active ChangeRecord 与 exact-SHA evidence 记录；
-CHANGELOG 只记录真实 release，不能把当前 `next` 的 source changes 写成已发布更新。
+当前唯一建议 NEXT `D0` 仍只是选择，不是实现授权。D0 source closure 后必须重新摸排，再决定
+Q0、O1-A 或其他一个 sole NEXT；不得自动执行整条路线。详细证据、文档影响与停止条件见
+[全量重构摸排](../../docs/audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)。
 
 ## 已完成 Runtime 架构分片背景
 

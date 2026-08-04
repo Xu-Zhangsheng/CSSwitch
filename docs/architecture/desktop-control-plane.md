@@ -130,7 +130,7 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
 ## 选择、应用与诊断语义
 
 - `set_active_profile` 只提交“当前选择”；运行中的 Gateway/Science 不立即切换。下一次一键开始才应用并写 runtime binding。
-- history attention、`restore_history_choice` 与下一次 start 是三个独立产品动作；当前 frontend 在 restore 成功后自动调用 one-click，这是待修的控制面串联，不是长期合同。目标是 frontend 只提交一个明确 intent 并渲染 typed result，由用户显式发起下一次 start。
+- history attention、`restore_history_choice` 与下一次 start 是三个独立 backend operation；当前 frontend 在 restore 成功后自动调用 one-click，因此一个用户点击会串联后两个 destructive operation。这个当前缺口不是 durable transaction 合同。
 - `status` 是轻量状态投影；Science 灯的 HTTP health 不证明 listener/runtime 强身份。
 - `finalize_consumer_state` 是 one-click 完成后的窄、脱敏、只读投影；它不探活、不写配置，也不
   成为新的 transaction owner。history choice 即使伴随 cleanup warning 也保持 attention；normal

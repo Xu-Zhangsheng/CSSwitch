@@ -71,8 +71,14 @@ Codex 区块内部再分为：
 ## 状态与文案
 
 - “配置已保存”“已设为当前”“Gateway 已就绪”“Science 已打开”是不同状态，不合并成一个成功提示。
+- “当前选择”不等于“已应用”。只有 backend 对本次 operation 的 journal cleared、exact active
+  binding 和 selection non-pending 完成只读回读后才能显示 applied；attention、manual 或回读失败
+  必须显示 applied unknown 并保持 pending，不能沿用旧 binding 或当前选择制造成功状态。
 - Codex 模型目录区分 live、stale cache、网络失败和未登录；不把缓存目录写成实时目录。
 - Skill 的“已发现”“已绑定”和“当前会话已加载”是三件事；本页只证明前两者，不显示“可用”。
+- 当前“运行自检”在诊断脚本后还会强制核验并同步第三方 Skill route，可能失效或重写 route
+  marker、connector 和 managed prompt，因此不是纯只读动作。UI 不得把它描述成“不改变 Skill
+  或 MCP 配置”；纯诊断与显式修复尚未分成两个 intent。
 - 浏览器视觉预览、源码测试、Tauri App 和发布 artifact 的验证结论分开记录。
 
 ## 响应式与验收门
