@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-08-04 post-H4 全量重构摸排整理
+状态：当前；按 v0.8.4 release source、2026-08-04 post-H4 全量重构摸排与 D0 source closure 整理
 
 最后复核：2026-08-04（Asia/Taipei）
 
@@ -12,6 +12,8 @@
 
 最新只读审计见
 [2026-08-04 Post-H4 全量重构摸排](../../docs/audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)。
+最新 implementation closure 见
+[2026-08-04 D0 Doctor intent split source closure](../../docs/audits/2026-08-04-d0-doctor-intent-split.md)。
 较窄的 H4 production-flow 结论见
 [2026-08-04 Post-H4 production flow 再基线](../../docs/audits/2026-08-04-post-h4-production-flow-rebaseline.md)。
 原三个 HIGH 的发现基线见
@@ -63,24 +65,29 @@ completion review 为零 BLOCK/HIGH/MEDIUM/LOW；exact-SHA 15-suite source run
 或 release。
 
 窄 post-H4 production-flow 复核没有发现新的 runtime HIGH；全量摸排随后发现两个不同证据层的
-HIGH，旧的 O1-A sole NEXT 排序已失效：
+HIGH。D0 已在 source-test 层关闭其中的产品信任 HIGH：最终 implementation candidate
+`3c2eeea32c71438b2ac24f962017597ce1ed4218` 将 read-only Doctor 与显式 Skill route repair
+拆成独立 typed intent；Doctor 不取得 mutation lease，不迁移 config，不消费父进程 Doctor path
+override，不读取真实 Science HOME，也不为诊断启动受管 Science/正式 Gateway。最终 clean-context
+review 为零 BLOCK/HIGH/MEDIUM/LOW；15-suite run `79a6b4ca17076464e4bbd02ebbdd42cd`
+为 PASS。该结论不外推 artifact、installed/live、signing 或 release。
 
-1. **产品信任 HIGH**：状态页声称“运行自检”不会改变 Skill/MCP 配置，但 `run_doctor` 实际取得
-   `HostBridge` mutation lease，并强制 reconcile、失效或重写第三方 Skill route 状态。当前唯一
-   建议 NEXT 改为 `D0 Doctor intent split`：纯 read-only doctor 与显式 repair intent 分离；
-2. **变更治理 HIGH**：`quality/release-lineage.v1.json` 仍停在 `v0.8.3 <- v0.8.2`，ChangeRecord
-   只提供 active path coverage，没有机器绑定 base/exact candidate/run/seal/release。D0 后的首个
-   候选是 Q0 source/release ledger；它必须保持 CHANGELOG 只记录真实 release；
-3. **Runtime MEDIUM**：healthy/cold decision 晚于 SSH/stub/pending cleanup；command/runtime 共同
+剩余候选与已知缺口：
+
+1. **变更治理 HIGH 候选 Q0**：`quality/release-lineage.v1.json` 仍停在
+   `v0.8.3 <- v0.8.2`，ChangeRecord 只提供 active path coverage，没有机器绑定
+   base/exact candidate/run/seal/release；它必须保持 CHANGELOG 只记录真实 release；
+2. **Runtime MEDIUM**：healthy/cold decision 晚于 SSH/stub/pending cleanup；command/runtime 共同
    拥有 entry recovery；one-click 仍是 giant coordinator；frontend history restore 串联第二个
    destructive operation且无 durable journal；mutation lease/config CAS 主要 process-local；
    compensation progress 未持久化；`AtomicRollbackUncertain` 未向 orchestration typed 暴露；
-4. **Update MEDIUM**：Science 只有受校验内容寻址 snapshot 身份链，没有通用
+3. **Update MEDIUM**：Science 只有受校验内容寻址 snapshot 身份链，没有通用
    predecessor/candidate/adoption diff ledger。
 
-当前唯一建议 NEXT `D0` 仍只是选择，不是实现授权。D0 source closure 后必须重新摸排，再决定
-Q0、O1-A 或其他一个 sole NEXT；不得自动执行整条路线。详细证据、文档影响与停止条件见
-[全量重构摸排](../../docs/audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)。
+当前没有新的 sole NEXT。必须在全新窗口从 D0 后最新源码执行只读重新基线，重新比较 Q0、O1-A、
+F1 与新发现后只选择一个；不得自动继承旧路线或执行整条路线。详细旧候选、文档影响与停止条件见
+[全量重构摸排](../../docs/audits/2026-08-04-post-h4-full-refactor-reconnaissance.md)，D0 完成证据见
+[D0 source closure](../../docs/audits/2026-08-04-d0-doctor-intent-split.md)。
 
 ## 已完成 Runtime 架构分片背景
 
