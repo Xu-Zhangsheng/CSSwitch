@@ -21,7 +21,7 @@ WebView
   -> invoke(command, DTO)
   -> Tauri command
   -> command-specific boundary
-     -> Lifecycle serializer（runtime/profile/mode/doctor reconcile）
+     -> Lifecycle serializer（runtime/profile/mode/Skill route repair）
      -> picker 后短 HostBridge lease + typed host receipt + Skill package transaction（本地 Skill 安装）
   -> Config / AppState / package-private state / Gateway / Science
 
@@ -136,8 +136,9 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
   成为新的 transaction owner。history choice 即使伴随 cleanup warning 也保持 attention；normal
   cleanup 只有 readback 确认 exact active binding 且 journal cleared 才可发布 ready；attention、
   manual 或回读失败一律清除 frontend 的 applied 展示并保持 selection pending。
-- Doctor 是两个独立 intent。`run_doctor_read_only` 只读 canonical v4 config、运行脱敏
-  `doctor.sh` 并投影 Codex 最近一次内存观察；旧 schema 只报错，不迁移、chmod、清 notice，
+- Doctor 是两个独立 intent。`run_doctor_read_only` 只读 canonical v4 config、在清空继承环境后
+  仅注入固定 `PATH`、canonical config/Science/Gateway 路径与脱敏状态，再运行 `doctor.sh` 并投影
+  Codex 最近一次内存观察；生产入口强制关闭真实 Science HOME 检查，旧 schema 只报错，不迁移、chmod、清 notice，
   也不取得 mutation lease、修改 route 或为诊断启动 Science/Gateway。`repair_skill_route`
   只在用户显式触发后取得 `HostBridge` mutation lease，强制 reconcile 第三方 Skill route；
   它可失效 route marker，或在健康 Science 上通过一次性 control sidecar 同步 route Skill、

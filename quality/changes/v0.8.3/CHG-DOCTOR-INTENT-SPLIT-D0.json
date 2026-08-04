@@ -28,6 +28,7 @@
       "quality/schema/runtime-mutation-inventory.v1.schema.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
       "test/quality/test_source_gate_runtime.py",
       "test/run-frontend.sh",
       "test/runtime_controller_doctor.test.mjs",
@@ -79,6 +80,7 @@
       ],
       "basis": [
         "run_doctor_read_only uses the canonical-v4 read-only loader, rejects legacy schema instead of migrating it, and does not acquire a runtime mutation lease",
+        "the Doctor child clears inherited environment state, fixes canonical config and Science/Gateway paths, and forces real Science HOME inspection off even under hostile parent overrides",
         "the read-only command runs only the existing redacted doctor shell and in-memory Codex diagnostic projection; it never invokes Skill route reconcile or starts Science/Gateway",
         "repair_skill_route is a separate explicit Tauri command and the sole Doctor-area owner of the HostBridge mutation lease and force_third_party_reconcile",
         "repair returns synchronized, deferred, restart-required, not-required, or warning as typed status while preserving the existing no-implicit-Science/Gateway-start boundary",

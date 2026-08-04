@@ -191,8 +191,8 @@ mod tests {
     }
 }
 
-/// Explicit doctor action: bypass the version cache and route marker without
-/// starting Science or the proxy solely for diagnostics.
+/// Explicit Skill route repair: bypass the version cache and route marker
+/// without starting Science or the proxy solely for this mutation intent.
 pub(crate) fn force_third_party_reconcile<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,

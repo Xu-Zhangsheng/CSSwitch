@@ -78,7 +78,9 @@ fn run_doctor_read_only_cmd<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<ReadOnlyDoctorResult, String> {
     let root = asset_root(app).ok_or("找不到 scripts/doctor.sh（打包资源或仓库根均未命中）。")?;
-    let cfg = doctor_config_from(&config::default_dir())?;
+    let config_dir = config::default_dir();
+    let config_path = config_dir.join("config.json");
+    let cfg = doctor_config_from(&config_dir)?;
     let doctor = root.join("scripts/doctor.sh");
     // 生效 profile 的展示名（template_id）+ adapter + 脱敏认证类型；无生效配置则留空。
     let (provider_label, adapter, auth_mode, has_key) = match cfg.active_profile() {
@@ -104,7 +106,9 @@ fn run_doctor_read_only_cmd<R: tauri::Runtime>(
         }
         None => (String::new(), String::new(), "", false),
     };
-    let mut cmd = Command::new("bash");
+    let gateway = crate::runtime::proxy_lifecycle::gateway_bin_path(app);
+    let mut cmd = Command::new("/bin/bash");
+    harden_doctor_command(&mut cmd, &config_path, gateway.as_deref());
     // 多 profile：传 template_id + adapter + key 有无（布尔）。doctor 不再按 provider 名写死、
     // 不再去 shell 环境找 key（key 存 config.json）。绝不把真实 key 值传进其环境。
     cmd.arg(&doctor)
@@ -114,9 +118,6 @@ fn run_doctor_read_only_cmd<R: tauri::Runtime>(
         .env("CSSWITCH_KEY_PRESENT", if has_key { "1" } else { "0" })
         .env("CSSWITCH_PROXY_PORT", cfg.proxy_port.to_string())
         .env("CSSWITCH_SANDBOX_PORT", cfg.sandbox_port.to_string());
-    if let Some(gateway) = crate::runtime::proxy_lifecycle::gateway_bin_path(app) {
-        cmd.env("CSSWITCH_GATEWAY_BIN", gateway);
-    }
     let out = cmd.output().map_err(|e| e.to_string())?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr);
@@ -170,6 +171,23 @@ fn run_doctor_read_only_cmd<R: tauri::Runtime>(
     })
 }
 
+fn harden_doctor_command(
+    cmd: &mut Command,
+    config_path: &std::path::Path,
+    gateway_bin: Option<&std::path::Path>,
+) {
+    cmd.env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("LC_ALL", "C")
+        .env("CSSWITCH_CONFIG", config_path)
+        .env("SCIENCE_BIN", crate::runtime::science::SCIENCE_BIN)
+        .env("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0")
+        .env(
+            "CSSWITCH_GATEWAY_BIN",
+            gateway_bin.unwrap_or_else(|| std::path::Path::new("")),
+        );
+}
+
 fn doctor_config_from(dir: &std::path::Path) -> Result<config::Config, String> {
     config::load_current_from_read_only(dir)
         .map_err(|e| format!("只读配置检查失败，无法运行自检：{e}"))
@@ -207,7 +225,10 @@ pub(crate) fn open_logs() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{doctor_config_from, DoctorIntent, ReadOnlyDoctorStatus, SkillRouteRepairStatus};
+    use super::{
+        doctor_config_from, harden_doctor_command, DoctorIntent, ReadOnlyDoctorStatus,
+        SkillRouteRepairStatus,
+    };
     use crate::runtime::skill_install_bridge::{
         mark_route_configuration_current, route_configuration_is_current,
     };
@@ -265,6 +286,40 @@ mod tests {
         );
         assert!(!dir.join("config.json.v2.bak").exists());
         assert!(!dir.join("config.json.v3.bak").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn d0_doctor_child_environment_rejects_hostile_parent_overrides() {
+        let dir = tmpdir("hostile-parent-env");
+        let hostile_home = dir.join("hostile-home");
+        let real_science_home = hostile_home.join(".claude-science");
+        fs::create_dir_all(&real_science_home).unwrap();
+        let config_path = dir.join("config.json");
+        fs::write(&config_path, b"{}").unwrap();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let doctor =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/doctor.sh");
+
+        let mut cmd = std::process::Command::new("/bin/bash");
+        cmd.arg(&doctor)
+            .env("HOME", &hostile_home)
+            .env("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "1")
+            .env("CSSWITCH_CONFIG", dir.join("hostile-config.json"))
+            .env("SCIENCE_BIN", dir.join("hostile-science"))
+            .env("CSSWITCH_GATEWAY_BIN", dir.join("hostile-gateway"));
+        harden_doctor_command(&mut cmd, &config_path, None);
+        let output = cmd.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+
+        assert!(output.status.success());
+        assert!(text.contains("真实 HOME 检查默认跳过"));
+        assert!(text.contains(&config_path.display().to_string()));
+        assert!(!text.contains(&hostile_home.display().to_string()));
+        assert!(!text.contains("hostile-config"));
+        assert!(!text.contains("hostile-science"));
+        assert!(!text.contains("hostile-gateway"));
 
         fs::remove_dir_all(dir).unwrap();
     }

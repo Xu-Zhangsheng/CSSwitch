@@ -747,6 +747,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::status_consistency_rejects_hash_or_login_state_anomalies",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::structured_auth_errors_have_exact_reason_cause_and_retryability_contracts",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::terminal_ensure_races_repair_manual_create_logout_and_disable_without_deadlock",
+        "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::d0_doctor_child_environment_rejects_hostile_parent_overrides",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::d0_doctor_read_only_rejects_legacy_without_migration_or_permission_change",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::doctor_config_rejects_reserved_port_instead_of_defaulting",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile",

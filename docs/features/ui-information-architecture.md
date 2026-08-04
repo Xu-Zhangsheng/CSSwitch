@@ -77,7 +77,7 @@ Codex 区块内部再分为：
 - Codex 模型目录区分 live、stale cache、网络失败和未登录；不把缓存目录写成实时目录。
 - Skill 的“已发现”“已绑定”和“当前会话已加载”是三件事；本页只证明前两者，不显示“可用”。
 - “运行只读自检”与“修复 Skill 路由”是两个独立动作。只读自检不迁移配置、不修改 Skill/MCP
-  或 route marker，也不启动 Science/Gateway；显式修复会同步 CSSwitch 管理的第三方 Skill
+  或 route marker，也不读取真实 Science HOME、继承父进程的 Doctor 覆盖变量或启动 Science/Gateway；显式修复会同步 CSSwitch 管理的第三方 Skill
   route，并可能失效 marker、修改 connector 或 managed prompt。frontend 每次只提交一个 intent，
   按 typed result 展示完成、延后、需重启或警告，不按诊断文案推断控制流。
 - 浏览器视觉预览、源码测试、Tauri App 和发布 artifact 的验证结论分开记录。
