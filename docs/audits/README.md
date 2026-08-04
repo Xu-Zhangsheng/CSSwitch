@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [Q0-A source-candidate lineage closure（2026-08-04）](2026-08-04-q0-a-source-candidate-lineage.md)：v0.8.4 / `next` lineage、immutable source record、exact-C review 与 source gate closure。
 - [Post-D0 只读重新基线（2026-08-04）](2026-08-04-post-d0-rebaseline.md)：当前最新的 source-only 架构与治理再基线。
 - [D0 Doctor intent split source closure（2026-08-04）](2026-08-04-d0-doctor-intent-split.md)：D0 implementation candidate、review 与 source gate 证据。
 

@@ -1,22 +1,24 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 2026-08-04 Post-D0 source-only 重新基线整理
+状态：当前；按 2026-08-04 Q0-A source-only closure 整理
 
 最后复核：2026-08-04（Asia/Taipei）
 
 失效条件：quality lineage、Doctor / one-click / history / config / boot read model、Science runtime provenance、release source、artifact、installed/live 或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4 与 D0 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
+本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0 与 Q0-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
 ## 当前唯一决策门
 
-最新只读基线是 [2026-08-04 Post-D0 重新基线](../../docs/audits/2026-08-04-post-d0-rebaseline.md)；最近 implementation closure 是 [D0 Doctor intent split](../../docs/audits/2026-08-04-d0-doctor-intent-split.md)。两者只建立 source / test / review 结论，不外推 artifact、installed/live、签名、公证或公开 release。
+最近 implementation closure 是 [Q0-A source-candidate lineage](../../docs/audits/2026-08-04-q0-a-source-candidate-lineage.md)；其输入是 [Post-D0 重新基线](../../docs/audits/2026-08-04-post-d0-rebaseline.md)。两者只建立 source / test / review 结论，不外推 artifact、installed/live、签名、公证或公开 release。
 
-唯一建议 NEXT 是 **Q0-A Current release baseline and source-candidate lineage**，尚未授权实施：
+Q0-A 已在 source/unit 层完成：
 
-- **变更治理 HIGH**：`quality/release-lineage.v1.json` 与 validator 仍停在 `v0.8.3 <- v0.8.2`；D0 等 v0.8.4 后 source change 继续复用旧 namespace。只读复核中 `metadata` PASS，但 `impact-release` 因过旧 base、历史删除、未知 policy path 和缺少 matching ChangeRecord 等原因 FAIL。
-- **Q0-A 边界**：同步已核验的 v0.8.4 release/tag identity 与显式 development source line；保留 ChangeRecord 的 intent / risk / test-impact 语义；新增 immutable SourceCandidateRecord 绑定 base、exact candidate、change set 与 run / seal / snapshot / evidence digest；复用 ReleaseCandidateV1 建立 fail-closed promotion edge。source evidence 不得升级成 release evidence。
-- **停止条件**：Q0-A 若获授权并完成，必须重新基线后停止；不得自动进入 frontend、one-click、config、Science provenance 或 release 工作。
+- `quality/release-lineage.v1.json` 已绑定 `v0.8.4` annotated tag object / peeled identity 与显式 `next` development source；post-release ChangeRecord 使用 `quality/changes/next/`，已发布 namespace 保持不变；
+- immutable SourceCandidateRecord 已绑定 exact implementation candidate、canonical current change set、change IDs 与完整 source gate digest；ReleaseCandidate / ReleaseEvidence promotion edge fail closed；
+- exact-C source gate 与 clean-context review 已闭合。artifact、installed/live、签名、公证和 public release 仍未由此建立。
+
+**当前没有获授权的 implementation sole NEXT。** 下一动作只做一次新的只读再基线，重新比较 F1 history、read-model/boot、O1-A、config concurrency、Science provenance 等窄候选；不得沿用 Post-D0 表格顺序自动进入任何阶段。
 
 ## 仍开放的源码与架构问题
 
