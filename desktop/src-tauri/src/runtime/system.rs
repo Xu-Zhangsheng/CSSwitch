@@ -24,17 +24,22 @@ pub(crate) fn repo_root() -> Option<PathBuf> {
             }
         }
     }
-    // Only walk from the executable path. current_dir is intentionally ignored:
-    // the launch directory can be influenced, and must not select a foreign
-    // proxy script that receives provider keys through env.
-    if let Ok(exe) = std::env::current_exe() {
-        let mut dir: Option<&Path> = exe.parent();
-        while let Some(d) = dir {
-            if d.join(gateway_marker).is_file() && d.join(script_marker).is_file() {
-                return Some(d.to_path_buf());
-            }
-            dir = d.parent();
+    canonical_repo_root()
+}
+
+/// Locate the repository only from the current executable ancestry. Doctor uses
+/// this path so parent-process development overrides cannot select its script or
+/// the Gateway path it reports.
+pub(crate) fn canonical_repo_root() -> Option<PathBuf> {
+    let gateway_marker = Path::new("desktop/gateway/Cargo.toml");
+    let script_marker = Path::new("scripts/doctor.sh");
+    let exe = std::env::current_exe().ok()?;
+    let mut dir: Option<&Path> = exe.parent();
+    while let Some(candidate) = dir {
+        if candidate.join(gateway_marker).is_file() && candidate.join(script_marker).is_file() {
+            return Some(candidate.to_path_buf());
         }
+        dir = candidate.parent();
     }
     None
 }
@@ -49,6 +54,17 @@ pub(crate) fn asset_root<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBu
         }
     }
     repo_root()
+}
+
+/// Packaged resource lookup with a current-executable-only development fallback.
+pub(crate) fn canonical_asset_root<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBuf> {
+    let marker = Path::new("scripts/doctor.sh");
+    if let Ok(res) = app.path().resource_dir() {
+        if res.join(marker).is_file() {
+            return Some(res);
+        }
+    }
+    canonical_repo_root()
 }
 
 pub(crate) fn log_path(name: &str) -> PathBuf {

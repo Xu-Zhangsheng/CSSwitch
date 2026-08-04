@@ -787,6 +787,15 @@ class SkillRuntimeBoundary(unittest.TestCase):
         for domain in ("Intent", "Destructive", "HostBridge", "Terminal"):
             self.assertIn(f"RuntimeMutationDomain::{domain}", production)
 
+        diagnostics = (
+            ROOT / "desktop/src-tauri/src/commands/diagnostics.rs"
+        ).read_text().split("#[cfg(test)]", 1)[0]
+        self.assertIn("canonical_asset_root(app)", diagnostics)
+        self.assertIn("doctor_gateway_bin_path(app)", diagnostics)
+        self.assertNotIn("let root = asset_root(app)", diagnostics)
+        self.assertNotIn("proxy_lifecycle::gateway_bin_path(app)", diagnostics)
+        self.assertIn("cmd.env_clear()", diagnostics)
+
         local_skill = (
             ROOT / "desktop/src-tauri/src/commands/skill_install.rs"
         ).read_text()

@@ -6,7 +6,7 @@ use crate::lifecycle::RuntimeMutationDomain;
 use crate::provider_contracts::AuthMode;
 use crate::runtime::provider::adapter_for_profile;
 use crate::runtime::sandbox_session::{SkillRouteRepairOutcome, SkillRouteRepairStatus};
-use crate::runtime::system::{asset_root, open_in_browser};
+use crate::runtime::system::{canonical_asset_root, open_in_browser};
 use crate::{config, run_blocking, SharedAppState, SharedLifecycle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -77,7 +77,8 @@ fn repair_skill_route_cmd<R: tauri::Runtime>(
 fn run_doctor_read_only_cmd<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<ReadOnlyDoctorResult, String> {
-    let root = asset_root(app).ok_or("找不到 scripts/doctor.sh（打包资源或仓库根均未命中）。")?;
+    let root = canonical_asset_root(app)
+        .ok_or("找不到 scripts/doctor.sh（打包资源或可执行文件祖先均未命中）。")?;
     let config_dir = config::default_dir();
     let config_path = config_dir.join("config.json");
     let cfg = doctor_config_from(&config_dir)?;
@@ -106,7 +107,7 @@ fn run_doctor_read_only_cmd<R: tauri::Runtime>(
         }
         None => (String::new(), String::new(), "", false),
     };
-    let gateway = crate::runtime::proxy_lifecycle::gateway_bin_path(app);
+    let gateway = crate::runtime::proxy_lifecycle::doctor_gateway_bin_path(app);
     let mut cmd = Command::new("/bin/bash");
     harden_doctor_command(&mut cmd, &config_path, gateway.as_deref());
     // 多 profile：传 template_id + adapter + key 有无（布尔）。doctor 不再按 provider 名写死、
@@ -364,11 +365,16 @@ mod tests {
             b"[package]\nname='fake'\n",
         )
         .unwrap();
-        fs::write(&doctor, b"#!/bin/sh\nprintf 'doctor-ok\\n'\n").unwrap();
+        fs::write(&doctor, b"#!/bin/sh\nprintf 'doctor-hostile\\n'\n").unwrap();
         fs::set_permissions(&doctor, fs::Permissions::from_mode(0o700)).unwrap();
+        let hostile_gateway = repo.join("hostile-gateway");
+        fs::write(&hostile_gateway, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&hostile_gateway, fs::Permissions::from_mode(0o700)).unwrap();
         fs::create_dir_all(&home).unwrap();
         env::set_var("HOME", &home);
         env::set_var("CSSWITCH_REPO", &repo);
+        env::set_var("CSSWITCH_GATEWAY_BIN", &hostile_gateway);
+        env::set_var("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "1");
 
         let config_dir = crate::config::default_dir();
         let data_dir = config_dir.join("sandbox/home/.claude-science");
@@ -397,7 +403,10 @@ mod tests {
         let second = super::run_doctor_read_only_cmd(app.handle()).unwrap();
         assert_eq!(second.intent, DoctorIntent::ReadOnlyDiagnostics);
         assert_eq!(second.status, ReadOnlyDoctorStatus::Passed);
-        assert!(second.message.contains("doctor-ok"));
+        assert!(second.message.contains("诊断完成"));
+        assert!(second.message.contains("真实 HOME 检查默认跳过"));
+        assert!(!second.message.contains("doctor-hostile"));
+        assert!(!second.message.contains(&repo.display().to_string()));
         assert_eq!(
             serde_json::to_value(&second).unwrap()["intent"],
             "read_only_diagnostics"

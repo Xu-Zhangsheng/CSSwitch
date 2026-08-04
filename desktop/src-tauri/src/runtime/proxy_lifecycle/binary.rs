@@ -32,6 +32,17 @@ pub(crate) fn gateway_bin_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<
     )
 }
 
+/// Gateway lookup for read-only Doctor. Unlike the runtime launcher, this never
+/// consumes parent `CSSWITCH_GATEWAY_BIN` or `CSSWITCH_REPO` overrides.
+pub(crate) fn doctor_gateway_bin_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBuf> {
+    gateway_bin_path_from(
+        None,
+        std::env::current_exe().ok(),
+        app.path().resource_dir().ok(),
+        canonical_repo_root(),
+    )
+}
+
 pub(crate) fn gateway_bin_path_from(
     env_bin: Option<PathBuf>,
     current_exe: Option<PathBuf>,

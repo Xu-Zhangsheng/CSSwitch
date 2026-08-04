@@ -137,7 +137,8 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
   cleanup 只有 readback 确认 exact active binding 且 journal cleared 才可发布 ready；attention、
   manual 或回读失败一律清除 frontend 的 applied 展示并保持 selection pending。
 - Doctor 是两个独立 intent。`run_doctor_read_only` 只读 canonical v4 config、在清空继承环境后
-  仅注入固定 `PATH`、canonical config/Science/Gateway 路径与脱敏状态，再运行 `doctor.sh` 并投影
+  仅注入固定 `PATH`、canonical config/Science/Gateway 路径与脱敏状态；script 与 Gateway 的开发回退
+  也只沿当前 executable ancestry 查找，不消费父进程 `CSSWITCH_REPO` / `CSSWITCH_GATEWAY_BIN`，再运行 `doctor.sh` 并投影
   Codex 最近一次内存观察；生产入口强制关闭真实 Science HOME 检查，旧 schema 只报错，不迁移、chmod、清 notice，
   也不取得 mutation lease、修改 route 或为诊断启动 Science/Gateway。`repair_skill_route`
   只在用户显式触发后取得 `HostBridge` mutation lease，强制 reconcile 第三方 Skill route；
