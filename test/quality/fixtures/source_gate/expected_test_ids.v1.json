@@ -704,6 +704,12 @@
       },
       "approved_skipped_test_ids": [],
       "discovered_test_ids": [
+        "config::tests::c1_a_config_writer_child",
+        "config::tests::c1_a_cross_process_writer_fence_prevents_lost_update",
+        "config::tests::config_writer_fence_rejects_hardlink_without_touching_target",
+        "config::tests::config_writer_fence_rejects_replacement_while_waiting",
+        "config::tests::config_writer_fence_rejects_symlink_without_touching_target",
+        "config::tests::read_only_current_config_does_not_create_writer_fence",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::exit_after_preflight_child_exit_rejects_ready_proof_promotion",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::exit_before_pid_registration_closes_the_spawn_race",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::exit_cancellation_covers_interactive_preflight_pid",

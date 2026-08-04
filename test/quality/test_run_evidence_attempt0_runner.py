@@ -828,7 +828,7 @@ class Attempt0RunnerTests(unittest.TestCase):
         }
         raw = canonical_json_bytes(value)
         frame = len(raw).to_bytes(4, "big") + raw
-        self.assertEqual(len(expected), 539)
+        self.assertEqual(len(expected), 545)
         self.assertGreater(len(raw), 64 * 1024)
         self.assertLess(len(raw), 4 * 1024 * 1024)
         program = (

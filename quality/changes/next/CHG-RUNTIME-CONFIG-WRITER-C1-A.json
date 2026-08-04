@@ -13,6 +13,10 @@
       "docs/architecture/runtime-state-transactions.md",
       "quality/changes/next/CHG-RUNTIME-CONFIG-WRITER-C1-A.json",
       "quality/runtime-mutation-inventory.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py",
       "test/test_runtime_mutation_inventory.py"
     ],
     "requirement_ids": [
