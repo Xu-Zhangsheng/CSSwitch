@@ -746,15 +746,33 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         ),
         "one-click must propagate the prevalidation Result with an exact Try(Call)"
     );
-    let mut early_exit = EarlyExitFacts::default();
-    for statement in &one_click.block.stmts[..prevalidate_statement] {
-        early_exit.visit_stmt(statement);
-    }
-    early_exit.visit_stmt(&one_click.block.stmts[prevalidate_statement]);
-    assert_eq!(
-            early_exit.count, 0,
-            "one-click prevalidation statement and its prefix must be reachable before explicit early-exit control flow"
-        );
+    let entry_facts_statement = one_click
+        .block
+        .stmts
+        .iter()
+        .position(|statement| {
+            statement_facts(statement)
+                .calls
+                .iter()
+                .any(|call| call == "capture_one_click_entry_facts")
+        })
+        .expect("one-click must capture immutable entry facts");
+    let entry_decision_statement = one_click
+        .block
+        .stmts
+        .iter()
+        .position(|statement| {
+            statement_facts(statement)
+                .calls
+                .iter()
+                .any(|call| call == "decide_one_click_entry")
+        })
+        .expect("one-click must decide its route from immutable facts");
+    assert!(
+        entry_facts_statement < entry_decision_statement
+            && entry_decision_statement < prevalidate_statement,
+        "one-click must capture facts and decide healthy versus mutating before SSH prevalidation"
+    );
     let authority_transaction_statement = one_click
         .block
         .stmts

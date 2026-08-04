@@ -1,4 +1,3 @@
-use super::one_click::typed_interrupted_gateway_recovery_error;
 use super::{
     config_last_error_json, manual_open_result, project_one_click_failure,
     status_response_for_config_error, status_runtime_identity, status_upstream_applicable,
@@ -222,9 +221,9 @@ fn science_operation_failures_have_stable_structured_stages() {
     );
 
     let recovery_failure = |kind, message| {
-        typed_interrupted_gateway_recovery_error(InterruptedGatewayRecoveryError::new(
-            kind, message,
-        ))
+        sandbox_session::typed_interrupted_gateway_recovery_error(
+            InterruptedGatewayRecoveryError::new(kind, message),
+        )
     };
     let authority_failure = recovery_failure(
         InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot,
@@ -7521,6 +7520,10 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
     assert_eq!(call_count(&science_call_log, "url"), 2);
     assert_eq!(call_count(&route_config_log, "configure-third-party"), 1);
 
+    let pending_cleanup_manifest = config_dir.join(config::PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE);
+    let malformed_pending_cleanup = b"malformed-pending-cleanup-must-not-block-healthy-reopen\n";
+    fs::write(&pending_cleanup_manifest, malformed_pending_cleanup).unwrap();
+    fs::set_permissions(&pending_cleanup_manifest, fs::Permissions::from_mode(0o600)).unwrap();
     let second = sandbox_session::one_click_login(
         handle.clone(),
         state.clone(),
@@ -7530,6 +7533,12 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
     )
     .expect("second one-click should reuse running sandbox");
     assert_eq!(second["action"], "reopened");
+    assert_eq!(
+        fs::read(&pending_cleanup_manifest).unwrap(),
+        malformed_pending_cleanup,
+        "healthy reopen must decide before and bypass cold/recovery pending cleanup"
+    );
+    fs::remove_file(&pending_cleanup_manifest).unwrap();
     assert!(
         second.get("url").is_none(),
         "one-time URL must stay backend-only"
@@ -7546,6 +7555,12 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
     assert_eq!(call_count(&science_call_log, "status"), 2);
     assert_eq!(call_count(&science_call_log, "url"), 3);
     assert_eq!(call_count(&route_config_log, "configure-third-party"), 1);
+    if env::var_os("CSSWITCH_TEST_O1A_HEALTHY_ONLY").is_some() {
+        cleanup
+            .finish()
+            .expect("focused O1-A healthy-reopen fixture must cleanly stop");
+        return;
+    }
 
     let managed_launch_metadata = managed_launch_path
         .symlink_metadata()

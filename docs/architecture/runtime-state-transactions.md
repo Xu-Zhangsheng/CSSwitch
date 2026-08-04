@@ -29,8 +29,8 @@
 |---|---|
 | `AppState` / `SharedLifecycle` 类型与进程级组合 | `desktop/src-tauri/src/lib.rs` |
 | command 级 mode/settings/stop/quit 串行编排 | `commands/runtime/lifecycle.rs` |
-| 一键启动、history recovery 与 UI failure 投影 | `commands/runtime/one_click.rs` |
-| protected projection、journal recovery、route reconcile、SSH preflight 与一键事务 | `runtime/sandbox_session/` |
+| 一键 IPC、锁外 auth preflight 与 UI failure 投影 | `commands/runtime/one_click.rs` |
+| typed entry decision、protected projection、journal recovery、route reconcile、SSH preflight 与一键事务 | `runtime/sandbox_session/` |
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
 | one-click authority capture、verified ticket、restore 与 cleanup 接口 | `runtime/sandbox_session/authority_transaction.rs` |
 | healthy daemon reopen 的独立补偿分支 | `runtime/sandbox_session/one_click/healthy_reopen.rs` |
@@ -140,11 +140,16 @@ snapshot ticket、cleanup path、credential 或写能力。
 
 冷启动或重启分支的高层顺序：
 
-1. 读取 active profile 与 provider contract，复核端口和 Codex proof；
-2. 进入 Lifecycle 串行区，先重放 one-click success finalize，再恢复 interrupted-Gateway；
-   recovery 的 terminal exact record 由不可序列化、process-local affine handoff 交给同一次
-   one-click，首个 checkpoint 只能用完整记录 CAS 接管；
-3. 若启用 SSH，完成真实 config、alias、wrapper、sidecar/stub 预检；
+1. runtime-owned preflight 捕获 immutable config/Gateway snapshot；command 只在锁外准备 provider
+   auth，进入 Lifecycle 串行区后复核 snapshot 并把控制权交给唯一 runtime entry façade；
+2. façade 每轮重新读取 facts，由 pure decision 选择一次 finalize replay、interrupted-Gateway
+   recovery 或业务 route；每个 recovery effect 后必须重采 facts 再决策。Gateway terminal exact
+   record 只经不可序列化、process-local affine handoff 交给同一次 one-click，首个 checkpoint
+   只能用完整记录 CAS 接管；
+3. coordinator 在任何 branch-specific effect 前用 immutable facts 区分 healthy reopen 与 mutating
+   cold/recovery。healthy 不再读取或消费 pending-cleanup，也不 capture SSH stub；mutating 分支先重试
+   exact pending cleanup，只有实际清理后才重新采集 facts，再完成真实 config、alias、wrapper、
+   sidecar/stub 预检；
 4. 从 managed launch receipt 生成脱敏 durable recipe，先持久化 `PriorStopIntent`，再精确停止
    prior Science，并立即持久化 `PriorStopOutcome`（`ExactStopped|NotStopped|Unknown`）；
 5. 通过 `AuthorityTransaction` 固定 opaque roots、捕获 protected projection，并持久登记
@@ -227,8 +232,9 @@ operation/phase、exposure、compensation 或 outcome 漂移都保留当前记�
 eligibility 在后续重启仍会拒绝 compensation 已漂移的记录，不会
 回滚 stage、重启 prior Gateway 或改变既有 TERM/wait 策略。
 
-production command 必须保留 recovery 返回的 affine terminal handoff，并传入 one-click；
-ordinary one-click API 不接受调用方伪造 expected record，缺少 handoff 时仍拒绝任意 V2。
+production runtime entry façade 必须保留 recovery 返回的 affine terminal handoff，并在 post-effect
+facts 重新采集后传入 one-click；command 不解释或保存 recovery outcome。ordinary one-click API
+不接受调用方伪造 expected record，缺少 handoff 时仍拒绝任意 V2。
 handoff 只承载实际持久化的 terminal complete record；one-click 重新读取 config，逐字段确认
 transaction、target、operation/phase、terminal outcome、binding、prior-stop/finalize 默认状态后，
 才允许首个 checkpoint 用 complete-record、current active profile 与旧 binding 的联合 CAS 接管。terminal record 仍保留到接管时，因此

@@ -80,20 +80,75 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertEqual(catalog["skills"], [])
 
     def test_gateway_starts_only_after_config_and_science_state_prechecks(self):
-        one_click = sandbox_session_one_click_source().split(
+        source = sandbox_session_one_click_source()
+        one_click = source.split(
             "fn one_click_login_with_options", 1
         )[1]
-        state_check = one_click.index("let (science_state, running_runtime)")
+        state_check = one_click.index("let entry_facts = capture_one_click_entry_facts(")
         self.assertLess(one_click.index("config::load_from(&dir)"), state_check)
         self.assertNotIn("GatewayController::ensure_active(", one_click[:state_check])
 
-        runtime_selection = one_click.index("let launch_runtime: ScienceRuntimeIdentity")
+        runtime_selection = one_click.index("match decide_one_click_entry(entry_facts)")
         self.assertGreater(runtime_selection, state_check)
         launch_check = one_click.index("if !launch.is_file()")
         normal_proxy = one_click.index(
             "GatewayController::ensure_active(", state_check
         )
         self.assertGreater(normal_proxy, launch_check)
+
+        source = sandbox_session_one_click_source()
+        command = runtime_command_module("one_click").split(
+            "pub(crate) fn one_click_login_cmd", 1
+        )[1].split("pub(super) async fn restore_history_choice_command", 1)[0]
+        self.assertIn("OneClickEntryPreflight::capture", command)
+        self.assertIn("one_click_login_entry(", command)
+        self.assertNotIn("recover_interrupted_gateway", command)
+        self.assertNotIn("replay_interrupted_one_click_finalize", command)
+
+        facade = source.split("pub(crate) fn one_click_login_entry", 1)[1].split(
+            "enum PriorScienceDisposition", 1
+        )[0]
+        self.assertIn("decide_one_click_entry_recovery(", facade)
+        self.assertLess(
+            facade.index("OneClickEntryRecoveryDecision::ReplayFinalize"),
+            facade.index("replay_interrupted_one_click_finalize"),
+        )
+        self.assertLess(
+            facade.index("OneClickEntryRecoveryDecision::ReplayFinalizeCleanup"),
+            facade.index("retry_pending_authority_cleanup"),
+        )
+        self.assertLess(
+            facade.index("OneClickEntryRecoveryDecision::RecoverGateway"),
+            facade.index("recover_interrupted_gateway"),
+        )
+        self.assertIn("OneClickEntryRecoveryDecision::Route", facade)
+
+        coordinator = source.split("fn one_click_login_with_options", 1)[1]
+        facts = coordinator.index("capture_one_click_entry_facts(")
+        decision = coordinator.index("decide_one_click_entry(entry_facts)")
+        cleanup = coordinator.index("retry_pending_authority_cleanup")
+        ssh_preflight = coordinator.index("prevalidate_one_click_system_ssh")
+        stub_capture = coordinator.index("ManagedSshStubTransaction::capture")
+        self.assertLess(facts, decision)
+        self.assertLess(decision, cleanup)
+        self.assertLess(cleanup, ssh_preflight)
+        self.assertLess(ssh_preflight, stub_capture)
+        cleanup_branch = coordinator[decision:ssh_preflight]
+        self.assertIn("one_click_login_with_options(", cleanup_branch)
+        self.assertIn("entry_progress.after_cleanup()", cleanup_branch)
+
+        pure_decision = source.split("fn decide_one_click_entry(", 1)[1].split(
+            "pub(crate) fn replay_interrupted_one_click_finalize", 1
+        )[0]
+        for protected_effect in (
+            "retry_pending_authority_cleanup",
+            "ManagedSshStubTransaction::capture",
+            "prevalidate_one_click_system_ssh",
+            "ensure_virtual_login",
+            "GatewayController::ensure_active",
+            "ScienceHostAdapter::stop",
+        ):
+            self.assertNotIn(protected_effect, pure_decision)
 
     def test_launcher_never_clones_or_implicitly_selects_data_dir_runtime(self):
         launch = (ROOT / "scripts/launch-virtual-sandbox.sh").read_text()
@@ -355,14 +410,12 @@ class SkillRuntimeBoundary(unittest.TestCase):
         one_click_command = command_one_click.split(
             "pub(crate) fn one_click_login_cmd", 1
         )[1].split("pub(super) async fn restore_history_choice_command", 1)[0]
-        self.assertRegex(
-            one_click_command,
-            r"(?s)recover_interrupted_gateway\(&app, &state\)\s*"
-            r"\.map_err\(typed_interrupted_gateway_recovery_error\)\?;",
-        )
-        recovery_projection = command_one_click.split(
+        self.assertIn("one_click_login_entry(", one_click_command)
+        self.assertNotIn("recover_interrupted_gateway", one_click_command)
+        self.assertNotIn("replay_interrupted_one_click_finalize", one_click_command)
+        recovery_projection = one_click_source.split(
             "fn typed_interrupted_gateway_recovery_error", 1
-        )[1].split("impl OneClickGatewayPreflightSnapshot", 1)[0]
+        )[1].split("#[allow(dead_code)]\nfn stop_sandbox_state", 1)[0]
         self.assertIn("error.kind()", recovery_projection)
         self.assertIn("error.recovery()", recovery_projection)
         self.assertRegex(
@@ -445,7 +498,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn('"CSSWITCH_PROXY_URL".into(), cfg.proxy_url.into()', launch_env)
         self.assertNotIn('.arg(&proxy_url)', session)
         self.assertIn("current.science_runtime = Some(launch_runtime.clone())", one_click)
-        self.assertIn("ScienceHostAdapter::probe_known(sport, &runtime)", session)
+        self.assertIn(
+            "ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime)", session
+        )
         self.assertIn("sandbox_listener_matches_runtime(healthy.port", science_host)
         self.assertIn("ScienceHostAdapter::url(sport, &launch_runtime)", session)
         self.assertIn(

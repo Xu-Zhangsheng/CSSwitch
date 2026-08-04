@@ -37,7 +37,7 @@ use super::authority_transaction::AuthorityTransaction;
 use super::catalog_verify::*;
 use super::pending_cleanup::{
     cleanup_required_error, replay_finalize_authority_cleanup, retry_pending_authority_cleanup,
-    AuthorityCleanupFailure, AuthorityCleanupPhase,
+    AuthorityCleanupFailure, AuthorityCleanupPhase, PendingCleanupRetryOutcome,
 };
 use super::recovery::{AppAuthoritySnapshot, RuntimeTransactionRestoreExpectation};
 use super::route_reconcile::configure_third_party_best_effort;
@@ -46,6 +46,231 @@ use super::ssh_preflight::*;
 mod healthy_reopen;
 
 use healthy_reopen::healthy_reopen_with_gateway_rollback;
+
+#[derive(Clone, PartialEq)]
+struct OneClickGatewayPreflightSnapshot {
+    child_pid: u32,
+    proxy_port: u16,
+    secret: String,
+    provider: String,
+    gateway_kind: String,
+    shim_mode: String,
+    launch_id: String,
+    key_fp: u64,
+    launch_context: crate::runtime::proxy_lifecycle::GatewayLaunchRecipe,
+}
+
+impl OneClickGatewayPreflightSnapshot {
+    fn capture(state: &SharedAppState) -> Result<Option<Self>, String> {
+        let mut current = lock(state);
+        let Some(child) = current.proxy.as_mut() else {
+            return Ok(None);
+        };
+        if child
+            .try_wait()
+            .map_err(|_| {
+                "gateway_identity_retry：无法确认先前 Gateway child 状态，请重试。".to_string()
+            })?
+            .is_some()
+        {
+            return Err(
+                "gateway_identity_retry：先前 Gateway child 已退出，请先恢复运行态后重试。".into(),
+            );
+        }
+        let child_pid = child.id();
+        let launch_context = current.gateway_launch_context.clone().ok_or(
+            "gateway_identity_retry：先前 Gateway 缺少完整启动上下文，请先恢复运行态后重试。",
+        )?;
+        Ok(Some(Self {
+            child_pid,
+            proxy_port: current.proxy_port,
+            secret: current.secret.clone(),
+            provider: current.provider.clone(),
+            gateway_kind: current.gateway_kind.clone(),
+            shim_mode: current.shim_mode.clone(),
+            launch_id: current.launch_id.clone(),
+            key_fp: current.key_fp,
+            launch_context,
+        }))
+    }
+
+    fn needs_codex_proof(&self) -> Result<bool, String> {
+        Ok(
+            crate::runtime::provider::resolve_launch_plan(&self.launch_context.profile)?.adapter
+                == "codex",
+        )
+    }
+
+    fn verify_unchanged(&self, state: &SharedAppState) -> Result<(), String> {
+        let mut current = lock(state);
+        let child_matches = match current.proxy.as_mut() {
+            Some(child) if child.id() == self.child_pid => child
+                .try_wait()
+                .map_err(|_| {
+                    "gateway_identity_retry：无法复核先前 Gateway child 状态，请重试。".to_string()
+                })?
+                .is_none(),
+            _ => false,
+        };
+        let exact_context = child_matches
+            && current.proxy_port == self.proxy_port
+            && current.secret == self.secret
+            && current.provider == self.provider
+            && current.gateway_kind == self.gateway_kind
+            && current.shim_mode == self.shim_mode
+            && current.launch_id == self.launch_id
+            && current.key_fp == self.key_fp
+            && current.gateway_launch_context.as_ref() == Some(&self.launch_context);
+        if exact_context {
+            Ok(())
+        } else {
+            Err(
+                "gateway_context_changed_retry：先前 Gateway 身份或完整启动上下文在认证检查期间发生变化，请重试。"
+                    .into(),
+            )
+        }
+    }
+}
+
+/// Immutable command-to-runtime proof used only to keep lock-free auth preflight
+/// outside the destructive lease. Runtime entry owns capture and verification.
+pub(crate) struct OneClickEntryPreflight {
+    config: Option<config::Config>,
+    prior_gateway: Option<OneClickGatewayPreflightSnapshot>,
+    auth_adapter: String,
+}
+
+impl OneClickEntryPreflight {
+    pub(crate) fn capture(state: &SharedAppState) -> Result<Self, TypedOneClickFailure> {
+        let cfg = config::load_from(&config::default_dir()).map_err(|error| {
+            typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
+        })?;
+        let active = cfg.active_profile().ok_or_else(|| {
+            typed_one_click_err(
+                OneClickFailureKind::NoActiveProfile,
+                "未配置生效 profile，请先在面板选择或新建一条配置。",
+            )
+        })?;
+        let adapter = crate::runtime::provider::resolve_launch_plan(active)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::LaunchPlan, message))?
+            .adapter;
+        let prior_gateway =
+            OneClickGatewayPreflightSnapshot::capture(state).map_err(|message| {
+                typed_one_click_err(OneClickFailureKind::PreflightSnapshot, message)
+            })?;
+        let needs_codex_proof = adapter == "codex"
+            || prior_gateway
+                .as_ref()
+                .map(OneClickGatewayPreflightSnapshot::needs_codex_proof)
+                .transpose()
+                .map_err(|message| {
+                    typed_one_click_err(OneClickFailureKind::PreflightSnapshot, message)
+                })?
+                .unwrap_or(false);
+        Ok(Self {
+            config: (adapter != "codex").then_some(cfg),
+            prior_gateway,
+            auth_adapter: if needs_codex_proof {
+                "codex".into()
+            } else {
+                adapter
+            },
+        })
+    }
+
+    pub(crate) fn auth_adapter(&self) -> &str {
+        &self.auth_adapter
+    }
+
+    pub(crate) fn verify_unchanged(
+        &self,
+        state: &SharedAppState,
+    ) -> Result<(), TypedOneClickFailure> {
+        if let Some(expected) = self.config.as_ref() {
+            let current = config::load_from(&config::default_dir()).map_err(|_| {
+                typed_one_click_err(
+                    OneClickFailureKind::PreflightSnapshot,
+                    "config_changed_retry：无法复核候选启动配置，请重试。",
+                )
+            })?;
+            if &current != expected {
+                return Err(typed_one_click_err(
+                    OneClickFailureKind::PreflightSnapshot,
+                    "config_changed_retry：候选启动配置在认证检查期间发生变化，请重试。",
+                ));
+            }
+        }
+        if let Some(expected) = self.prior_gateway.as_ref() {
+            expected.verify_unchanged(state).map_err(|message| {
+                typed_one_click_err(OneClickFailureKind::PreflightSnapshot, message)
+            })?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum OneClickEntryRecoveryDecision {
+    ReplayFinalize,
+    ReplayFinalizeCleanup,
+    RecoverGateway,
+    Route,
+}
+
+pub(super) fn decide_one_click_entry_recovery(
+    finalize_pending: bool,
+    finalize_replayed: bool,
+    finalize_cleanup_replayed: bool,
+    gateway_recovery_complete: bool,
+) -> OneClickEntryRecoveryDecision {
+    if finalize_pending {
+        OneClickEntryRecoveryDecision::ReplayFinalize
+    } else if finalize_replayed && !finalize_cleanup_replayed {
+        OneClickEntryRecoveryDecision::ReplayFinalizeCleanup
+    } else if !gateway_recovery_complete {
+        OneClickEntryRecoveryDecision::RecoverGateway
+    } else {
+        OneClickEntryRecoveryDecision::Route
+    }
+}
+
+fn one_click_finalize_pending(cfg: &config::Config) -> bool {
+    cfg.runtime_transaction.as_ref().is_some_and(|record| {
+        matches!(
+            record,
+            config::RuntimeTransactionRecord::V2(transaction)
+                if transaction.finalize != config::RuntimeFinalizeState::NotStarted
+        )
+    })
+}
+
+pub(super) fn pending_cleanup_requires_recapture(outcome: PendingCleanupRetryOutcome) -> bool {
+    outcome == PendingCleanupRetryOutcome::Cleared
+}
+
+pub(crate) fn typed_interrupted_gateway_recovery_error(
+    error: crate::runtime::proxy_lifecycle::InterruptedGatewayRecoveryError,
+) -> TypedOneClickFailure {
+    use crate::runtime::proxy_lifecycle::{
+        InterruptedGatewayRecoveryDisposition, InterruptedGatewayRecoveryErrorKind,
+    };
+
+    let kind = match error.kind() {
+        InterruptedGatewayRecoveryErrorKind::AuthoritySnapshot => {
+            OneClickFailureKind::AuthoritySnapshot
+        }
+        InterruptedGatewayRecoveryErrorKind::GatewayStart
+        | InterruptedGatewayRecoveryErrorKind::NotManaged
+        | InterruptedGatewayRecoveryErrorKind::StopUnknown(_) => OneClickFailureKind::GatewayStart,
+    };
+    let recovery = match error.recovery() {
+        InterruptedGatewayRecoveryDisposition::Degraded => ProjectedRecovery::DEGRADED,
+        InterruptedGatewayRecoveryDisposition::ManualRecoveryRequired => {
+            ProjectedRecovery::MANUAL_RECOVERY_REQUIRED
+        }
+    };
+    TypedOneClickFailure::new(kind, error.to_string()).with_recovery(recovery)
+}
 
 #[allow(dead_code)]
 fn stop_sandbox_state<R: Runtime>(
@@ -135,11 +360,11 @@ pub(crate) fn one_click_login<R: Runtime>(
         true,
         None,
         None,
-        None,
+        OneClickEntryProgress::initial(None),
     )
 }
 
-pub(crate) fn one_click_login_after_gateway_recovery<R: Runtime>(
+fn one_click_login_after_gateway_recovery<R: Runtime>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
@@ -157,8 +382,79 @@ pub(crate) fn one_click_login_after_gateway_recovery<R: Runtime>(
         true,
         None,
         None,
-        terminal.as_ref(),
+        OneClickEntryProgress::initial(terminal.as_ref()),
     )
+}
+
+/// Sole production one-click runtime entry owner. Recovery is an explicit
+/// recapture/decide/effect loop; the affine Gateway handoff is consumed only
+/// after the post-effect facts have been recaptured.
+pub(crate) fn one_click_login_entry<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    state: SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    runtime_choice: Option<&str>,
+    auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+) -> Result<Value, TypedOneClickFailure> {
+    let mut finalize_replayed = false;
+    let mut finalize_cleanup_replayed = false;
+    let mut gateway_recovery = None;
+    loop {
+        let facts = config::load_from(&config::default_dir()).map_err(|error| {
+            typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
+        })?;
+        match decide_one_click_entry_recovery(
+            one_click_finalize_pending(&facts),
+            finalize_replayed,
+            finalize_cleanup_replayed,
+            gateway_recovery.is_some(),
+        ) {
+            OneClickEntryRecoveryDecision::ReplayFinalize => {
+                replay_interrupted_one_click_finalize(&state).map_err(|error| {
+                    TypedOneClickFailure::new(
+                        OneClickFailureKind::AuthoritySnapshot,
+                        format!(
+                            "检测到未完成的 success finalize，安全重放失败并已保留事务：{error}"
+                        ),
+                    )
+                    .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+                })?;
+                finalize_replayed = true;
+            }
+            OneClickEntryRecoveryDecision::ReplayFinalizeCleanup => {
+                retry_pending_authority_cleanup(&state).map_err(|failure| {
+                    typed_authority_cleanup_err(
+                        OneClickFailureKind::AuthoritySnapshot,
+                        failure,
+                        false,
+                    )
+                })?;
+                finalize_cleanup_replayed = true;
+            }
+            OneClickEntryRecoveryDecision::RecoverGateway => {
+                gateway_recovery = Some(
+                    crate::runtime::proxy_lifecycle::recover_interrupted_gateway(&app, &state)
+                        .map_err(typed_interrupted_gateway_recovery_error)?,
+                );
+            }
+            OneClickEntryRecoveryDecision::Route => {
+                let recovery = gateway_recovery.ok_or_else(|| {
+                    typed_one_click_err(
+                        OneClickFailureKind::GatewayStart,
+                        "runtime entry lost the typed Gateway recovery outcome",
+                    )
+                })?;
+                return one_click_login_after_gateway_recovery(
+                    app,
+                    state,
+                    lifecycle,
+                    runtime_choice,
+                    auth_proof,
+                    recovery,
+                );
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -214,7 +510,7 @@ pub(crate) fn reconcile_science_for_active<R: Runtime>(
         false,
         Some(profile_switch_transaction),
         Some(&mut disposition),
-        None,
+        OneClickEntryProgress::initial(None),
     )
     .map_err(|failure| {
         let cause = failure.safe_detail;
@@ -326,7 +622,15 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
         }
     }
     one_click_login_with_options(
-        app, state, lifecycle, None, auth_proof, false, None, None, None,
+        app,
+        state,
+        lifecycle,
+        None,
+        auth_proof,
+        false,
+        None,
+        None,
+        OneClickEntryProgress::initial(None),
     )
 }
 
@@ -1716,6 +2020,192 @@ fn preserve_interrupted_success_finalize(
     }
 }
 
+struct OneClickEntryFacts {
+    science_state: SandboxScienceState,
+    running_runtime: Option<ScienceRuntimeIdentity>,
+    selected_runtime: Option<ScienceRuntimeIdentity>,
+    login_intact: bool,
+    binding_matches: bool,
+    remembered_runtime_was_present: bool,
+}
+
+enum OneClickEntryDecision {
+    HealthyReopen {
+        runtime: ScienceRuntimeIdentity,
+    },
+    Mutating {
+        launch_runtime: ScienceRuntimeIdentity,
+        running_runtime_to_stop: Option<ScienceRuntimeIdentity>,
+        science_state: SandboxScienceState,
+        remembered_runtime_was_present: bool,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct OneClickEntryProgress<'a> {
+    gateway_terminal_handoff: Option<&'a config::RuntimeTransactionV2>,
+    cleanup_replayed: bool,
+}
+
+impl<'a> OneClickEntryProgress<'a> {
+    fn initial(gateway_terminal_handoff: Option<&'a config::RuntimeTransactionV2>) -> Self {
+        Self {
+            gateway_terminal_handoff,
+            cleanup_replayed: false,
+        }
+    }
+
+    fn after_cleanup(self) -> Self {
+        Self {
+            cleanup_replayed: true,
+            ..self
+        }
+    }
+}
+
+fn capture_one_click_entry_facts(
+    state: &SharedAppState,
+    cfg: &config::Config,
+    active_profile: &config::Profile,
+    auth_dir: &Path,
+    runtime_choice: Option<&str>,
+    interrupted_environment_runtime_id: Option<&str>,
+) -> Result<OneClickEntryFacts, TypedOneClickFailure> {
+    let version_cache = { lock(state).science_version_cache.clone() };
+    let (remembered_runtime, confirmed_stopped) = {
+        let current = lock(state);
+        (
+            current.science_runtime.clone(),
+            current.science_confirmed_stopped.clone(),
+        )
+    };
+    let remembered_runtime_was_present = remembered_runtime.is_some();
+    let (science_state, running_runtime) = match remembered_runtime {
+        Some(runtime) => {
+            let observed = ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime);
+            let running = (observed == SandboxScienceState::RunningHealthy).then_some(runtime);
+            (observed, running)
+        }
+        None if confirmed_stopped
+            .as_ref()
+            .is_some_and(|runtime| runtime.source != ScienceRuntimeSource::CachedOnce)
+            && !proc::loopback_port_in_use(cfg.sandbox_port, 100) =>
+        {
+            (SandboxScienceState::Stopped, None)
+        }
+        None => ScienceHostAdapter::probe_cached(cfg.sandbox_port, &version_cache)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStart, message))?,
+    };
+
+    let mut selected_runtime = None;
+    let mut login_intact = false;
+    let mut binding_matches = false;
+    match science_state {
+        SandboxScienceState::RunningHealthy => {
+            let running = running_runtime.as_ref().ok_or_else(|| {
+                typed_one_click_err(
+                    OneClickFailureKind::ScienceStart,
+                    "Science 状态为运行中，但无法确认其 binary 身份",
+                )
+            })?;
+            validate_interrupted_science_environment_runtime(
+                interrupted_environment_runtime_id,
+                running,
+            )
+            .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
+            let desired_binding =
+                crate::runtime::provider::desired_runtime_binding(cfg, active_profile, running)
+                    .map_err(|message| {
+                        typed_one_click_err(OneClickFailureKind::Prepare, message)
+                    })?;
+            binding_matches = !crate::runtime::provider::science_restart_required(
+                cfg.runtime_binding.as_ref(),
+                &desired_binding,
+            );
+            login_intact =
+                oauth_forge::login_intact(auth_dir, "virtual@localhost.invalid", &sandbox_home());
+            if !login_intact {
+                selected_runtime = Some(
+                    select_science_runtime_cached(runtime_choice, &version_cache).map_err(
+                        |message| typed_one_click_err(OneClickFailureKind::ScienceStart, message),
+                    )?,
+                );
+            }
+        }
+        SandboxScienceState::Stopped => {
+            selected_runtime = Some(
+                select_science_runtime_cached(runtime_choice, &version_cache).map_err(
+                    |message| typed_one_click_err(OneClickFailureKind::ScienceStart, message),
+                )?,
+            );
+        }
+        SandboxScienceState::Unknown => {
+            if interrupted_environment_runtime_id.is_some() {
+                return Err(TypedOneClickFailure::new(
+                    OneClickFailureKind::ScienceStart,
+                    "上次启动在 Science 环境暴露边界中断，且当前 listener/runtime 身份无法确认；已拒绝自动恢复；environment_uncertain；recovery_status=manual_recovery_required",
+                )
+                .with_recovery(ProjectedRecovery::environment_uncertain_manual()));
+            }
+            let sandbox_port = cfg.sandbox_port;
+            return Err(typed_one_click_err(
+                OneClickFailureKind::ScienceStart,
+                format!(
+                    "无法确认隔离 Science 状态（端口 {sandbox_port} 或 data-dir 状态不一致）。请先停止占用该端口的进程后重试。"
+                ),
+            ));
+        }
+    }
+    Ok(OneClickEntryFacts {
+        science_state,
+        running_runtime,
+        selected_runtime,
+        login_intact,
+        binding_matches,
+        remembered_runtime_was_present,
+    })
+}
+
+fn decide_one_click_entry(
+    facts: OneClickEntryFacts,
+) -> Result<OneClickEntryDecision, TypedOneClickFailure> {
+    if facts.science_state == SandboxScienceState::RunningHealthy
+        && facts.login_intact
+        && facts.binding_matches
+    {
+        let runtime = facts.running_runtime.ok_or_else(|| {
+            typed_one_click_err(
+                OneClickFailureKind::ScienceStart,
+                "healthy entry facts lost the observed Science runtime",
+            )
+        })?;
+        return Ok(OneClickEntryDecision::HealthyReopen { runtime });
+    }
+    let running_runtime_to_stop = facts.running_runtime.clone();
+    let launch_runtime =
+        if facts.science_state == SandboxScienceState::RunningHealthy && facts.login_intact {
+            facts.running_runtime.ok_or_else(|| {
+                typed_one_click_err(
+                    OneClickFailureKind::ScienceStart,
+                    "mutating entry facts lost the observed Science runtime",
+                )
+            })?
+        } else {
+            facts.selected_runtime.ok_or_else(|| {
+                typed_one_click_err(
+                    OneClickFailureKind::ScienceStart,
+                    "mutating entry facts lost the selected Science runtime",
+                )
+            })?
+        };
+    Ok(OneClickEntryDecision::Mutating {
+        launch_runtime,
+        running_runtime_to_stop,
+        science_state: facts.science_state,
+        remembered_runtime_was_present: facts.remembered_runtime_was_present,
+    })
+}
+
 pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> Result<(), String> {
     let dir = config::default_dir();
     let cfg = config::load_from(&dir).map_err(|error| error.to_string())?;
@@ -2255,22 +2745,15 @@ fn one_click_login_with_options<R: Runtime>(
     open_surface: bool,
     expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
-    expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
+    entry_progress: OneClickEntryProgress<'_>,
 ) -> Result<Value, TypedOneClickFailure> {
     let trace = OperationTrace::start(OperationKind::OneClickLogin, "command=one_click_login");
     let dir = config::default_dir();
-    replay_interrupted_one_click_finalize(&state).map_err(|error| {
-        TypedOneClickFailure::new(
-            OneClickFailureKind::AuthoritySnapshot,
-            format!("检测到未完成的 success finalize，安全重放失败并已保留事务：{error}"),
-        )
-        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
-    })?;
     let cfg = config::load_from(&dir)
         .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
     let gateway_terminal_handoff = resolve_gateway_terminal_handoff(
         cfg.runtime_transaction.as_ref(),
-        expected_gateway_terminal_handoff,
+        entry_progress.gateway_terminal_handoff,
         &cfg.active_id,
         cfg.runtime_binding.as_ref(),
     )
@@ -2329,76 +2812,19 @@ fn one_click_login_with_options<R: Runtime>(
 
     let sbx_home = sandbox_home();
     let auth_dir = sbx_home.join(".claude-science");
-    let ssh_prevalidation =
-        crate::runtime::sandbox_session::prevalidate_one_click_system_ssh(&app, &cfg, &sbx_home)
-            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-    let ssh_stub_transaction = cfg
-        .reuse_system_ssh
-        .then(|| {
-            crate::runtime::settings::ManagedSshStubTransaction::capture(
-                &sbx_home,
-                &ssh_prevalidation,
-            )
-        })
-        .transpose()
-        .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-    retry_pending_authority_cleanup(&state).map_err(|failure| {
-        typed_authority_cleanup_err(OneClickFailureKind::AuthoritySnapshot, failure, false)
-    })?;
-    let version_cache = { lock(&state).science_version_cache.clone() };
-
-    let (remembered_runtime, confirmed_stopped) = {
-        let st = lock(&state);
-        (
-            st.science_runtime.clone(),
-            st.science_confirmed_stopped.clone(),
-        )
-    };
-    let remembered_runtime_was_present = remembered_runtime.is_some();
-    let (science_state, running_runtime) = match remembered_runtime {
-        Some(runtime) => {
-            let science_state = ScienceHostAdapter::probe_known(sport, &runtime);
-            let running_runtime =
-                (science_state == SandboxScienceState::RunningHealthy).then_some(runtime);
-            (science_state, running_runtime)
-        }
-        None if confirmed_stopped
-            .as_ref()
-            .is_some_and(|runtime| runtime.source != ScienceRuntimeSource::CachedOnce)
-            && !proc::loopback_port_in_use(sport, 100) =>
-        {
-            (SandboxScienceState::Stopped, None)
-        }
-        None => ScienceHostAdapter::probe_cached(sport, &version_cache)
-            .map_err(|message| typed_one_click_err(OneClickFailureKind::ScienceStart, message))?,
-    };
-    let mut running_runtime_to_stop = None;
-    let launch_runtime: ScienceRuntimeIdentity = match science_state {
-        SandboxScienceState::RunningHealthy => {
-            let running_runtime = running_runtime.ok_or_else(|| {
-                typed_one_click_err(
-                    OneClickFailureKind::ScienceStart,
-                    "Science 状态为运行中，但无法确认其 binary 身份",
-                )
-            })?;
-            validate_interrupted_science_environment_runtime(
-                interrupted_environment_runtime_id,
-                &running_runtime,
-            )
-            .map_err(|error| typed_interrupted_science_err(OneClickFailureKind::Prepare, error))?;
-            let desired_binding = crate::runtime::provider::desired_runtime_binding(
-                &cfg,
-                active_profile,
-                &running_runtime,
-            )
-            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-            let science_binding_matches = !crate::runtime::provider::science_restart_required(
-                cfg.runtime_binding.as_ref(),
-                &desired_binding,
-            );
-            let login_intact =
-                oauth_forge::login_intact(&auth_dir, "virtual@localhost.invalid", &sbx_home);
-            if login_intact && science_binding_matches {
+    let entry_facts = capture_one_click_entry_facts(
+        &state,
+        &cfg,
+        active_profile,
+        &auth_dir,
+        runtime_choice,
+        interrupted_environment_runtime_id,
+    )?;
+    let (launch_runtime, running_runtime_to_stop, science_state, remembered_runtime_was_present) =
+        match decide_one_click_entry(entry_facts)? {
+            OneClickEntryDecision::HealthyReopen {
+                runtime: running_runtime,
+            } => {
                 if cfg.reuse_system_ssh {
                     validate_running_system_ssh_bridge(&app, &sbx_home).map_err(|message| {
                         typed_one_click_err(OneClickFailureKind::Prepare, message)
@@ -2437,39 +2863,55 @@ fn one_click_login_with_options<R: Runtime>(
                 }
                 return Ok(reopened);
             }
-            let prior_runtime = running_runtime.clone();
-            let selected = if login_intact {
-                running_runtime
-            } else {
-                select_science_runtime_cached(runtime_choice, &version_cache).map_err(
-                    |message| typed_one_click_err(OneClickFailureKind::ScienceStart, message),
-                )?
-            };
-            running_runtime_to_stop = Some(prior_runtime);
-            selected
-        }
-        SandboxScienceState::Stopped => {
-            select_science_runtime_cached(runtime_choice, &version_cache).map_err(|message| {
-                typed_one_click_err(OneClickFailureKind::ScienceStart, message)
-            })?
-        }
-        SandboxScienceState::Unknown => {
-            trace.finish("error=sandbox_state_unknown_before_start");
-            if interrupted_environment_runtime_id.is_some() {
-                return Err(TypedOneClickFailure::new(
-                    OneClickFailureKind::ScienceStart,
-                    "上次启动在 Science 环境暴露边界中断，且当前 listener/runtime 身份无法确认；已拒绝自动恢复；environment_uncertain；recovery_status=manual_recovery_required",
+            OneClickEntryDecision::Mutating {
+                launch_runtime,
+                running_runtime_to_stop,
+                science_state,
+                remembered_runtime_was_present,
+            } => {
+                if !entry_progress.cleanup_replayed {
+                    let cleanup = retry_pending_authority_cleanup(&state).map_err(|failure| {
+                        typed_authority_cleanup_err(
+                            OneClickFailureKind::AuthoritySnapshot,
+                            failure,
+                            false,
+                        )
+                    })?;
+                    if pending_cleanup_requires_recapture(cleanup) {
+                        return one_click_login_with_options(
+                            app,
+                            state,
+                            lifecycle,
+                            runtime_choice,
+                            auth_proof,
+                            open_surface,
+                            expected_profile_switch_transaction,
+                            reconcile_disposition,
+                            entry_progress.after_cleanup(),
+                        );
+                    }
+                }
+                (
+                    launch_runtime,
+                    running_runtime_to_stop,
+                    science_state,
+                    remembered_runtime_was_present,
                 )
-                .with_recovery(ProjectedRecovery::environment_uncertain_manual()));
             }
-            return Err(typed_one_click_err(
-                OneClickFailureKind::ScienceStart,
-                format!(
-                    "无法确认隔离 Science 状态（端口 {sport} 或 data-dir 状态不一致）。请先停止占用该端口的进程后重试。"
-                ),
-            ));
-        }
-    };
+        };
+    let ssh_prevalidation =
+        crate::runtime::sandbox_session::prevalidate_one_click_system_ssh(&app, &cfg, &sbx_home)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+    let ssh_stub_transaction = cfg
+        .reuse_system_ssh
+        .then(|| {
+            crate::runtime::settings::ManagedSshStubTransaction::capture(
+                &sbx_home,
+                &ssh_prevalidation,
+            )
+        })
+        .transpose()
+        .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
     validate_interrupted_science_environment_runtime(
         interrupted_environment_runtime_id,
         &launch_runtime,

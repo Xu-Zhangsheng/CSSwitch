@@ -1,12 +1,37 @@
 #[test]
 fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     use super::super::one_click::{
-        CompensationCause, CompensationEnvironment, CompensationOutcome, CompensationSkipCause,
-        CompensationStepOutcome,
+        decide_one_click_entry_recovery, pending_cleanup_requires_recapture, CompensationCause,
+        CompensationEnvironment, CompensationOutcome, CompensationSkipCause,
+        CompensationStepOutcome, OneClickEntryRecoveryDecision,
     };
+    use super::super::pending_cleanup::PendingCleanupRetryOutcome;
     use crate::runtime::failure::ProjectedRecovery;
     use syn::visit::{self, Visit};
     use syn::{Expr, ExprCall, ExprMethodCall, Item, ItemFn, Pat, Stmt};
+
+    assert_eq!(
+        decide_one_click_entry_recovery(true, false, false, false),
+        OneClickEntryRecoveryDecision::ReplayFinalize
+    );
+    assert_eq!(
+        decide_one_click_entry_recovery(false, true, false, false),
+        OneClickEntryRecoveryDecision::ReplayFinalizeCleanup
+    );
+    assert_eq!(
+        decide_one_click_entry_recovery(false, true, true, false),
+        OneClickEntryRecoveryDecision::RecoverGateway
+    );
+    assert_eq!(
+        decide_one_click_entry_recovery(false, true, true, true),
+        OneClickEntryRecoveryDecision::Route
+    );
+    assert!(pending_cleanup_requires_recapture(
+        PendingCleanupRetryOutcome::Cleared
+    ));
+    assert!(!pending_cleanup_requires_recapture(
+        PendingCleanupRetryOutcome::NotNeeded
+    ));
 
     fn top_level<'a>(file: &'a syn::File, name: &str) -> Option<&'a ItemFn> {
         file.items.iter().find_map(|item| match item {
@@ -221,11 +246,14 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             ),
         "interrupted Gateway error constructor must map AuthoritySnapshot to manual recovery and all other kinds to degraded"
     );
-    let gateway_projection = command_projection_source
+    let gateway_projection = source
         .split("fn typed_interrupted_gateway_recovery_error")
         .nth(1)
-        .and_then(|tail| tail.split("impl OneClickGatewayPreflightSnapshot").next())
-        .expect("interrupted Gateway command projection must remain discoverable");
+        .and_then(|tail| {
+            tail.split("#[allow(dead_code)]\nfn stop_sandbox_state")
+                .next()
+        })
+        .expect("interrupted Gateway runtime projection must remain discoverable");
     assert!(
         gateway_projection.contains("error.kind()")
             && gateway_projection.contains("error.recovery()")
@@ -237,7 +265,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && gateway_projection.contains("ProjectedRecovery::MANUAL_RECOVERY_REQUIRED")
             && gateway_projection.contains(".with_recovery(recovery)")
             && !gateway_projection.contains(".contains("),
-        "interrupted Gateway command projection must map kind and recovery from typed fields"
+        "interrupted Gateway runtime projection must map kind and recovery from typed fields"
     );
     let gateway_recovery_writer = gateway_recovery_source
         .split("fn interrupted_gateway_recovery_record")
@@ -354,17 +382,20 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             ),
         "handoff/finalize must CAS companion config authority and missing manifest must never count as durable cleanup completion"
     );
-    let command_recovery = command_projection_source
-        .find("let gateway_recovery =")
-        .expect("production command must retain the typed Gateway recovery outcome");
-    let command_handoff = command_projection_source
-        .find("one_click_login_after_gateway_recovery")
-        .expect("production command must hand recovery authority to one-click");
+    let runtime_entry = source
+        .split("pub(crate) fn one_click_login_entry")
+        .nth(1)
+        .and_then(|tail| tail.split("enum PriorScienceDisposition").next())
+        .expect("production runtime entry facade must remain discoverable");
     assert!(
-        command_recovery < command_handoff
-            && command_projection_source[command_recovery..command_handoff]
-                .contains("recover_interrupted_gateway"),
-        "the production command must pass the exact interrupted-Gateway terminal handoff into one-click"
+        command_projection_source.contains("one_click_login_entry(")
+            && !command_projection_source.contains("recover_interrupted_gateway")
+            && !command_projection_source.contains("replay_interrupted_one_click_finalize")
+            && runtime_entry.contains("decide_one_click_entry_recovery(")
+            && runtime_entry.contains("recover_interrupted_gateway")
+            && runtime_entry.contains("replay_interrupted_one_click_finalize")
+            && runtime_entry.contains("one_click_login_after_gateway_recovery"),
+        "the runtime entry facade must exclusively own finalize/Gateway recovery and consuming handoff"
     );
     assert!(
         gateway_recovery_source.contains(

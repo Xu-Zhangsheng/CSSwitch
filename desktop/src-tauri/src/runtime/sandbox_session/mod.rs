@@ -36,8 +36,9 @@ use one_click::{
 };
 #[allow(unused_imports)]
 pub(crate) use one_click::{
-    force_restart_science_for_active, one_click_login_after_gateway_recovery,
-    reconcile_science_for_active, replay_interrupted_one_click_finalize, ReconcileScienceError,
+    force_restart_science_for_active, one_click_login_entry, reconcile_science_for_active,
+    replay_interrupted_one_click_finalize, typed_interrupted_gateway_recovery_error,
+    OneClickEntryPreflight, ReconcileScienceError,
 };
 #[cfg(test)]
 use pending_cleanup::retry_pending_authority_cleanup;
