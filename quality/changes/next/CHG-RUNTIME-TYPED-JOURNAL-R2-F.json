@@ -1,0 +1,73 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-F",
+    "version": "v0.8.4-dev",
+    "title": "Close the R2 versioned typed runtime journal inventory",
+    "summary": "Reconciles R2-A through R2-E as one source-only inventory covering the nested V1/V2 schema, immutable identity, complete-record CAS, typed recovery outcomes, and fail-closed V1 compatibility. It reruns the focused matrix and requires an exact-SHA source gate plus independent completion review before Post-R2 Rebaseline. Production behavior is unchanged.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-F.json"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-ORPHAN-SKILL-BOUNDARY",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "R2-A through R2-E schema, writer, reader, recovery, compensation, and compatibility boundaries were reconciled without production changes",
+        "focused config V1/V2, one-click checkpoint and drift, transaction source contract, profile-switch, and interrupted-Gateway recovery regressions passed",
+        "the proxy lifecycle module passed with 20 passed and one explicitly ignored identity; its interrupted-Gateway recovery subset accounted for four passed and one explicitly ignored identity",
+        "the three restricted-sandbox recovery failures were permission-only; the isolated rerun passed all four executable recovery identities and retained one explicitly ignored Acceptance-boundary identity",
+        "cargo check passed and the complete Rust library serial regression passed with 487 passed, zero failed, and 41 explicitly ignored isolated or live-bound identities",
+        "the first parallel full-library run was rejected as evidence after one unrelated Codex cancel failure; that identity and the complete serial rerun both passed",
+        "the inventory preserves the F5 pre-intent gap, StopFailed behavior, current checkpoint timing, and the existing runtime_transaction operation scope",
+        "complete 15-suite GATE-SOURCE passed at exact SHA be961cb27701fd2adfde699c342cdd4dcf8a3d8d with run id 81a0f70476b075da3763390f88b4385c and runner exit zero",
+        "the completion seal contains 15 passing test results and 15 passing source observations; all 30 manifest references and all three seal references were independently rehashed",
+        "desktop identity closed at 528 discovered and executed, 487 passed, zero failed, 41 approved ignored, and zero skipped, todo, or not run",
+        "the clean-commit source snapshot contains 495 tracked entries whose paths, modes, sizes, contents, and hashes match the exact candidate HEAD",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings and confirmed the source-only evidence boundary and Post-R2 stop gate"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

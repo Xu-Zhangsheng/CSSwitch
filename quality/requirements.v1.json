@@ -70,7 +70,7 @@
       "id": "REQ-083-LINEAGE",
       "version": "v0.8.3",
       "title": "Release lineage and base selection are explicit",
-      "description": "Audit baseline and previous release tag object/peeled commit are checked in; a future run binds candidate SHA in runtime evidence rather than this lineage source.",
+      "description": "The current public base, explicit development line, and immutable source-candidate promotion boundary are checked in without upgrading source evidence into release evidence.",
       "status": "active",
       "owner": "quality-kernel",
       "depends_on": [
@@ -79,7 +79,9 @@
       "acceptance_conditions": [
         "The previous release records both annotated tag object and peeled commit.",
         "Audit baseline cannot be selected as the release impact base.",
-        "PR impact requires an explicit target ref and derives its merge-base; release impact uses the previous peeled commit."
+        "PR impact requires an explicit target ref and derives its merge-base; release impact uses the previous peeled commit.",
+        "Published-version ChangeRecord namespaces are immutable; post-release work uses the explicit development namespace.",
+        "A SourceCandidateRecord binds the exact base, candidate, current change records, Git change set, and complete PASS source-run manifests before ReleaseCandidate promotion."
       ],
       "evidence_boundary": {
         "allowed_layers": [
@@ -112,7 +114,8 @@
       ],
       "acceptance_conditions": [
         "Duplicate IDs, bad foreign keys, dependency/replacement cycles, invalid frozen test-impact states, and malformed lineage fail.",
-        "Release impact fails on dirty, shallow, non-ancestor, rename/delete, untracked production, or unknown production paths.",
+        "Release impact fails on dirty, shallow, non-ancestor, released-namespace reuse, production rename/delete, untracked production, or unknown production paths.",
+        "Production coverage requires a matching ChangeRecord added or updated in the current base-to-candidate change set; historical active coverage cannot satisfy it.",
         "Only metadata, impact-pr, and impact-release profiles are accepted by the CLI."
       ],
       "evidence_boundary": {
@@ -145,8 +148,8 @@
       ],
       "acceptance_conditions": [
         "Every changed or untracked production path matches one registered policy prefix or an explicit narrative exemption.",
-        "A production path change is covered by an active change record and required source-test gate.",
-        "Unknown paths and rename/delete operations fail closed in impact profiles."
+        "A production path change is covered by a current active change record and required source-test gate.",
+        "Unknown paths and production rename/delete operations fail closed in impact profiles; narrative-only moves remain exempt."
       ],
       "evidence_boundary": {
         "allowed_layers": [

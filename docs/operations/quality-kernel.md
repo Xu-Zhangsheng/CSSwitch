@@ -8,6 +8,12 @@
 - test catalog 与 release gates 绑定固定 suite、entrypoint、identity、环境和聚合规则；
 - lineage 区分 previous release、development source、source candidate、release candidate 与公开 release，不能把 source evidence 提升为 release evidence。
 
+`quality/release-lineage.v1.json` 的 `previous_release` 是下一候选的冻结公开 comparison base；`development_source` 明确给出开发线、ChangeRecord namespace 与 record version。已公开 `quality/changes/v*` namespace 只读，发布后工作只能进入 `quality/changes/next/`。impact coverage 只接受 `base..candidate` 本次新增或更新的 matching ChangeRecord，历史 active record 不能替当前变化兜底。
+
+clean exact candidate 的完整 `GATE-SOURCE` PASS 后，`python3 -m test.quality.source_candidate create --evidence-root <GATE_OUTPUT_ROOT> --candidate <SHA>` 从该 output root 中唯一且 state/evidence identity 一致的 sealed PASS run 读取 public manifests 与 private snapshot，并以 no-clobber 方式生成 `quality/source-candidates/<SHA>.json`。记录绑定 v0.8.4 tag identity、exact candidate、canonical Git change set、current change IDs、run manifest、completion seal、source snapshot 与 evidence manifest digest；它不保存 reviewer 结论，也不建立 release evidence。
+
+promotion 顺序固定为 `SourceCandidateRecord -> ReleaseCandidateV1 -> ReleaseEvidenceV1`：ReleaseCandidate 必须引用同一 candidate/base 的 source record，并仍要求独立 release-profile PASS；ReleaseEvidence 再绑定同一 release candidate、artifact manifest 与 public receipt。source record 不能直接充当后二者。
+
 当前完整 source/unit 操作入口、输出目录、安全重跑和结果词汇只在[自动测试与证据判定](testing.md)维护。`GATE-S0-LEGACY` 已 retired；只有递归验证通过的 `GATE-SOURCE` completion seal 才能建立 `RUN-EVIDENCE-GREEN` 与 `SOURCE-GREEN`。
 
 source claim 不证明 app / DMG、installed runtime、live provider / Science、签名、公证、Gatekeeper 或公开附件。更高证据层以[发布流程](release.md)、[真机验收](real-machine-acceptance.md)和 dated evidence 为准。

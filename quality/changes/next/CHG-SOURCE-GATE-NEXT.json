@@ -1,9 +1,9 @@
 {
   "schema": "change-record.v1",
   "change": {
-    "id": "CHG-SOURCE-GATE",
-    "version": "v0.8.3",
-    "title": "Migrate the complete source catalog to the trusted source gate",
+    "id": "CHG-SOURCE-GATE-NEXT",
+    "version": "v0.8.4-dev",
+    "title": "Migrate the complete source catalog to the trusted source gate on next",
     "summary": "Adds the closed source-observation ABI, exact fifteen-suite source selection, exact discovered/executed identity inventory, sequential no-retry execution, evidence binding, fixed source CLI, current-source private gateway derivation for loopback, a capacity-checked short private source TMPDIR for Darwin AF_UNIX fixtures, and legacy S0 retirement. The change closes only test-system false-green paths and does not change product behavior.",
     "status": "active",
     "owner": "quality-kernel",
@@ -13,6 +13,8 @@
       "desktop/skill-package/src/science.rs",
       "desktop/skill-package/src/github.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
+      "test/test_external_skill_install_bridge.py",
+      "test/test_profile_pin_contract.py",
       "test/test_provider_mock_scenarios.py",
       "test/test_skill_runtime_boundary.py",
       "test/run_all.sh",
@@ -28,12 +30,7 @@
       "REQ-083-FOCUSED",
       "REQ-083-SOURCE-GATE"
     ],
-    "bug_ids": [
-      "BUG-083-RC",
-      "BUG-083-RETRY",
-      "BUG-083-ORPHANS",
-      "BUG-083-RUST-COVERAGE"
-    ],
+    "bug_ids": [],
     "test_impact": {
       "kind": "add",
       "required_suite_ids": [
@@ -69,7 +66,9 @@
     },
     "claim_state": "confirmed",
     "evidence_boundary": {
-      "allowed_layers": ["source-test"],
+      "allowed_layers": [
+        "source-test"
+      ],
       "excluded_layers": [
         "isolated-test-app",
         "final-dmg",

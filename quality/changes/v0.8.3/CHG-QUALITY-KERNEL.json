@@ -4,10 +4,10 @@
     "id": "CHG-QUALITY-KERNEL",
     "version": "v0.8.3",
     "title": "Add the versioned quality kernel",
-    "summary": "Adds strict machine quality schemas, v0.8.3 requirement/change/bug/test/gate/lineage/path registries, a read-only stdlib validator, isolated focused unit tests, bounded Git-aware discovery, and redacted source-gate preflight diagnostics. This records quality and evidence boundaries; it does not fix or rerun the registered runtime issues.",
+    "summary": "Adds strict machine quality schemas, v0.8.3 requirement/change/bug/test/gate/lineage/path registries, a read-only stdlib validator, and isolated focused unit tests. This records quality and evidence boundaries; it does not fix or rerun the registered runtime issues.",
     "status": "active",
     "owner": "quality-kernel",
-    "changed_paths": ["quality/", "test/quality/", "docs/operations/quality-kernel.md", "docs/operations/testing.md", "docs/operations/development.md", "docs/operations/real-machine-acceptance.md", "docs/operations/release.md", "docs/README.md", "README.md", "README.en.md", ".agents/context/refactor-progress.md"],
+    "changed_paths": ["quality/", "test/quality/", "docs/operations/quality-kernel.md", "docs/README.md"],
     "requirement_ids": ["REQ-083-SCHEMA", "REQ-083-REGISTRY", "REQ-083-LINEAGE", "REQ-083-VALIDATOR", "REQ-083-PATHS", "REQ-083-INVENTORY", "REQ-083-EVIDENCE", "REQ-083-FOCUSED"],
     "bug_ids": ["BUG-083-RC", "BUG-083-RETRY", "BUG-083-ORPHANS", "BUG-083-RUST-COVERAGE", "BUG-083-ARTIFACT-GATE", "BUG-083-SCIENCE-MACHO", "BUG-083-SSH-LATE", "BUG-083-READINESS"],
     "test_impact": {

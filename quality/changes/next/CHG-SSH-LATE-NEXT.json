@@ -1,9 +1,9 @@
 {
   "schema": "change-record.v1",
   "change": {
-    "id": "CHG-SSH-LATE",
-    "version": "v0.8.3",
-    "title": "Repair SSH late-failure authority recheck and exact compensation",
+    "id": "CHG-SSH-LATE-NEXT",
+    "version": "v0.8.4-dev",
+    "title": "Repair SSH late-failure authority recheck and exact compensation on next",
     "summary": "Records source-level red-green-mutation repair for pre-OAuth SSH validation, serializer-bound candidate and rollback authority rechecks, exact multi-authority compensation, durable cleanup, idempotent retry, and credential-free diagnostics. The required does_not_claim_fix flag applies to production artifact/runtime, real SSH/provider, signing, and release closure, which remain pending.",
     "status": "active",
     "owner": "science-runtime",
@@ -12,7 +12,7 @@
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/config.rs",
       "desktop/src-tauri/src/lib.rs",
-      "desktop/src-tauri/src/runtime/sandbox_session.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/",
       "desktop/src-tauri/src/runtime/science.rs",
       "desktop/src-tauri/src/runtime/settings.rs",
       "docs/evidence/investigations/",
@@ -27,9 +27,7 @@
       "REQ-083-SSH-LATE",
       "REQ-083-EVIDENCE"
     ],
-    "bug_ids": [
-      "BUG-083-SSH-LATE"
-    ],
+    "bug_ids": [],
     "test_impact": {
       "kind": "add",
       "required_suite_ids": [

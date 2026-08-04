@@ -8,6 +8,7 @@ network, installed apps, or the existing run_all gate.
 
 import copy
 import pathlib
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -15,8 +16,10 @@ from unittest import mock
 
 try:
     from validate_quality_metadata import PRODUCT_BUG_IDS, Validator, ROOT
+    import source_candidate
 except ModuleNotFoundError:
     from test.quality.validate_quality_metadata import PRODUCT_BUG_IDS, Validator, ROOT
+    from test.quality import source_candidate
 
 
 class QualityKernelFocused(unittest.TestCase):
@@ -103,7 +106,7 @@ class QualityKernelFocused(unittest.TestCase):
         self.assertNotIn("candidate_head_sha", validator.lineage)
         validator.lineage["previous_release"]["tag_object_sha"] = "0" * 40
         errors = self.errors_after(validator, validator.check_lineage)
-        self.assertIn("refs/tags/v0.8.2 does not match tag_object_sha", errors)
+        self.assertIn("refs/tags/v0.8.4 does not match tag_object_sha", errors)
         validator = self.fresh()
         errors = self.errors_after(validator, lambda: validator.check_impact("impact-pr", None))
         self.assertIn("impact-pr requires an explicit --target-ref", errors)
@@ -339,6 +342,7 @@ class QualityKernelFocused(unittest.TestCase):
             "version": "v0.8.3",
             "candidate_head_sha": "0" * 40,
             "previous_release": {"tag": "v0.8.2", "tag_object_sha": "0" * 40, "peeled_sha": "1" * 40},
+            "source_candidate": {"path": "source-candidate.json", "sha256": "0" * 64},
             "gate_ids": ["GATE-QUALITY-RELEASE"],
             "completion_seal": {"path": "completion-seal.json", "sha256": "0" * 64}
         }
@@ -353,7 +357,11 @@ class QualityKernelFocused(unittest.TestCase):
         change["test_impact"]["required_gate_ids"] = ["GATE-S0-LEGACY"]
         errors = self.errors_after(
             validator,
-            lambda: validator.check_changed_paths([("M", "quality/schema/test-result.v1.schema.json")], "impact-pr"),
+            lambda: validator.check_changed_paths(
+                [("M", "quality/schema/test-result.v1.schema.json")],
+                "impact-pr",
+                {"CHG-QUALITY-KERNEL", "CHG-SOURCE-GATE"},
+            ),
         )
         self.assertIn("misses policy required suites", errors)
         self.assertIn("misses policy required gates", errors)
@@ -363,9 +371,420 @@ class QualityKernelFocused(unittest.TestCase):
         validator.changes["CHG-SOURCE-GATE"]["status"] = "retired"
         errors = self.errors_after(
             validator,
-            lambda: validator.check_changed_paths([("M", "quality/schema/test-result.v1.schema.json")], "impact-pr"),
+            lambda: validator.check_changed_paths(
+                [("M", "quality/schema/test-result.v1.schema.json")],
+                "impact-pr",
+                {"CHG-QUALITY-KERNEL", "CHG-SOURCE-GATE"},
+            ),
         )
-        self.assertIn("no active matching ChangeRecordV1", errors)
+        self.assertIn("no current matching ChangeRecordV1", errors)
+
+        validator = self.fresh()
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("M", "quality/schema/test-result.v1.schema.json")],
+                "impact-pr",
+                set(),
+            ),
+        )
+        self.assertIn("no current matching ChangeRecordV1", errors)
+
+    def test_released_change_namespace_and_development_identity_fail_closed(self):
+        validator = self.fresh()
+        validator.lineage["development_source"]["record_version"] = "v0.8.4"
+        errors = self.errors_after(validator, validator.check_lineage)
+        self.assertIn("distinct versioned development identity", errors)
+
+        validator = self.fresh()
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_released_change_namespaces(
+                [("M", "quality/changes/v0.8.3/CHG-QUALITY-KERNEL.json")],
+            ),
+        )
+        self.assertIn("released change namespace is immutable", errors)
+
+    def test_source_candidate_publication_is_no_clobber(self):
+        candidate = "a" * 40
+        record = {"schema": "source-candidate-record.v1", "candidate_head_sha": candidate}
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                target = source_candidate.publish_record(repo, repo, candidate)
+                first = target.read_bytes()
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.publish_record(repo, repo, candidate)
+                self.assertEqual(target.read_bytes(), first)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory) / "repo"
+            outside = pathlib.Path(directory) / "outside"
+            (repo / "quality").mkdir(parents=True)
+            outside.mkdir()
+            (repo / "quality/source-candidates").symlink_to(outside, target_is_directory=True)
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.publish_record(repo, repo, candidate)
+            self.assertEqual(list(outside.iterdir()), [])
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            current = repo / "quality/source-candidates"
+            held = repo / "quality/source-candidates-held"
+            real_write = source_candidate.os.write
+            swapped = False
+
+            def replace_directory_before_rename(fd, raw):
+                nonlocal swapped
+                if not swapped:
+                    swapped = True
+                    current.rename(held)
+                    current.mkdir()
+                return real_write(fd, raw)
+
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                with mock.patch.object(
+                    source_candidate.os,
+                    "write",
+                    side_effect=replace_directory_before_rename,
+                ):
+                    with self.assertRaises(
+                        source_candidate.SourceCandidateError,
+                    ) as raised:
+                        source_candidate.publish_record(repo, repo, candidate)
+            self.assertTrue(swapped)
+            self.assertFalse(raised.exception.published_may_exist)
+            self.assertEqual(list(current.iterdir()), [])
+            self.assertEqual(list(held.iterdir()), [])
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            current = repo / "quality/source-candidates"
+            held = repo / "quality/source-candidates-held"
+            real_rename = source_candidate._rename_exclusive
+            swapped = False
+
+            def replace_directory_after_rename(directory_fd, source, target):
+                nonlocal swapped
+                real_rename(directory_fd, source, target)
+                swapped = True
+                current.rename(held)
+                current.mkdir()
+
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                with mock.patch.object(
+                    source_candidate,
+                    "_rename_exclusive",
+                    side_effect=replace_directory_after_rename,
+                ):
+                    with self.assertRaises(
+                        source_candidate.SourceCandidateError,
+                    ) as raised:
+                        source_candidate.publish_record(repo, repo, candidate)
+            target = current / "{}.json".format(candidate)
+            self.assertTrue(swapped)
+            self.assertTrue(raised.exception.published_may_exist)
+            self.assertFalse(target.exists())
+            self.assertTrue((held / target.name).is_file())
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                with mock.patch.object(source_candidate.os, "write", side_effect=[3, OSError("interrupted")]):
+                    with self.assertRaises(source_candidate.SourceCandidateError):
+                        source_candidate.publish_record(repo, repo, candidate)
+                target = repo.resolve() / "quality/source-candidates/{}.json".format(candidate)
+                self.assertFalse(target.exists())
+                self.assertEqual(list(target.parent.iterdir()), [])
+                self.assertEqual(source_candidate.publish_record(repo, repo, candidate), target)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                real_close = source_candidate.os.close
+                failed = False
+
+                def fail_temporary_close(fd):
+                    nonlocal failed
+                    item = source_candidate.os.fstat(fd)
+                    real_close(fd)
+                    if stat.S_ISREG(item.st_mode) and not failed:
+                        failed = True
+                        raise OSError("temporary close uncertainty")
+
+                with mock.patch.object(
+                    source_candidate.os,
+                    "close",
+                    side_effect=fail_temporary_close,
+                ):
+                    with self.assertRaises(
+                        source_candidate.SourceCandidateError,
+                    ) as raised:
+                        source_candidate.publish_record(repo, repo, candidate)
+                target = repo.resolve() / "quality/source-candidates/{}.json".format(candidate)
+                self.assertTrue(failed)
+                self.assertFalse(raised.exception.published_may_exist)
+                self.assertFalse(target.exists())
+                self.assertEqual(list(target.parent.iterdir()), [])
+                self.assertEqual(source_candidate.publish_record(repo, repo, candidate), target)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                real_close = source_candidate.os.close
+                failed = False
+
+                def fail_directory_close(fd):
+                    nonlocal failed
+                    item = source_candidate.os.fstat(fd)
+                    real_close(fd)
+                    if stat.S_ISDIR(item.st_mode) and not failed:
+                        failed = True
+                        raise OSError("directory close uncertainty")
+
+                with mock.patch.object(
+                    source_candidate.os,
+                    "close",
+                    side_effect=fail_directory_close,
+                ):
+                    with self.assertRaises(
+                        source_candidate.SourceCandidateError,
+                    ) as raised:
+                        source_candidate.publish_record(repo, repo, candidate)
+                target = repo.resolve() / "quality/source-candidates/{}.json".format(candidate)
+                self.assertTrue(failed)
+                self.assertTrue(raised.exception.published_may_exist)
+                self.assertTrue(target.is_file())
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.publish_record(repo, repo, candidate)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                target = repo.resolve() / "quality/source-candidates/{}.json".format(candidate)
+                real_fsync = source_candidate.os.fsync
+                swapped = False
+
+                def replace_leaf_during_directory_fsync(fd):
+                    nonlocal swapped
+                    item = source_candidate.os.fstat(fd)
+                    real_fsync(fd)
+                    if stat.S_ISDIR(item.st_mode) and not swapped:
+                        swapped = True
+                        target.unlink()
+                        target.write_bytes(b"replacement")
+
+                with mock.patch.object(
+                    source_candidate.os,
+                    "fsync",
+                    side_effect=replace_leaf_during_directory_fsync,
+                ):
+                    with self.assertRaises(
+                        source_candidate.SourceCandidateError,
+                    ) as raised:
+                        source_candidate.publish_record(repo, repo, candidate)
+                self.assertTrue(swapped)
+                self.assertTrue(raised.exception.published_may_exist)
+                self.assertEqual(target.read_bytes(), b"replacement")
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.publish_record(repo, repo, candidate)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / "quality").mkdir()
+            with mock.patch.object(source_candidate, "build_record", return_value=record):
+                with mock.patch.object(
+                    source_candidate.os,
+                    "fsync",
+                    side_effect=[None, OSError("directory durability")],
+                ):
+                    with self.assertRaises(
+                        source_candidate.SourceCandidateError,
+                    ) as raised:
+                        source_candidate.publish_record(repo, repo, candidate)
+                target = repo.resolve() / "quality/source-candidates/{}.json".format(candidate)
+                self.assertTrue(raised.exception.published_may_exist)
+                self.assertTrue(target.is_file())
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.publish_record(repo, repo, candidate)
+
+        run_id = "b" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            gate_root = pathlib.Path(directory).resolve() / "gate"
+            evidence_run = gate_root / "evidence/runs" / run_id
+            state_run = gate_root / "state/runs" / run_id
+            results = evidence_run / "results"
+            snapshot_dir = state_run / "snapshot"
+            for path in (
+                gate_root,
+                gate_root / "evidence",
+                gate_root / "evidence/runs",
+                evidence_run,
+                results,
+                gate_root / "state",
+                gate_root / "state/runs",
+                state_run,
+                snapshot_dir,
+            ):
+                path.mkdir(exist_ok=True)
+                path.chmod(0o700)
+            documents = {
+                evidence_run / "run-manifest.json": {
+                    "run_id": run_id,
+                    "head_sha": candidate,
+                },
+                evidence_run / "completion-seal.json": {
+                    "run_id": run_id,
+                    "aggregate_decision": "PASS",
+                    "runner_exit": 0,
+                },
+                snapshot_dir / "source-snapshot-manifest.json": {
+                    "run_id": run_id,
+                    "head_sha": candidate,
+                },
+                evidence_run / "evidence-manifest.json": {
+                    "run_id": run_id,
+                    "test_results": [{"path": "results/SUITE-ONE.json"}],
+                    "source_observations": [],
+                },
+                results / "SUITE-ONE.json": {"suite_id": "SUITE-ONE"},
+            }
+            for path, value in documents.items():
+                path.write_bytes(source_candidate.canonical_json_bytes(value))
+            artifacts = source_candidate.load_gate_artifacts(
+                gate_root,
+                candidate,
+            )
+            self.assertEqual(
+                set(artifacts),
+                {
+                    "run-manifest.json",
+                    "completion-seal.json",
+                    "snapshot/source-snapshot-manifest.json",
+                    "evidence-manifest.json",
+                    "results/SUITE-ONE.json",
+                },
+            )
+            second = gate_root / "evidence/runs" / ("c" * 32)
+            second.mkdir(mode=0o700)
+            with self.assertRaises(source_candidate.SourceCandidateError):
+                source_candidate.load_gate_artifacts(gate_root, candidate)
+
+        def fresh_gate(directory):
+            gate_root = pathlib.Path(directory).resolve() / "gate"
+            evidence_run = gate_root / "evidence/runs" / run_id
+            state_run = gate_root / "state/runs" / run_id
+            results = evidence_run / "results"
+            snapshot_dir = state_run / "snapshot"
+            for path in (
+                gate_root,
+                gate_root / "evidence",
+                gate_root / "evidence/runs",
+                evidence_run,
+                results,
+                gate_root / "state",
+                gate_root / "state/runs",
+                state_run,
+                snapshot_dir,
+            ):
+                path.mkdir(exist_ok=True)
+                path.chmod(0o700)
+            documents = {
+                evidence_run / "run-manifest.json": {
+                    "run_id": run_id,
+                    "head_sha": candidate,
+                },
+                evidence_run / "completion-seal.json": {
+                    "run_id": run_id,
+                    "aggregate_decision": "PASS",
+                    "runner_exit": 0,
+                },
+                snapshot_dir / "source-snapshot-manifest.json": {
+                    "run_id": run_id,
+                    "head_sha": candidate,
+                },
+                evidence_run / "evidence-manifest.json": {
+                    "run_id": run_id,
+                    "test_results": [{"path": "results/SUITE-ONE.json"}],
+                    "source_observations": [],
+                },
+                results / "SUITE-ONE.json": {"suite_id": "SUITE-ONE"},
+            }
+            for path, value in documents.items():
+                path.write_bytes(source_candidate.canonical_json_bytes(value))
+            return gate_root, evidence_run, results
+
+        with tempfile.TemporaryDirectory() as directory:
+            gate_root, evidence_run, _ = fresh_gate(directory)
+            victim = evidence_run / "run-manifest.json"
+            held = evidence_run / "run-manifest-held.json"
+            real_open = source_candidate.os.open
+            swapped = False
+
+            def substitute_leaf_before_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if path == "run-manifest.json" and not swapped:
+                    swapped = True
+                    victim.rename(held)
+                    victim.symlink_to(held.name)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                source_candidate.os,
+                "open",
+                side_effect=substitute_leaf_before_open,
+            ):
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.load_gate_artifacts(gate_root, candidate)
+            self.assertTrue(swapped)
+
+        with tempfile.TemporaryDirectory() as directory:
+            gate_root, _, results = fresh_gate(directory)
+            held = results.with_name("results-held")
+            real_open = source_candidate.os.open
+            swapped = False
+
+            def substitute_directory_before_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if path == "results" and not swapped:
+                    swapped = True
+                    results.rename(held)
+                    results.symlink_to(held.name, target_is_directory=True)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                source_candidate.os,
+                "open",
+                side_effect=substitute_directory_before_open,
+            ):
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.load_gate_artifacts(gate_root, candidate)
+            self.assertTrue(swapped)
+
+        with tempfile.TemporaryDirectory() as directory:
+            gate_root, evidence_run, _ = fresh_gate(directory)
+            victim = evidence_run / "run-manifest.json"
+            held = evidence_run / "run-manifest-held.json"
+            victim_inode = victim.stat().st_ino
+            real_read = source_candidate.os.read
+            swapped = False
+
+            def replace_leaf_after_open(fd, size):
+                nonlocal swapped
+                if source_candidate.os.fstat(fd).st_ino == victim_inode and not swapped:
+                    swapped = True
+                    victim.rename(held)
+                    victim.write_bytes(held.read_bytes())
+                return real_read(fd, size)
+
+            with mock.patch.object(
+                source_candidate.os,
+                "read",
+                side_effect=replace_leaf_after_open,
+            ):
+                with self.assertRaises(source_candidate.SourceCandidateError):
+                    source_candidate.load_gate_artifacts(gate_root, candidate)
+            self.assertTrue(swapped)
 
     def test_replacement_cycle_and_retired_gate_need_tombstone(self):
         validator = self.fresh()

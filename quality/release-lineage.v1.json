@@ -1,11 +1,17 @@
 {
   "schema": "release-lineage.v1",
-  "version": "v0.8.3",
+  "version": "v0.8.4",
   "audit_baseline_sha": "4e0af6ba7909dca22f1257b168172ecbe4af4836",
   "previous_release": {
-    "tag": "v0.8.2",
-    "tag_object_sha": "3e54ed969163392c2e718d1af3c0035f16c757b6",
-    "peeled_sha": "0e740814c5cb30d7623757231ced882767f28a53"
+    "tag": "v0.8.4",
+    "tag_object_sha": "9c478c092e4b6f4a0bb80ca1f215bb6e60a87014",
+    "peeled_sha": "37d5cfb6600a0022d5e1bbbe9a7e181a917b12dd"
+  },
+  "development_source": {
+    "line": "next",
+    "change_namespace": "next",
+    "record_version": "v0.8.4-dev",
+    "comparison_base": "previous_release.peeled_sha"
   },
   "base_policy": {
     "audit_baseline_is_not_release_base": true,

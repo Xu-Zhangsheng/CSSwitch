@@ -618,7 +618,7 @@
     "ReleaseLineageV1": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "version", "audit_baseline_sha", "previous_release", "base_policy"],
+      "required": ["schema", "version", "audit_baseline_sha", "previous_release", "development_source", "base_policy"],
       "properties": {
         "schema": {"const": "release-lineage.v1"},
         "version": {"$ref": "#/$defs/Version"},
@@ -631,6 +631,17 @@
             "tag": {"type": "string", "pattern": "^v[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$", "maxLength": 32},
             "tag_object_sha": {"$ref": "#/$defs/GitSha"},
             "peeled_sha": {"$ref": "#/$defs/GitSha"}
+          }
+        },
+        "development_source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["line", "change_namespace", "record_version", "comparison_base"],
+          "properties": {
+            "line": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$", "maxLength": 64},
+            "change_namespace": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "maxLength": 64},
+            "record_version": {"$ref": "#/$defs/Version"},
+            "comparison_base": {"const": "previous_release.peeled_sha"}
           }
         },
         "base_policy": {

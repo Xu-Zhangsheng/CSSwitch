@@ -1,0 +1,92 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-B",
+    "version": "v0.8.4-dev",
+    "title": "Migrate one-click checkpoints to the V2 runtime journal",
+    "summary": "Migrates the existing eight one-click checkpoint sites from the V1 string-stage writer to typed V2 phases without moving their runtime timing. The first durable checkpoint freezes one candidate runtime fingerprint and one verified registered snapshot managed_id ticket; later phases, success clear, and binding commit require that same transaction identity. A first-write failure before protected mutation may enter existing compensation only through same-process PreJournalAbort with the in-memory registered ticket. Restarted ActiveRecovery without a journal remains manual, and the destructive-stop-before-durable-intent F5 gap is intentionally retained.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "desktop/src-tauri/src/config.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/authority_snapshot/test_seams.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/authority_snapshot.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-B.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py",
+      "test/test_runtime_mutation_inventory.py",
+      "test/test_profile_pin_contract.py",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-ORPHAN-SKILL-BOUNDARY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "the focused V2 identity covers all eight typed phases, first-write V1 replacement, immutable transaction id, candidate fingerprint and verified managed_id ticket, exact clear, and secret-free serialization",
+        "the isolated first-journal write fault uses a temporary HOME, fake Science identity, dynamic loopback ports, and the in-memory registered ticket to prove same-process PreJournalAbort compensation and prior Science restart",
+        "the existing crash-after-snapshot-before-journal characterization remains unchanged and continues to require manual recovery for ActiveRecovery without a journal",
+        "the source boundary binds exactly eight production V2 checkpoint calls and one candidate fingerprint derivation",
+        "focused inventory, document governance, quality metadata, format, and diff checks passed",
+        "candidate SHA f969d56dbd293e235afc1ed97f4e4e1d63d1b074 passed 14 suites; desktop rejected an over-broad manifest-empty assertion in the pre-registration snapshot-failure mode, so run 9ab7dd50d8794411d7c1fae43d0a1527 is rejected",
+        "the repair limits manifest-empty proof to the actual PreJournalAbort mode while preserving the legacy pre-registration snapshot-failure contract, and both isolated identities plus a clean-context repair review passed",
+        "complete 15-suite GATE-SOURCE passed at exact SHA 545ad28f0253f7ea9d2bde076ad7b136318c6b0e with run id 37f69cfd7ed2150425033872c3f7085b and runner exit zero",
+        "recursive schema, semantic, and hash readback passed with 15 passing results, 15 passing source observations, and a 491-entry clean source snapshot",
+        "desktop identity closed at 528 discovered, 487 passed, zero failed, 41 approved ignored, zero skipped, zero todo, and zero not run",
+        "exact-SHA clean-context completion review passed with zero BLOCK, HIGH, MEDIUM, or LOW findings",
+        "this evidence-only seal records the verified candidate and run and does not claim that the seal commit itself ran the complete gate"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

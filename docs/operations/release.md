@@ -26,6 +26,8 @@ completion seal。preflight、环境或 suite 阻断时应在满足同一候选�
 不能把局部测试、stdout 摘要或旧 `current-env clean` / `release-ready green`
 词汇改写成当前 `SOURCE-GREEN`。
 
+source gate 通过后可发布 immutable `SourceCandidateRecord`，但它仍只属于 source 层。真正的 release candidate 必须引用该 record，并另外绑定 release-profile run、当前公开 base 与所需 release gates；artifact/public evidence 只能在随后的 `ReleaseEvidenceV1` 建立。三层 candidate SHA、previous release identity 或 digest 任一不一致都 fail closed。
+
 ## 3. 构建 artifact
 
 ```bash

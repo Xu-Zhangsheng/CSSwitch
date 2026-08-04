@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 ROOT = Path(__file__).resolve().parents[2]
 QUALITY = ROOT / "quality"
 SCHEMA_DIR = QUALITY / "schema"
-VERSION = "v0.8.3"
+REGISTRY_VERSION = "v0.8.3"
 PRODUCT_BUG_IDS = {
     "BUG-083-SCIENCE-UPDATER",
     "BUG-083-DEEPSEEK-THINKING",
@@ -121,6 +121,7 @@ class Validator:
         self.kernel: Optional[Dict[str, Any]] = None
         self.requirements: Dict[str, Dict[str, Any]] = {}
         self.changes: Dict[str, Dict[str, Any]] = {}
+        self.change_sources: Dict[str, str] = {}
         self.bugs: Dict[str, Dict[str, Any]] = {}
         self.suites: Dict[str, Dict[str, Any]] = {}
         self.gates: Dict[str, Dict[str, Any]] = {}
@@ -128,6 +129,7 @@ class Validator:
         self.catalog: Dict[str, Any] = {}
         self.lineage: Dict[str, Any] = {}
         self.path_policy: Dict[str, Any] = {}
+        self.source_candidates: Dict[str, Dict[str, Any]] = {}
 
     def error(self, path: str, message: str) -> None:
         self.errors.append("{}: {}".format(path, message))
@@ -333,6 +335,7 @@ class Validator:
             return
         self.requirements.clear()
         self.changes.clear()
+        self.change_sources.clear()
         self.bugs.clear()
         self.suites.clear()
         self.gates.clear()
@@ -340,6 +343,7 @@ class Validator:
         self.catalog = {}
         self.lineage = {}
         self.path_policy = {}
+        self.source_candidates.clear()
         requirements_path = self.quality / "requirements.v1.json"
         if requirements_path.exists():
             document = self.load_json(requirements_path)
@@ -352,10 +356,15 @@ class Validator:
         else:
             self.error("quality/requirements.v1.json", "required registry is missing")
 
-        change_dir = self.quality / "changes" / VERSION
-        if not change_dir.is_dir():
-            self.error("quality/changes/" + VERSION, "required change directory is missing")
-        else:
+        development = self.lineage.get("development_source", {}) if isinstance(self.lineage, dict) else {}
+        # The lineage file is loaded below; load the frozen registry and the
+        # fixed development namespace independently, then validate their
+        # relationship after all registries are present.
+        for namespace in (REGISTRY_VERSION, "next"):
+            change_dir = self.quality / "changes" / namespace
+            if not change_dir.is_dir():
+                self.error("quality/changes/" + namespace, "required change directory is missing")
+                continue
             for path in sorted(change_dir.glob("*.json")):
                 document = self.load_json(path)
                 if document is not None:
@@ -363,6 +372,9 @@ class Validator:
                     item = document.get("change") if isinstance(document, dict) else None
                     if isinstance(item, dict):
                         self.add_record(self.changes, item, "change", str(path.relative_to(self.repo)))
+                        record_id = item.get("id")
+                        if isinstance(record_id, str):
+                            self.change_sources[record_id] = str(path.relative_to(self.repo))
 
         bug_dir = self.quality / "bugs"
         if not bug_dir.is_dir():
@@ -408,6 +420,25 @@ class Validator:
             elif attribute == "path_policy" and isinstance(document, dict):
                 self.path_policy = document
 
+        source_candidate_schema = self.schemas.get("source-candidate-record.v1.schema.json")
+        source_candidate_dir = self.quality / "source-candidates"
+        if source_candidate_dir.exists() and source_candidate_schema is None:
+            self.error("quality/schema/source-candidate-record.v1.schema.json", "source candidate schema is missing")
+        elif source_candidate_schema is not None and source_candidate_dir.exists():
+            for path in sorted(source_candidate_dir.glob("*.json")):
+                document = self.load_json(path)
+                if document is None:
+                    continue
+                self.validate_instance(document, source_candidate_schema, source_candidate_schema, str(path.relative_to(self.repo)))
+                if isinstance(document, dict):
+                    candidate_sha = document.get("candidate_head_sha")
+                    if isinstance(candidate_sha, str):
+                        if path.stem != candidate_sha:
+                            self.error(str(path.relative_to(self.repo)), "source candidate filename must equal candidate SHA")
+                        if candidate_sha in self.source_candidates:
+                            self.error(str(path.relative_to(self.repo)), "duplicate source candidate SHA")
+                        self.source_candidates[candidate_sha] = document
+
     def add_global_id(self, record_id: str, source: str) -> None:
         # Stored separately so catalog_id participates in the no-reuse namespace.
         existing = self.global_ids.get(record_id)
@@ -445,6 +476,7 @@ class Validator:
         self.check_catalog_discovery()
         self.check_fixed_run_evidence_catalog()
         self.check_source_gate_catalog()
+        self.check_source_candidates()
 
     @staticmethod
     def canonical_record_sha256(value: Any) -> str:
@@ -641,17 +673,26 @@ class Validator:
             self.error(SOURCE_IDENTITY_PATH, "source identity inventory has unknown or missing suites")
 
     def check_versions(self) -> None:
-        for kind, records in (("requirement", self.requirements), ("change", self.changes), ("bug", self.bugs), ("gate", self.gates)):
+        for kind, records in (("requirement", self.requirements), ("bug", self.bugs), ("gate", self.gates)):
             for record_id, record in records.items():
-                if record.get("version") != VERSION:
-                    self.error(record_id, "version must be {}".format(VERSION))
+                if record.get("version") != REGISTRY_VERSION:
+                    self.error(record_id, "version must be {}".format(REGISTRY_VERSION))
+        development = self.lineage.get("development_source", {}) if isinstance(self.lineage, dict) else {}
+        development_version = development.get("record_version") if isinstance(development, dict) else None
+        development_namespace = development.get("change_namespace") if isinstance(development, dict) else None
+        for record_id, record in self.changes.items():
+            source = self.change_sources.get(record_id, "")
+            expected = development_version if source.startswith("quality/changes/{}/".format(development_namespace)) else REGISTRY_VERSION
+            if record.get("version") != expected:
+                self.error(record_id, "version must be {} for {}".format(expected, source or "unknown namespace"))
         for key in ("version",):
-            if self.catalog.get(key) != VERSION:
-                self.error("quality/test-catalog.v1.json", "version must be {}".format(VERSION))
-            if self.lineage.get(key) != VERSION:
-                self.error("quality/release-lineage.v1.json", "version must be {}".format(VERSION))
-            if self.path_policy.get(key) != VERSION:
-                self.error("quality/production-paths.v1.json", "version must be {}".format(VERSION))
+            if self.catalog.get(key) != REGISTRY_VERSION:
+                self.error("quality/test-catalog.v1.json", "version must be {}".format(REGISTRY_VERSION))
+            if self.path_policy.get(key) != REGISTRY_VERSION:
+                self.error("quality/production-paths.v1.json", "version must be {}".format(REGISTRY_VERSION))
+        previous = self.lineage.get("previous_release", {}) if isinstance(self.lineage, dict) else {}
+        if self.lineage.get("version") != previous.get("tag"):
+            self.error("quality/release-lineage.v1.json", "version must equal previous_release.tag")
 
     def check_ref_list(self, source: str, values: Any, target: Dict[str, Any], label: str) -> None:
         if not isinstance(values, list):
@@ -1031,6 +1072,62 @@ class Validator:
         rc, _, _ = self.git(["cat-file", "-e", lineage.get("audit_baseline_sha", "")], allow_failure=True)
         if rc != 0:
             self.error("lineage.audit_baseline_sha", "audit baseline object is missing")
+        development = lineage.get("development_source", {})
+        if not isinstance(development, dict):
+            self.error("lineage.development_source", "must be an object")
+            return
+        namespace = development.get("change_namespace")
+        if development.get("line") != "next" or namespace != "next":
+            self.error("lineage.development_source", "must bind the explicit next development line and namespace")
+        if not VERSION_RE.fullmatch(str(development.get("record_version", ""))) or development.get("record_version") == previous.get("tag"):
+            self.error("lineage.development_source.record_version", "must be a distinct versioned development identity")
+        if development.get("comparison_base") != "previous_release.peeled_sha":
+            self.error("lineage.development_source.comparison_base", "must bind previous_release.peeled_sha")
+    def check_released_change_namespaces(
+        self,
+        changed: Iterable[Tuple[str, str]],
+    ) -> None:
+        development = self.lineage.get("development_source", {})
+        namespace = development.get("change_namespace") if isinstance(development, dict) else "next"
+        for _, path in changed:
+            if path.startswith("quality/changes/v"):
+                self.error(path, "released change namespace is immutable; use quality/changes/{}/".format(namespace))
+
+    def check_source_candidates(self) -> None:
+        if not self.source_candidates:
+            return
+        previous = self.lineage.get("previous_release", {})
+        development = self.lineage.get("development_source", {})
+        if not isinstance(previous, dict) or not isinstance(development, dict):
+            return
+        base = previous.get("peeled_sha")
+        for candidate_sha, record in sorted(self.source_candidates.items()):
+            path = "quality/source-candidates/{}.json".format(candidate_sha)
+            if not SHA_RE.fullmatch(candidate_sha) or record.get("comparison_base") != previous:
+                self.error(path, "source candidate identity or comparison base does not match current lineage")
+                continue
+            if record.get("development_line") != development.get("line"):
+                self.error(path, "source candidate development line mismatch")
+            if self.git(["cat-file", "-e", candidate_sha], allow_failure=True)[0] != 0:
+                self.error(path, "candidate commit is missing")
+                continue
+            if self.git(["merge-base", "--is-ancestor", str(base), candidate_sha], allow_failure=True)[0] != 0:
+                self.error(path, "comparison base is not an ancestor of candidate")
+            if self.git(["merge-base", "--is-ancestor", candidate_sha, "HEAD"], allow_failure=True)[0] != 0:
+                self.error(path, "candidate is not an ancestor of evidence HEAD")
+            if self.git(["cat-file", "-e", "{}:{}".format(candidate_sha, path)], allow_failure=True)[0] == 0:
+                self.error(path, "candidate record must be published after the tested candidate")
+            expected_change_set = self.diff_change_set(str(base), candidate_sha)
+            if record.get("change_set") != expected_change_set:
+                self.error(path, "recorded change set does not match comparison base..candidate")
+            if record.get("change_set_sha256") != self.canonical_record_sha256(expected_change_set):
+                self.error(path, "recorded change set digest mismatch")
+            expected_ids = sorted(self.current_change_ids(str(base), candidate_sha, []))
+            if record.get("change_ids") != expected_ids:
+                self.error(path, "recorded change IDs do not match candidate change records")
+            rc, commits, _ = self.git(["log", "--format=%H", "{}..HEAD".format(candidate_sha), "--", path], allow_failure=True)
+            if rc != 0 or len([line for line in commits.splitlines() if line]) != 1:
+                self.error(path, "source candidate record must be published once without clobber")
 
     def discover_catalog_paths(self) -> set:
         candidates: Optional[List[Path]] = None
@@ -1151,8 +1248,14 @@ class Validator:
             if self.git(["merge-base", "--is-ancestor", merge_base, head], allow_failure=True)[0] != 0:
                 self.error("impact-pr", "merge-base is not an ancestor of HEAD")
             changed = self.diff_paths(merge_base, head)
-            changed.extend(self.status_paths())
-            self.check_changed_paths(changed, "impact-pr")
+            status_changed = self.status_paths()
+            changed.extend(status_changed)
+            self.check_released_change_namespaces(changed)
+            self.check_changed_paths(
+                changed,
+                "impact-pr",
+                self.current_change_ids(merge_base, head, status_changed),
+            )
         else:
             rc, status, _ = self.git(["status", "--porcelain=v1"], allow_failure=True)
             if rc != 0:
@@ -1170,7 +1273,12 @@ class Validator:
             if self.git(["merge-base", "--is-ancestor", str(base), head], allow_failure=True)[0] != 0:
                 self.error("impact-release", "previous release peeled commit is not an ancestor of HEAD")
             changed = self.diff_paths(str(base), head)
-            self.check_changed_paths(changed, "impact-release")
+            self.check_released_change_namespaces(changed)
+            self.check_changed_paths(
+                changed,
+                "impact-release",
+                self.current_change_ids(str(base), head, []),
+            )
 
     def gate_for_profile(self, profile: str) -> Optional[Dict[str, Any]]:
         candidates = [gate for gate in self.gates.values() if gate.get("profile") == profile]
@@ -1206,6 +1314,41 @@ class Validator:
                 result.append((status, fields[1]))
         return result
 
+    def diff_change_set(self, base: str, head: str) -> List[Dict[str, Any]]:
+        rc, output, _ = self.git(["diff", "--name-status", "--find-renames", base + ".." + head], allow_failure=True)
+        if rc != 0:
+            self.error("git diff", "could not build canonical change set {}..{}".format(base, head))
+            return []
+        entries: List[Dict[str, Any]] = []
+        for line in output.splitlines():
+            if not line:
+                continue
+            fields = line.split("\t")
+            status = fields[0]
+            paths = fields[1:3] if status.startswith(("R", "C")) else fields[1:2]
+            if len(paths) not in {1, 2}:
+                self.error("git diff", "malformed name-status entry")
+                continue
+            entries.append({"status": status, "paths": paths})
+        return sorted(entries, key=lambda item: (tuple(item["paths"]), item["status"]))
+
+    def current_change_ids(
+        self,
+        base: str,
+        head: str,
+        extra_changed: Iterable[Tuple[str, str]],
+    ) -> set:
+        development = self.lineage.get("development_source", {})
+        namespace = development.get("change_namespace") if isinstance(development, dict) else None
+        prefix = "quality/changes/{}/".format(namespace)
+        changed_paths = {path for _, path in self.diff_paths(base, head)}
+        changed_paths.update(path for _, path in extra_changed)
+        return {
+            record_id
+            for record_id, source in self.change_sources.items()
+            if source.startswith(prefix) and source in changed_paths
+        }
+
     def status_paths(self) -> List[Tuple[str, str]]:
         rc, output, _ = self.git(["status", "--porcelain=v1"], allow_failure=True)
         if rc != 0:
@@ -1230,19 +1373,25 @@ class Validator:
             return path == prefix or path.startswith(pattern)
         return path == pattern
 
-    def check_changed_paths(self, changed: Iterable[Tuple[str, str]], profile: str) -> None:
+    def check_changed_paths(
+        self,
+        changed: Iterable[Tuple[str, str]],
+        profile: str,
+        current_change_ids: Optional[set] = None,
+    ) -> None:
         policy_paths = [item for item in self.path_policy.get("paths", []) if isinstance(item, dict)]
         exemptions = [item for item in self.path_policy.get("narrative_exemptions", []) if isinstance(item, dict)]
-        changes = list(self.changes.values())
+        eligible_ids = set(self.changes) if current_change_ids is None else set(current_change_ids)
+        changes = [record for record_id, record in self.changes.items() if record_id in eligible_ids]
         seen: set = set()
         for status, path in changed:
             if not path or path in seen:
                 continue
             seen.add(path)
-            if status.startswith("D") or status.startswith("R") or status.startswith("C"):
-                self.error(profile, "rename/delete/copy status is fail-closed for {} ({})".format(path, status))
             matching = [item for item in policy_paths if self.path_matches(str(item.get("path", "")), path)]
             if matching:
+                if status.startswith("D") or status.startswith("R") or status.startswith("C"):
+                    self.error(profile, "rename/delete/copy status is fail-closed for {} ({})".format(path, status))
                 policy = sorted(matching, key=lambda item: len(str(item.get("path", ""))), reverse=True)[0]
                 active_matches = [
                     change for change in changes
@@ -1250,7 +1399,7 @@ class Validator:
                     and any(self.path_matches(str(path_pattern), path) for path_pattern in change.get("changed_paths", []))
                 ]
                 if not active_matches:
-                    self.error(path, "production path has no active matching ChangeRecordV1")
+                    self.error(path, "production path has no current matching ChangeRecordV1")
                     continue
                 required_suites = set(policy.get("required_suite_ids", []))
                 required_gates = set(policy.get("required_gate_ids", []))
