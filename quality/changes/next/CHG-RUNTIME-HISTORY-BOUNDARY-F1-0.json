@@ -1,0 +1,73 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-HISTORY-BOUNDARY-F1-0",
+    "version": "v0.8.4-dev",
+    "title": "Keep restored history stopped until an explicit one-click",
+    "summary": "Removes the frontend's automatic one_click_login call after a successful history restore so one user action submits only the restore_history_choice IPC, preserves the backend stopped result, and tells the user to start explicitly in a separate action.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src/runtime-controller.js",
+      "docs/architecture/desktop-control-plane.md",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/next/CHG-RUNTIME-HISTORY-BOUNDARY-F1-0.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/runtime_controller_history_restore.test.mjs"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-MJS-FRONTEND",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "successful restoreHistoryChoice submits only restore_history_choice and never chains one_click_login, finalize_consumer_state, or status",
+        "the successful frontend message preserves the backend restore result and explicitly states that Science remains stopped until the user clicks one-click again",
+        "restore failure remains a single rejected restore IPC and cannot start the runtime",
+        "the backend restore operation, exact managed Science stop, credential publication, reference rotation, and narrow success DTO remain unchanged",
+        "manual one-click remains a separate explicit frontend action with the existing finalize-consumer readback contract",
+        "focused frontend tests, quality metadata validation, documentation governance, exact-SHA source gate, and clean-context review are required for source closure",
+        "a combined durable restore-and-resume transaction, O1-A, C1, F1-A, artifact, installed, live provider or Science, signing, and release behavior remain excluded"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

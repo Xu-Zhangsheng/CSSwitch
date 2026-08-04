@@ -37,7 +37,7 @@
         "test/runtime_controller_history_restore.test.mjs::history cleanup-required remains attention and never publishes the active profile",
         "test/runtime_controller_history_restore.test.mjs::manual one-click publishes applied only from a confirmed normal cleanup readback",
         "test/runtime_controller_history_restore.test.mjs::open finalize journal and readback failure both publish unknown manual state",
-        "test/runtime_controller_history_restore.test.mjs::successful history restore invokes one_click_login exactly once after restore succeeds",
+        "test/runtime_controller_history_restore.test.mjs::successful history restore stays stopped until an explicit one-click",
         "test/runtime_status_state.test.mjs::Codex 无独立 upstream 时只聚合适用层",
         "test/runtime_status_state.test.mjs::官方模式不把打开请求当作健康证明",
         "test/runtime_status_state.test.mjs::未知状态保持中性，明确失败才变红",

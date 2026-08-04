@@ -13,6 +13,9 @@ globalThis.window = {
     },
   },
 };
+globalThis.document = {
+  createElement: () => ({ dataset: {} }),
+};
 
 const { createRuntimeController } = await import(
   "../desktop/src/runtime-controller.js?r0-history-restore"
@@ -83,32 +86,32 @@ function projection(disposition, {
   };
 }
 
-test("successful history restore invokes one_click_login exactly once after restore succeeds", async () => {
+test("successful history restore stays stopped until an explicit one-click", async () => {
   const calls = [];
+  const messages = [];
   invokeHandler = async (command, args) => {
     calls.push([command, args]);
     if (command === "restore_history_choice") {
-      return { status: "ok", action: "history_choice_restored" };
-    }
-    if (command === "one_click_login") {
-      return { status: "ok", action: "started", recovery_status: "not_needed", fallback_url: null };
-    }
-    if (command === "finalize_consumer_state") {
-      return projection("ready");
-    }
-    if (command === "status") {
-      return { proxy: "green", sandbox: "green", upstream: "green" };
+      return {
+        status: "ok",
+        action: "history_choice_restored",
+        message: "已恢复所选历史记录；其他历史记录未被删除。",
+        choices: [{ reference: "rotated-history-reference-a", label: "历史记录 A" }],
+      };
     }
     throw new Error(`unexpected command: ${command}`);
   };
 
-  await makeController(calls).restoreHistoryChoice("history-reference-a");
+  await makeController(calls, {
+    setMsg: (text, kind) => messages.push([text, kind]),
+  }).restoreHistoryChoice("history-reference-a");
 
   assert.deepEqual(calls, [
     ["restore_history_choice", { reference: "history-reference-a" }],
-    ["one_click_login", { runtimeChoice: null }],
-    ["finalize_consumer_state", { outcome: { status: "ok", action: "started", recovery_status: "not_needed", fallback_url: null } }],
-    ["status", undefined],
+  ]);
+  assert.deepEqual(messages.at(-1), [
+    "已恢复所选历史记录；其他历史记录未被删除。 当前保持停止；请再次点击「一键开始」。",
+    "ok",
   ]);
 });
 

@@ -8,7 +8,7 @@
 
 本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0 与 Q0-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
-## 当前唯一建议实施目标
+## 当前 source candidate closure
 
 最近 implementation closure 是 [Q0-A source-candidate lineage](../../docs/audits/2026-08-04-q0-a-source-candidate-lineage.md)；其输入是 [Post-D0 重新基线](../../docs/audits/2026-08-04-post-d0-rebaseline.md)。两者只建立 source / test / review 结论，不外推 artifact、installed/live、签名、公证或公开 release。
 
@@ -18,13 +18,13 @@ Q0-A 已在 source/unit 层完成：
 - immutable SourceCandidateRecord 已绑定 exact implementation candidate、canonical current change set、change IDs 与完整 source gate digest；ReleaseCandidate / ReleaseEvidence promotion edge fail closed；
 - exact-C source gate 与 clean-context review 已闭合。artifact、installed/live、签名、公证和 public release 仍未由此建立。
 
-新的[Post-Q0 Runtime 后续路线再基线](../../docs/audits/2026-08-04-post-q0-runtime-roadmap-rebaseline.md)已完成上述比较。当前唯一建议实施目标是 **F1-0 history boundary guard**：删除 history restore 成功后的前端自动第二次 `one_click_login`，明确保持 stopped 并要求用户再次显式启动。
+新的[Post-Q0 Runtime 后续路线再基线](../../docs/audits/2026-08-04-post-q0-runtime-roadmap-rebaseline.md)已完成上述比较。当前正在闭合 **F1-0 history boundary guard** source candidate：history restore 成功后 frontend 不再自动调用第二次 `one_click_login`，而是明确保持 stopped 并要求用户再次显式启动。
 
-F1-0 仍需单独 implementation 授权。它不建立 restore + one-click 原子事务，也不自动授权 O1-A、C1、完整 F1-A 或后续阶段；完成后必须重新基线。
+F1-0 的 implementation、focused tests 与治理变更已经形成候选，但 exact-SHA source gate 与最终 clean-context review 尚未闭合，因此还不是 source PASS。它不建立 restore + one-click 原子事务，也不自动授权 O1-A、C1、完整 F1-A 或后续阶段；闭合后必须重新基线，再选择新的 sole NEXT。
 
 ## 仍开放的源码与架构问题
 
-- **Runtime MEDIUM**：F1 history 仍跨 exact stop、多文件 restore 和第二个 destructive IPC；read model 仍由 `get_config` 隐式 ack notice，boot event / pull 没有统一 sequence。
+- **Runtime MEDIUM**：F1 history 的 backend restore 仍跨 exact stop 与多文件 restore；用户随后可选的显式 one-click 是另一个 destructive operation，两者没有共同 durable journal。read model 仍由 `get_config` 隐式 ack notice，boot event / pull 没有统一 sequence。
 - **Runtime MEDIUM**：O1-A entry decision 晚于 SSH / stub / pending cleanup；command / runtime entry owner、giant coordinator、config typed / cross-process boundary 仍未收敛。
 - **Science update MEDIUM**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 

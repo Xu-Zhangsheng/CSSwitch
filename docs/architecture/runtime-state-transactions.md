@@ -241,12 +241,13 @@ frontend 只持有一次性 opaque reference。backend 复核 active profile、p
 1. 精确停止当前受管 Science；
 2. 恢复用户选择的历史组织；
 3. 清理一次性 reference；
-4. 返回本次 restore 的结果；当前 frontend 随后自动发起另一次 one-click start。
+4. 返回本次 restore 的结果；frontend 保持 stopped，并要求用户再次显式点击「一键开始」。
 
 组织 UUID、真实路径与敏感凭证不跨 invoke 边界。
 
-restore 与随后 one-click 各自取得 destructive lease，且没有覆盖两次 operation 的共同 durable
-journal。它们不能被解释成一个原子事务，也不能与 cold start、recovery 合并成万能事务。
+restore 与用户随后可选的显式 one-click 各自取得 destructive lease，且没有覆盖两次 operation 的共同
+durable journal。frontend 不自动串联两者；它们也不能被解释成一个原子事务，或与 cold start、
+recovery 合并成万能事务。
 
 ## 停止
 
@@ -274,6 +275,6 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 - V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
 - config 的外部并发检测不是跨进程共享锁；
-- history restore 与 frontend 随后的一键开始仍是两个 destructive operation，没有共同 durable journal；
+- history restore 与用户随后可选的显式一键开始仍是两个 destructive operation，没有共同 durable journal；
 - `stop_all` 已锁外等待，但 mode/settings/native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
 - MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。

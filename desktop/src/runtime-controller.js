@@ -79,18 +79,16 @@ async function restoreHistoryChoice(reference) {
   if (!reference || isBusy()) return;
   setBusy(true, { kind: "historyRecovery" });
   setMsg("正在重新核验并恢复所选历史记录…");
-  let restored = false;
   try {
     const result = await call("restore_history_choice", { reference });
     if (result && Array.isArray(result.choices)) showHistoryRecovery(result);
-    setMsg(result && result.message || "已恢复所选历史记录。", "ok");
-    restored = true;
+    const restoredMessage = result && result.message || "已恢复所选历史记录。";
+    setMsg(restoredMessage + " 当前保持停止；请再次点击「一键开始」。", "ok");
   } catch (e) {
     setMsg("恢复历史记录失败：" + e, "err");
   } finally {
     setBusy(false);
   }
-  if (restored) await runOneClick(null);
 }
 
 async function checkOneClickBoundary() {
