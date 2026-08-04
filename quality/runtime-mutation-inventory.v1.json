@@ -321,7 +321,7 @@
       "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "configure_third_party_best_effort"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "force_third_party_reconcile"}, {"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "invalidate_route_configuration"}],
       "readers": [{"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "inspect_while_science_running"}, {"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "route_configuration_is_current"}],
       "source_anchor": {"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "invalidate_route_configuration"},
-      "known_gap": "Doctor, one-click, and healthy reopen share this host mutation without a uniform typed receipt or inverse; partial host changes are reported as warning/restart-required."
+      "known_gap": "Explicit Skill route repair, one-click, and healthy reopen share this host mutation without a uniform typed receipt or inverse; partial host changes are reported as warning/restart-required."
     },
     {
       "id": "record.gateway-bridge-key-v1",

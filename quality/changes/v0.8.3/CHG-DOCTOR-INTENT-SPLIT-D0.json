@@ -8,7 +8,6 @@
     "status": "active",
     "owner": "quality-kernel",
     "changed_paths": [
-      ".agents/context/known-issues.md",
       "desktop/src-tauri/src/commands/diagnostics.rs",
       "desktop/src-tauri/src/commands/runtime/tests.rs",
       "desktop/src-tauri/src/config.rs",
@@ -22,10 +21,8 @@
       "desktop/src/main.js",
       "desktop/src/preview-adapter.js",
       "desktop/src/runtime-controller.js",
-      "docs/README.md",
       "docs/architecture/overview.md",
       "docs/architecture/desktop-control-plane.md",
-      "docs/audits/2026-08-04-d0-doctor-intent-split.md",
       "docs/features/ui-information-architecture.md",
       "quality/changes/v0.8.3/CHG-DOCTOR-INTENT-SPLIT-D0.json",
       "quality/runtime-mutation-inventory.v1.json",
