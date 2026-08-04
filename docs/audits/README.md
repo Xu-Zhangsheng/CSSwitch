@@ -4,7 +4,8 @@
 
 ## 最新基线与完成证据
 
-- [Post-Q0 Runtime 后续路线再基线（2026-08-04）](2026-08-04-post-q0-runtime-roadmap-rebaseline.md)：当前 source-only 优先级、唯一建议实施目标与后续依赖顺序；不自动授权 implementation。
+- [F1-0 history boundary guard closure（2026-08-04）](2026-08-04-f1-0-history-boundary-guard.md)：restore 成功后保持 stopped、显式后续启动、独立审查与 exact-SHA source gate closure。
+- [Post-Q0 Runtime 后续路线再基线（2026-08-04）](2026-08-04-post-q0-runtime-roadmap-rebaseline.md)：F1-0 前的 source-only 优先级与依赖输入；首阶段已完成，后续顺序不再自动有效。
 - [Q0-A source-candidate lineage closure（2026-08-04）](2026-08-04-q0-a-source-candidate-lineage.md)：v0.8.4 / `next` lineage、immutable source record、exact-C review 与 source gate closure。
 - [Post-D0 只读重新基线（2026-08-04）](2026-08-04-post-d0-rebaseline.md)：Q0-A 前的 source-only 架构与治理输入。
 - [D0 Doctor intent split source closure（2026-08-04）](2026-08-04-d0-doctor-intent-split.md)：D0 implementation candidate、review 与 source gate 证据。
