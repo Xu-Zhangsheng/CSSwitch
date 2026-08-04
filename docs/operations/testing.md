@@ -39,7 +39,9 @@ Gate 只接受 clean、non-shallow 的 exact `HEAD`，固定顺序执行
 报告至少记录命令、退出码、exact `HEAD`、输出目录、最终 completion seal / aggregate
 判定与 15 个 suite 状态。只有递归验证后的 PASS seal 才建立
 `RUN-EVIDENCE-GREEN` 与 `SOURCE-GREEN`；stdout 摘要或某个组件通过都不是权威。
-完整冻结合同见 [Trusted source gate v1](quality-source-gate.md)。
+固定 suite / entrypoint identity、允许环境、timeout、retry、result 与 seal 的机器合同
+由 `quality/test-catalog.v1.json`、`quality/release-gates.v1.json` 及其 schema 维护；
+本文是当前人工执行与判定入口。
 
 ## 聚焦诊断
 

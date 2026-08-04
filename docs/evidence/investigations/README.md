@@ -17,6 +17,7 @@
   - [生命周期 / Science](2026-07-18-v070-model-catalog-lifecycle-science-review.md)
   - [UI / 覆盖安装 Acceptance](2026-07-18-v070-model-catalog-ui-acceptance-review.md)
   - [真实 Science alias Stage 0](2026-07-18-v070-model-catalog-stage0.md)
+- [2026-07-20 v0.8.1 Provider 源码兼容范围](2026-07-20-v081-provider-compatibility.md)
 - [2026-07-28 v0.8.3 SSH 晚失败源码修复](2026-07-28-v083-ssh-late-source-repair.md)
 - [2026-07-28 Claude Science 0.1.20 → 0.1.25 兼容与 updater 修复](2026-07-28-claude-science-0.1.25-compatibility.md)
 - [2026-07-30 Claude Science 0.1.25 `A-IPC-01` 静态调查](2026-07-30-claude-science-0.1.25-a-ipc-01.md)

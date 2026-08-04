@@ -6,13 +6,13 @@
 
 最后复核：2026-07-30
 
-失效条件：Claude Science 版本、CSSwitch 能力边界、九层证据词表、安全隔离合同或探针目标发生变化时复核。
+失效条件：Claude Science 版本、CSSwitch 能力边界、证据词表、安全隔离合同或探针目标发生变化时立即失效并复核；目标版本组合被替代或探针计划取消后，结果留在 dated evidence，本规格删除或由新规格替换。
 
 本文是 Claude Science 0.1.25 A/B/C 探针唯一执行规格，只定义 fixture、授权、
 gate、判定和证据输出，不记录运行结果。能力含义与 owner 见
 [Claude Science 能力依赖](../architecture/science-capability-dependencies.md)，用户可见
 状态见[产品能力地图](../features/product-science-capability-map.md)，队列来源与九层
-证据词表见[2026-07-30 架构调研](../audits/2026-07-30-v084-architecture-reconnaissance.md)。
+证据词表的历史冻结见[2026-07-30 架构调研](../audits/2026-07-30-v084-architecture-reconnaissance.md)；当前 source/result 用语和更高证据层边界分别以[自动测试](testing.md)与[发布流程](release.md)为准。
 本文不复制能力或证据正文。
 
 ## 1. 规格与结果分界

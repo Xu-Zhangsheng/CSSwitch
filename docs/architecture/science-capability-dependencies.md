@@ -284,10 +284,9 @@ CSSwitch 不托管：
 | Python/R/Conda/GPU 异常 | Science environment/kernel；GPU 另查主机与安全模式 | CSSwitch 将 opaque roots 当缓存管理 |
 | 更新后行为变化 | 先确定实际 runtime identity，再对照能力 owner 和依赖面 | seed App 版本或静态字符串单独定性 |
 
-## 7. 拆分前冻结与拆分后验证
+## 7. 维护不变量与验证
 
-本边界是生产拆分的输入，不是拆分完成后的说明。进入 typed failure、runtime
-事务或 Gateway 模块拆分前，必须冻结：
+任何实现变更都必须保持以下稳定边界：
 
 1. 每个状态和语义的唯一 owner；
 2. `CSSWITCH-RUNTIME`、`MODEL-GATEWAY`、`SCIENCE-NATIVE`、
@@ -301,18 +300,11 @@ CSSwitch 不托管：
    domain 已由 `runtime/failure.rs` 建立；bridge / Science-native / external
    service 的局部 typed error 保持各自所有权，不并入全局 mega-enum；
 7. ambient environment 两层 allowlist 与 sentinel-secret regressions 已闭合
-   （见上文与 `runtime/launch_env`）；后续机械拆分不得扩大该 allowlist。
+   （见上文与 `runtime/launch_env`）；后续变更不得扩大该 allowlist。
 
-这一步不要求先证明每项 Science 能力 current live，也不要求解决所有
-`UNKNOWN`。拆分前需要的是 owner、路径和不变量无歧义；具体版本/provider 的
-兼容结果可以继续是 `UNKNOWN`。
-
-拆分按这些边界机械进行：typed failure projection 已建立；下一步拆 runtime
-transaction/recovery，随后拆 Gateway HTTP/inference/bridge，最后处理 frontend、
-config 与其他高 fan-in 模块。拆分期间不得顺手改变协议、权限、凭证来源、状态
-提交顺序或 feature ownership。
-
-拆分后再绑定 exact Science artifact、CSSwitch artifact、provider/model 和环境，
+维护这些边界不要求先证明每项 Science 能力 current live，也不要求解决所有
+`UNKNOWN`。owner、路径和不变量必须无歧义；具体版本/provider 的兼容结果可以继续是
+`UNKNOWN`。实现变化后再绑定 exact Science artifact、CSSwitch artifact、provider/model 和环境，
 验证 stream、tools、`tool_choice`、reasoning、structured output、vision、错误
 映射、停止/流终止语义、Science-native 状态保全、bridge restart 与独立外部
 流量；每项按 provider capability 记录支持或可定位降级。动态结果用于修复

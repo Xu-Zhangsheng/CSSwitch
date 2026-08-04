@@ -115,22 +115,22 @@ RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 p
 
 | ID | 场景 | 操作 | 必须满足 |
 |---|---|---|---|
-| RM-01 | v1 -> v2 迁移 | 用假 key fixture 首次启动 | DeepSeek / Qwen profile 与 active 正确；`config.json.v1.bak` 为 `0600`；key 只显示掩码 |
+| RM-01 | v1 -> v2 迁移 | 用假 key fixture 首次启动 | DeepSeek / Qwen profile 与 `active_id` 当前选择正确；`config.json.v1.bak` 为 `0600`；key 只显示掩码 |
 | RM-02 | 新建 profile | 新建后分别取消 / 完成 | 取消不落盘；完成新增且不自动生效；同模板可多条 |
 | RM-03 | 元数据编辑 | 改名和备注后重启 | 名称 / 备注持久；连接字段与 key 不变 |
-| RM-04 | non-active 连接编辑 | 正确 key、错误 key、5xx / 断网 | 2xx 标已验证；明确 4xx 拒绝且不落盘；含糊态保存但标未验证 |
-| RM-05 | 激活切换 | DeepSeek ↔ Qwen | scratch 与正式 Gateway 健康后才提交 active；Gateway PID / adapter 变化；Science 不重启 |
-| RM-06 | 激活失败回滚 | 候选使用错误 key / model | `active_id` 不变；旧 Gateway 恢复；UI 不谎称成功；Science 不停止 |
-| RM-07 | active 连接编辑 | 修改当前连接为有效 / 无效值 | 有效值提交并换 Gateway；无效值不落盘且恢复旧链 |
+| RM-04 | 非 selected / applied 连接编辑 | 对既非当前选择、也非上次应用的 profile 使用正确 key、错误 key / model、405、429 / 5xx / 断网 | 2xx 标已验证；401 / 403 与 400 / 404 / 422 明确拒绝且不落盘；405、429 / 5xx 与无响应可保存但标未验证；当前选择、binding 与运行链不变 |
+| RM-05 | 当前选择切换 | DeepSeek ↔ Qwen 后观察运行链，再执行下一次一键开始 | `active_id` 只记录 selection；既有 Gateway / Science 不因选择动作切换；下一次一键开始才校验并应用候选，UI 区分 selected / applied |
+| RM-06 | 候选应用失败 | 选择错误 key / model 的候选并执行下一次一键开始 | 不把候选发布为 applied / Ready；selected 与 applied 继续分开；旧 binding 或 unknown/manual 状态只按 typed outcome 与 exact readback 发布，不用文案伪造回滚成功 |
+| RM-07 | selected / applied 连接编辑 | 对 selected-only、applied-only 与 selected=applied 分别保存有效、401 / 404、405 与含糊网络结果，再对当前选择执行下一次一键开始 | 编辑不热切换既有 Gateway / Science；有效值保存，401 / 403 与 400 / 404 / 422 不落盘，405、429 / 5xx 与无响应可保存但标未验证；selection 与旧 binding 在保存时不变，只有后续一键开始可应用当前选择并发布新 binding |
 | RM-08 | 一键开始 | 连续点击两次 | 首次启动 Gateway + Science；再次幂等复用并 reopen；UI status 只按 health 解释 |
 | RM-09 | 整链推理 | 经授权发送 minimal text 与 tool request | 实际 provider / model / tool 结果分栏；日志无 path-secret / key；8765 PID 不变 |
-| RM-10 | 清 key | 对 active / non-active 各清一次 | active 撤销链路并清 active；non-active 不影响当前链；backup 不可恢复旧 key |
-| RM-11 | 删除 profile | 删除 non-active；尝试删除 active | non-active 消失且链不变；active 不留下悬空 `active_id` |
+| RM-10 | 清 key（selected × applied） | 分别清 selected-only、applied-only、selected=applied 与 neither 的 key | 所有角色都只清目标 key且保留 `active_id` selection；applied-only 与 selected=applied 还必须清 `runtime_binding` 并停止 tracked Gateway，selected-only 与 neither 不影响当前链；backup 不可恢复旧 key |
+| RM-11 | 删除 profile（selected × applied） | 分别删除 selected-only、applied-only、selected=applied 与 neither | 删除 selected 清 `active_id`；删除 applied 清 `runtime_binding` 并停止 tracked Gateway；角色分离时删除一侧保留另一侧及其相应运行状态；neither 消失且链不变；不留下悬空引用 |
 | RM-12 | 端口变更 | 运行中修改 Gateway / Science port | 先停受管链再保存；旧端口释放；下次按新端口启动 |
 | RM-13 | 端口冲突 | 预占候选端口 | 明确报占用；不误报 key；不杀未知占位进程 |
 | RM-14 | 官方模式 | 第三方链运行时切换 | 只停测试 Gateway / Science；真实 8765 不变；切回不自启 |
 | RM-15 | 全部停止 / 退出 | UI 停止后退出 | 据实报告；测试端口释放；无残留受管 desktop / gateway 子进程 |
-| RM-16 | 重启恢复 | 同一隔离 HOME 重开 | profiles / active / notes / ports 持久；不自动启动；恢复不能仅凭端口冒认 runtime |
+| RM-16 | 重启恢复 | 同一隔离 HOME 重开 | profiles / 当前选择 / notes / ports 持久；不自动启动；恢复不能仅凭端口冒认 applied runtime |
 | RM-17 | 包资源 | 从 `.app` 与挂载 DMG 启动 | `Contents/MacOS/{desktop,csswitch-gateway}` 与 `Contents/Resources/scripts` 齐全；无旧 `Resources/proxy`；正式包无需 `CSSWITCH_REPO` |
 | RM-18 | 发布安全 | hash、codesign、spctl、stapler | 签名完整性、身份、公证、ticket、Gatekeeper 分栏；不把 ad-hoc 写成已公证 |
 | RM-19 | updater runtime 优先 | 固定真实 HOME updater、App 与 stale 隔离 cache 同时存在 | 通过路径、属主、权限、Mach-O、embedded identity 校验后生成 CSSwitch 私有 SHA-256 snapshot，选择来源 `official_updated` 并复用 CSSwitch data-dir；只读取固定 executable，不读取或改写真实 HOME 的其他 Science 数据；不得把 embedded metadata 写成官方来源密码学证明 |
@@ -149,7 +149,7 @@ RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 p
 | RM-32 | bundle 卸载取消 | 从任意成员发起卸载并取消 | 首次只返回 bundle 名称、完整受影响 Skill 列表和确认 ID；不 detach、不移动、不写 quarantine；取消后无第二次工具调用 |
 | RM-33 | bundle 整包确认 | 重复 RM-32 并明确确认 | 精确 confirmation ID 校验；全部成员批量 detach 并整包 quarantine；不残留部分物理安装；不提供成员级删除 |
 | RM-34 | v0.5.0 干净升级 | 旧 route / split connector、用户 MCP / 未知字段、已装 GitHub Skill 与新本地 ZIP 组合 | 迁移到合并 connector；用户 MCP 与未知字段保留；重启恢复、重复安装、GitHub / ZIP bundle 整包卸载均按 v0.6 合同工作 |
-| RM-35 | Acceptance artifact + 用户 OAuth 后 live provider | 独立 Codex 登录 | 只由脱敏 `codex-auth status` 证明 Acceptance data root 凭据存在，不读取或输出文件内容；登录成功后 Codex profile 自动出现但 active provider 不变；正式 CSSwitch 与原生 Codex 登录前后状态不变；无 token 证据泄漏 |
+| RM-35 | Acceptance artifact + 用户 OAuth 后 live provider | 独立 Codex 登录 | 只由脱敏 `codex-auth status` 证明 Acceptance data root 凭据存在，不读取或输出文件内容；登录成功后 Codex profile 自动出现但当前选择不变；正式 CSSwitch 与原生 Codex 登录前后状态不变；无 token 证据泄漏 |
 | RM-36 | 用户 OAuth 后 live provider | 动态多模型 | 当前账号至少返回两个可用模型；若目录返回 Sol/Terra/Luna，则 CSSwitch 与 Science 分别显示 `Codex / GPT-5.6-Sol`、`Codex / GPT-5.6-Terra`、`Codex / GPT-5.6-Luna`；请求 alias/raw id 与 Gateway 脱敏观测一致，缺失模型不伪造 |
 | RM-37 | 用户 OAuth 后 live provider | 流式文本与 reasoning | 增量顺序、thinking、usage 和终态正确；CSSwitch Gateway 不持久化对话，Science 自有项目 / 对话持久化不属于失败 |
 | RM-38 | 自动 mock + 用户 OAuth 后 live provider | 工具调用 | tool id / result 严格闭环；真实最小工具成功；断流 / 取消不重复执行由 mock 故障注入证明 |

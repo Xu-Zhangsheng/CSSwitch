@@ -1,12 +1,11 @@
 # Codex → Claude Science 实验桥接合同
 
-状态：**当前 v0.8.4 Feature Contract；Codex 仍是默认关闭的实验能力。**
-browser-only 登录、OAuth 后自动 profile、动态模型目录兼容、双 App 数据根隔离与
-无签名前置的私有文件认证已进入发布源码。2026-07-17 的 no-signing Acceptance
-候选曾完成浏览器 OAuth、动态目录、Science 模型选择和文本推理；当前 v0.8.4
-公开 DMG 已有分层发布证据，但没有从该 DMG 安装后重跑真实 Codex OAuth / 推理。
-当前发布边界见 [v0.8.4 发布证据](../evidence/releases/v0.8.4.md)，历史 live 候选见
-[Acceptance evidence](../evidence/investigations/2026-07-17-codex-browser-only-acceptance.md)。
+状态：当前 v0.8.4 Feature Contract；Codex 仍是默认关闭的实验能力。
+
+适用范围：browser-only 登录、CSSwitch 私有认证、动态模型目录、Responses bridge 与隔离数据边界。
+
+当前发布层见 [v0.8.4 发布证据](../evidence/releases/v0.8.4.md)；2026-07-17 live 候选见
+[Acceptance evidence](../evidence/investigations/2026-07-17-codex-browser-only-acceptance.md)。历史候选不能替代当前公开 DMG 的 installed/live OAuth 或推理证据。
 
 本文维护 CSSwitch 将用户自己的 Codex 登录接入隔离 Claude Science 的 v1 稳定
 边界。它是非官方、实验性且默认关闭的本地能力，不代表 OpenAI 或 Anthropic 的

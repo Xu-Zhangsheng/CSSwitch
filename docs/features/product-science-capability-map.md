@@ -77,7 +77,7 @@ artifact；`PACKAGE-STATIC` 不证明实际调用；`FIXTURE` 不证明 live。
 |---|---|---|---|---|---|---|---|
 | 安装与平台 | macOS App/CLI | 是：Science App、CLI 与本地数据语义 | `CSSWITCH-RUNTIME → SCIENCE-NATIVE` | `原生保留`；第三方受管启动另见“第三方运行包络” | 否 | `OFFICIAL`、`PACKAGE-STATIC` | 当前 final artifact、普通 installed 行为与发布态 |
 | 安装与平台 | whole-app remote Linux / WSL | 是：Science 的整机部署能力 | `SCIENCE-NATIVE → SCIENCE-EXTERNAL` | `原生保留`；CSSwitch 当前不提供部署管理 | 是：CSSwitch 不提供 whole-app Linux/WSL 管理面 | `OFFICIAL` | 第三方模式兼容性、端口、preview 与数据目录行为 |
-| 第三方运行包络 | 隔离 HOME、持久 data-dir、runtime identity、启动/停止/恢复 | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME` | `必须托管` | 否 | `SOURCE`、`TEST` | final artifact 与 installed-live 连续性；prior-stop durable intent/outcome 与 recovery handoff 缺口 |
+| 第三方运行包络 | 隔离 HOME、持久 data-dir、runtime identity、启动/停止/恢复 | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME` | `必须托管` | 否 | `SOURCE`、`TEST` | final artifact 与 installed-live 连续性 |
 | 第三方运行包络 | 本地虚拟登录、loopback Gateway 与受限 route | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME → MODEL-GATEWAY` | `必须托管`；虚拟登录只建立本地受管路径 | 否 | `SOURCE`、`TEST` | final artifact、真实第三方请求与版本兼容性 |
 | Provider | profile、第三方 provider、模型 selector、模型目录与协议适配 | 否：第三方 provider 拥有模型、认证、配额和计费 | `MODEL-GATEWAY`；provider 只作为 external dependency | `必须托管` profile/selector/routing；不拥有模型服务 | 否 | `SOURCE`、`TEST` | 指定 provider/model 的 live、配额与服务质量 |
 | Project | project、session、conversation、custom instructions、archive/import | 是：Science 本地 UI、数据库和 session control plane | `SCIENCE-NATIVE`；推理操作再进入 `MODEL-GATEWAY` | `原生保留`；CSSwitch 只隔离和保全数据域 | 是：不提供 Science 语义 CRUD | `OFFICIAL`、`PACKAGE-STATIC` | 第三方 current live、archive/unarchive、import 与 restart readback |
@@ -133,9 +133,9 @@ load/trigger、Reviewer/Specialist 等能力继续由 Science 原生管理；CSS
 仍须保证 `SCIENCE-NATIVE` 包络不破坏它们，并验证第三方模型路径所需的底层协议
 能力。官方账号、
 entitlement、catalog/hosted connectors、通用 MCP/Plugin 管理、云服务、组织管理
-和真实付费计算当前不是 CSSwitch 第三方模式的托管目标。其中 Skill/MCP/Plugin
-的未来受管子集将在机械拆分完成后的逻辑重构中单独确定；不得由这项规划反推当前
-支持，也不得提前改写表中的 production ownership、可达性或证据层。
+和真实付费计算当前不是 CSSwitch 第三方模式的托管目标。未来若明确授权受管的
+Skill/MCP/Plugin 子集，必须先建立独立功能合同与对应证据；在此之前不得改写表中的
+production ownership、可达性或证据层。
 
 ## 维护规则
 
@@ -147,7 +147,7 @@ entitlement、catalog/hosted connectors、通用 MCP/Plugin 管理、云服务�
 - mock、fake、fixture、source、test、package-static、artifact 与 installed-live
   必须保持分层；
 - 不因能力存在于 Science UI、route 或字符串中，就承诺第三方模式 current live；
-- 规划中的 Skill/MCP/Plugin 扩展必须先冻结支持类型、来源、权限、生命周期、
+- 未来获授权的 Skill/MCP/Plugin 扩展必须先冻结支持类型、来源、权限、生命周期、
   故障/日志合同与 Science ownership，再按实际证据更新本表；
 - 不为本表新增 handoff 流水线、探针执行、GATE-SOURCE、schema、lint 或 lifecycle
   合同。

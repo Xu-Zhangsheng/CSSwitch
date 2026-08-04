@@ -272,41 +272,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- ~~journal/trace/frontend stage 没有统一 typed source~~ 一键/auto-boot UI stage
-  已由 `OneClickFailureKind` 投影；one-click、compiled test-only profile-switch 与
-  interrupted Gateway recovery writer 均写 typed V2，V1 只保留兼容读取与原 wire 序列化；
-- ~~prior Science 的 verified stop 早于 durable intent~~ 已由脱敏 durable
-  `PriorStopIntent/Outcome` 前移闭合；
-- ~~interrupted-Gateway terminal record 无法进入同 command one-click~~ 已由 affine exact-record
-  handoff 与首 checkpoint complete-record CAS 闭合；
-- ~~binding/journal clear 与 authority cleanup-only 之间存在不可重放 crash window~~ 已由
-  `RuntimeFinalizeState::Intent`、authority manifest 精确转换和原子 binding+journal finalize
-  闭合；
 - V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
-- ~~`science_failure_stage()` 用字符串推断~~ 已删除生产路径；
-- ~~auto-boot 丢失 `stage/recovery_status/environment_status`~~ `boot://failed` 与
-  `boot_error` 现携带与手动一键同 shape 的 failed DTO；
 - config 的外部并发检测不是跨进程共享锁；
-- Science stop 已建立 process-local `ScienceStopRequest`、可选 exact
-  `ScienceStopOwnershipReceipt` 与 `ScienceStopOutcome`；mode、settings、stop/quit、history、
-  one-click compensation/DB restart、Codex downgrade 与 native exit 均从 typed outcome 判定
-  verified stop 或 classified failure。端口已关闭但 data-dir / ownership receipt 不存在的
-  幂等成功不会发布 `science_confirmed_stopped`，也不能满足 one-click exact cleanup 或继续
-  需要停止既有 runtime 的 authority recovery。首次离线历史恢复则由进程内
-  `HistoryRecoveryScienceQuiescence::NoManagedRuntimeObserved` 冻结“preflight 未发现受管
-  runtime”这一不同的 typed 前置，并在 restore 前以完整 Science probe 重新校验 session、端口与
-  当前 typed state；若期间出现受管 runtime，restore 必须 exact-stop 并把 session proof 推进为
-  `ExactStopped` 后才能旋转引用。它不冒充 exact stop receipt。用户可见文本与
-  stop/TERM/KILL/wait 顺序保持不变；
-- ~~`stop_all` 持有 `AppState` 锁跨越 stop script、TERM/KILL 与轮询等待~~ 已由 S2 的
-  process-local owner claim、锁外等待和 generation/identity CAS 闭合；该结论只覆盖
-  `stop_all`，不自动迁移 mode/settings/native-exit 等 sibling stop caller，也不建立 S3 mutation lease；
-- ~~本地 Skill 第二次 runtime-context 复核之后仍可能与 stop/switch 交错~~ S3 在
-  picker 之后取得短 `HostBridge` lease，并把 matching typed host receipt 绑定到 package
-  commit 与 attach/readback；picker/download 不进 lease，Gateway bridge 的独立进程事务也
-  不冒充全局 durable journal；
-- ~~Science launch/health/managed receipt 由 one-click coordinator 直接解释 shell process~~
-  S4 以 `ScienceHostAdapter` 收拢 typed launch spec、environment exposure、health、listener
-  identity、managed receipt 与 stop façade；保留现有 Rust + shell 双层 fail-closed、用户可见
-  行为与 operation ordering，不实现 host-neutral extension；
-- MCP 与 SSH 的产品动态 gate 仍开放。
+- history restore 与 frontend 随后的一键开始仍是两个 destructive operation，没有共同 durable journal；
+- `stop_all` 已锁外等待，但 mode/settings/native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
+- MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。

@@ -1,6 +1,14 @@
-# v0.8.1 Provider 兼容范围
+# 2026-07-20 v0.8.1 Provider 源码兼容范围
 
-本页描述 CSSwitch v0.8.1 对 OpenCode Go、Grok 与 Gemini 的产品合同。它是源码支持范围，不等同于某个公开 DMG 或真实账号已经验收；artifact 与 live provider 结果必须另行记录。
+状态：日期化历史 source-contract 证据
+
+适用范围：CSSwitch v0.8.1 对 OpenCode Go、Grok 与 Gemini 的源码支持范围。
+
+最后复核：2026-07-20（Asia/Shanghai）
+
+源码身份：tag `v0.8.1` peeled commit `c93c7e64d75703d38f08c385ed94460b5057831b`。
+
+本页不再作为当前 Feature Contract。当前 provider / transport 能力必须按现行 catalog、[Gateway 与 provider 路由](../../architecture/gateway-provider-routing.md)和[产品能力地图](../../features/product-science-capability-map.md)实时复核；artifact 与 live provider 结果另行记录。
 
 ## 连接合同
 
@@ -11,9 +19,9 @@
 | Grok | Grok（xAI） | `https://api.x.ai/v1` | OpenAI Chat Completions | Bearer API key |
 | Gemini | Gemini（OpenAI 兼容） | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI compatibility | Bearer API key |
 
-官方依据：[OpenCode Go](https://opencode.ai/docs/zh-cn/go/)、[xAI Inference API](https://docs.x.ai/developers/rest-api-reference/inference)、[Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai)。Gemini native API 不在 v0.8.1 范围内。
+当时的官方依据：[OpenCode Go](https://opencode.ai/docs/zh-cn/go/)、[xAI Inference API](https://docs.x.ai/developers/rest-api-reference/inference)、[Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai)。Gemini native API 不在 v0.8.1 范围内。
 
-OpenCode Go 的模型协议不是根据名称猜测，而是读取版本化的 [`catalog/opencode-go-model-routes.v1.json`](../../catalog/opencode-go-model-routes.v1.json)。该快照记录来源与更新时间，并与 `/v1/models` 的实时结果求交。已知模型必须使用对应模板；未知模型不会从探测结果自动启用，只有用户明确选择 transport 后才能手工加入。发送上游的始终是裸模型 ID，不含 `opencode-go/` 前缀。
+OpenCode Go 的模型协议不是根据名称猜测，而是读取版本化的 [`catalog/opencode-go-model-routes.v1.json`](../../../catalog/opencode-go-model-routes.v1.json)。该快照记录来源与更新时间，并与 `/v1/models` 的实时结果求交。已知模型必须使用对应模板；未知模型不会从探测结果自动启用，只有用户明确选择 transport 后才能手工加入。发送上游的始终是裸模型 ID，不含 `opencode-go/` 前缀。
 
 ## v0.8.1 支持矩阵
 
@@ -28,9 +36,9 @@ OpenCode Go 的模型协议不是根据名称猜测，而是读取版本化的 [
 | 原生流式 | limited | limited | limited |
 | 结构化输出 | limited | limited | limited |
 
-“支持”表示请求转换、路由、错误分类和隔离 mock/loopback 合同已建立；不表示每个上游账号、模型或区域都已 live 验收。探测失败不会修改正式配置，用户手填的模型也不会被 CSSwitch 静默替换。
+“支持”表示当时的请求转换、路由、错误分类和隔离 mock/loopback 合同已建立；不表示每个上游账号、模型或区域都已 live 验收。探测失败不会修改正式配置，用户手填的模型也不会被 CSSwitch 静默替换。
 
-## 错误与恢复边界
+## 当时的错误与恢复边界
 
 - 推理请求不自动重发；网络或协议失败由下一次用户请求显式恢复。
 - 上游 400、401、403、404、429 与 5xx 保留可区分的 HTTP 分类，错误正文有界且脱敏。
