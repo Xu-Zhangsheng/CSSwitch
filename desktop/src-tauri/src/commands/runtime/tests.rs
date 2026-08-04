@@ -7620,7 +7620,12 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
 
     let route_check =
         lifecycle.with_serialized(|| sandbox_session::force_third_party_reconcile(&handle, &state));
-    assert_eq!(route_check.as_deref(), Ok("Skill 路由已强制核验并同步。"));
+    let route_check = route_check.unwrap();
+    assert_eq!(
+        route_check.status,
+        sandbox_session::SkillRouteRepairStatus::Synchronized
+    );
+    assert_eq!(route_check.message, "Skill 路由已强制核验并同步。");
     assert_eq!(call_count(&science_call_log, "--version"), 3);
     assert_eq!(call_count(&science_call_log, "status"), 4);
     assert_eq!(call_count(&science_call_log, "url"), 8);

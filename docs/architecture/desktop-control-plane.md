@@ -136,12 +136,14 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
   成为新的 transaction owner。history choice 即使伴随 cleanup warning 也保持 attention；normal
   cleanup 只有 readback 确认 exact active binding 且 journal cleared 才可发布 ready；attention、
   manual 或回读失败一律清除 frontend 的 applied 展示并保持 selection pending。
-- `run_doctor` 先执行诊断脚本，再在 Lifecycle 边界强制 reconcile 第三方 Skill
-  route；它不是纯只读诊断。Science 健康运行时，该路径可绑定 route Skill 与
-  connector、清理旧 connector、解除 `customize` 并更新 managed prompt。Science
-  停止、身份未知、binary/version 变化或 bridge 身份不足时，也可能使 route marker
-  失效以安排下次重配；它不会仅为 doctor 启动 Science 或 Gateway。doctor 结果不等于
-  provider、Science、artifact、installed 或 live 验收。
+- Doctor 是两个独立 intent。`run_doctor_read_only` 只读 canonical v4 config、运行脱敏
+  `doctor.sh` 并投影 Codex 最近一次内存观察；旧 schema 只报错，不迁移、chmod、清 notice，
+  也不取得 mutation lease、修改 route 或为诊断启动 Science/Gateway。`repair_skill_route`
+  只在用户显式触发后取得 `HostBridge` mutation lease，强制 reconcile 第三方 Skill route；
+  它可失效 route marker，或在健康 Science 上通过一次性 control sidecar 同步 route Skill、
+  connector 与 managed prompt，但不会启动受管 Science 或正式 Gateway 服务。两个 command 各自返回 typed result；frontend
+  每个动作只提交一个 intent 并渲染 `status/message`，不串联或编排事务。Doctor/repair
+  结果都不等于 provider、Science、artifact、installed 或 live 验收。
 - 关闭窗口只隐藏；显式退出才按受管顺序停止 Science/Gateway。
 
 ## 条件入口

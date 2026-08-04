@@ -230,17 +230,17 @@ function startPortSaveFeedback(changed) {
 
 function startDoctorFeedback() {
   clearBusyMsgTimers();
-  setMsg("自检中：正在运行本地诊断脚本…");
-  scheduleBusyMsg(3500, { kind: "doctor" }, "自检仍在运行。它会检查本地依赖、端口、配置摘要和 CSSwitch 管理的 Skill 路由；不会读取真实 Science HOME，也不会传出、打印或展示完整 key。");
+  setMsg("只读自检中：正在运行本地诊断脚本…");
+  scheduleBusyMsg(3500, { kind: "doctorReadOnly" }, "只读自检仍在运行。它会检查本地依赖、端口和脱敏配置摘要；不会修复 Skill 路由、启动 Science 或 Gateway，也不会读取真实 Science HOME 或展示完整 key。");
 }
 
 function setBusy(on, op) {
   busy = on;
   busyOp = on ? (op || { kind: "global" }) : null;
-  const activationBusy = on && busyOp && busyOp.kind === "activate";
   if (!on) clearBusyMsgTimers();
   [
     els.oneClickBtn, els.stopBtn, els.importSkillBtn, els.newBtn,
+    els.doctorBtn, els.repairSkillRouteBtn,
     els.runtimeUseCacheBtn, els.runtimeDownloadBtn, els.runtimeChoiceCancelBtn,
     els.wizSaveBtn, els.wizFetchBtn, els.wizCancelBtn,
     els.connSaveBtn, els.connFetchBtn, els.connClearBtn, els.connCancelBtn,
@@ -255,7 +255,6 @@ function setBusy(on, op) {
   ].forEach((b) => b && (b.disabled = on));
   syncOpenBrowserControl();
   if (skillPage) skillPage.setGlobalBusy(on);
-  if (els.doctorBtn) els.doctorBtn.disabled = on && !activationBusy;
   // 模式切换按钮同样禁用：忙碌中切官方会与「一键开始」竞态（修 P1-b 前端侧）。
   if (els.modeSeg) els.modeSeg.querySelectorAll(".seg-btn").forEach((b) => (b.disabled = on));
   profileController.syncProfileBusyState();
@@ -385,7 +384,6 @@ runtimeController = createRuntimeController({
   getConfigState: () => configState,
   getSkillPage: () => skillPage,
   isBusy: () => busy,
-  getBusyOp: () => busyOp,
   isActivationInFlight: () => activationInFlight,
   getMode: () => mode,
   getOfficialRuntimeState: () => officialRuntimeState,
@@ -409,7 +407,7 @@ function wire() {
     "oneClickBtn", "stopBtn", "importSkillBtn", "refreshSkillsBtn", "ltProxy", "ltSandbox", "ltUpstream",
     "runtimeChoiceSec", "runtimeChoiceText", "runtimeUseCacheBtn", "runtimeDownloadBtn", "runtimeChoiceCancelBtn",
     "historyRecoverySec", "historyRecoveryText", "historyRecoveryChoices", "historyRecoveryCancelBtn",
-    "msg", "browserFallback", "browserFallbackUrl", "browserFallbackCopyBtn", "browserFallbackRetryBtn", "brandDot", "openBrowserBtn", "doctorBtn", "updateBtn", "verLabel",
+    "msg", "browserFallback", "browserFallbackUrl", "browserFallbackCopyBtn", "browserFallbackRetryBtn", "brandDot", "openBrowserBtn", "doctorBtn", "repairSkillRouteBtn", "updateBtn", "verLabel",
     "reportBtn", "logsBtn", "quitBtn", "modeSeg", "proxyPort", "sandboxPort", "reuseSystemSsh", "advSec",
     "codexEnabled", "codexAuthStatus", "codexStatusBtn", "codexLoginBtn", "codexCancelBtn", "codexLogoutBtn", "codexProfileRepairBox", "codexRepairProfileBtn",
     "codexNetworkMode", "codexProxyUrl", "codexNetworkResolved", "codexNetworkSaveBtn", "codexDowngradeBox", "codexDowngradeBtn",
@@ -525,7 +523,8 @@ function wire() {
       setMsg("无法自动写入剪贴板；已选中 URL，请手动复制。", "err");
     }
   });
-  els.doctorBtn.addEventListener("click", runtimeController.runDoctor);
+  els.doctorBtn.addEventListener("click", runtimeController.runDoctorReadOnly);
+  els.repairSkillRouteBtn.addEventListener("click", runtimeController.repairSkillRoute);
   els.updateBtn.addEventListener("click", runtimeController.checkUpdate);
   els.reportBtn.addEventListener("click", () =>
     call("report_bug").catch((e) => setMsg("打开反馈页失败：" + e, "err"))

@@ -91,7 +91,7 @@ EXPECTED_OPERATIONS = {
     "op.codex-catalog-mutation",
     "op.codex-logout",
     "op.codex-network",
-    "op.doctor-reconcile",
+    "op.skill-route-repair",
     "op.healthy-reopen",
     "op.history-restore",
     "op.install-local-skill",
@@ -141,7 +141,8 @@ EXPECTED_SURFACE_CONTRACT = {
     "quit_app": ("terminal-mutation", "op.quit-command"),
     "report_bug": ("external-side-effect", "none"),
     "restore_history_choice": ("runtime-mutation", "op.history-restore"),
-    "run_doctor": ("host-bridge-mutation", "op.doctor-reconcile"),
+    "repair_skill_route": ("host-bridge-mutation", "op.skill-route-repair"),
+    "run_doctor_read_only": ("read-only", "none"),
     "science_runtime_preflight": ("transient-probe", "none"),
     "set_active_profile": ("intent-mutation", "op.select-profile"),
     "set_codex_network": ("runtime-mutation", "op.codex-network"),
@@ -708,7 +709,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
 
         bad_anchor = {
             "path": "desktop/src-tauri/src/commands/diagnostics.rs",
-            "symbol": "run_doctor open_logs",
+            "symbol": "run_doctor_read_only open_logs",
         }
         self.assertFalse(source_anchor_resolves(bad_anchor))
 

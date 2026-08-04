@@ -26,10 +26,13 @@
         "test/model_catalog_state.test.mjs::scratch discovery enriches only explicitly selected models and never writes the full probe",
         "test/model_catalog_state.test.mjs::simple model projection preserves selectors and unbound legacy routes",
         "test/model_catalog_state.test.mjs::submission maps quality to opus and fable and rejects non-tool models",
-        "test/profile_preview_mock.test.mjs::preview clear and delete remove applied truth only for the applied profile",
-        "test/profile_preview_mock.test.mjs::preview pin preserves applied binding until one-click succeeds",
-        "test/profile_preview_mock.test.mjs::preview selected edits and preset sync become pending without changing applied",
-        "test/runtime_controller_history_restore.test.mjs::auto-boot non-ready publication clears stale applied presentation",
+    "test/profile_preview_mock.test.mjs::preview clear and delete remove applied truth only for the applied profile",
+    "test/profile_preview_mock.test.mjs::preview pin preserves applied binding until one-click succeeds",
+    "test/profile_preview_mock.test.mjs::preview selected edits and preset sync become pending without changing applied",
+    "test/runtime_controller_doctor.test.mjs::explicit Skill route repair invokes only repair_skill_route and renders typed attention",
+    "test/runtime_controller_doctor.test.mjs::read-only Doctor intent invokes only run_doctor_read_only and renders typed status",
+    "test/runtime_controller_doctor.test.mjs::status page names the read-only and mutating intents separately",
+    "test/runtime_controller_history_restore.test.mjs::auto-boot non-ready publication clears stale applied presentation",
         "test/runtime_controller_history_restore.test.mjs::failed history restore never invokes one_click_login",
         "test/runtime_controller_history_restore.test.mjs::history cleanup-required remains attention and never publishes the active profile",
         "test/runtime_controller_history_restore.test.mjs::manual one-click publishes applied only from a confirmed normal cleanup readback",
@@ -540,7 +543,7 @@
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile": {
           "boundary": "acceptance",
-          "reason": "source-gate parent runs the complete run_doctor command body in an isolated HOME"
+          "reason": "source-gate parent runs both split Doctor intent bodies in an isolated HOME"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent": {
           "boundary": "acceptance",
@@ -744,6 +747,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::status_consistency_rejects_hash_or_login_state_anomalies",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::structured_auth_errors_have_exact_reason_cause_and_retryability_contracts",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::terminal_ensure_races_repair_manual_create_logout_and_disable_without_deadlock",
+        "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::d0_doctor_read_only_rejects_legacy_without_migration_or_permission_change",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::doctor_config_rejects_reserved_port_instead_of_defaulting",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::r0_doctor_diagnostic_failure_skips_reconcile",

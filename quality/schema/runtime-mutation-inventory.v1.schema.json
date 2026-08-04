@@ -36,8 +36,8 @@
     },
     "registered_surface": {
       "type": "array",
-      "minItems": 43,
-      "maxItems": 43,
+      "minItems": 44,
+      "maxItems": 44,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/SurfaceEntry" }
     },

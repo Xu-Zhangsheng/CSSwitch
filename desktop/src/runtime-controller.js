@@ -6,7 +6,6 @@ export function createRuntimeController({
   getConfigState,
   getSkillPage,
   isBusy,
-  getBusyOp,
   isActivationInFlight,
   getMode,
   getOfficialRuntimeState,
@@ -25,7 +24,7 @@ export function createRuntimeController({
   proxyRecoveryMessage,
 }) {
   let browserOpenInFlight = false;
-  let doctorInFlight = false;
+  let doctorIntentInFlight = false;
   let runtimeChoiceActiveId = null;
 
 function hideRuntimeChoice() {
@@ -290,26 +289,43 @@ async function openBrowser() {
   }
 }
 
-async function runDoctor() {
-  const activationBusy = isActivationInFlight() || (isBusy() && getBusyOp() && getBusyOp().kind === "activate");
-  if (doctorInFlight || (isBusy() && !activationBusy)) return;
-  doctorInFlight = true;
-  if (els.doctorBtn) els.doctorBtn.disabled = true;
-  if (activationBusy) {
-    setMsg("自检中：配置后台应用仍在继续。完成后会核验 CSSwitch 管理的 Skill 路由。");
-  } else {
-    setBusy(true, { kind: "doctor" });
-    startDoctorFeedback();
+function renderDoctorIntentResult(result, expectedIntent) {
+  if (!result || result.schema_version !== 1 || result.intent !== expectedIntent || typeof result.status !== "string" || typeof result.message !== "string") {
+    throw new Error("后端返回了无法识别的 Doctor intent 结果");
   }
+  const completed = result.status === "passed" || result.status === "synchronized" || result.status === "not_required";
+  setMsg(result.message, completed ? "ok" : "err");
+}
+
+async function runDoctorReadOnly() {
+  if (doctorIntentInFlight || isBusy()) return;
+  doctorIntentInFlight = true;
+  setBusy(true, { kind: "doctorReadOnly" });
+  startDoctorFeedback();
   try {
-    const out = await call("run_doctor");
-    setMsg(out, out.includes("失败 0") ? "ok" : null);
+    const result = await call("run_doctor_read_only");
+    renderDoctorIntentResult(result, "read_only_diagnostics");
   } catch (e) {
-    setMsg("自检失败：" + e, "err");
+    setMsg("只读自检失败：" + e, "err");
   } finally {
-    doctorInFlight = false;
-    if (els.doctorBtn) els.doctorBtn.disabled = isBusy() && getBusyOp() && getBusyOp().kind !== "activate";
-    if (!activationBusy) setBusy(false);
+    doctorIntentInFlight = false;
+    setBusy(false);
+  }
+}
+
+async function repairSkillRoute() {
+  if (doctorIntentInFlight || isBusy()) return;
+  doctorIntentInFlight = true;
+  setBusy(true, { kind: "repairSkillRoute" });
+  setMsg("正在核验并修复 CSSwitch 管理的 Skill 路由…");
+  try {
+    const result = await call("repair_skill_route");
+    renderDoctorIntentResult(result, "repair_skill_route");
+  } catch (e) {
+    setMsg("Skill 路由修复失败：" + e, "err");
+  } finally {
+    doctorIntentInFlight = false;
+    setBusy(false);
   }
 }
 
@@ -372,7 +388,7 @@ async function refreshStatus() {
 
   return {
     isBrowserOpenInFlight: () => browserOpenInFlight,
-    isDoctorInFlight: () => doctorInFlight,
+    isDoctorInFlight: () => doctorIntentInFlight,
     hideRuntimeChoice,
     showRuntimeChoice,
     hideHistoryRecovery,
@@ -386,7 +402,8 @@ async function refreshStatus() {
     cancelRuntimeChoice,
     stopAll,
     openBrowser,
-    runDoctor,
+    runDoctorReadOnly,
+    repairSkillRoute,
     checkUpdate,
     refreshStatus,
   };

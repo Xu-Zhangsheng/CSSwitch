@@ -49,7 +49,9 @@ use pending_cleanup::{
 };
 #[cfg(test)]
 use recovery::OneClickAuthoritySnapshot;
-pub(crate) use route_reconcile::force_third_party_reconcile;
+pub(crate) use route_reconcile::{
+    force_third_party_reconcile, SkillRouteRepairOutcome, SkillRouteRepairStatus,
+};
 use ssh_preflight::*;
 
 #[cfg(test)]

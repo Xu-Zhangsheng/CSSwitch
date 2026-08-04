@@ -2197,7 +2197,7 @@ pub(crate) fn load_current_from_read_only(dir: &Path) -> io::Result<Config> {
     if !matches!(detect_version(&data)?, VersionKind::V4) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "finalize consumer readback requires canonical schema v4",
+            "read-only consumer requires canonical schema v4",
         ));
     }
     let cfg: Config = serde_json::from_slice(&data).map_err(|error| {

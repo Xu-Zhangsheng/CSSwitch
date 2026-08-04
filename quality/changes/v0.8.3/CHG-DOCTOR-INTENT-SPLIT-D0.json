@@ -1,0 +1,93 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-DOCTOR-INTENT-SPLIT-D0",
+    "version": "v0.8.3",
+    "title": "Split read-only Doctor diagnostics from explicit Skill route repair",
+    "summary": "Replaces the combined string-returning Doctor action with one canonical-config read-only diagnostic intent and one explicit HostBridge Skill route repair intent, each returning a typed result that the frontend renders without transaction chaining or message parsing.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/commands/diagnostics.rs",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "desktop/src-tauri/src/config.rs",
+      "desktop/src-tauri/src/lib.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs",
+      "desktop/src/index.html",
+      "desktop/src/main.js",
+      "desktop/src/preview-adapter.js",
+      "desktop/src/runtime-controller.js",
+      "docs/README.md",
+      "docs/architecture/desktop-control-plane.md",
+      "docs/audits/2026-08-04-d0-doctor-intent-split.md",
+      "docs/features/ui-information-architecture.md",
+      "quality/changes/v0.8.3/CHG-DOCTOR-INTENT-SPLIT-D0.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "quality/schema/runtime-mutation-inventory.v1.schema.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_source_gate_runtime.py",
+      "test/run-frontend.sh",
+      "test/runtime_controller_doctor.test.mjs",
+      "test/test_runtime_mutation_inventory.py",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-MJS-FRONTEND",
+        "SUITE-SHELL-SCRIPTS",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-ORPHAN-SKILL-BOUNDARY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "run_doctor_read_only uses the canonical-v4 read-only loader, rejects legacy schema instead of migrating it, and does not acquire a runtime mutation lease",
+        "the read-only command runs only the existing redacted doctor shell and in-memory Codex diagnostic projection; it never invokes Skill route reconcile or starts Science/Gateway",
+        "repair_skill_route is a separate explicit Tauri command and the sole Doctor-area owner of the HostBridge mutation lease and force_third_party_reconcile",
+        "repair returns synchronized, deferred, restart-required, not-required, or warning as typed status while preserving the existing no-implicit-Science/Gateway-start boundary",
+        "the frontend maps each button to exactly one command and renders schema_version, intent, status, and message without chaining IPC or parsing diagnostic prose",
+        "focused Rust, Node, shell, metadata, inventory, boundary, document-governance, exact-SHA source gate, and clean-context review are required for source closure",
+        "artifact, installed, live provider/Science/SSH, signing, notarization, public release, Q0, O1-A, F1, and Post-D0 route selection remain excluded"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

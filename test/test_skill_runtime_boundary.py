@@ -220,7 +220,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         system = (ROOT / "desktop/src-tauri/src/runtime/system.rs").read_text()
 
         handler = js.split("async function openBrowser()", 1)[1].split(
-            "async function runDoctor", 1
+            "function renderDoctorIntentResult", 1
         )[0]
         self.assertIn("if (isBusy() || browserOpenInFlight) return", handler)
         self.assertIn("browserOpenInFlight = true", handler)

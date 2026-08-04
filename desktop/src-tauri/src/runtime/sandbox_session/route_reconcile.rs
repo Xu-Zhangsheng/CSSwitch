@@ -1,4 +1,5 @@
 //! Third-party Skill/route reconcile after Science is running.
+use serde::Serialize;
 use tauri::Runtime;
 
 use crate::runtime::proxy_lifecycle::{current_skill_install_bridge_key, skill_install_bridge_dir};
@@ -12,6 +13,31 @@ use crate::runtime::skill_install_bridge::{
     route_configuration_is_current, RegistrationStatus,
 };
 use crate::{config, lock, SharedAppState};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SkillRouteRepairStatus {
+    Synchronized,
+    Deferred,
+    RestartRequired,
+    NotRequired,
+    Warning,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct SkillRouteRepairOutcome {
+    pub(crate) status: SkillRouteRepairStatus,
+    pub(crate) message: String,
+}
+
+impl SkillRouteRepairOutcome {
+    fn new(status: SkillRouteRepairStatus, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
 
 pub(super) fn configure_third_party_best_effort<R: Runtime>(
     app: &tauri::AppHandle<R>,
@@ -170,7 +196,7 @@ mod tests {
 pub(crate) fn force_third_party_reconcile<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
-) -> Result<String, String> {
+) -> Result<SkillRouteRepairOutcome, String> {
     let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
     let data_dir = sandbox_data_dir();
     let (remembered_runtime, version_cache) = {
@@ -182,9 +208,10 @@ pub(crate) fn force_third_party_reconcile<R: Runtime>(
         Some(mut runtime) => {
             if !runtime_identity_is_current(&runtime) {
                 invalidate_route_configuration(&data_dir)?;
-                return Ok(
-                    "Science 二进制文件已变化；已安排下次停止并启动后重新选择 runtime。".into(),
-                );
+                return Ok(SkillRouteRepairOutcome::new(
+                    SkillRouteRepairStatus::Deferred,
+                    "Science 二进制文件已变化；已安排下次停止并启动后重新选择 runtime。",
+                ));
             }
             let previous_version = runtime.version.clone();
             let refreshed = version_cache
@@ -195,9 +222,10 @@ pub(crate) fn force_third_party_reconcile<R: Runtime>(
                 .is_some_and(|version| version != refreshed)
             {
                 invalidate_route_configuration(&data_dir)?;
-                return Ok(
-                    "Science 二进制版本已变化；已安排下次停止并启动后重新配置 Skill 路由。".into(),
-                );
+                return Ok(SkillRouteRepairOutcome::new(
+                    SkillRouteRepairStatus::Deferred,
+                    "Science 二进制版本已变化；已安排下次停止并启动后重新配置 Skill 路由。",
+                ));
             }
             runtime.version = Some(refreshed);
             let science_state = ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime);
@@ -211,31 +239,44 @@ pub(crate) fn force_third_party_reconcile<R: Runtime>(
     };
 
     if cfg.mode == "official" {
-        return Ok("官方模式无需核验 CSSwitch 第三方 Skill 路由。".into());
+        return Ok(SkillRouteRepairOutcome::new(
+            SkillRouteRepairStatus::NotRequired,
+            "官方模式无需核验 CSSwitch 第三方 Skill 路由。",
+        ));
     }
     match science_state {
         SandboxScienceState::Stopped => {
             invalidate_route_configuration(&data_dir)?;
-            Ok("Science 未运行；已安排下次一键开始重新核验 Skill 路由。".into())
+            Ok(SkillRouteRepairOutcome::new(
+                SkillRouteRepairStatus::Deferred,
+                "Science 未运行；已安排下次一键开始重新核验 Skill 路由。",
+            ))
         }
         SandboxScienceState::Unknown => {
             invalidate_route_configuration(&data_dir)?;
-            Err("无法确认 Science 实例身份；已使路由标记失效，未执行修复".into())
+            Ok(SkillRouteRepairOutcome::new(
+                SkillRouteRepairStatus::Warning,
+                "无法确认 Science 实例身份；已使路由标记失效，未执行修复",
+            ))
         }
         SandboxScienceState::RunningHealthy => {
             let runtime = running_runtime.ok_or("Science 运行身份缺失")?;
             let secret = { lock(state).secret.clone() };
             if secret.is_empty() {
                 invalidate_route_configuration(&data_dir)?;
-                return Ok("当前代理身份不可用；已安排下次一键开始重新核验 Skill 路由。".into());
+                return Ok(SkillRouteRepairOutcome::new(
+                    SkillRouteRepairStatus::Deferred,
+                    "当前代理身份不可用；已安排下次一键开始重新核验 Skill 路由。",
+                ));
             }
             let bridge_dir = skill_install_bridge_dir(&secret)?;
             let bridge_key = match current_skill_install_bridge_key() {
                 Ok(path) => path,
                 Err(error) => {
                     invalidate_route_configuration(&data_dir)?;
-                    return Ok(format!(
-                        "Skill bridge 尚未就绪；已安排下次一键开始重新核验：{error}"
+                    return Ok(SkillRouteRepairOutcome::new(
+                        SkillRouteRepairStatus::Deferred,
+                        format!("Skill bridge 尚未就绪；已安排下次一键开始重新核验：{error}"),
                     ));
                 }
             };
@@ -255,14 +296,19 @@ pub(crate) fn force_third_party_reconcile<R: Runtime>(
             }
             match status {
                 RegistrationStatus::AlreadyRegistered | RegistrationStatus::Registered => {
-                    Ok("Skill 路由已强制核验并同步。".into())
+                    Ok(SkillRouteRepairOutcome::new(
+                        SkillRouteRepairStatus::Synchronized,
+                        "Skill 路由已强制核验并同步。",
+                    ))
                 }
-                RegistrationStatus::RestartRequired => {
-                    Ok("Skill 路由文件需要重启 Science 后加载；状态标记已失效。".into())
-                }
-                RegistrationStatus::Warning(message) => {
-                    Ok(format!("Skill 路由核验未完成：{message}"))
-                }
+                RegistrationStatus::RestartRequired => Ok(SkillRouteRepairOutcome::new(
+                    SkillRouteRepairStatus::RestartRequired,
+                    "Skill 路由文件需要重启 Science 后加载；状态标记已失效。",
+                )),
+                RegistrationStatus::Warning(message) => Ok(SkillRouteRepairOutcome::new(
+                    SkillRouteRepairStatus::Warning,
+                    format!("Skill 路由核验未完成：{message}"),
+                )),
             }
         }
     }

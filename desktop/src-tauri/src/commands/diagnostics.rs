@@ -1,40 +1,82 @@
 use std::process::Command;
 
+use serde::Serialize;
+
 use crate::lifecycle::RuntimeMutationDomain;
 use crate::provider_contracts::AuthMode;
 use crate::runtime::provider::adapter_for_profile;
+use crate::runtime::sandbox_session::{SkillRouteRepairOutcome, SkillRouteRepairStatus};
 use crate::runtime::system::{asset_root, open_in_browser};
 use crate::{config, run_blocking, SharedAppState, SharedLifecycle};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DoctorIntent {
+    ReadOnlyDiagnostics,
+    RepairSkillRoute,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReadOnlyDoctorStatus {
+    Passed,
+    IssuesFound,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ReadOnlyDoctorResult {
+    schema_version: u8,
+    intent: DoctorIntent,
+    status: ReadOnlyDoctorStatus,
+    message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct SkillRouteRepairResult {
+    schema_version: u8,
+    intent: DoctorIntent,
+    status: SkillRouteRepairStatus,
+    message: String,
+}
+
 #[tauri::command]
-pub(crate) async fn run_doctor(
+pub(crate) async fn run_doctor_read_only(
+    app: tauri::AppHandle,
+) -> Result<ReadOnlyDoctorResult, String> {
+    run_blocking(move || run_doctor_read_only_cmd(&app)).await
+}
+
+#[tauri::command]
+pub(crate) async fn repair_skill_route(
     app: tauri::AppHandle,
     state: tauri::State<'_, SharedAppState>,
     lifecycle: tauri::State<'_, SharedLifecycle>,
-) -> Result<String, String> {
+) -> Result<SkillRouteRepairResult, String> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
-    run_blocking(move || run_doctor_cmd(&app, &state, &lifecycle)).await
+    run_blocking(move || repair_skill_route_cmd(&app, &state, &lifecycle)).await
 }
 
-fn run_doctor_cmd<R: tauri::Runtime>(
+fn repair_skill_route_cmd<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
     lifecycle: &SharedLifecycle,
-) -> Result<String, String> {
-    let mut output = run_doctor_inner_cmd(app)?;
-    let route = lifecycle.with_mutation(RuntimeMutationDomain::HostBridge, |_| {
-        crate::runtime::sandbox_session::force_third_party_reconcile(app, state)
-    });
-    output.push_str("\n[Skill 路由] ");
-    match route {
-        Ok(message) => output.push_str(&message),
-        Err(error) => output.push_str(&format!("核验失败：{error}")),
-    }
-    Ok(output)
+) -> Result<SkillRouteRepairResult, String> {
+    let SkillRouteRepairOutcome { status, message } = lifecycle
+        .with_mutation(RuntimeMutationDomain::HostBridge, |_| {
+            crate::runtime::sandbox_session::force_third_party_reconcile(app, state)
+        })?;
+    Ok(SkillRouteRepairResult {
+        schema_version: 1,
+        intent: DoctorIntent::RepairSkillRoute,
+        status,
+        message,
+    })
 }
 
-fn run_doctor_inner_cmd<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<String, String> {
+fn run_doctor_read_only_cmd<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<ReadOnlyDoctorResult, String> {
     let root = asset_root(app).ok_or("找不到 scripts/doctor.sh（打包资源或仓库根均未命中）。")?;
     let cfg = doctor_config_from(&config::default_dir())?;
     let doctor = root.join("scripts/doctor.sh");
@@ -116,11 +158,21 @@ fn run_doctor_inner_cmd<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<
             text.push('\n');
         }
     }
-    Ok(text)
+    Ok(ReadOnlyDoctorResult {
+        schema_version: 1,
+        intent: DoctorIntent::ReadOnlyDiagnostics,
+        status: if out.status.success() {
+            ReadOnlyDoctorStatus::Passed
+        } else {
+            ReadOnlyDoctorStatus::IssuesFound
+        },
+        message: text,
+    })
 }
 
 fn doctor_config_from(dir: &std::path::Path) -> Result<config::Config, String> {
-    config::load_from(dir).map_err(|e| format!("读取配置失败，无法运行自检：{e}"))
+    config::load_current_from_read_only(dir)
+        .map_err(|e| format!("只读配置检查失败，无法运行自检：{e}"))
 }
 
 /// 当前 app 版本（供前端「检查更新」与页脚版本号用）。
@@ -155,7 +207,7 @@ pub(crate) fn open_logs() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::doctor_config_from;
+    use super::{doctor_config_from, DoctorIntent, ReadOnlyDoctorStatus, SkillRouteRepairStatus};
     use crate::runtime::skill_install_bridge::{
         mark_route_configuration_current, route_configuration_is_current,
     };
@@ -179,15 +231,42 @@ mod tests {
     fn doctor_config_rejects_reserved_port_instead_of_defaulting() {
         let dir = tmpdir("reserved-port");
         fs::create_dir_all(&dir).unwrap();
+        let cfg = crate::config::Config {
+            proxy_port: 8765,
+            ..Default::default()
+        };
         fs::write(
             dir.join("config.json"),
-            br#"{"schema_version":2,"profiles":[],"active_id":"","proxy_port":8765,"sandbox_port":8990}"#,
+            serde_json::to_vec_pretty(&cfg).unwrap(),
         )
         .unwrap();
 
         let err = doctor_config_from(&dir).unwrap_err();
-        assert!(err.contains("读取配置失败"));
+        assert!(err.contains("只读配置检查失败"));
         assert!(err.contains("8765"));
+    }
+
+    #[test]
+    fn d0_doctor_read_only_rejects_legacy_without_migration_or_permission_change() {
+        let dir = tmpdir("legacy-read-only");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let legacy = br#"{"schema_version":2,"profiles":[],"active_id":"","proxy_port":18991,"sandbox_port":8990}"#;
+        fs::write(&path, legacy).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let before_mode = fs::metadata(&path).unwrap().permissions().mode();
+
+        let err = doctor_config_from(&dir).unwrap_err();
+        assert!(err.contains("read-only consumer requires canonical schema v4"));
+        assert_eq!(fs::read(&path).unwrap(), legacy);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode(),
+            before_mode
+        );
+        assert!(!dir.join("config.json.v2.bak").exists());
+        assert!(!dir.join("config.json.v3.bak").exists());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -215,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "source-gate parent runs the complete run_doctor command body in an isolated HOME"]
+    #[ignore = "source-gate parent runs both split Doctor intent bodies in an isolated HOME"]
     fn isolated_r0_doctor_diagnostic_failure_skips_reconcile() {
         let root = tmpdir("r0-command-sequence");
         fs::create_dir_all(&root).unwrap();
@@ -248,9 +327,11 @@ mod tests {
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
 
-        let first = super::run_doctor_cmd(app.handle(), &state, &lifecycle).unwrap_err();
-        assert!(first.contains("读取配置失败"));
+        let first = super::run_doctor_read_only_cmd(app.handle()).unwrap_err();
+        assert!(first.contains("只读配置检查失败"));
         assert!(route_configuration_is_current(&data_dir, "science-v1").unwrap());
+        assert!(config_dir.join("config.json").is_file());
+        assert!(!config_dir.join("config.json.v2.bak").exists());
 
         let cfg = crate::config::Config {
             proxy_port: 18_992,
@@ -258,8 +339,25 @@ mod tests {
             ..Default::default()
         };
         crate::config::save_to(&config_dir, &cfg).unwrap();
-        let second = super::run_doctor_cmd(app.handle(), &state, &lifecycle).unwrap();
-        assert!(second.contains("doctor-ok"));
+        let second = super::run_doctor_read_only_cmd(app.handle()).unwrap();
+        assert_eq!(second.intent, DoctorIntent::ReadOnlyDiagnostics);
+        assert_eq!(second.status, ReadOnlyDoctorStatus::Passed);
+        assert!(second.message.contains("doctor-ok"));
+        assert_eq!(
+            serde_json::to_value(&second).unwrap()["intent"],
+            "read_only_diagnostics"
+        );
+        assert_eq!(serde_json::to_value(&second).unwrap()["status"], "passed");
+        assert!(route_configuration_is_current(&data_dir, "science-v1").unwrap());
+
+        let repair = super::repair_skill_route_cmd(app.handle(), &state, &lifecycle).unwrap();
+        assert_eq!(repair.intent, DoctorIntent::RepairSkillRoute);
+        assert_eq!(repair.status, SkillRouteRepairStatus::Deferred);
+        assert_eq!(
+            serde_json::to_value(&repair).unwrap()["intent"],
+            "repair_skill_route"
+        );
+        assert_eq!(serde_json::to_value(&repair).unwrap()["status"], "deferred");
         assert!(!route_configuration_is_current(&data_dir, "science-v1").unwrap());
 
         drop(app);

@@ -360,8 +360,10 @@ export function mockInvoke(cmd, args) {
       return Promise.resolve(null);
     case "app_version":
       return Promise.resolve("0.0.0-preview");
-    case "run_doctor":
-      return Promise.resolve("（预览模式：后端未运行，这里是占位文本）");
+    case "run_doctor_read_only":
+      return Promise.resolve({ schema_version: 1, intent: "read_only_diagnostics", status: "passed", message: "（预览模式：只读诊断占位结果）" });
+    case "repair_skill_route":
+      return Promise.resolve({ schema_version: 1, intent: "repair_skill_route", status: "synchronized", message: "（预览模式：Skill 路由修复占位结果）" });
     default:
       return Promise.resolve(null);
   }
