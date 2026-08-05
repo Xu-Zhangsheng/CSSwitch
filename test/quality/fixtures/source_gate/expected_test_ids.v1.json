@@ -711,6 +711,7 @@
         "config::tests::config_writer_fence_rejects_hardlink_without_touching_target",
         "config::tests::config_writer_fence_rejects_replacement_while_waiting",
         "config::tests::config_writer_fence_rejects_symlink_without_touching_target",
+        "config::tests::downgrade_rejects_every_history_phase_before_export_backup_or_config_write",
         "config::tests::read_only_current_config_does_not_create_writer_fence",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::exit_after_preflight_child_exit_rejects_ready_proof_promotion",
         "desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::exit_before_pid_registration_closes_the_spawn_race",

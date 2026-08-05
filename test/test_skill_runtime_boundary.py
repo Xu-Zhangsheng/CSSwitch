@@ -486,6 +486,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         science_host = (
             ROOT / "desktop/src-tauri/src/runtime/science/host_adapter.rs"
         ).read_text()
+        history_recovery = (
+            ROOT
+            / "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs"
+        ).read_text()
         launch_env = (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text()
         runtime = runtime_command_source()
         one_click = sandbox_session_one_click_source().split(
@@ -529,13 +533,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ScienceStopOwnershipReceipt::from_managed_launch", session)
         self.assertIn("require_exact_stop_of", science_contracts)
         self.assertGreaterEqual(session.count("require_exact_stop_of"), 5)
-        self.assertGreaterEqual(runtime.count("require_exact_stop_of"), 1)
+        self.assertGreaterEqual(history_recovery.count("require_exact_stop_of"), 1)
         self.assertIn("verified.confirmed_runtime().cloned()", session)
         force_restart = session.split(
             "pub(crate) fn force_restart_science_for_active", 1
         )[1].split("fn typed_one_click_err", 1)[0]
-        history_restore = runtime_command_module("one_click").split(
-            "pub(super) async fn restore_history_choice_command", 1
+        history_restore = history_recovery.split(
+            "pub(crate) fn restore_history_choice_entry", 1
         )[1]
         for recovery_caller in (force_restart, history_restore):
             self.assertIn("ScienceStopRequest::exact", recovery_caller)
@@ -548,9 +552,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("NoManagedRuntimeObserved", history_restore)
         self.assertIn("science_quiescence.clone()", history_restore)
         self.assertIn("ScienceHostAdapter::probe_cached", history_restore)
-        self.assertIn("current_science_state != SandboxScienceState::Stopped", history_restore)
+        self.assertIn("observed != SandboxScienceState::Stopped", history_restore)
+        self.assertIn("observed_runtime.is_some()", history_restore)
         self.assertIn(
-            "session.science_quiescence =\n                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime)",
+            "session.science_quiescence =\n                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime.clone())",
             history_restore,
         )
         self.assertIn("remembered_runtime_was_present", session)
