@@ -12,7 +12,7 @@
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
-| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
+| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | `science-managed-launch.v1.json` + live listener identity | 持久 receipt 与 live 组合 |
 | virtual login | Science credential files + CSSwitch `virtual-org.v1.json` marker | 分属 Science/CSSwitch |
@@ -33,6 +33,7 @@
 | typed entry decision、protected projection、journal recovery、route reconcile、SSH preflight 与一键事务 | `runtime/sandbox_session/` |
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
 | one-click authority capture、verified ticket、restore 与 cleanup 接口 | `runtime/sandbox_session/authority_transaction.rs` |
+| history exact stop、snapshot、credential publication、finalize 与 resume handoff | `runtime/sandbox_session/history_recovery.rs` |
 | healthy daemon reopen 的独立补偿分支 | `runtime/sandbox_session/one_click/healthy_reopen.rs` |
 | Gateway recovery/reuse/spawn/stop 与 typed acceptance receipt | `runtime/proxy_lifecycle.rs` façade及其 `proxy_lifecycle/controller.rs`、其他片段 |
 | Science executable、runtime identity、launch/health、managed receipt 与 stop | `runtime/science.rs` façade及其 `science/host_adapter.rs`、其他 `science/` 片段 |
@@ -223,7 +224,11 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 V1 reader 只接受十种已冻结 wire stage（八种 plain stage 与两种携带合法 64-hex
 fingerprint 的 environment stage），save/load 不会隐式升级或改写 wire。未知、缺失
 fingerprint、future nested schema、未知字段和重复字段均在 config load 时 fail-closed。
-当前生产可写 V2 的重启矩阵限于八个 one-click phases、test-only profile-switch
+`runtime_fingerprint` 的语义由 operation 拥有：one-click 绑定 candidate runtime，history recovery
+绑定去除 journal 后的完整 Config authority；history phase 缺少该 64-hex identity 同样 fail-closed。
+当前生产可写 V2 的重启矩阵包括八个 one-click phases、history recovery 的
+`stop_old_science / authority_snapshot_active / history_credential_write_pending /
+history_credential_published / resume_after_history_restore`、test-only profile-switch
 `start_formal_gateway`，以及 interrupted-Gateway recovery 的
 `pending|stopped|not_managed|signal_failed|exit_unconfirmed|absent_after_attempt`；其它组合
 不得由 reader 推断为可恢复语义。
@@ -250,18 +255,48 @@ later-listener 不会被二次探测或停止；任一漂移都保留原 journal
 
 ## 历史恢复
 
-frontend 只持有一次性 opaque reference。backend 复核 active profile、port、session 后：
+frontend 只持有一次性 opaque reference，并为每份历史提供“仅恢复”和显式“恢复并启动”两个 intent。
+两者都只调用一次 `restore_history_choice`；backend 复核 active profile、port、session 与可选 resume
+auth preflight 后：
 
-1. 精确停止当前受管 Science；
-2. 恢复用户选择的历史组织；
-3. 清理一次性 reference；
-4. 返回本次 restore 的结果；frontend 保持 stopped，并要求用户再次显式点击「一键开始」。
+1. 冻结去除 journal 后的完整 Config authority fingerprint，并以
+   `HistoryRecovery / StopOldScience` complete record 持久化该 identity 与 stop intent/outcome，再精确停止当前
+   受管 Science；没有当前 runtime 时必须保有 typed quiescence proof；
+2. 捕获 protected authority snapshot，取得 verified ticket，并以完整原记录 CAS 发布
+   `AuthoritySnapshotActive`；私有恢复清单完成 fsync 后，再以完整原记录 CAS 发布
+   `HistoryCredentialWritePending`，此后才允许写凭证；每个 credential / marker 文件都必须完成
+   file fsync、atomic rename 与 parent-directory fsync，调用方才可继续发布 credential commit；
+3. 每次 history checkpoint、credential commit、finalize 和 terminal resume handoff 消费都同时要求
+   当前完整 Config authority fingerprint 未变化；mode、port、SSH setting、profile 或其它 sibling writer
+   漂移时保留现状与 exact journal，绝不继续 resume。恢复用户选择的历史组织后，再以一次完整原记录 CAS 同时发布 `HistoryCredentialPublished` 与
+   `ClearJournal` / `ResumeOneClick` finalize intent；同进程失败只有在**完整 Config**仍与预期相等
+   时才回写 before-image，避免覆盖并发 writer；重启看到 write-pending 时按 exact ticket、清单与
+   backup inode 重放 credential/marker before-image；重放任何 effect 前必须先复核冻结的完整 Config
+   authority fingerprint；只要 HistoryRecovery journal 打开，central config writer fence 就拒绝所有
+   journal-external sibling Config 写入，downgrade preview/commit 也必须在 export、backup 与 v2 publication
+   前拒绝 open transaction，关闭校验到 effect 之间的跨进程 writer 窗口。随后必须用事务开始时
+   仍被 fingerprint 证明的 port 重新探测当前 Science typed quiescence，最终清 journal 也要求同一
+   fingerprint 与 exact record CAS，
+   已持久化的 pending 会在 one-click provider auth preflight 前收敛；若 journal 与 lock-free auth
+   preflight 竞态出现，则必须在认证失败返回前或业务 entry 前于 destructive lease 内收敛，认证不可用
+   不能把 before-image 留在认证之后；
+   随后再转 cleanup-only、清 journal；
+4. credential publication 与 finalize intent durable commit 成功后才轮换全部一次性 reference；
+   cleanup/finalize 失败时以 degraded DTO 的 `history_recovery.choices` 返回当前轮换后的 reference，
+   不返回私有 snapshot 路径，并保留 exact snapshot/journal；
+   cleanup 已转为 cleanup-only 后，restore-only
+   清 journal 并返回 stopped，resume 则发布无 snapshot ticket 的 terminal handoff；
+5. 只有 exact terminal handoff 可由同一 backend operation 消费并重新进入既有 one-click owner。
+   frontend 对 restore-only 和 resume 都通过 `finalize_consumer_state` 的只读回读决定展示；restore-only
+   只有 `ok + attention` 才可显示“已恢复并保持停止”，degraded/manual 或回读失败均不得误报成功。
 
 组织 UUID、真实路径与敏感凭证不跨 invoke 边界。
 
-restore 与用户随后可选的显式 one-click 各自取得 destructive lease，且没有覆盖两次 operation 的共同
-durable journal。frontend 不自动串联两者；它们也不能被解释成一个原子事务，或与 cold start、
-recovery 合并成万能事务。
+默认 restore-only 仍安全结束在 stopped；用户以后单独点击一键开始仍是另一个 destructive
+operation。显式 restore-and-resume 则在同一 destructive lease / backend IPC 内，以 typed terminal
+handoff 衔接既有 one-click transaction。history credential 一旦完成 durable commit，后续 one-click
+失败不会回滚用户已选择的历史；它沿既有 one-click 补偿与 readback 合同停在可检查状态。这不是把
+history、cold start 与 recovery 合并成万能事务。
 
 ## 停止
 
@@ -288,9 +323,10 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 ## 当前架构缺口
 
 - V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
-- canonical config writer 已有跨进程 advisory fence；但直接 full-snapshot restore 仍未统一成
-  typed commit outcome + expected-record CAS，跨 config / history / authority 的 multi-file crash
-  boundary 也仍未形成共同 durable transaction；
-- history restore 与用户随后可选的显式一键开始仍是两个 destructive operation，没有共同 durable journal；
+- canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
+  protected snapshot 与 cleanup/finalize 收敛 credential publication。其他直接 full-snapshot restore
+  与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；
+- history restore durable commit 之后的 one-click 失败不会回滚用户已选择的历史；默认 restore-only
+  与以后单独点击的一键开始仍是两个 operation，只有显式 restore-and-resume 使用同一 backend handoff；
 - `stop_all` 已锁外等待，但 mode/settings/native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
 - MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。

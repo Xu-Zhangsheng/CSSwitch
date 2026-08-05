@@ -1,4 +1,38 @@
 use super::*;
+use crate::runtime::failure::ProjectedRecovery;
+
+fn project_history_replay_failure(error: String) -> serde_json::Value {
+    project_one_click_failure(
+        TypedOneClickFailure::new(
+            OneClickFailureKind::AuthoritySnapshot,
+            format!("检测到未完成的 history recovery，安全重放失败并已保留事务：{error}"),
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED),
+    )
+}
+
+fn replay_history_before_auth_if_required(
+    state: &SharedAppState,
+    lifecycle: &SharedLifecycle,
+) -> Result<bool, String> {
+    if !crate::runtime::sandbox_session::interrupted_history_recovery_requires_pre_auth_replay()? {
+        return Ok(false);
+    }
+    lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+        crate::runtime::sandbox_session::replay_interrupted_history_recovery_before_auth(state)
+    })
+}
+
+fn replay_history_before_auth_error_return(
+    state: &SharedAppState,
+    lifecycle: &SharedLifecycle,
+) -> Result<(), String> {
+    lifecycle
+        .with_mutation(RuntimeMutationDomain::Destructive, |_| {
+            crate::runtime::sandbox_session::replay_interrupted_history_recovery_before_auth(state)
+        })
+        .map(|_| ())
+}
 
 pub(super) async fn one_click_login_command<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -17,9 +51,26 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     lifecycle: SharedLifecycle,
     runtime_choice: Option<String>,
 ) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    let entry = match crate::runtime::sandbox_session::OneClickEntryPreflight::capture(&state) {
-        Ok(entry) => entry,
-        Err(failure) => return Ok(project_one_click_failure(failure)),
+    // History credential replay is local authority recovery. It must converge
+    // before provider-auth preflight so unavailable Codex auth cannot strand a
+    // recoverable credential before-image behind an open journal.
+    let entry = loop {
+        match replay_history_before_auth_if_required(&state, &lifecycle) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => return Ok(project_history_replay_failure(error)),
+        }
+        let entry = match crate::runtime::sandbox_session::OneClickEntryPreflight::capture(&state) {
+            Ok(entry) => entry,
+            Err(failure) => return Ok(project_one_click_failure(failure)),
+        };
+        #[cfg(test)]
+        apply_pre_auth_history_race_record()?;
+        match replay_history_before_auth_if_required(&state, &lifecycle) {
+            Ok(true) => continue,
+            Ok(false) => break entry,
+            Err(error) => return Ok(project_history_replay_failure(error)),
+        }
     };
     let prepared = match crate::commands::codex::prepare_provider_auth(
         &app,
@@ -28,12 +79,20 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     ) {
         Ok(prepared) => prepared,
         Err(crate::commands::codex::RuntimeCommandError::Message(message)) => {
+            if let Err(error) = replay_history_before_auth_error_return(&state, &lifecycle) {
+                return Ok(project_history_replay_failure(error));
+            }
             return Ok(project_one_click_failure(TypedOneClickFailure::new(
                 OneClickFailureKind::AuthPreflight,
                 message,
-            )))
+            )));
         }
-        Err(auth @ crate::commands::codex::RuntimeCommandError::Auth(_)) => return Err(auth),
+        Err(auth @ crate::commands::codex::RuntimeCommandError::Auth(_)) => {
+            if let Err(error) = replay_history_before_auth_error_return(&state, &lifecycle) {
+                return Ok(project_history_replay_failure(error));
+            }
+            return Err(auth);
+        }
     };
     match lifecycle.with_mutation(
         RuntimeMutationDomain::Destructive,
@@ -58,207 +117,116 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     }
 }
 
+#[cfg(test)]
+static PRE_AUTH_HISTORY_RACE_RECORD: std::sync::Mutex<Option<config::RuntimeTransactionRecord>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(super) struct PreAuthHistoryRaceGuard;
+
+#[cfg(test)]
+impl Drop for PreAuthHistoryRaceGuard {
+    fn drop(&mut self) {
+        *PRE_AUTH_HISTORY_RACE_RECORD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(super) fn test_arm_pre_auth_history_race(
+    record: config::RuntimeTransactionRecord,
+) -> PreAuthHistoryRaceGuard {
+    *PRE_AUTH_HISTORY_RACE_RECORD
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(record);
+    PreAuthHistoryRaceGuard
+}
+
+#[cfg(test)]
+fn apply_pre_auth_history_race_record() -> Result<(), crate::commands::codex::RuntimeCommandError> {
+    let record = PRE_AUTH_HISTORY_RACE_RECORD
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    let Some(record) = record else {
+        return Ok(());
+    };
+    config::update(&config::default_dir(), |current| {
+        current.runtime_transaction = Some(record);
+    })
+    .map(|_| ())
+    .map_err(|error| crate::commands::codex::RuntimeCommandError::Message(error.to_string()))
+}
+
 pub(super) async fn restore_history_choice_command<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     reference: String,
-) -> Result<serde_json::Value, String> {
+    resume: Option<bool>,
+) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
-    run_blocking(move || {
-        lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
-            let cfg = config::load_from(&config::default_dir()).map_err(|e| e.to_string())?;
-            if cfg.mode != "proxy" {
-                return Err("当前已不是第三方模型模式，本次历史恢复选择已作废".into());
-            }
-            if cfg.runtime_transaction.is_some() {
-                return Err("当前有新的运行事务尚未完成，已拒绝覆盖其历史身份".into());
-            }
-            let active_profile_id = cfg
-                .active_profile()
-                .map(|profile| profile.id.clone())
-                .ok_or("当前选择已变化，本次历史恢复选择已作废")?;
-            let (auth_dir, sandbox_root, candidate, expected_port, science_quiescence) = {
-                let app_state = lock(&state);
-                let session = app_state
-                    .history_recovery
-                    .as_ref()
-                    .ok_or("历史恢复选择已过期，请重新点击一键开始")?;
-                if session.active_profile_id != active_profile_id
-                    || session.sandbox_port != cfg.sandbox_port
-                {
-                    return Err("当前配置或端口已变化，本次历史恢复选择已作废".into());
+    let resume = resume.unwrap_or(false);
+    let entry = resume
+        .then(|| crate::runtime::sandbox_session::OneClickEntryPreflight::capture(&state))
+        .transpose()
+        .map_err(|failure| {
+            crate::commands::codex::RuntimeCommandError::Message(failure.to_string())
+        })?;
+    let prepared = if let Some(entry) = entry.as_ref() {
+        crate::commands::codex::prepare_provider_auth(
+            &app,
+            entry.auth_adapter(),
+            crate::commands::codex::CodexPreflightTarget::ActiveProfile,
+        )?
+    } else {
+        None
+    };
+    run_blocking_typed(move || {
+        lifecycle
+            .with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                if let Some(entry) = entry.as_ref() {
+                    entry
+                        .verify_unchanged(&state)
+                        .map_err(|failure| failure.to_string())?;
                 }
-                let choice = session
-                    .choices
-                    .iter()
-                    .find(|choice| choice.reference == reference)
-                    .ok_or("历史恢复引用无效或已过期")?;
-                (
-                    session.auth_dir.clone(),
-                    session.sandbox_root.clone(),
-                    choice.candidate.clone(),
-                    session.sandbox_port,
-                    session.science_quiescence.clone(),
+                if let Some(prepared) = prepared.as_ref() {
+                    prepared
+                        .verify_unchanged()
+                        .map_err(|error| error.to_string())?;
+                }
+                crate::runtime::sandbox_session::restore_history_choice_entry(
+                    app,
+                    state,
+                    lifecycle.as_ref(),
+                    &reference,
+                    resume,
+                    prepared.as_ref().map(|prepared| prepared.proof()),
                 )
-            };
-
-            // A user may discover after opening Science that A/B was the wrong
-            // history. Keep the one-shot mapping in memory for this app session,
-            // but stop only the exact managed runtime before changing credentials.
-            {
-                let mut app_state = lock(&state);
-                if let Some(runtime) = app_state.science_runtime.clone() {
-                    let receipt = ScienceHostAdapter::managed_receipt(expected_port, &runtime)
-                        .ok_or("历史恢复前无法取得 Science 的精确受管启动身份")?;
-                    let AppState {
-                        sandbox,
-                        sandbox_url,
-                        ..
-                    } = &mut *app_state;
-                    let verified = ScienceHostAdapter::stop(
-                        &app,
-                        sandbox,
-                        sandbox_url,
-                        ScienceStopRequest::exact(
-                            &runtime,
-                            ScienceStopOwnershipReceipt::from_managed_launch(&receipt),
-                        ),
-                    )
-                    .and_then(|verified| verified.require_exact_stop_of(&runtime))
-                    .map_err(|error| error.to_string())?;
-                    app_state.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-                    app_state.science_runtime = None;
-                    let session = app_state
-                        .history_recovery
-                        .as_mut()
-                        .ok_or("历史恢复会话已过期")?;
-                    session.science_quiescence =
-                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime);
-                } else {
-                    let version_cache = app_state.science_version_cache.clone();
-                    let (current_science_state, current_runtime) =
-                        ScienceHostAdapter::probe_cached(expected_port, &version_cache)
-                            .map_err(|error| error.to_string())?;
-                    if current_science_state != SandboxScienceState::Stopped
-                        || current_runtime.is_some()
-                    {
-                        return Err(
-                            "历史恢复前 Science typed quiescence 复核失败；已拒绝改写历史身份"
-                                .into(),
-                        );
-                    }
-                    match science_quiescence {
-                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(expected) => {
-                            if app_state.science_confirmed_stopped.as_ref() != Some(&expected) {
-                                return Err(
-                                    "历史恢复的 verified-stopped receipt 已变化，本次选择已作废"
-                                        .into(),
-                                );
-                            }
-                        }
-                        crate::HistoryRecoveryScienceQuiescence::NoManagedRuntimeObserved => {
-                            if app_state.science_confirmed_stopped.is_some() {
-                                return Err(
-                                    "历史恢复的 Science quiescence 状态已变化，本次选择已作废"
-                                        .into(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            #[cfg(test)]
-            apply_history_restore_post_stop_config_drift(expected_port)?;
-            let current_cfg =
-                config::load_from(&config::default_dir()).map_err(|e| e.to_string())?;
-            if current_cfg.mode != "proxy"
-                || current_cfg.sandbox_port != expected_port
-                || current_cfg.runtime_transaction.is_some()
-                || current_cfg
-                    .active_profile()
-                    .map(|profile| profile.id.as_str())
-                    != Some(active_profile_id.as_str())
-            {
-                return Err("运行配置或事务在恢复前已变化，本次选择已作废".into());
-            }
-            let _ = crate::oauth_forge::restore_history_choice(
-                &auth_dir,
-                "virtual@localhost.invalid",
-                &sandbox_root,
-                &candidate,
-            )?;
-            // Consume every old reference after a successful selection. Fresh
-            // references preserve the in-session "choose again" escape hatch
-            // without making an invoke token replayable.
-            let refreshed_choices = {
-                let mut app_state = lock(&state);
-                app_state.boot_attention = None;
-                let session = app_state
-                    .history_recovery
-                    .as_mut()
-                    .ok_or("历史恢复会话已过期")?;
-                session
-                    .choices
-                    .iter_mut()
-                    .enumerate()
-                    .map(|(index, choice)| {
-                        choice.reference = config::new_id();
-                        let label = if index < 26 {
-                            format!("历史记录 {}", (b'A' + index as u8) as char)
-                        } else {
-                            format!("历史记录 {}", index + 1)
-                        };
-                        json!({"reference": choice.reference, "label": label})
-                    })
-                    .collect::<Vec<_>>()
-            };
-            Ok(json!({
-                "status": "ok",
-                "action": "history_choice_restored",
-                "message": "已恢复所选历史记录；其他历史记录未被删除。",
-                "choices": refreshed_choices
-            }))
-        })
+            })
+            .map_err(crate::commands::codex::RuntimeCommandError::Message)
     })
     .await
 }
 
 #[cfg(test)]
-static HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(test)]
-pub(super) struct HistoryRestorePostStopConfigDriftGuard;
-
-#[cfg(test)]
-impl Drop for HistoryRestorePostStopConfigDriftGuard {
-    fn drop(&mut self) {
-        HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-#[cfg(test)]
 pub(super) fn test_arm_history_restore_post_stop_config_drift(
-) -> HistoryRestorePostStopConfigDriftGuard {
-    HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT.store(true, std::sync::atomic::Ordering::SeqCst);
-    HistoryRestorePostStopConfigDriftGuard
+) -> crate::runtime::sandbox_session::HistoryRestorePostStopConfigDriftGuard {
+    crate::runtime::sandbox_session::test_arm_history_restore_post_stop_config_drift()
 }
 
 #[cfg(test)]
-fn apply_history_restore_post_stop_config_drift(expected_port: u16) -> Result<(), String> {
-    if !HISTORY_RESTORE_POST_STOP_CONFIG_DRIFT.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-    config::update(&config::default_dir(), |current| {
-        current.sandbox_port = expected_port
-            .checked_add(1)
-            .filter(|port| *port != 8765)
-            .unwrap_or(expected_port.saturating_sub(1));
-    })
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+pub(super) fn test_arm_history_restore_post_snapshot_config_drift(
+) -> crate::runtime::sandbox_session::HistoryRestorePostSnapshotConfigDriftGuard {
+    crate::runtime::sandbox_session::test_arm_history_restore_post_snapshot_config_drift()
+}
+
+#[cfg(test)]
+pub(super) fn test_arm_history_restore_credential_interrupt(
+) -> crate::runtime::sandbox_session::HistoryRestoreCredentialInterruptGuard {
+    crate::runtime::sandbox_session::test_arm_history_restore_credential_interrupt()
 }
 
 pub(super) fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_json::Value {

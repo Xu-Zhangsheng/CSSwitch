@@ -323,7 +323,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         .nth(2)
         .expect("one-click authority restore must remain discoverable");
     let restore_guard = one_click_restore
-        .find("if let RuntimeTransactionRestoreExpectation::Exact(expected)")
+        .find("let authority_matches = match runtime_transaction")
         .expect("one-click compensation must preflight the current journal");
     let first_restore_effect = one_click_restore
         .find("lock(state).stop_proxy()")
@@ -555,7 +555,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         snapshot_cleanup: CompensationStepOutcome::Skipped(
             CompensationSkipCause::SnapshotPreserved,
         ),
-        environment: CompensationEnvironment::NotExposed,
+        environment: CompensationEnvironment::Quiescent,
     };
     assert!(
         !incomplete_after_prior_restart.authorities_restored()
@@ -738,10 +738,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     )
     .expect("ScienceHostAdapter source must be readable");
     let spawn_launch = host_adapter_source
-        .splitn(2, "pub(crate) fn spawn_launch")
-        .nth(1)
+        .split_once("pub(crate) fn spawn_launch")
+        .map(|(_, suffix)| suffix)
         .expect("ScienceHostAdapter must define spawn_launch")
-        .splitn(2, "pub(crate) fn accept_launch_script")
+        .split("pub(crate) fn accept_launch_script")
         .next()
         .expect("spawn_launch must precede accept_launch_script");
     let deadline_offset = spawn_launch
@@ -758,10 +758,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "the recovery absolute deadline must begin before command setup and cover spawn/wait"
     );
     let verify_health = host_adapter_source
-        .splitn(2, "pub(crate) fn verify_health")
-        .nth(1)
+        .split_once("pub(crate) fn verify_health")
+        .map(|(_, suffix)| suffix)
         .expect("ScienceHostAdapter must define verify_health")
-        .splitn(2, "pub(crate) fn verify_identity")
+        .split("pub(crate) fn verify_identity")
         .next()
         .expect("verify_health must precede verify_identity");
     assert!(

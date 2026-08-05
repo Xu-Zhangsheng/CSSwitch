@@ -168,6 +168,9 @@ EXPECTED_IMPLICIT_OPERATION_CONTRACT = {
     "update_profile_metadata": {"op.startup-config-migration"},
     "validate_profile_catalog_model": {"op.startup-config-migration"},
 }
+EXPECTED_OPERATION_IMPLICIT_CONTRACT = {
+    "op.history-restore": {"op.one-click"},
+}
 EXPECTED_NATIVE_CONTRACT = {
     "app_state_drop": ("terminal-mutation", "op.native-exit"),
     "exit_cleanup": ("terminal-mutation", "op.native-exit"),
@@ -316,6 +319,9 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 if operation["id"] != "op.startup-config-migration"
                 and "record.config-v4" in access["reads"]
                 else set()
+            )
+            expected_implicit.update(
+                EXPECTED_OPERATION_IMPLICIT_CONTRACT.get(operation["id"], set())
             )
             self.assertEqual(
                 set(operation.get("implicit_operation_ids", [])),

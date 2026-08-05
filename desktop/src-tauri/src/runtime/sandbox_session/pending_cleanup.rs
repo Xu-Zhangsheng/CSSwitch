@@ -1028,6 +1028,128 @@ pub(super) fn replay_finalize_authority_cleanup(
     }
 }
 
+fn registered_authority_snapshot_for_ticket(
+    state: &SharedAppState,
+    snapshot_ticket: &config::RuntimeSnapshotTicket,
+) -> Result<
+    (
+        PendingCleanupManifest,
+        AuthorityCleanupContext,
+        RegisteredAuthorityCleanup,
+        std::fs::File,
+    ),
+    AuthorityCleanupFailure,
+> {
+    let config_dir = config::default_dir();
+    let manifest_raw = config::read_pending_authority_cleanup_manifest(&config_dir)
+        .map_err(|_| {
+            retry_failure("cleanup_manifest_read_failed：无法读取 history authority 清单。")
+        })?
+        .ok_or_else(|| {
+            retry_failure("cleanup_manifest_missing：history journal 缺少 authority 清单。")
+        })?;
+    let manifest = parse_pending_cleanup_manifest(&manifest_raw).map_err(retry_failure)?;
+    if manifest.entries.len() != 1 {
+        return Err(retry_failure(
+            "cleanup_manifest_invalid：history authority 清单必须恰好包含一个快照。",
+        ));
+    }
+    let entry = manifest.entries[0].clone();
+    if entry.managed_id != snapshot_ticket.managed_id || entry.marker != entry.managed_id {
+        return Err(retry_failure(
+            "cleanup_manifest_causal_mismatch：history journal 与 authority 快照不匹配。",
+        ));
+    }
+    let sandbox_home_path = sandbox_home();
+    let expected_parent = sandbox_home_path
+        .parent()
+        .ok_or_else(|| retry_failure("cleanup_manifest_invalid：沙箱 HOME 无父目录。"))?
+        .to_path_buf();
+    match validate_pending_cleanup_entry(&entry, &expected_parent)? {
+        PendingCleanupTargetState::Present(actual) if actual == entry => {}
+        _ => {
+            return Err(retry_failure(
+                "cleanup_identity_changed：history authority 快照身份不再匹配。",
+            ))
+        }
+    }
+    let parent =
+        AuthorityTreeSnapshot::open_absolute_directory(&expected_parent).map_err(|_| {
+            retry_failure("cleanup_identity_invalid：无法打开 history snapshot 父目录。")
+        })?;
+    let root_name = AuthorityTreeSnapshot::destination_name(&entry.path)
+        .map_err(|_| retry_failure("cleanup_identity_invalid：history snapshot 名称非法。"))?;
+    let root = AuthorityTreeSnapshot::open_directory_at(parent.as_raw_fd(), &root_name)
+        .map_err(|_| retry_failure("cleanup_identity_invalid：无法打开 history snapshot。"))?;
+    let metadata = root
+        .metadata()
+        .map_err(|_| retry_failure("cleanup_identity_invalid：无法复核 history snapshot。"))?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o777 != 0o700
+        || metadata.dev() != entry.device
+        || metadata.ino() != entry.inode
+    {
+        return Err(retry_failure(
+            "cleanup_identity_changed：history snapshot root 身份已变化。",
+        ));
+    }
+    let context = AuthorityCleanupContext {
+        config_dir,
+        expected_snapshot_parent: expected_parent,
+        managed_id: entry.managed_id.clone(),
+        root: entry.path.clone(),
+        expected_root_identity: Some((entry.device, entry.inode)),
+        state: state.clone(),
+    };
+    let registered = RegisteredAuthorityCleanup {
+        manifest_raw,
+        entry,
+    };
+    Ok((manifest, context, registered, root))
+}
+
+pub(super) struct HistorySnapshotRoot {
+    pub(super) root: std::fs::File,
+    pub(super) active_recovery: bool,
+}
+
+pub(super) fn open_history_snapshot_root(
+    state: &SharedAppState,
+    snapshot_ticket: &config::RuntimeSnapshotTicket,
+) -> Result<HistorySnapshotRoot, AuthorityCleanupFailure> {
+    let (manifest, _, _, root) = registered_authority_snapshot_for_ticket(state, snapshot_ticket)?;
+    if !pending_cleanup_requires_recovery(&manifest)
+        && manifest.disposition != Some(PendingCleanupDisposition::CleanupOnly)
+    {
+        return Err(AuthorityCleanupFailure::new(
+            AuthorityCleanupPhase::Retry,
+            "cleanup_manifest_invalid：history snapshot disposition 非法。",
+        ));
+    }
+    Ok(HistorySnapshotRoot {
+        root,
+        active_recovery: pending_cleanup_requires_recovery(&manifest),
+    })
+}
+
+pub(super) fn prepare_history_snapshot_cleanup_only(
+    state: &SharedAppState,
+    snapshot_ticket: &config::RuntimeSnapshotTicket,
+) -> Result<(), AuthorityCleanupFailure> {
+    let (manifest, context, registered, _) =
+        registered_authority_snapshot_for_ticket(state, snapshot_ticket)?;
+    if pending_cleanup_requires_recovery(&manifest) {
+        prepare_registered_authority_cleanup(&context, &registered)?;
+    } else if manifest.disposition != Some(PendingCleanupDisposition::CleanupOnly) {
+        return Err(AuthorityCleanupFailure::new(
+            AuthorityCleanupPhase::Retry,
+            "cleanup_manifest_invalid：history cleanup disposition 非法。",
+        ));
+    }
+    Ok(())
+}
+
 // Snapshot root removal (uses authority FS primitives; owned by cleanup lifecycle).
 pub(super) fn remove_authority_snapshot_root(
     entry: &PendingCleanupEntry,

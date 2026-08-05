@@ -507,7 +507,10 @@ function wire() {
   els.runtimeChoiceCancelBtn.addEventListener("click", runtimeController.cancelRuntimeChoice);
   els.historyRecoveryChoices.addEventListener("click", (event) => {
     const button = event.target.closest("[data-history-reference]");
-    if (button) runtimeController.restoreHistoryChoice(button.dataset.historyReference);
+    if (button) runtimeController.restoreHistoryChoice(
+      button.dataset.historyReference,
+      button.dataset.historyResume === "true",
+    );
   });
   els.historyRecoveryCancelBtn.addEventListener("click", runtimeController.hideHistoryRecovery);
   els.stopBtn.addEventListener("click", runtimeController.stopAll);

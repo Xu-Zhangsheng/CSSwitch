@@ -49,6 +49,10 @@ impl AuthorityTransaction {
         &self.snapshot.backup_root
     }
 
+    pub(super) fn persist_private_manifest(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        self.snapshot.persist_private_manifest(name, bytes)
+    }
+
     pub(super) fn validate_science_restore_root(&self) -> Result<(), String> {
         self.snapshot.validate_science_restore_root()
     }

@@ -1,6 +1,7 @@
 mod authority_snapshot;
 mod authority_transaction;
 mod catalog_verify;
+mod history_recovery;
 mod one_click;
 mod pending_cleanup;
 mod recovery;
@@ -23,6 +24,18 @@ use authority_snapshot::{
 use authority_transaction::AuthorityTransaction;
 #[cfg(test)]
 use catalog_verify::*;
+pub(crate) use history_recovery::{
+    interrupted_history_recovery_requires_pre_auth_replay,
+    replay_interrupted_history_recovery_before_auth, restore_history_choice_entry,
+};
+#[cfg(test)]
+pub(crate) use history_recovery::{
+    test_arm_history_finalize_completion_failure, test_arm_history_replay_sibling_config_writer,
+    test_arm_history_restore_credential_interrupt,
+    test_arm_history_restore_post_snapshot_config_drift,
+    test_arm_history_restore_post_stop_config_drift, HistoryRestoreCredentialInterruptGuard,
+    HistoryRestorePostSnapshotConfigDriftGuard, HistoryRestorePostStopConfigDriftGuard,
+};
 #[cfg(test)]
 pub(crate) use one_click::one_click_login;
 #[cfg(test)]

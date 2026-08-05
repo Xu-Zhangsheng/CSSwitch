@@ -305,6 +305,7 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
     });
 }
 
+#[allow(clippy::result_large_err)]
 fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let supervisor = app.state::<SharedCodexAuthSupervisor>().inner().clone();
     cleanup_for_exit_with(
@@ -858,6 +859,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup() {
         type MockNativeExitCleanup = NativeExitCleanup<tauri::test::MockRuntime>;
         let production: MockNativeExitCleanup = production_native_exit_cleanup();
@@ -1021,9 +1023,11 @@ mod tests {
         assert_ne!(proxy_port, 8765);
         let config_dir = config::default_dir();
         fs::create_dir_all(&config_dir).unwrap();
-        let mut cfg = Config::default();
-        cfg.sandbox_port = sandbox_port;
-        cfg.proxy_port = proxy_port;
+        let cfg = Config {
+            sandbox_port,
+            proxy_port,
+            ..Default::default()
+        };
         config::save_to(&config_dir, &cfg).unwrap();
 
         let fake_science = root.join("fake-science");

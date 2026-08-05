@@ -450,7 +450,6 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
     let mut degraded_snapshot =
         OneClickAuthoritySnapshot::capture(&config_dir, &sandbox_home, &auth_dir, &config, &state)
             .unwrap();
-    let degraded_root = degraded_snapshot.backup_root.clone();
     let mut success_dto = serde_json::json!({
         "msg": "ready",
         "action": "started",
@@ -467,13 +466,10 @@ fn one_shot_commit_cleanup_fault_is_retried_before_success() {
     assert_eq!(success_dto["stage"], "complete");
     assert_eq!(success_dto["status"], "degraded");
     assert_eq!(success_dto["recovery_status"], "cleanup_required");
-    assert_eq!(
-        success_dto["cleanup_recovery_path"],
-        degraded_root.to_string_lossy().as_ref()
-    );
+    assert!(success_dto.get("cleanup_recovery_path").is_none());
     assert_eq!(
         success_dto["cleanup_message"],
-        "one-click 已完成，但私有事务快照需要稍后安全清理。"
+        "运行事务已完成，但私有事务快照需要稍后安全清理。"
     );
     assert!(success_dto["fallback_url"].is_null());
     let _ = fs::remove_dir_all(&tmp);

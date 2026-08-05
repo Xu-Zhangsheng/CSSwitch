@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；按 2026-08-05 C1-A source closure 整理
+状态：当前；F1-A source candidate 修复后复审中，尚未形成 closure
 
 最后复核：2026-08-05（Asia/Taipei）
 
@@ -8,22 +8,23 @@
 
 本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A 与 C1-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
-## 当前 source candidate closure
+## 当前 source candidate
 
-最近 implementation closure 是 [C1-A cross-process config writer fence](../../docs/audits/2026-08-05-c1-a-config-writer-fence.md)：canonical config load-modify-save、migration、downgrade、rolling backup 与 full save publication 在 process-local gate 之后共享一个 pinned-directory writer fence；锁 inode 使用 no-follow、single-link、0600 与 acquire 后 identity recheck，read-only projection 不创建或获取该 fence。
+最近已完成的 implementation closure 仍是 [C1-A cross-process config writer fence](../../docs/audits/2026-08-05-c1-a-config-writer-fence.md)。当前 worktree 的唯一候选是 F1-A durable history recovery；尚未绑定 implementation commit 或 exact-SHA source gate，因此本节不能当作完成证据。
 
-C1-A 已在 source/unit 层完成：
+F1-A candidate 当前源码合同：
 
-- runtime implementation commit 是 `b55eb89e5edfb3d5920c7238574caaee08efa63f`，identity governance commit 是 `70940d08e266de2ad002278428d8604fddbbf37f`；最终实现与身份治理独立审查均为 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0`；
-- exact-SHA 15-suite `GATE-SOURCE` run `d9bf63dea8d3003e981b5232a4f4faea` 为 `PASS`；首次 run 在 Rust 原始进程 505 passed / 0 failed / 40 ignored 后因新增 child-process test identity 未登记而 fail-closed，不用于 closure；
-- O1-A 的 entry owner 与 F1-0 的 stopped history boundary 保持有效；完整 F1 durable transaction、giant coordinator、read model、Science provenance、artifact、installed/live、签名、公证和 public release 均未由 C1-A 建立。
+- restore-only 与 restore-and-resume 都由一个 `restore_history_choice` backend destructive operation 驱动；默认 safe-stopped，显式 resume 只消费 exact terminal handoff 后进入既有 one-click owner；
+- credential 写前有 `HistoryCredentialWritePending` 与 identity-bound 私有 before-image 清单；重启可恢复 credential/marker 并收敛 snapshot/journal；operation-scoped fingerprint 冻结去除 journal 后的完整 Config authority，任一 sibling writer 漂移都会阻止 checkpoint/finalize/resume；
+- focused Rust / fake-Science / frontend / quality tests 已通过；前八轮 clean-context review 报告的 config 并发覆盖、credential crash replay、durability barrier、auth/replay 竞态、状态机 ownership、Science quiescence、cleanup/finalize DTO、私有路径投影、inventory coverage、replay fingerprint、validation-to-effect writer window 与 downgrade bypass 均已修复；修复后的 fresh review 与 exact-SHA 15-suite gate 仍待执行；
+- 该候选不证明 artifact、installed/live、真实 provider/Science/SSH、签名、公证或 release。
 
-C1-A 完成后没有自动继承的新 implementation sole NEXT。若继续，必须先按实时源码重新比较完整 F1-A / F1-R、giant coordinator、read model / boot sequence、Science provenance 与其他候选；旧路线表不能自动授权后续实现。
+F1-A 未通过 fresh review、提交和 exact-SHA source gate 前，不得选择或实施后续阶段；完成后也没有自动继承的新 implementation sole NEXT。
 
 ## 仍开放的源码与架构问题
 
-- **Runtime MEDIUM**：F1 history 的 backend restore 仍跨 exact stop 与多文件 restore；用户随后可选的显式 one-click 是另一个 destructive operation，两者没有共同 durable journal。read model 仍由 `get_config` 隐式 ack notice，boot event / pull 没有统一 sequence。
-- **Runtime MEDIUM**：O1-A 已收拢 production one-click entry owner 与 effect ordering，C1-A 已关闭 canonical config writer 的跨进程 lost-update 窗口；giant coordinator、typed full-snapshot restore / multi-file durable transaction 与统一 read model 仍未收敛。
+- **Runtime MEDIUM**：F1-A candidate 只收敛 history-owned credential / marker before-image 与可选 resume handoff；其他 sibling full-snapshot restore / multi-file crash boundary、giant coordinator、typed durable compensation progress 与统一 read model 仍未收敛。
+- **Runtime MEDIUM**：read model 仍由 `get_config` 隐式 ack notice，boot event / pull 没有统一 sequence；这是候选 F1-R，未由 F1-A 授权或实现。
 - **Science update MEDIUM**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
 Post-Q0 表格只保留 F1-0 前的日期化规划事实。F1-0 已改变其首阶段状态，后续范围、非目标与顺序必须重新比较；旧 R3–R11、S7、Post-D0/Post-Q0 表格或 ignored plan 都不能自动授权后续实现。

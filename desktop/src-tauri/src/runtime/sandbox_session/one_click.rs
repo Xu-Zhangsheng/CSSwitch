@@ -136,6 +136,7 @@ impl OneClickGatewayPreflightSnapshot {
 /// outside the destructive lease. Runtime entry owns capture and verification.
 pub(crate) struct OneClickEntryPreflight {
     config: Option<config::Config>,
+    runtime_transaction: Option<config::RuntimeTransactionRecord>,
     prior_gateway: Option<OneClickGatewayPreflightSnapshot>,
     auth_adapter: String,
 }
@@ -168,6 +169,7 @@ impl OneClickEntryPreflight {
                 })?
                 .unwrap_or(false);
         Ok(Self {
+            runtime_transaction: cfg.runtime_transaction.clone(),
             config: (adapter != "codex").then_some(cfg),
             prior_gateway,
             auth_adapter: if needs_codex_proof {
@@ -197,6 +199,19 @@ impl OneClickEntryPreflight {
                 return Err(typed_one_click_err(
                     OneClickFailureKind::PreflightSnapshot,
                     "config_changed_retry：候选启动配置在认证检查期间发生变化，请重试。",
+                ));
+            }
+        } else {
+            let current = config::load_from(&config::default_dir()).map_err(|_| {
+                typed_one_click_err(
+                    OneClickFailureKind::PreflightSnapshot,
+                    "config_changed_retry：无法复核认证期间的 runtime transaction，请重试。",
+                )
+            })?;
+            if current.runtime_transaction != self.runtime_transaction {
+                return Err(typed_one_click_err(
+                    OneClickFailureKind::PreflightSnapshot,
+                    "config_changed_retry：runtime transaction 在认证检查期间发生变化，请重试。",
                 ));
             }
         }
@@ -244,6 +259,23 @@ fn one_click_finalize_pending(cfg: &config::Config) -> bool {
     })
 }
 
+fn history_resume_handoff(cfg: &config::Config) -> Option<config::RuntimeTransactionV2> {
+    match cfg.runtime_transaction.as_ref() {
+        Some(config::RuntimeTransactionRecord::V2(record))
+            if record.operation == config::RuntimeTransactionOperation::HistoryRecovery
+                && record.phase == config::RuntimeTransactionPhase::ResumeAfterHistoryRestore
+                && record.snapshot_ticket.is_none()
+                && record.finalize == config::RuntimeFinalizeState::NotStarted
+                && record.target_profile_id == cfg.active_id
+                && record.previous_binding.as_ref() == cfg.runtime_binding.as_ref() =>
+        {
+            super::history_recovery::history_config_authority_matches(cfg, record)
+                .then(|| record.clone())
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn pending_cleanup_requires_recapture(outcome: PendingCleanupRetryOutcome) -> bool {
     outcome == PendingCleanupRetryOutcome::Cleared
 }
@@ -272,7 +304,7 @@ pub(crate) fn typed_interrupted_gateway_recovery_error(
     TypedOneClickFailure::new(kind, error.to_string()).with_recovery(recovery)
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::result_large_err)]
 fn stop_sandbox_state<R: Runtime>(
     app: &tauri::AppHandle<R>,
     st: &mut AppState,
@@ -386,6 +418,36 @@ fn one_click_login_after_gateway_recovery<R: Runtime>(
     )
 }
 
+pub(super) fn one_click_login_after_history_handoff<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    state: SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    runtime_choice: Option<&str>,
+    auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+    expected: config::RuntimeTransactionV2,
+) -> Result<Value, TypedOneClickFailure> {
+    let dir = config::default_dir();
+    config::update_result(&dir, |current| {
+        if history_resume_handoff(current).as_ref() != Some(&expected)
+            || !super::history_recovery::history_config_authority_matches(current, &expected)
+            || current.runtime_transaction.as_ref()
+                != Some(&config::RuntimeTransactionRecord::V2(expected.clone()))
+        {
+            return Err(
+                "history resume handoff disappeared, drifted, or retargeted; preserved current state"
+                    .into(),
+            );
+        }
+        current.runtime_transaction = None;
+        Ok(((), true))
+    })
+    .map_err(|error| {
+        TypedOneClickFailure::new(OneClickFailureKind::Prepare, error)
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+    })?;
+    one_click_login_entry(app, state, lifecycle, runtime_choice, auth_proof)
+}
+
 /// Sole production one-click runtime entry owner. Recovery is an explicit
 /// recapture/decide/effect loop; the affine Gateway handoff is consumed only
 /// after the post-effect facts have been recaptured.
@@ -403,6 +465,27 @@ pub(crate) fn one_click_login_entry<R: Runtime>(
         let facts = config::load_from(&config::default_dir()).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
+        if super::history_recovery::replay_interrupted_history_recovery(&state, &facts).map_err(
+            |error| {
+                TypedOneClickFailure::new(
+                    OneClickFailureKind::AuthoritySnapshot,
+                    format!("检测到未完成的 history recovery，安全重放失败并已保留事务：{error}"),
+                )
+                .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+            },
+        )? {
+            continue;
+        }
+        if let Some(handoff) = history_resume_handoff(&facts) {
+            return one_click_login_after_history_handoff(
+                app,
+                state,
+                lifecycle,
+                runtime_choice,
+                auth_proof,
+                handoff,
+            );
+        }
         match decide_one_click_entry_recovery(
             one_click_finalize_pending(&facts),
             finalize_replayed,
@@ -534,6 +617,7 @@ pub(crate) fn reconcile_science_for_active<R: Runtime>(
 /// catalog. Stop only the exact in-memory Science identity and start the
 /// committed chain again from a clean process.
 #[allow(dead_code)]
+#[allow(clippy::result_large_err)]
 pub(crate) fn force_restart_science_for_active<R: Runtime>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
@@ -1343,6 +1427,7 @@ impl ManagedScienceRestartError {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn after_exact_cleanup(
         message: impl Into<String>,
         expected_runtime: &ScienceRuntimeIdentity,
@@ -2217,19 +2302,37 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
         config::RuntimeFinalizeState::NotStarted => return Ok(()),
         config::RuntimeFinalizeState::Intent { action } => action.clone(),
     };
-    if expected.operation != config::RuntimeTransactionOperation::OneClick
-        || !config_authority_matches(
-            &cfg,
-            &expected.target_profile_id,
-            expected.previous_binding.as_ref(),
-        )
-    {
+    let initial_authority_matches =
+        if expected.operation == config::RuntimeTransactionOperation::HistoryRecovery {
+            super::history_recovery::history_config_authority_matches(&cfg, expected)
+        } else {
+            config_authority_matches(
+                &cfg,
+                &expected.target_profile_id,
+                expected.previous_binding.as_ref(),
+            )
+        };
+    if !initial_authority_matches {
         return Err("interrupted finalize intent no longer targets the active profile".into());
     }
-    if let config::RuntimeFinalizeAction::CommitBinding { binding } = &action {
-        if binding.profile_id != expected.target_profile_id {
-            return Err("interrupted finalize binding no longer matches its target profile".into());
+    match (&expected.operation, &action) {
+        (
+            config::RuntimeTransactionOperation::OneClick,
+            config::RuntimeFinalizeAction::CommitBinding { binding },
+        ) if binding.profile_id != expected.target_profile_id => {
+            return Err("interrupted finalize binding no longer matches its target profile".into())
         }
+        (
+            config::RuntimeTransactionOperation::OneClick,
+            config::RuntimeFinalizeAction::ClearJournal
+            | config::RuntimeFinalizeAction::CommitBinding { .. },
+        )
+        | (
+            config::RuntimeTransactionOperation::HistoryRecovery,
+            config::RuntimeFinalizeAction::ClearJournal
+            | config::RuntimeFinalizeAction::ResumeOneClick,
+        ) => {}
+        _ => return Err("interrupted finalize action has invalid operation ownership".into()),
     }
     let ticket = expected
         .snapshot_ticket
@@ -2237,22 +2340,41 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
         .ok_or("interrupted finalize intent has no authority snapshot ticket")?;
     let cleanup = replay_finalize_authority_cleanup(state, ticket).map_err(String::from)?;
     config::update_result(&dir, |current| {
-        if !config_authority_matches(
-            current,
-            &expected.target_profile_id,
-            expected.previous_binding.as_ref(),
-        ) || current.runtime_transaction.as_ref()
-            != Some(&config::RuntimeTransactionRecord::V2(expected.clone()))
+        let authority_matches =
+            if expected.operation == config::RuntimeTransactionOperation::HistoryRecovery {
+                super::history_recovery::history_config_authority_matches(current, expected)
+            } else {
+                config_authority_matches(
+                    current,
+                    &expected.target_profile_id,
+                    expected.previous_binding.as_ref(),
+                )
+            };
+        if !authority_matches
+            || current.runtime_transaction.as_ref()
+                != Some(&config::RuntimeTransactionRecord::V2(expected.clone()))
         {
             return Err(
                 "interrupted finalize record drifted during authority replay; preserved current state"
                     .into(),
             );
         }
-        if let config::RuntimeFinalizeAction::CommitBinding { binding } = &action {
-            current.runtime_binding = Some(binding.clone());
+        match &action {
+            config::RuntimeFinalizeAction::CommitBinding { binding } => {
+                current.runtime_binding = Some(binding.clone());
+                current.runtime_transaction = None;
+            }
+            config::RuntimeFinalizeAction::ClearJournal => {
+                current.runtime_transaction = None;
+            }
+            config::RuntimeFinalizeAction::ResumeOneClick => {
+                let mut terminal = expected.clone();
+                terminal.phase = config::RuntimeTransactionPhase::ResumeAfterHistoryRestore;
+                terminal.snapshot_ticket = None;
+                terminal.finalize = config::RuntimeFinalizeState::NotStarted;
+                current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(terminal));
+            }
         }
-        current.runtime_transaction = None;
         Ok(((), true))
     })?;
     let _ = cleanup;
@@ -2366,34 +2488,34 @@ impl CompensationStepOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CompensationEnvironment {
-    NotExposed,
-    CandidateExposed,
-    CrossRuntimeExposed,
+    Quiescent,
+    Candidate,
+    CrossRuntime,
 }
 
 impl CompensationEnvironment {
     fn from_launch(environment: ScienceEnvironmentExposure, cross_runtime: bool) -> Self {
         if cross_runtime {
-            Self::CrossRuntimeExposed
+            Self::CrossRuntime
         } else {
             match environment {
-                ScienceEnvironmentExposure::NotExposed => Self::NotExposed,
+                ScienceEnvironmentExposure::NotExposed => Self::Quiescent,
                 ScienceEnvironmentExposure::Exposed | ScienceEnvironmentExposure::Uncertain => {
-                    Self::CandidateExposed
+                    Self::Candidate
                 }
             }
         }
     }
 
     fn is_uncertain(self) -> bool {
-        self != Self::NotExposed
+        self != Self::Quiescent
     }
 
     fn append_diagnostics(self, diagnostics: &mut Vec<String>) {
         if self.is_uncertain() {
             diagnostics.push("environment_uncertain".into());
         }
-        if self == Self::CrossRuntimeExposed {
+        if self == Self::CrossRuntime {
             diagnostics.push("newer_runtime_required".into());
         }
     }
@@ -2495,7 +2617,7 @@ impl CompensationOutcome {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn compensate_one_click_failure<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
@@ -2735,7 +2857,7 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
     )
 }
 
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn one_click_login_with_options<R: Runtime>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,

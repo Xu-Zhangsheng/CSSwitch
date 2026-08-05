@@ -31,9 +31,11 @@ use super::pending_cleanup::{
     RegisteredAuthorityCleanup,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum RuntimeTransactionRestoreExpectation {
     Unchecked,
     Exact(Option<config::RuntimeTransactionRecord>),
+    ExactConfig(Box<config::Config>),
 }
 
 pub(super) struct AppAuthoritySnapshot {
@@ -197,6 +199,60 @@ impl OneClickAuthoritySnapshot {
             return Err("registered authority snapshot ticket identity changed".into());
         }
         config::RuntimeSnapshotTicket::verified(ticket.entry.managed_id.clone())
+    }
+
+    pub(super) fn persist_private_manifest(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        if bytes.is_empty() || bytes.len() > 64 * 1024 {
+            return Err("private recovery manifest size is invalid".into());
+        }
+        let parent = AuthorityTreeSnapshot::open_absolute_directory(
+            &self.cleanup_context.expected_snapshot_parent,
+        )
+        .map_err(|error| format!("private recovery parent open failed: {error}"))?;
+        let root_name = AuthorityTreeSnapshot::destination_name(&self.backup_root)?;
+        let root = AuthorityTreeSnapshot::open_directory_at(parent.as_raw_fd(), &root_name)
+            .map_err(|error| format!("private recovery root open failed: {error}"))?;
+        let metadata = root
+            .metadata()
+            .map_err(|error| format!("private recovery root metadata failed: {error}"))?;
+        let expected = self
+            .cleanup_context
+            .expected_root_identity
+            .ok_or("private recovery root identity is missing")?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o700
+            || (metadata.dev(), metadata.ino()) != expected
+        {
+            return Err("private recovery root identity changed".into());
+        }
+        let manifest_name = std::ffi::CString::new(name)
+            .map_err(|_| "private recovery manifest name is invalid")?;
+        let mut manifest = AuthorityTreeSnapshot::open_destination_at(
+            root.as_raw_fd(),
+            &manifest_name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )
+        .map_err(|error| format!("private recovery manifest create failed: {error}"))?;
+        std::io::Write::write_all(&mut manifest, bytes)
+            .and_then(|_| manifest.set_permissions(std::fs::Permissions::from_mode(0o600)))
+            .and_then(|_| manifest.sync_all())
+            .map_err(|error| format!("private recovery manifest sync failed: {error}"))?;
+        let manifest_metadata = manifest
+            .metadata()
+            .map_err(|error| format!("private recovery manifest metadata failed: {error}"))?;
+        if !manifest_metadata.is_file()
+            || manifest_metadata.uid() != unsafe { libc::geteuid() }
+            || manifest_metadata.permissions().mode() & 0o777 != 0o600
+            || manifest_metadata.nlink() != 1
+            || manifest_metadata.len() != bytes.len() as u64
+        {
+            return Err("private recovery manifest identity is unsafe".into());
+        }
+        root.sync_all()
+            .and_then(|_| parent.sync_all())
+            .map_err(|error| format!("private recovery directory sync failed: {error}"))
     }
 
     pub(super) fn science_opaque_root_bindings(
@@ -766,6 +822,7 @@ impl OneClickAuthoritySnapshot {
         Err(errors.join("; "))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn restore_with_gateway<R: Runtime>(
         &mut self,
         app: &tauri::AppHandle<R>,
@@ -776,12 +833,17 @@ impl OneClickAuthoritySnapshot {
         proxy_action: ProxyAction,
         runtime_transaction: &RuntimeTransactionRestoreExpectation,
     ) -> Result<(), String> {
-        if let RuntimeTransactionRestoreExpectation::Exact(expected) = runtime_transaction {
-            let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
-            if current.runtime_transaction.as_ref() != expected.as_ref() {
-                self.preserve_recovery = true;
-                return Err("one-click compensation found a retargeted runtime journal; preserved the current config, authority, runtime state, and recovery snapshot".into());
+        let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
+        let authority_matches = match runtime_transaction {
+            RuntimeTransactionRestoreExpectation::Unchecked => true,
+            RuntimeTransactionRestoreExpectation::Exact(expected) => {
+                current.runtime_transaction.as_ref() == expected.as_ref()
             }
+            RuntimeTransactionRestoreExpectation::ExactConfig(expected) => current == **expected,
+        };
+        if !authority_matches {
+            self.preserve_recovery = true;
+            return Err("one-click compensation found drifted config authority; preserved the current config, authority, runtime state, and recovery snapshot".into());
         }
         if proxy_action == ProxyAction::Restarted {
             lock(state).stop_proxy();
@@ -810,6 +872,15 @@ impl OneClickAuthoritySnapshot {
                 config::update_result(config_dir, |current| {
                     if current.runtime_transaction.as_ref() != expected.as_ref() {
                         return Err("one-click compensation found a retargeted runtime journal; preserved the current config and recovery snapshot".into());
+                    }
+                    *current = self.config.clone();
+                    Ok(((), true))
+                })
+            }
+            RuntimeTransactionRestoreExpectation::ExactConfig(expected) => {
+                config::update_result(config_dir, |current| {
+                    if current != expected.as_ref() {
+                        return Err("one-click compensation found drifted config authority; preserved the current config and recovery snapshot".into());
                     }
                     *current = self.config.clone();
                     Ok(((), true))
@@ -883,10 +954,6 @@ impl OneClickAuthoritySnapshot {
             Ok(AuthorityCleanupOutcome::Cleared) => Ok(()),
             Err(error) if self.cleanup_prepared && error.cleanup_requirement().is_some() => {
                 self.preserve_recovery = true;
-                let recovery_path = error
-                    .cleanup_requirement()
-                    .map(|(path, _)| path)
-                    .unwrap_or(&self.backup_root);
                 if let Some(object) = value.as_object_mut() {
                     object.insert("status".into(), Value::String("degraded".into()));
                     object.insert(
@@ -894,12 +961,8 @@ impl OneClickAuthoritySnapshot {
                         Value::String("cleanup_required".into()),
                     );
                     object.insert(
-                        "cleanup_recovery_path".into(),
-                        Value::String(recovery_path.to_string_lossy().into_owned()),
-                    );
-                    object.insert(
                         "cleanup_message".into(),
-                        Value::String("one-click 已完成，但私有事务快照需要稍后安全清理。".into()),
+                        Value::String("运行事务已完成，但私有事务快照需要稍后安全清理。".into()),
                     );
                 }
                 Ok(())

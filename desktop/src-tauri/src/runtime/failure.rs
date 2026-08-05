@@ -89,6 +89,7 @@ pub(crate) struct SafeCause {
 
 /// Fine-grained one-click failure kind. Maps 1:N to frozen UI coarse stages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum OneClickFailureKind {
     // prepare
     ConfigLoad,

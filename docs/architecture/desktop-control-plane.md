@@ -130,7 +130,18 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
 ## 选择、应用与诊断语义
 
 - `set_active_profile` 只提交“当前选择”；运行中的 Gateway/Science 不立即切换。下一次一键开始才应用并写 runtime binding。
-- history attention、`restore_history_choice` 与下一次 start 是三个独立 backend operation；frontend 在 restore 成功后保持 stopped，只显示恢复结果并要求用户再次显式点击「一键开始」。因此一次用户动作只提交一个 destructive IPC；restore 与后续可选 start 仍不是共同 durable transaction。
+- history attention 后，每份选择都有“仅恢复”和显式“恢复并启动”。两者都只提交一次
+  `restore_history_choice` destructive IPC：restore-only 经 typed history journal / protected snapshot /
+  cleanup finalize 后保持 stopped；restore-and-resume 由 backend 发布并消费 exact terminal handoff，
+  再进入既有 one-click owner。用户以后单独点击「一键开始」仍是另一个 operation；frontend 不自动
+  串联第二个 IPC，也不把 history DTO 当 applied/ready 证明。若重启遗留
+  `HistoryCredentialWritePending`，one-click command 会先重验当前 Science quiescence 并收敛
+  credential before-image；若该 journal 与 lock-free provider auth 竞态出现，则在 auth failure 返回前
+  或 business entry 前收敛。失败保留 exact journal 并投影 manual recovery。
+  history journal 还冻结去除 journal 后的完整 Config authority fingerprint；任一 sibling mode、port、
+  SSH setting 或 profile 漂移都会阻止 credential commit/finalize/resume。credential commit 后的降级结果
+  返回 nested rotated choices，但不返回私有 snapshot 路径；restore-only 也必须经 consumer readback，
+  只有 `ok + attention` 才显示恢复成功。
 - `status` 是轻量状态投影；Science 灯的 HTTP health 不证明 listener/runtime 强身份。
 - `finalize_consumer_state` 是 one-click 完成后的窄、脱敏、只读投影；它不探活、不写配置，也不
   成为新的 transaction owner。history choice 即使伴随 cleanup warning 也保持 attention；normal

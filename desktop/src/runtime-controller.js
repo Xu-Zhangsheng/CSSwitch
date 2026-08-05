@@ -55,14 +55,23 @@ function showHistoryRecovery(result) {
   els.historyRecoveryChoices.replaceChildren();
   choices.forEach((choice) => {
     if (!choice || typeof choice.reference !== "string" || !choice.reference) return;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "btn primary";
-    button.dataset.historyReference = choice.reference;
-    button.textContent = typeof choice.label === "string" && choice.label
+    const label = typeof choice.label === "string" && choice.label
       ? choice.label
       : "历史记录";
-    els.historyRecoveryChoices.appendChild(button);
+    const restoreButton = document.createElement("button");
+    restoreButton.type = "button";
+    restoreButton.className = "btn";
+    restoreButton.dataset.historyReference = choice.reference;
+    restoreButton.dataset.historyResume = "false";
+    restoreButton.textContent = label;
+    els.historyRecoveryChoices.appendChild(restoreButton);
+    const resumeButton = document.createElement("button");
+    resumeButton.type = "button";
+    resumeButton.className = "btn primary";
+    resumeButton.dataset.historyReference = choice.reference;
+    resumeButton.dataset.historyResume = "true";
+    resumeButton.textContent = label + "并启动";
+    els.historyRecoveryChoices.appendChild(resumeButton);
   });
   els.historyRecoveryText.textContent =
     "检测到多份 v0.8.0 遗留历史。请选择要恢复的一份；CSSwitch 不会读取对话内容，也不会删除其他记录。若打开后发现选错，可在本次应用运行期间返回这里改选。";
@@ -75,17 +84,64 @@ function publishFinalizeUnknown() {
   renderList();
 }
 
-async function restoreHistoryChoice(reference) {
+async function restoreHistoryChoice(reference, resume = false) {
   if (!reference || isBusy()) return;
   setBusy(true, { kind: "historyRecovery" });
   setMsg("正在重新核验并恢复所选历史记录…");
   try {
-    const result = await call("restore_history_choice", { reference });
-    if (result && Array.isArray(result.choices)) showHistoryRecovery(result);
+    const result = await call("restore_history_choice", { reference, resume });
+    if (resume) {
+      if (result && result.history_recovery && Array.isArray(result.history_recovery.choices)) {
+        showHistoryRecovery({ choices: result.history_recovery.choices });
+      }
+      let consumer;
+      try {
+        consumer = await call("finalize_consumer_state", { outcome: result });
+      } catch (_) {
+        publishFinalizeUnknown();
+        setMsg("历史记录已恢复，但无法回读继续启动后的最终配置状态；不会误报为已应用。", "err");
+        await refreshStatus();
+        return;
+      }
+      getConfigState().selection_pending = !!consumer.selection_pending;
+      getConfigState().applied_profile_id = consumer.applied_profile_id || null;
+      renderList();
+      if (consumer.disposition !== "ready") {
+        setMsg(((result && (result.message || result.msg)) || "历史恢复后的继续启动未完成") + "；请检查后重试。", "err");
+        await refreshStatus();
+        return;
+      }
+      setMsg((result && result.msg) || "已恢复所选历史记录并启动。", "ok");
+      setBrowserFallback(result && result.fallback_url);
+      await refreshStatus();
+      return;
+    }
+    if (result && result.history_recovery && Array.isArray(result.history_recovery.choices)) {
+      showHistoryRecovery({ choices: result.history_recovery.choices });
+    } else if (result && Array.isArray(result.choices)) {
+      showHistoryRecovery(result);
+    }
+    let consumer;
+    try {
+      consumer = await call("finalize_consumer_state", { outcome: result });
+    } catch (_) {
+      publishFinalizeUnknown();
+      setMsg("历史记录恢复结果无法完成权威回读；不会误报为已完成。", "err");
+      await refreshStatus();
+      return;
+    }
+    getConfigState().selection_pending = !!consumer.selection_pending;
+    getConfigState().applied_profile_id = consumer.applied_profile_id || null;
+    renderList();
     const restoredMessage = result && result.message || "已恢复所选历史记录。";
+    if (!result || result.status !== "ok" || consumer.disposition !== "attention") {
+      setMsg(restoredMessage + " 请先完成恢复清理再重试。", "err");
+      await refreshStatus();
+      return;
+    }
     setMsg(restoredMessage + " 当前保持停止；请再次点击「一键开始」。", "ok");
   } catch (e) {
-    setMsg("恢复历史记录失败：" + e, "err");
+    setMsg((resume ? "恢复并启动失败：" : "恢复历史记录失败：") + runtimeCommandErrorText(e), "err");
   } finally {
     setBusy(false);
   }

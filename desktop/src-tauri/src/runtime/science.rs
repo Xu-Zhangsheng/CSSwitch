@@ -4,6 +4,10 @@
 //! crate-facing surface, private helper relationships, failure codes, and test
 //! identities stay unchanged while each responsibility has one file owner.
 
+// Science failures deliberately retain typed ownership receipts, runtime
+// identity, and recovery disposition inside this module boundary.
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};

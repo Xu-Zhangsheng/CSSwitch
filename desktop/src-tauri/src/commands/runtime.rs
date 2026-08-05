@@ -20,8 +20,7 @@ use crate::runtime::provider::{
 };
 use crate::runtime::science::{
     science_runtime_preflight as runtime_preflight, settings_change_needs_teardown,
-    SandboxScienceState, ScienceHostAdapter, ScienceStopOwnershipReceipt, ScienceStopRequest,
-    SCIENCE_DOWNLOAD_URL,
+    ScienceHostAdapter, SCIENCE_DOWNLOAD_URL,
 };
 use crate::runtime::settings::{
     remove_managed_sandbox_ssh_stub, system_ssh_config_path, validate_runtime_ports,
@@ -111,8 +110,9 @@ pub(crate) async fn restore_history_choice<R: tauri::Runtime>(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     reference: String,
-) -> Result<serde_json::Value, String> {
-    one_click::restore_history_choice_command(app, state, lifecycle, reference).await
+    resume: Option<bool>,
+) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
+    one_click::restore_history_choice_command(app, state, lifecycle, reference, resume).await
 }
 
 #[tauri::command]

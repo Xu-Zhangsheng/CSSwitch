@@ -689,6 +689,7 @@ pub const RUNTIME_TRANSACTION_SCHEMA_VERSION_V2: u32 = 2;
 pub enum RuntimeTransactionOperation {
     OneClick,
     ProfileSwitch,
+    HistoryRecovery,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -704,6 +705,9 @@ pub enum RuntimeTransactionPhase {
     VerifyScienceCatalog,
     StartFormalGateway,
     RecoverInterruptedGateway,
+    HistoryCredentialWritePending,
+    HistoryCredentialPublished,
+    ResumeAfterHistoryRestore,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -803,6 +807,7 @@ pub enum RuntimePriorStopState {
 pub enum RuntimeFinalizeAction {
     ClearJournal,
     CommitBinding { binding: RuntimeBindingCommit },
+    ResumeOneClick,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -841,6 +846,7 @@ pub struct RuntimeTransactionV2 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum RuntimeTransactionRecord {
     V1(RuntimeTransactionV1),
     V2(RuntimeTransactionV2),
@@ -889,6 +895,7 @@ impl Serialize for RuntimeTransactionRecord {
 
 #[derive(Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 enum RuntimeTransactionWire {
     V2(RuntimeTransactionV2),
     V1(RuntimeTransactionV1),
@@ -1130,6 +1137,9 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
         RuntimeFinalizeState::Intent {
             action: RuntimeFinalizeAction::CommitBinding { binding },
         } => valid_runtime_binding(binding),
+        RuntimeFinalizeState::Intent {
+            action: RuntimeFinalizeAction::ResumeOneClick,
+        } => true,
     };
     if !finalize_valid {
         return Err("runtime_transaction V2 finalize action is invalid".into());
@@ -1152,15 +1162,25 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
                 ..
             }
         );
+    if journal.operation == RuntimeTransactionOperation::HistoryRecovery
+        && (journal.compensation != RuntimeCompensationState::NotStarted
+            || journal.previous_gateway.is_some())
+    {
+        return Err("runtime_transaction V2 history recovery has sibling-owned state".into());
+    }
     let valid_phase = match (journal.operation, journal.phase) {
         (
             RuntimeTransactionOperation::OneClick,
-            RuntimeTransactionPhase::StartFormalGateway
-            | RuntimeTransactionPhase::RecoverInterruptedGateway,
-        ) => false,
-        (RuntimeTransactionOperation::OneClick, _) => {
-            one_click_identity && (pre_snapshot_prior_stop || registered_one_click)
-        }
+            RuntimeTransactionPhase::StopOldScience
+            | RuntimeTransactionPhase::StartGateway
+            | RuntimeTransactionPhase::AuthoritySnapshotActive
+            | RuntimeTransactionPhase::StartScienceEnvironmentPending
+            | RuntimeTransactionPhase::WaitScienceDbReverify
+            | RuntimeTransactionPhase::RestartScienceAfterDbHeal
+            | RuntimeTransactionPhase::VerifyScienceDbAfterRestart
+            | RuntimeTransactionPhase::VerifyScienceCatalog,
+        ) => one_click_identity && (pre_snapshot_prior_stop || registered_one_click),
+        (RuntimeTransactionOperation::OneClick, _) => false,
         (
             RuntimeTransactionOperation::ProfileSwitch,
             RuntimeTransactionPhase::StartFormalGateway
@@ -1173,6 +1193,86 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
                 && journal.finalize == RuntimeFinalizeState::NotStarted
         }
         (RuntimeTransactionOperation::ProfileSwitch, _) => false,
+        (RuntimeTransactionOperation::HistoryRecovery, RuntimeTransactionPhase::StopOldScience) => {
+            journal.runtime_fingerprint.is_some()
+                && journal.snapshot_ticket.is_none()
+                && journal.finalize == RuntimeFinalizeState::NotStarted
+        }
+        (
+            RuntimeTransactionOperation::HistoryRecovery,
+            RuntimeTransactionPhase::AuthoritySnapshotActive,
+        ) => {
+            journal.runtime_fingerprint.is_some()
+                && journal.snapshot_ticket.is_some()
+                && journal.finalize == RuntimeFinalizeState::NotStarted
+                && !matches!(journal.prior_stop, RuntimePriorStopState::Intent { .. })
+                && !matches!(
+                    journal.prior_stop,
+                    RuntimePriorStopState::Outcome {
+                        outcome: RuntimePriorStopOutcome::NotStopped
+                            | RuntimePriorStopOutcome::Unknown,
+                        ..
+                    }
+                )
+        }
+        (
+            RuntimeTransactionOperation::HistoryRecovery,
+            RuntimeTransactionPhase::HistoryCredentialWritePending,
+        ) => {
+            journal.runtime_fingerprint.is_some()
+                && journal.snapshot_ticket.is_some()
+                && journal.finalize == RuntimeFinalizeState::NotStarted
+                && !matches!(journal.prior_stop, RuntimePriorStopState::Intent { .. })
+                && !matches!(
+                    journal.prior_stop,
+                    RuntimePriorStopState::Outcome {
+                        outcome: RuntimePriorStopOutcome::NotStopped
+                            | RuntimePriorStopOutcome::Unknown,
+                        ..
+                    }
+                )
+        }
+        (
+            RuntimeTransactionOperation::HistoryRecovery,
+            RuntimeTransactionPhase::HistoryCredentialPublished,
+        ) => {
+            journal.runtime_fingerprint.is_some()
+                && journal.snapshot_ticket.is_some()
+                && matches!(
+                    journal.finalize,
+                    RuntimeFinalizeState::Intent {
+                        action: RuntimeFinalizeAction::ClearJournal
+                            | RuntimeFinalizeAction::ResumeOneClick,
+                    }
+                )
+                && !matches!(journal.prior_stop, RuntimePriorStopState::Intent { .. })
+                && !matches!(
+                    journal.prior_stop,
+                    RuntimePriorStopState::Outcome {
+                        outcome: RuntimePriorStopOutcome::NotStopped
+                            | RuntimePriorStopOutcome::Unknown,
+                        ..
+                    }
+                )
+        }
+        (
+            RuntimeTransactionOperation::HistoryRecovery,
+            RuntimeTransactionPhase::ResumeAfterHistoryRestore,
+        ) => {
+            journal.runtime_fingerprint.is_some()
+                && journal.snapshot_ticket.is_none()
+                && !matches!(journal.prior_stop, RuntimePriorStopState::Intent { .. })
+                && !matches!(
+                    journal.prior_stop,
+                    RuntimePriorStopState::Outcome {
+                        outcome: RuntimePriorStopOutcome::NotStopped
+                            | RuntimePriorStopOutcome::Unknown,
+                        ..
+                    }
+                )
+                && journal.finalize == RuntimeFinalizeState::NotStarted
+        }
+        (RuntimeTransactionOperation::HistoryRecovery, _) => false,
     };
     if !valid_phase {
         return Err("runtime_transaction V2 operation/phase identity is invalid".into());
@@ -1182,7 +1282,10 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
         RuntimeTransactionPhase::StopOldScience
         | RuntimeTransactionPhase::StartGateway
         | RuntimeTransactionPhase::AuthoritySnapshotActive
-        | RuntimeTransactionPhase::StartFormalGateway => {
+        | RuntimeTransactionPhase::StartFormalGateway
+        | RuntimeTransactionPhase::HistoryCredentialWritePending
+        | RuntimeTransactionPhase::HistoryCredentialPublished
+        | RuntimeTransactionPhase::ResumeAfterHistoryRestore => {
             journal.environment_exposure == RuntimeEnvironmentExposure::NotExposed
         }
         RuntimeTransactionPhase::StartScienceEnvironmentPending => {
@@ -1209,12 +1312,30 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
     if !gateway_outcome_valid {
         return Err("runtime_transaction V2 gateway outcome is invalid for phase".into());
     }
-    if journal.finalize != RuntimeFinalizeState::NotStarted
-        && (journal.operation != RuntimeTransactionOperation::OneClick
-            || journal.snapshot_ticket.is_none()
-            || journal.compensation != RuntimeCompensationState::NotStarted)
-    {
-        return Err("runtime_transaction V2 finalize intent has invalid ownership".into());
+    if journal.finalize != RuntimeFinalizeState::NotStarted {
+        let finalize_owner_valid = journal.snapshot_ticket.is_some()
+            && journal.compensation == RuntimeCompensationState::NotStarted
+            && matches!(
+                (&journal.operation, &journal.phase, &journal.finalize),
+                (
+                    RuntimeTransactionOperation::OneClick,
+                    _,
+                    RuntimeFinalizeState::Intent {
+                        action: RuntimeFinalizeAction::ClearJournal
+                            | RuntimeFinalizeAction::CommitBinding { .. },
+                    },
+                ) | (
+                    RuntimeTransactionOperation::HistoryRecovery,
+                    RuntimeTransactionPhase::HistoryCredentialPublished,
+                    RuntimeFinalizeState::Intent {
+                        action: RuntimeFinalizeAction::ClearJournal
+                            | RuntimeFinalizeAction::ResumeOneClick,
+                    },
+                )
+            );
+        if !finalize_owner_valid {
+            return Err("runtime_transaction V2 finalize intent has invalid ownership".into());
+        }
     }
     Ok(())
 }
@@ -2700,7 +2821,48 @@ pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
     let access = config_access();
     ensure_config_access_open(&access)?;
     let (secure, _fence) = open_config_writer(dir, true)?;
+    // `save_to` is also the explicit repair primitive for malformed legacy
+    // bytes. Preserve that overwrite contract, but enforce the HistoryRecovery
+    // fence whenever a valid current Config can be identified.
+    if let Ok(current) = load_from_secure(&secure) {
+        ensure_history_recovery_sibling_authority_unchanged(&current, cfg)?;
+    }
     save_to_secure(&secure, cfg)
+}
+
+#[cfg(test)]
+pub(crate) fn test_save_to_without_history_authority_guard(
+    dir: &Path,
+    cfg: &Config,
+) -> io::Result<()> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = open_config_writer(dir, true)?;
+    save_to_secure(&secure, cfg)
+}
+
+fn ensure_history_recovery_sibling_authority_unchanged(
+    current: &Config,
+    next: &Config,
+) -> io::Result<()> {
+    let history_open = matches!(
+        current.runtime_transaction.as_ref(),
+        Some(RuntimeTransactionRecord::V2(record))
+            if record.operation == RuntimeTransactionOperation::HistoryRecovery
+    );
+    if !history_open {
+        return Ok(());
+    }
+    let mut current_authority = current.clone();
+    current_authority.runtime_transaction = None;
+    let mut next_authority = next.clone();
+    next_authority.runtime_transaction = None;
+    if current_authority != next_authority {
+        return Err(io::Error::other(
+            "history recovery 正在持有完整 Config authority；拒绝 sibling config writer",
+        ));
+    }
+    Ok(())
 }
 
 fn save_to_secure(secure: &SecureDir, cfg: &Config) -> io::Result<()> {
@@ -2944,6 +3106,7 @@ pub(crate) fn prepare_downgrade_to_v2(
     cfg: &Config,
     actions: &BTreeMap<String, CodexDowngradeAction>,
 ) -> Result<DowngradePreview, String> {
+    require_no_runtime_transaction(cfg)?;
     validate_profile_contracts(cfg).map_err(|error| error.to_string())?;
     if !cfg.extra.is_empty()
         || !cfg.codex_network.extra.is_empty()
@@ -3203,7 +3366,9 @@ pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     ensure_config_access_open(&access)?;
     let (secure, _fence) = open_config_writer(dir, true)?;
     let mut cfg = load_from_secure(&secure)?;
+    let current = cfg.clone();
     f(&mut cfg);
+    ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)?;
     #[cfg(test)]
     if CONFIG_UPDATE_COMMIT_FAILURE
         .lock()
@@ -3229,8 +3394,11 @@ where
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
     let (secure, _fence) = open_config_writer(dir, true).map_err(|error| error.to_string())?;
     let mut cfg = load_from_secure(&secure).map_err(|error| error.to_string())?;
+    let current = cfg.clone();
     let (result, changed) = f(&mut cfg)?;
     if changed {
+        ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
+            .map_err(|error| error.to_string())?;
         save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
     }
     Ok(result)
@@ -3247,8 +3415,11 @@ where
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
     let (secure, _fence) = open_config_writer(dir, true).map_err(|error| error.to_string())?;
     let mut cfg = load_from_secure(&secure).map_err(|error| error.to_string())?;
+    let current = cfg.clone();
     let (result, changed) = f(&mut cfg)?;
     if changed {
+        ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
+            .map_err(|error| error.to_string())?;
         let _ = write_rolling_backup_in(&secure);
         save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
     }
@@ -3389,6 +3560,41 @@ mod tests {
             gateway_stop_outcome: RuntimeGatewayStopOutcome::NotAttempted,
             prior_stop: RuntimePriorStopState::NotRequired,
             finalize: RuntimeFinalizeState::NotStarted,
+        }
+    }
+
+    fn valid_history_v2(phase: RuntimeTransactionPhase) -> RuntimeTransactionV2 {
+        let snapshot_ticket = matches!(
+            phase,
+            RuntimeTransactionPhase::AuthoritySnapshotActive
+                | RuntimeTransactionPhase::HistoryCredentialWritePending
+                | RuntimeTransactionPhase::HistoryCredentialPublished
+        )
+        .then(|| RuntimeSnapshotTicket {
+            managed_id: ".one-click-rollback-fedcba9876543210fedcba9876543210".into(),
+        });
+        let finalize = if phase == RuntimeTransactionPhase::HistoryCredentialPublished {
+            RuntimeFinalizeState::Intent {
+                action: RuntimeFinalizeAction::ClearJournal,
+            }
+        } else {
+            RuntimeFinalizeState::NotStarted
+        };
+        RuntimeTransactionV2 {
+            schema_version: RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "history-v2".into(),
+            operation: RuntimeTransactionOperation::HistoryRecovery,
+            target_profile_id: "target-profile".into(),
+            phase,
+            runtime_fingerprint: Some("a".repeat(64)),
+            environment_exposure: RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket,
+            previous_binding: None,
+            previous_gateway: None,
+            compensation: RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: RuntimePriorStopState::NotRequired,
+            finalize,
         }
     }
 
@@ -3557,6 +3763,15 @@ mod tests {
             prior_stop: RuntimePriorStopState::NotRequired,
             finalize: RuntimeFinalizeState::NotStarted,
         });
+        for phase in [
+            RuntimeTransactionPhase::StopOldScience,
+            RuntimeTransactionPhase::AuthoritySnapshotActive,
+            RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryCredentialPublished,
+            RuntimeTransactionPhase::ResumeAfterHistoryRestore,
+        ] {
+            production_records.push(valid_history_v2(phase));
+        }
         for outcome in [
             RuntimeGatewayStopOutcome::Pending,
             RuntimeGatewayStopOutcome::Stopped,
@@ -3641,6 +3856,96 @@ mod tests {
         ));
         assert!(serde_json::from_value::<RuntimeTransactionRecord>(
             serde_json::to_value(one_click_gateway_recovery).unwrap()
+        )
+        .is_err());
+
+        for history_only_phase in [
+            RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryCredentialPublished,
+            RuntimeTransactionPhase::ResumeAfterHistoryRestore,
+        ] {
+            let illegal = RuntimeTransactionRecord::V2(valid_one_click_v2(history_only_phase));
+            assert!(
+                serde_json::from_value::<RuntimeTransactionRecord>(
+                    serde_json::to_value(illegal).unwrap()
+                )
+                .is_err(),
+                "one-click must reject history-only phase {history_only_phase:?}"
+            );
+        }
+
+        let mut one_click_resume =
+            valid_one_click_v2(RuntimeTransactionPhase::VerifyScienceCatalog);
+        one_click_resume.finalize = RuntimeFinalizeState::Intent {
+            action: RuntimeFinalizeAction::ResumeOneClick,
+        };
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(
+            serde_json::to_value(RuntimeTransactionRecord::V2(one_click_resume)).unwrap()
+        )
+        .is_err());
+
+        let mut history_resume_with_snapshot = serde_json::to_value(RuntimeTransactionRecord::V2(
+            valid_history_v2(RuntimeTransactionPhase::ResumeAfterHistoryRestore),
+        ))
+        .unwrap();
+        history_resume_with_snapshot["snapshot_ticket"] = serde_json::json!({
+            "managed_id": ".one-click-rollback-fedcba9876543210fedcba9876543210"
+        });
+        assert!(
+            serde_json::from_value::<RuntimeTransactionRecord>(history_resume_with_snapshot)
+                .is_err()
+        );
+
+        let mut history_without_config_authority =
+            serde_json::to_value(RuntimeTransactionRecord::V2(valid_history_v2(
+                RuntimeTransactionPhase::HistoryCredentialPublished,
+            )))
+            .unwrap();
+        history_without_config_authority
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime_fingerprint");
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(
+            history_without_config_authority
+        )
+        .is_err());
+
+        for (field, value) in [
+            (
+                "compensation",
+                serde_json::json!({"state": "in_progress", "step": "stop_gateway"}),
+            ),
+            (
+                "previous_gateway",
+                serde_json::json!({
+                    "provider": "deepseek",
+                    "shim": "anthropic",
+                    "launch_id": "launch-id",
+                    "provider_contract_id": "deepseek-native",
+                    "provider_contract_digest": "contract-digest",
+                    "catalog_fp": "catalog-fp"
+                }),
+            ),
+        ] {
+            let mut illegal_terminal = serde_json::to_value(RuntimeTransactionRecord::V2(
+                valid_history_v2(RuntimeTransactionPhase::ResumeAfterHistoryRestore),
+            ))
+            .unwrap();
+            illegal_terminal[field] = value;
+            assert!(
+                serde_json::from_value::<RuntimeTransactionRecord>(illegal_terminal).is_err(),
+                "history terminal must reject sibling-owned {field}"
+            );
+        }
+
+        let mut history_commit_without_finalize =
+            serde_json::to_value(RuntimeTransactionRecord::V2(valid_history_v2(
+                RuntimeTransactionPhase::HistoryCredentialPublished,
+            )))
+            .unwrap();
+        history_commit_without_finalize["finalize"] = serde_json::json!({"state": "not_started"});
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(
+            history_commit_without_finalize
         )
         .is_err());
     }
@@ -4724,6 +5029,53 @@ mod tests {
         };
         let actions = BTreeMap::from([("c1".into(), CodexDowngradeAction::Remove)]);
         assert!(prepare_downgrade_to_v2(&cfg, &actions).is_err());
+    }
+
+    #[test]
+    fn downgrade_rejects_every_history_phase_before_export_backup_or_config_write() {
+        for phase in [
+            RuntimeTransactionPhase::StopOldScience,
+            RuntimeTransactionPhase::AuthoritySnapshotActive,
+            RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryCredentialPublished,
+            RuntimeTransactionPhase::ResumeAfterHistoryRestore,
+        ] {
+            let root = tmpdir();
+            let dir = root.join(format!("history-downgrade-{phase:?}"));
+            let export = root.join(format!("history-export-{phase:?}.json"));
+            let mut record = valid_history_v2(phase);
+            record.target_profile_id = "codex-history".into();
+            let cfg = Config {
+                profiles: vec![codex_profile("codex-history")],
+                active_id: "codex-history".into(),
+                runtime_transaction: Some(RuntimeTransactionRecord::V2(record.clone())),
+                ..Default::default()
+            };
+            save_to(&dir, &cfg).unwrap();
+            let before = fs::read(config_path(&dir)).unwrap();
+            let manifest = br#"{"schema_version":2,"sentinel":"history-owned"}"#;
+            fs::write(dir.join(PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE), manifest).unwrap();
+            let actions = BTreeMap::from([(
+                "codex-history".into(),
+                CodexDowngradeAction::ExportThenRemove,
+            )]);
+
+            let preview_error = prepare_downgrade_to_v2(&cfg, &actions).unwrap_err();
+            assert!(preview_error.contains("runtime_transaction_in_progress"));
+            let commit_error = downgrade_to_v2(&dir, &actions, Some(&export)).unwrap_err();
+            assert!(commit_error.contains("runtime_transaction_in_progress"));
+            assert_eq!(fs::read(config_path(&dir)).unwrap(), before);
+            assert_eq!(
+                load_from(&dir).unwrap().runtime_transaction,
+                Some(RuntimeTransactionRecord::V2(record))
+            );
+            assert_eq!(
+                fs::read(dir.join(PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE)).unwrap(),
+                manifest
+            );
+            assert!(!export.exists());
+            assert!(!dir.join("config.json.bak").exists());
+        }
     }
 
     #[test]

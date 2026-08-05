@@ -94,6 +94,16 @@ fn classify(outcome: &Value, readback: &FinalizeReadModel) -> FinalizeConsumerDi
         };
     }
 
+    if action == Some("history_choice_restored") {
+        return match (status, recovery) {
+            (Some("ok"), None | Some("not_needed"))
+            | (Some("degraded"), Some("cleanup_required" | "manual_recovery_required")) => {
+                FinalizeConsumerDisposition::Attention
+            }
+            _ => FinalizeConsumerDisposition::Manual,
+        };
+    }
+
     let normal_action = matches!(action, Some("started" | "reopened"));
     let supported_outcome = matches!(
         (status, recovery),
@@ -233,6 +243,26 @@ mod tests {
         );
         assert_eq!(history_with_existing_binding.applied_profile_id, None);
         assert!(history_with_existing_binding.selection_pending);
+        for history_restore in [
+            outcome("ok", "not_needed", "history_choice_restored"),
+            outcome("degraded", "cleanup_required", "history_choice_restored"),
+        ] {
+            assert_eq!(
+                classify(&history_restore, &cleared_match),
+                FinalizeConsumerDisposition::Attention
+            );
+        }
+        assert_eq!(
+            classify(
+                &outcome(
+                    "degraded",
+                    "manual_recovery_required",
+                    "history_choice_restored"
+                ),
+                &open_match,
+            ),
+            FinalizeConsumerDisposition::Manual
+        );
         assert_eq!(
             classify(
                 &outcome("degraded", "manual_recovery_required", "started"),

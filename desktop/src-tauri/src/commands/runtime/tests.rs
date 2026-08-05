@@ -4078,6 +4078,33 @@ fn r0_history_restore_rotates_all_references_only_after_success() {
 }
 
 #[test]
+fn f1_a_history_restore_and_resume_is_one_backend_operation() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        &[("CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE", "resume-success")],
+    );
+}
+
+#[test]
+fn f1_a_history_crash_and_concurrent_config_recovery_is_owned() {
+    for oracle in [
+        "post-snapshot-config-drift",
+        "credential-crash-replay",
+        "credential-crash-replay-config-drift",
+        "credential-crash-replay-config-race",
+        "credential-preauth-race-replay",
+        "cleanup-prepare-failure-resume",
+        "finalize-completion-failure-restore-only",
+        "finalize-completion-failure-resume",
+    ] {
+        run_exact_ignored_runtime_characterization(
+            "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+            &[("CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE", oracle)],
+        );
+    }
+}
+
+#[test]
 fn r0_one_click_history_attention_commits_choice_session_without_starting_science() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_r0_one_click_history_attention",
@@ -4349,7 +4376,16 @@ fn isolated_r0_history_restore_command_contract() {
             | "post-stop-config-drift"
             | "candidate-revalidation-failure"
             | "credential-write-failure"
+            | "post-snapshot-config-drift"
+            | "credential-crash-replay"
+            | "credential-crash-replay-config-drift"
+            | "credential-crash-replay-config-race"
+            | "credential-preauth-race-replay"
+            | "cleanup-prepare-failure-resume"
+            | "finalize-completion-failure-restore-only"
+            | "finalize-completion-failure-resume"
             | "success"
+            | "resume-success"
     ));
     let tmp = tmpdir("r0-history-restore");
     let home = tmp.join("home");
@@ -4376,6 +4412,27 @@ fn isolated_r0_history_restore_command_contract() {
     let config_dir = config::default_dir();
     let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
     cfg.reuse_system_ssh = false;
+    if matches!(
+        oracle.as_str(),
+        "credential-crash-replay"
+            | "credential-crash-replay-config-drift"
+            | "credential-crash-replay-config-race"
+            | "credential-preauth-race-replay"
+    ) {
+        cfg.experimental_codex_enabled = true;
+        cfg.profiles.push(Profile {
+            id: "history-replay-codex".into(),
+            name: "History replay unavailable Codex auth".into(),
+            template_id: "codex".into(),
+            category: "experimental".into(),
+            api_format: "openai_responses".into(),
+            credential_source: crate::provider_contracts::CredentialSource::CsswitchOauth,
+            credential_ref: Some("csswitch:codex:default".into()),
+            model_policy: crate::provider_contracts::ModelPolicy::DynamicCatalog,
+            ..Default::default()
+        });
+        cfg.active_id = "history-replay-codex".into();
+    }
     config::save_to(&config_dir, &cfg).unwrap();
     let sandbox_home = config_dir.join("sandbox").join("home");
     let science_data = sandbox_home.join(".claude-science");
@@ -4457,9 +4514,11 @@ fn isolated_r0_history_restore_command_contract() {
         authority.boot_attention = Some(serde_json::json!({"status": "history"}));
     }
     let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let supervisor = Arc::new(crate::codex_auth_supervisor::CodexAuthSupervisor::default());
     let app = tauri::test::mock_builder()
         .manage(state.clone())
-        .manage(lifecycle)
+        .manage(lifecycle.clone())
+        .manage(supervisor)
         .invoke_handler(tauri::generate_handler![super::restore_history_choice])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -4469,6 +4528,26 @@ fn isolated_r0_history_restore_command_contract() {
 
     let _config_drift = (oracle == "post-stop-config-drift")
         .then(super::one_click::test_arm_history_restore_post_stop_config_drift);
+    let _post_snapshot_config_drift = (oracle == "post-snapshot-config-drift")
+        .then(super::one_click::test_arm_history_restore_post_snapshot_config_drift);
+    let _credential_interrupt = matches!(
+        oracle.as_str(),
+        "credential-crash-replay"
+            | "credential-crash-replay-config-drift"
+            | "credential-crash-replay-config-race"
+            | "credential-preauth-race-replay"
+    )
+    .then(super::one_click::test_arm_history_restore_credential_interrupt);
+    let _cleanup_prepare_failure = (oracle == "cleanup-prepare-failure-resume").then(|| {
+        config::test_arm_pending_cleanup_lifecycle(Some(
+            config::PendingCleanupPublishFault::Prepare,
+        ))
+    });
+    let _finalize_completion_failure = matches!(
+        oracle.as_str(),
+        "finalize-completion-failure-restore-only" | "finalize-completion-failure-resume"
+    )
+    .then(sandbox_session::test_arm_history_finalize_completion_failure);
     if oracle == "pre-stop-rejection" {
         cfg.mode = "official".into();
         config::save_to(&config_dir, &cfg).unwrap();
@@ -4487,8 +4566,84 @@ fn isolated_r0_history_restore_command_contract() {
     let result = invoke_json(
         &webview,
         "restore_history_choice",
-        serde_json::json!({"reference": selected_reference}),
+        serde_json::json!({
+            "reference": selected_reference,
+            "resume": matches!(oracle.as_str(), "resume-success" | "cleanup-prepare-failure-resume" | "finalize-completion-failure-resume")
+        }),
     );
+    let interrupted_journal = matches!(
+        oracle.as_str(),
+        "credential-crash-replay"
+            | "credential-crash-replay-config-drift"
+            | "credential-crash-replay-config-race"
+            | "credential-preauth-race-replay"
+    )
+    .then(|| config::load_from(&config_dir).unwrap().runtime_transaction)
+    .flatten();
+    let pending_manifest_before_drift = (oracle == "credential-crash-replay-config-drift")
+        .then(|| config::read_pending_authority_cleanup_manifest(&config_dir).unwrap());
+    let drifted_replay_result = if oracle == "credential-crash-replay-config-drift" {
+        let mut current = config::load_from(&config_dir).unwrap();
+        current.sandbox_port = sandbox_port
+            .checked_add(1)
+            .filter(|port| *port != 8765)
+            .unwrap_or(sandbox_port.saturating_sub(1));
+        config::test_save_to_without_history_authority_guard(&config_dir, &current).unwrap();
+        Some(sandbox_session::replay_interrupted_history_recovery_before_auth(&state))
+    } else {
+        None
+    };
+    let _replay_config_writer = (oracle == "credential-crash-replay-config-race")
+        .then(sandbox_session::test_arm_history_replay_sibling_config_writer);
+    let raced_replay_result = (oracle == "credential-crash-replay-config-race")
+        .then(|| sandbox_session::replay_interrupted_history_recovery_before_auth(&state));
+    let (blocked_replay_result, journal_while_blocked, selected_org_while_blocked, replay_result) =
+        if oracle == "credential-crash-replay" {
+            let replay_listener = TcpListener::bind(("127.0.0.1", sandbox_port)).unwrap();
+            let blocked = super::one_click::one_click_login_cmd(
+                app.handle().clone(),
+                state.clone(),
+                lifecycle.clone(),
+                None,
+            );
+            let journal_while_blocked = config::load_from(&config_dir)
+                .unwrap()
+                .runtime_transaction
+                .is_some();
+            let selected_org_while_blocked =
+                fs::read_to_string(science_data.join("active-org.json"))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_str::<serde_json::Value>(&bytes).ok())
+                    .and_then(|value| value["org_uuid"].as_str().map(str::to_string));
+            drop(replay_listener);
+            let replay = super::one_click::one_click_login_cmd(
+                app.handle().clone(),
+                state.clone(),
+                lifecycle.clone(),
+                None,
+            );
+            (
+                Some(blocked),
+                journal_while_blocked,
+                selected_org_while_blocked,
+                Some(replay),
+            )
+        } else if oracle == "credential-preauth-race-replay" {
+            let pending = interrupted_journal
+                .clone()
+                .expect("race fixture must preserve the pending history record");
+            config::update(&config_dir, |current| current.runtime_transaction = None).unwrap();
+            let _race = super::one_click::test_arm_pre_auth_history_race(pending);
+            let replay = super::one_click::one_click_login_cmd(
+                app.handle().clone(),
+                state.clone(),
+                lifecycle.clone(),
+                None,
+            );
+            (None, false, None, Some(replay))
+        } else {
+            (None, false, None, None)
+        };
     let (current_references, boot_attention_present, runtime_present, confirmed_stopped) = {
         let authority = lock(&state);
         (
@@ -4522,6 +4677,15 @@ fn isolated_r0_history_restore_command_contract() {
         .and_then(|bytes| serde_json::from_str::<serde_json::Value>(&bytes).ok())
         .and_then(|value| value["org_uuid"].as_str().map(str::to_string));
     let marker_present_after = marker.is_file();
+    let journal_present_after = config::load_from(&config_dir)
+        .unwrap()
+        .runtime_transaction
+        .is_some();
+    let pending_manifest_after_drift = (oracle == "credential-crash-replay-config-drift")
+        .then(|| config::read_pending_authority_cleanup_manifest(&config_dir).unwrap());
+    let config_after = config::load_from(&config_dir).unwrap();
+    let reuse_system_ssh_after = config_after.reuse_system_ssh;
+    let sandbox_port_after = config_after.sandbox_port;
 
     if oracle == "pre-stop-rejection" {
         let safe_stop = {
@@ -4584,13 +4748,164 @@ fn isolated_r0_history_restore_command_contract() {
         }
         "credential-write-failure" => {
             assert!(
-                result
-                    .as_ref()
-                    .is_err_and(|error| error.contains("符号链接")),
+                result.as_ref().is_err_and(|error| {
+                    error.contains("符号链接")
+                        && !error.contains(&tmp.to_string_lossy().to_string())
+                }),
                 "credential publication guard must fail after exact stop: {result:?}"
             );
             assert!(
                 exact_stopped && current_references == old_references && boot_attention_present
+            );
+        }
+        "post-snapshot-config-drift" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("concurrent config writer")
+                        && error.contains("drifted config authority")
+                }),
+                "snapshot compensation must reject a stale full-config restore: {result:?}"
+            );
+            assert!(
+                exact_stopped
+                    && current_references == old_references
+                    && boot_attention_present
+                    && reuse_system_ssh_after
+                    && journal_present_after,
+                "concurrent config must survive and exact recovery evidence must remain: reuse_system_ssh={reuse_system_ssh_after}, journal={journal_present_after}, result={result:?}"
+            );
+        }
+        "credential-crash-replay" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("interrupted history credential publication")
+                }),
+                "fixture must stop after credential files but before durable commit: {result:?}"
+            );
+            assert!(matches!(
+                interrupted_journal,
+                Some(config::RuntimeTransactionRecord::V2(
+                    config::RuntimeTransactionV2 {
+                        operation: config::RuntimeTransactionOperation::HistoryRecovery,
+                        phase: config::RuntimeTransactionPhase::HistoryCredentialWritePending,
+                        ..
+                    }
+                ))
+            ));
+            assert!(
+                blocked_replay_result.as_ref().is_some_and(|replay| {
+                    replay.as_ref().is_ok_and(|value| {
+                        value["status"] == "error"
+                            && value["action"] == "failed"
+                            && value["recovery_status"] == "manual_recovery_required"
+                    })
+                }) && journal_while_blocked
+                    && selected_org_while_blocked.as_deref() == Some(history_orgs[0])
+                    && replay_result.as_ref().is_some_and(|replay| {
+                        matches!(replay, Err(crate::commands::codex::RuntimeCommandError::Auth(_)))
+                    })
+                    && !journal_present_after
+                    && selected_org_after.is_none()
+                    && !marker_present_after,
+                "replay must fail closed while Science is live, then restore the exact before-image and clear the journal before unavailable Codex auth is checked: blocked={blocked_replay_result:?}, blocked_journal={journal_while_blocked}, blocked_org={selected_org_while_blocked:?}, replay={replay_result:?}, journal={journal_present_after}, selected_org={selected_org_after:?}, marker={marker_present_after}"
+            );
+        }
+        "credential-crash-replay-config-drift" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("interrupted history credential publication")
+                })
+                    && drifted_replay_result.as_ref().is_some_and(|replay| {
+                        replay.as_ref().is_err_and(|error| {
+                            error.contains("config authority drifted")
+                        })
+                    })
+                    && journal_present_after
+                    && selected_org_after.as_deref() == Some(history_orgs[0])
+                    && marker_present_after
+                    && pending_manifest_after_drift == pending_manifest_before_drift,
+                "restart replay must reject sibling Config drift before probing, credential restore, manifest transition, or journal clear: result={result:?}, replay={drifted_replay_result:?}, journal={journal_present_after}, selected_org={selected_org_after:?}, marker={marker_present_after}, manifest_before={pending_manifest_before_drift:?}, manifest_after={pending_manifest_after_drift:?}"
+            );
+        }
+        "credential-crash-replay-config-race" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("interrupted history credential publication")
+                })
+                    && raced_replay_result
+                        .as_ref()
+                        .is_some_and(|replay| replay.as_ref().is_ok_and(|replayed| *replayed))
+                    && !journal_present_after
+                    && selected_org_after.is_none()
+                    && !marker_present_after
+                    && sandbox_port_after == sandbox_port,
+                "a sibling writer inserted after replay validation must be rejected by the central Config authority fence before any drift commits, while replay converges normally: result={result:?}, replay={raced_replay_result:?}, journal={journal_present_after}, selected_org={selected_org_after:?}, marker={marker_present_after}"
+            );
+        }
+        "credential-preauth-race-replay" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("interrupted history credential publication")
+                })
+                    && replay_result.as_ref().is_some_and(|replay| {
+                        matches!(replay, Err(crate::commands::codex::RuntimeCommandError::Auth(_)))
+                    })
+                    && !journal_present_after
+                    && selected_org_after.is_none()
+                    && !marker_present_after,
+                "a pending history journal inserted after the first check must replay before provider auth and still return the later auth failure: result={result:?}, replay={replay_result:?}, journal={journal_present_after}, selected_org={selected_org_after:?}, marker={marker_present_after}"
+            );
+        }
+        "cleanup-prepare-failure-resume" => {
+            let returned_references = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value["history_recovery"]["choices"].as_array())
+                .map(|choices| {
+                    choices
+                        .iter()
+                        .filter_map(|choice| choice["reference"].as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert!(
+                result.as_ref().is_ok_and(|value| {
+                    value["status"] == "degraded"
+                        && value["recovery_status"] == "manual_recovery_required"
+                        && value["history_recovery"]["status"] == "restored"
+                }) && exact_stopped
+                    && journal_present_after
+                    && returned_references == current_references
+                    && current_references.iter().all(|reference| !old_references.contains(reference))
+                    && selected_org_after.as_deref() == Some(history_orgs[0])
+                    && marker_present_after,
+                "cleanup preparation failure must preserve the rotated references and exact recovery journal in a degraded DTO: result={result:?}, journal={journal_present_after}, old={old_references:?}, current={current_references:?}, returned={returned_references:?}"
+            );
+        }
+        "finalize-completion-failure-restore-only" | "finalize-completion-failure-resume" => {
+            let returned_references = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value["history_recovery"]["choices"].as_array())
+                .map(|choices| {
+                    choices
+                        .iter()
+                        .filter_map(|choice| choice["reference"].as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert!(
+                result.as_ref().is_ok_and(|value| {
+                    value["status"] == "degraded"
+                        && value["recovery_status"] == "manual_recovery_required"
+                        && value["history_recovery"]["status"] == "restored"
+                }) && exact_stopped
+                    && journal_present_after
+                    && returned_references == current_references
+                    && current_references.iter().all(|reference| !old_references.contains(reference))
+                    && selected_org_after.as_deref() == Some(history_orgs[0])
+                    && marker_present_after,
+                "finalize completion failure must preserve nested rotated references for restore-only and resume while retaining exact recovery evidence: result={result:?}, journal={journal_present_after}, old={old_references:?}, current={current_references:?}, returned={returned_references:?}"
             );
         }
         "success" => {
@@ -4627,6 +4942,44 @@ fn isolated_r0_history_restore_command_contract() {
                     && selected_org_after.as_deref() == Some(history_orgs[0])
                     && marker_present_after,
                 "successful history restore must rotate every reference, select only the chosen org, and leave Science stopped for the frontend's separate one-click: stopped={exact_stopped}, serve_count={serve_count:?}, old={old_references:?}, current={current_references:?}, returned={returned_references:?}, boot_attention_present={boot_attention_present}, selected_org={selected_org_after:?}, marker_present={marker_present_after}"
+            );
+        }
+        "resume-success" => {
+            let returned_references = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value["history_recovery"]["choices"].as_array())
+                .map(|choices| {
+                    choices
+                        .iter()
+                        .filter_map(|choice| choice["reference"].as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert!(
+                result.as_ref().is_ok_and(|value| {
+                    value["status"] == "ok"
+                        && value["action"] == "started"
+                        && value["history_recovery"]["status"] == "restored"
+                }),
+                "combined history restore-and-resume must return the one-click result from one backend command: {result:?}"
+            );
+            assert!(
+                runtime_present
+                    && listener_after.is_some()
+                    && receipt_exists
+                    && confirmed_stopped.is_none()
+                    && serve_count.trim() == "2"
+                    && current_references.len() == old_references.len()
+                    && current_references
+                        .iter()
+                        .all(|current| !old_references.contains(current))
+                    && returned_references == current_references
+                    && !boot_attention_present
+                    && !journal_present_after
+                    && selected_org_after.as_deref() == Some(history_orgs[0])
+                    && marker_present_after,
+                "combined history restore-and-resume must commit credentials, rotate references, consume the exact durable handoff, and publish a fresh managed runtime: runtime_present={runtime_present}, listener={listener_after:?}, receipt={receipt_exists}, confirmed_stopped={confirmed_stopped:?}, serve_count={serve_count:?}, journal={journal_present_after}, old={old_references:?}, current={current_references:?}, returned={returned_references:?}, selected_org={selected_org_after:?}"
             );
         }
         _ => unreachable!(),
@@ -4705,7 +5058,7 @@ fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
         .splitn(2, ".invoke_handler(tauri::generate_handler![")
         .nth(1)
         .expect("invoke handler must exist")
-        .splitn(2, "])\n")
+        .split("])\n")
         .next()
         .unwrap();
     assert!(!registration.contains("commands::runtime::start_proxy"));
@@ -8988,6 +9341,7 @@ fn r0_stop_all_stops_gateway_even_when_science_stop_fails() {
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
 fn s2_stop_all_wait_releases_read_model_and_stale_result_preserves_replacement() {
     let root = tmpdir("s2-stop-all-owner-cas");
     let prior_binary = root.join("prior-science");
@@ -9113,11 +9467,13 @@ fn r0_d_config(home: &Path, sandbox_port: u16, proxy_port: u16) -> PathBuf {
     let config_dir = config::default_dir();
     fs::create_dir_all(&config_dir).unwrap();
     fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let mut cfg = Config::default();
-    cfg.mode = "proxy".into();
-    cfg.sandbox_port = sandbox_port;
-    cfg.proxy_port = proxy_port;
-    cfg.reuse_system_ssh = false;
+    let cfg = Config {
+        mode: "proxy".into(),
+        sandbox_port,
+        proxy_port,
+        reuse_system_ssh: false,
+        ..Default::default()
+    };
     config::save_to(&config_dir, &cfg).unwrap();
     config_dir
 }

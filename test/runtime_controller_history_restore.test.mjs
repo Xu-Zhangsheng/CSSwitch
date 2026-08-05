@@ -36,8 +36,12 @@ function makeController(calls, options = {}) {
     historyRecoverySec: { hidden: true },
     historyRecoveryText: { textContent: "" },
     historyRecoveryChoices: {
-      replaceChildren() {},
-      appendChild() {},
+      replaceChildren() {
+        if (options.historyButtons) options.historyButtons.length = 0;
+      },
+      appendChild(button) {
+        if (options.historyButtons) options.historyButtons.push(button);
+      },
     },
     ltProxy: {},
     ltSandbox: {},
@@ -89,15 +93,19 @@ function projection(disposition, {
 test("successful history restore stays stopped until an explicit one-click", async () => {
   const calls = [];
   const messages = [];
+  const result = {
+    status: "ok",
+    recovery_status: "not_needed",
+    action: "history_choice_restored",
+    message: "已恢复所选历史记录；其他历史记录未被删除。",
+    choices: [{ reference: "rotated-history-reference-a", label: "历史记录 A" }],
+  };
   invokeHandler = async (command, args) => {
     calls.push([command, args]);
-    if (command === "restore_history_choice") {
-      return {
-        status: "ok",
-        action: "history_choice_restored",
-        message: "已恢复所选历史记录；其他历史记录未被删除。",
-        choices: [{ reference: "rotated-history-reference-a", label: "历史记录 A" }],
-      };
+    if (command === "restore_history_choice") return result;
+    if (command === "finalize_consumer_state") {
+      assert.deepEqual(args, { outcome: result });
+      return projection("attention", { applied: null, pending: true });
     }
     throw new Error(`unexpected command: ${command}`);
   };
@@ -107,12 +115,58 @@ test("successful history restore stays stopped until an explicit one-click", asy
   }).restoreHistoryChoice("history-reference-a");
 
   assert.deepEqual(calls, [
-    ["restore_history_choice", { reference: "history-reference-a" }],
+    ["restore_history_choice", { reference: "history-reference-a", resume: false }],
+    ["finalize_consumer_state", { outcome: result }],
   ]);
   assert.deepEqual(messages.at(-1), [
     "已恢复所选历史记录；其他历史记录未被删除。 当前保持停止；请再次点击「一键开始」。",
     "ok",
   ]);
+});
+
+test("restore-only degraded finalize refreshes choices and never reports success", async () => {
+  const calls = [];
+  const messages = [];
+  const historyButtons = [];
+  const result = {
+    status: "degraded",
+    recovery_status: "manual_recovery_required",
+    action: "history_choice_restored",
+    message: "历史记录已恢复，但 durable finalize 尚未完成",
+    choices: [{ reference: "rotated-top-level", label: "历史记录 A" }],
+    history_recovery: {
+      status: "restored",
+      choices: [{ reference: "rotated-nested", label: "历史记录 A" }],
+    },
+  };
+  invokeHandler = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "restore_history_choice") return result;
+    if (command === "finalize_consumer_state") {
+      assert.deepEqual(args, { outcome: result });
+      return projection("manual", {
+        journal: "open",
+        binding: "matches_active",
+        applied: null,
+        pending: true,
+      });
+    }
+    if (command === "status") return { proxy: "gray", sandbox: "gray", upstream: "gray" };
+    throw new Error(`unexpected command: ${command}`);
+  };
+
+  await makeController(calls, {
+    setMsg: (text, kind) => messages.push([text, kind]),
+    historyButtons,
+  }).restoreHistoryChoice("history-reference-a");
+
+  assert.deepEqual(historyButtons.map((button) => button.dataset.historyReference), [
+    "rotated-nested",
+    "rotated-nested",
+  ]);
+  assert.equal(messages.some(([, kind]) => kind === "ok"), false);
+  assert.equal(messages.at(-1)[1], "err");
+  assert.equal(calls.some(([command]) => command === "one_click_login"), false);
 });
 
 test("failed history restore never invokes one_click_login", async () => {
@@ -128,8 +182,86 @@ test("failed history restore never invokes one_click_login", async () => {
   await makeController(calls).restoreHistoryChoice("history-reference-b");
 
   assert.deepEqual(calls, [
-    ["restore_history_choice", { reference: "history-reference-b" }],
+    ["restore_history_choice", { reference: "history-reference-b", resume: false }],
   ]);
+});
+
+test("explicit restore-and-resume remains one backend operation", async () => {
+  const calls = [];
+  const messages = [];
+  const historyButtons = [];
+  const result = {
+    status: "ok",
+    action: "started",
+    msg: "已恢复并启动",
+    fallback_url: null,
+    history_recovery: {
+      status: "restored",
+      choices: [{ reference: "rotated-history-reference-a", label: "历史记录 A" }],
+    },
+  };
+  invokeHandler = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "restore_history_choice") return result;
+    if (command === "finalize_consumer_state") {
+      assert.deepEqual(args, { outcome: result });
+      return projection("ready");
+    }
+    if (command === "status") {
+      return { proxy: "green", sandbox: "green", upstream: "green" };
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+
+  await makeController(calls, {
+    setMsg: (text, kind) => messages.push([text, kind]),
+    historyButtons,
+  }).restoreHistoryChoice("history-reference-a", true);
+
+  assert.deepEqual(calls, [
+    ["restore_history_choice", { reference: "history-reference-a", resume: true }],
+    ["finalize_consumer_state", { outcome: result }],
+    ["status", undefined],
+  ]);
+  assert.deepEqual(messages.at(-1), ["已恢复并启动", "ok"]);
+  assert.deepEqual(
+    historyButtons.map((button) => [button.dataset.historyReference, button.dataset.historyResume]),
+    [
+      ["rotated-history-reference-a", "false"],
+      ["rotated-history-reference-a", "true"],
+    ],
+  );
+
+  const failedCalls = [];
+  const failedButtons = [];
+  const failedResult = {
+    status: "error",
+    recovery_status: "manual_recovery_required",
+    message: "历史已恢复，但继续启动失败",
+    history_recovery: {
+      status: "restored",
+      choices: [{ reference: "rotated-after-failure", label: "历史记录 B" }],
+    },
+  };
+  invokeHandler = async (command, args) => {
+    failedCalls.push([command, args]);
+    if (command === "restore_history_choice") return failedResult;
+    if (command === "finalize_consumer_state") return projection("manual_recovery_required", {
+      journal: "open",
+      binding: "unknown",
+      applied: null,
+      pending: true,
+    });
+    if (command === "status") return { proxy: "gray", sandbox: "gray", upstream: "gray" };
+    throw new Error(`unexpected command: ${command}`);
+  };
+  await makeController(failedCalls, { historyButtons: failedButtons })
+    .restoreHistoryChoice("old-reference-b", true);
+  assert.deepEqual(failedButtons.map((button) => button.dataset.historyReference), [
+    "rotated-after-failure",
+    "rotated-after-failure",
+  ]);
+  assert.equal(failedCalls.some(([command]) => command === "one_click_login"), false);
 });
 
 test("manual one-click publishes applied only from a confirmed normal cleanup readback", async () => {

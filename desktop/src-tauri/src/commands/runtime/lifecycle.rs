@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     st: &mut AppState,

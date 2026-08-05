@@ -1918,6 +1918,7 @@ fn complete_login_operation<R: tauri::Runtime>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn complete_login_operation_inner(
     supervisor: &SharedCodexAuthSupervisor,
     lifecycle: &SharedLifecycle,
