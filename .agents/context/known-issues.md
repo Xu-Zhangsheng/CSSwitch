@@ -1,25 +1,25 @@
 # 当前已知问题与证据缺口
 
-状态：当前；F1-A source candidate 修复后复审中，尚未形成 closure
+状态：当前；F1-A source-only closure 已完成，后续阶段尚未重新基线
 
 最后复核：2026-08-05（Asia/Taipei）
 
 失效条件：quality lineage、Doctor / one-click / history / config / boot read model、Science runtime provenance、release source、artifact、installed/live 或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A 与 C1-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
+本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A 与 F1-A 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
 ## 当前 source candidate
 
-最近已完成的 implementation closure 仍是 [C1-A cross-process config writer fence](../../docs/audits/2026-08-05-c1-a-config-writer-fence.md)。当前 worktree 的唯一候选是 F1-A durable history recovery；尚未绑定 implementation commit 或 exact-SHA source gate，因此本节不能当作完成证据。
+最近已完成的 implementation closure 是 [F1-A durable history recovery](../../docs/audits/2026-08-05-f1-a-history-recovery.md)。final source candidate 为 `c55942c23d87f17fb5add139247f97f1889a4333`；它已通过 fresh clean-context review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
 
-F1-A candidate 当前源码合同：
+F1-A 当前源码合同：
 
 - restore-only 与 restore-and-resume 都由一个 `restore_history_choice` backend destructive operation 驱动；默认 safe-stopped，显式 resume 只消费 exact terminal handoff 后进入既有 one-click owner；
 - credential 写前有 `HistoryCredentialWritePending` 与 identity-bound 私有 before-image 清单；重启可恢复 credential/marker 并收敛 snapshot/journal；operation-scoped fingerprint 冻结去除 journal 后的完整 Config authority，任一 sibling writer 漂移都会阻止 checkpoint/finalize/resume；
-- focused Rust / fake-Science / frontend / quality tests 已通过；前八轮 clean-context review 报告的 config 并发覆盖、credential crash replay、durability barrier、auth/replay 竞态、状态机 ownership、Science quiescence、cleanup/finalize DTO、私有路径投影、inventory coverage、replay fingerprint、validation-to-effect writer window 与 downgrade bypass 均已修复；修复后的 fresh review 与 exact-SHA 15-suite gate 仍待执行；
+- implementation 与 source-identity repair 均已由 fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0` 封口；run `ec61a51f1e8906935b71713a1c2e22ba` 的 exact-SHA 15-suite gate 为 PASS；
 - 该候选不证明 artifact、installed/live、真实 provider/Science/SSH、签名、公证或 release。
 
-F1-A 未通过 fresh review、提交和 exact-SHA source gate 前，不得选择或实施后续阶段；完成后也没有自动继承的新 implementation sole NEXT。
+F1-A 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
 
 ## 仍开放的源码与架构问题
 
