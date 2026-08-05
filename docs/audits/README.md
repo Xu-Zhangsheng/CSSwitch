@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [O1-E1 durable compensation journal foundation（2026-08-05）](2026-08-05-o1-e1-durable-compensation-journal.md)：path-free aggregate compensation journal、normal mutation guard、独立复审与 exact-SHA source gate closure。
 - [F1-R unified read model closure（2026-08-05）](2026-08-05-f1-r-read-model.md)：只读 config path、显式 notice ack、统一 sequenced boot publication、独立审查与 exact-SHA source gate closure。
 - [O1-D aggregate compensation phase closure（2026-08-05）](2026-08-05-o1-d-compensation-phase.md)：aggregate compensation phase 机械切分、独立复审与 exact-SHA source gate closure。
 - [O1-C managed Science launch phase closure（2026-08-05）](2026-08-05-o1-c-science-launch-phase.md)：managed Science launch phase 机械切分、独立复审与 exact-SHA source gate closure。
