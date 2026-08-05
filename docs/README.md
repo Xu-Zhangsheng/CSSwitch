@@ -15,7 +15,8 @@ Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agent
 
 ## 最新基线
 
-- [2026-08-05 F1-A durable history recovery closure](audits/2026-08-05-f1-a-history-recovery.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入 F1-R、giant coordinator、read model 或其他候选。
+- [2026-08-05 O1-B cold one-click coordinator closure](audits/2026-08-05-o1-b-cold-coordinator.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入 durable stepwise compensation、read model、Science provenance 或其他候选。
+- [2026-08-05 F1-A durable history recovery closure](audits/2026-08-05-f1-a-history-recovery.md)：O1-B 前一阶段的 durable history recovery closure。
 - [2026-08-05 C1-A cross-process config writer fence closure](audits/2026-08-05-c1-a-config-writer-fence.md)：F1-A 前一阶段的 canonical config writer fence closure。
 - [2026-08-04 O1-A typed runtime entry owner closure](audits/2026-08-04-o1-a-runtime-entry-owner.md)：C1-A 前一阶段的 production runtime entry owner closure。
 - [2026-08-04 F1-0 history boundary guard closure](audits/2026-08-04-f1-0-history-boundary-guard.md)：O1-A 前一阶段的 stopped history boundary closure。
