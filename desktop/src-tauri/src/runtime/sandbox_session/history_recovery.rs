@@ -1158,9 +1158,9 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
             };
         }
     };
+    crate::clear_boot_attention(&app);
     let refreshed_choices = {
         let mut app_state = lock(&state);
-        app_state.boot_attention = None;
         let session = app_state
             .history_recovery
             .as_mut()

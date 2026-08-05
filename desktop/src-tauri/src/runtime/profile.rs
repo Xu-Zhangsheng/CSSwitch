@@ -119,7 +119,7 @@ pub(crate) fn selection_pending_from_config(cfg: &config::Config) -> Result<bool
 }
 
 pub(crate) fn build_get_config(dir: &Path) -> Result<serde_json::Value, String> {
-    let cfg = config::load_from(dir).map_err(|e| e.to_string())?;
+    let cfg = config::load_current_from_read_only(dir).map_err(|e| e.to_string())?;
     let selection_pending = selection_pending_from_config(&cfg).unwrap_or(true);
     let resolved_codex_network = csswitch_codex_network::resolve_from_process(&cfg.codex_network)
         .map(|route| {
@@ -135,11 +135,8 @@ pub(crate) fn build_get_config(dir: &Path) -> Result<serde_json::Value, String> 
                 "error_code": error.code(),
             })
         });
-    // 一次性迁移提示（#9 甲）：读出后立即清盘，避免每次 get_config 重复提示。
     let notice = cfg.pending_notice.clone();
-    if notice.is_some() {
-        config::update(dir, |c| c.pending_notice = None).map_err(|e| e.to_string())?;
-    }
+    let notice_id = notice.as_deref().map(pending_notice_id);
     let profiles: Vec<serde_json::Value> = cfg
         .profiles
         .iter()
@@ -170,8 +167,38 @@ pub(crate) fn build_get_config(dir: &Path) -> Result<serde_json::Value, String> 
         "experimental_codex_enabled": cfg.experimental_codex_enabled,
         "codex_network": cfg.codex_network,
         "codex_network_resolved": resolved_codex_network,
-        "mode": cfg.mode, "pending_notice": notice,
+        "mode": cfg.mode, "pending_notice": notice, "pending_notice_id": notice_id,
     }))
+}
+
+fn pending_notice_id(notice: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"csswitch-pending-notice-v1\0");
+    hasher.update(notice.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+pub(crate) fn acknowledge_pending_notice_inner(
+    dir: &Path,
+    expected_notice_id: &str,
+) -> Result<serde_json::Value, String> {
+    if expected_notice_id.len() != 64
+        || !expected_notice_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("pending notice id 无效".into());
+    }
+    config::update_result(dir, |cfg| {
+        let Some(notice) = cfg.pending_notice.as_deref() else {
+            return Ok((json!({"status": "already_acknowledged"}), false));
+        };
+        if pending_notice_id(notice) != expected_notice_id {
+            return Ok((json!({"status": "stale"}), false));
+        }
+        cfg.pending_notice = None;
+        Ok((json!({"status": "acknowledged"}), true))
+    })
 }
 
 /// 模板注册表交前端铺 UI（单一来源，前端不复制常量）。
@@ -784,13 +811,13 @@ pub(crate) fn probe_kind_for_model(model: &str) -> scratch::ProbeKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_get_config, build_list_templates, build_preset_sync_preview, clear_profile_key_inner,
-        create_profile_inner, delete_profile_inner, ensure_codex_profile_inner,
-        is_canonical_codex_profile, is_main_list_model, merge_and_sort_models,
-        nonactive_probe_verdict, persist_profile_candidate_inner, probe_kind_for,
-        probe_kind_for_model, profile_capabilities, template_capabilities,
-        update_profile_connection_inner, update_profile_metadata_inner, CatalogEdit,
-        ConnectionEdit, EnsureCodexProfileDisposition,
+        acknowledge_pending_notice_inner, build_get_config, build_list_templates,
+        build_preset_sync_preview, clear_profile_key_inner, create_profile_inner,
+        delete_profile_inner, ensure_codex_profile_inner, is_canonical_codex_profile,
+        is_main_list_model, merge_and_sort_models, nonactive_probe_verdict,
+        persist_profile_candidate_inner, probe_kind_for, probe_kind_for_model,
+        profile_capabilities, template_capabilities, update_profile_connection_inner,
+        update_profile_metadata_inner, CatalogEdit, ConnectionEdit, EnsureCodexProfileDisposition,
     };
     use crate::{
         config,
@@ -1313,6 +1340,50 @@ mod tests {
             p["capabilities"]["model_discovery"],
             "anthropic_models_or_manual"
         );
+
+        config::update(&d, |cfg| {
+            cfg.pending_notice = Some("migration notice".into())
+        })
+        .unwrap();
+        let before_read = std::fs::read(d.join("config.json")).unwrap();
+        let first_read = build_get_config(&d).unwrap();
+        let second_read = build_get_config(&d).unwrap();
+        assert_eq!(first_read["pending_notice"], "migration notice");
+        assert_eq!(
+            first_read["pending_notice_id"],
+            second_read["pending_notice_id"]
+        );
+        assert_eq!(std::fs::read(d.join("config.json")).unwrap(), before_read);
+        assert_eq!(
+            config::load_current_from_read_only(&d)
+                .unwrap()
+                .pending_notice
+                .as_deref(),
+            Some("migration notice")
+        );
+
+        let stale = acknowledge_pending_notice_inner(&d, &"0".repeat(64)).unwrap();
+        assert_eq!(stale["status"], "stale");
+        assert_eq!(
+            config::load_current_from_read_only(&d)
+                .unwrap()
+                .pending_notice
+                .as_deref(),
+            Some("migration notice")
+        );
+        let notice_id = first_read["pending_notice_id"].as_str().unwrap();
+        assert_eq!(
+            acknowledge_pending_notice_inner(&d, notice_id).unwrap()["status"],
+            "acknowledged"
+        );
+        assert_eq!(
+            acknowledge_pending_notice_inner(&d, notice_id).unwrap()["status"],
+            "already_acknowledged"
+        );
+        assert!(config::load_current_from_read_only(&d)
+            .unwrap()
+            .pending_notice
+            .is_none());
     }
 
     #[test]

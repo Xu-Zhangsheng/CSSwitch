@@ -4,9 +4,10 @@ use serde_json::json;
 use tauri::State;
 
 use crate::runtime::profile::{
-    build_get_config, build_list_templates, build_preset_sync_preview, clear_profile_key_inner,
-    create_profile_with_catalog_inner, delete_profile_inner, persist_profile_candidate_inner,
-    update_profile_metadata_inner, CatalogEdit, ConnectionEdit,
+    acknowledge_pending_notice_inner, build_get_config, build_list_templates,
+    build_preset_sync_preview, clear_profile_key_inner, create_profile_with_catalog_inner,
+    delete_profile_inner, persist_profile_candidate_inner, update_profile_metadata_inner,
+    CatalogEdit, ConnectionEdit,
 };
 use crate::runtime::profile_switch::scratch_validate_candidate;
 use crate::runtime::provider::{reject_openai_custom_anthropic_base, resolve_launch_plan};
@@ -56,6 +57,13 @@ fn load_without_runtime_transaction(dir: &Path) -> Result<config::Config, String
 #[tauri::command]
 pub(crate) fn get_config() -> Result<serde_json::Value, String> {
     build_get_config(&config::default_dir())
+}
+
+#[tauri::command]
+pub(crate) fn acknowledge_pending_notice(
+    expected_notice_id: String,
+) -> Result<serde_json::Value, String> {
+    acknowledge_pending_notice_inner(&config::default_dir(), &expected_notice_id)
 }
 
 /// 模板注册表交前端铺 UI（新建向导用）。
@@ -806,7 +814,10 @@ mod tests {
         };
         config::save_to(&dir, &cfg).unwrap();
         let state = state_with_proxy_identity();
-        lock(&state).boot_attention = Some(serde_json::json!({"status": "keep"}));
+        lock(&state).boot.transition(
+            crate::BootState::Attention,
+            Some(serde_json::json!({"status": "keep"})),
+        );
 
         let result = pin_active_profile_in_dir(&dir, &state, "next").unwrap();
 
@@ -825,10 +836,8 @@ mod tests {
         assert_eq!(st.provider, "deepseek");
         assert_eq!(st.gateway_kind, "rust");
         assert_eq!(st.launch_id, "launch-current");
-        assert_eq!(
-            st.boot_attention,
-            Some(serde_json::json!({"status": "keep"}))
-        );
+        assert_eq!(st.boot.state, crate::BootState::Attention);
+        assert_eq!(st.boot.payload, Some(serde_json::json!({"status": "keep"})));
         assert!(st.sandbox.is_none());
         assert!(st.science_runtime.is_none());
         drop(st);

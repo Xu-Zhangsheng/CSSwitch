@@ -141,7 +141,7 @@ cleared、binding exact match 且 selection 不 pending 时可成为 ready；his
 cleared 时保持 attention；journal open、readback failure、unknown 或矛盾组合一律保持 manual。
 只有 ready 投影可携带 applied profile id；attention、manual 与 readback failure 对 UI 发布
 `applied_profile_id=null`、`selection_pending=true`，避免陈旧 binding 被呈现为本次已应用。
-auto-boot 的 failed/attention event 与 one-shot 补读在渲染 DTO 前执行同一 unknown publication；
+auto-boot 的 failed/attention publication event 与同 sequence 非消费式 snapshot 补读在渲染 DTO 前执行同一 unknown publication；
 这不改变或包裹原 one-click DTO。
 因此 atomic commit sync 与 rollback 双失败即使返回同一 degraded DTO，也按其后真实可读状态
 分类，不预设一定保留旧 binding 或 journal。projection 不 chmod、不携带 transaction record、

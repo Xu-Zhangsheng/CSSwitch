@@ -95,11 +95,12 @@ cold/healthy/profile-switch/recovery 内部流程经 `GatewayController` 启动�
 
 | Event | 发出方 | Payload | 当前边界 |
 |---|---|---|---|
-| `boot://failed` | auto-boot coordinator | JSON value（一键 failed DTO） | 与手动一键同 keys：`action/stage/status/recovery_status/environment_status/message/fallback_url`；frontend 兼容旧 string payload |
-| `boot://attention` | auto-boot coordinator | JSON value | 保留 history-choice 等 attention 对象 |
+| `boot://publication` | auto-boot coordinator | `{sequence,state,payload}` | `sequence` 在进程内单调递增；`state=failed|attention` 时 payload 保留完整一键 DTO，其他 state 为 `idle|starting|ready` 且 payload 为空 |
 | `codex-auth://operation` | Codex command | typed operation snapshot | sequence/state/error 等结构化字段保留 |
 
-frontend 启动时同时读取 `boot_error` / `boot_attention` command，并监听对应 event，覆盖 listener 注册前已经发生的启动结果。`boot_error` 现返回结构化 failed DTO（与 event 一致），不再只是纯 message 字符串。
+frontend 先监听 `boot://publication`，再读取非消费式 `boot_snapshot`。两条路径来自同一 `BootPublication`，使用相同 `sequence/state/payload` envelope；frontend 只接受更大的安全整数 sequence。因此 listener 建立前丢失的 event 可由 snapshot 补读，snapshot 与并发 event 的重复或倒序交付也不会重复展示。
+
+`get_config` 只读 canonical v4 config，不迁移、不归一化写回、不创建 writer fence，也不消费 `pending_notice`。返回值同时携带 notice 展示文本与确定性内容 identity；frontend 展示后显式调用 `acknowledge_pending_notice`。ack 只在 identity 仍匹配时清除 notice；重复 ack 成功幂等，旧 identity 不会清除并发产生的新 notice。启动时的 legacy migration 仍由 setup 的独立 config load owner 完成。
 
 ## 一键 DTO 与错误投影
 
@@ -114,7 +115,7 @@ frontend 启动时同时读取 `boot_error` / `boot_attention` command，并监�
 coarse stage 由 `OneClickFailureKind` 在产生点投影，不扫描 message 文案；当前 runtime
 journal writer 使用 typed V2 operation/phase/outcome，V1 只保留 fail-closed 兼容读取与原
 wire round-trip。typed journal phase 也不能与 UI coarse stage 无损互映。auto-boot 的
-`boot://failed` / `boot_error` 与手动一键共享 failed DTO shape；recovery/environment
+`boot://publication` / `boot_snapshot` 中 `state=failed` 的 payload 与手动一键共享 failed DTO shape；recovery/environment
 status 从 typed failure/compensation projection 产生，message 只用于展示。
 
 H4 在 one-click DTO 与 consumer publication 之间增加 `finalize_consumer_state`：它只读 canonical
@@ -124,7 +125,7 @@ applied profile id / selection pending；`attention/manual` 固定发布 unknown
 不 chmod、不清 notice、不返回 journal record、path、credential 或
 其他配置内容。manual UI 与 auto-boot 复用同一个 Rust classifier；journal open、回读失败或
 不一致组合不得发布 applied/`BootState::Ready`，message 仍只参与展示。
-auto-boot 的 failed/attention event 与启动后补读路径也必须把 frontend applied 展示发布为
+auto-boot publication 的 failed/attention event 与同 sequence snapshot 补读路径也必须把 frontend applied 展示发布为
 unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
 
 ## 选择、应用与诊断语义

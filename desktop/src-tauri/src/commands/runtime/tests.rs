@@ -1682,8 +1682,7 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
         .invoke_handler(tauri::generate_handler![
             super::one_click_login,
             super::status,
-            super::boot_error,
-            super::boot_attention
+            super::boot_snapshot
         ])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -1692,11 +1691,7 @@ fn isolated_ssh_late_failure_compensates_every_authority_and_retry_is_idempotent
         .build()
         .unwrap();
     let event_sinks = Arc::new(Mutex::new(Vec::<String>::new()));
-    for event_name in [
-        "codex-auth://operation",
-        "boot://failed",
-        "boot://attention",
-    ] {
+    for event_name in ["codex-auth://operation", "boot://publication"] {
         let observed = event_sinks.clone();
         handle.listen_any(event_name, move |event| {
             observed
@@ -2119,7 +2114,7 @@ exec '{}' "$@"
         .filter(|line| *line == "codex-auth status")
         .count();
     let ipc_ui_sinks = if codex_gateway_oracle {
-        ["status", "boot_error", "boot_attention"]
+        ["status", "boot_snapshot"]
             .into_iter()
             .map(|command| {
                 invoke_json(&webview, command, serde_json::json!({}))
@@ -2698,8 +2693,7 @@ fn isolated_real_ipc_rechecks_union_proof_after_serializer_wait() {
         .invoke_handler(tauri::generate_handler![
             super::one_click_login,
             super::status,
-            super::boot_error,
-            super::boot_attention
+            super::boot_snapshot
         ])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -4511,7 +4505,10 @@ fn isolated_r0_history_restore_command_contract() {
             ),
             choices,
         });
-        authority.boot_attention = Some(serde_json::json!({"status": "history"}));
+        authority.boot.transition(
+            crate::BootState::Attention,
+            Some(serde_json::json!({"status": "history"})),
+        );
     }
     let lifecycle = Arc::new(lifecycle::Lifecycle::new());
     let supervisor = Arc::new(crate::codex_auth_supervisor::CodexAuthSupervisor::default());
@@ -4658,7 +4655,7 @@ fn isolated_r0_history_restore_command_contract() {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
-            authority.boot_attention.is_some(),
+            authority.boot.state == crate::BootState::Attention,
             authority.science_runtime.is_some(),
             authority.science_confirmed_stopped.clone(),
         )
@@ -8833,8 +8830,7 @@ fn isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait() {
         .invoke_handler(tauri::generate_handler![
             super::one_click_login,
             super::status,
-            super::boot_error,
-            super::boot_attention
+            super::boot_snapshot
         ])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -8843,11 +8839,7 @@ fn isolated_real_ipc_rechecks_non_codex_credential_after_serializer_wait() {
         .build()
         .unwrap();
     let event_sinks = Arc::new(Mutex::new(Vec::<String>::new()));
-    for event_name in [
-        "codex-auth://operation",
-        "boot://failed",
-        "boot://attention",
-    ] {
+    for event_name in ["codex-auth://operation", "boot://publication"] {
         let observed = event_sinks.clone();
         handle.listen_any(event_name, move |event| {
             observed
@@ -9018,7 +9010,7 @@ exec '{}' "$@"
             .lines()
             .any(|line| line == "serve");
 
-    let ipc_ui_sinks = ["status", "boot_error", "boot_attention"]
+    let ipc_ui_sinks = ["status", "boot_snapshot"]
         .into_iter()
         .map(|command| {
             invoke_json(&webview, command, serde_json::json!({}))

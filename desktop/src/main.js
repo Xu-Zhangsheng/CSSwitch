@@ -37,6 +37,7 @@ let mode = "proxy"; // "proxy" 第三方 | "official" 官方
 let officialRuntimeState = "gray";
 // 当前配置快照（get_config 结果）。全 key 绝不在此，只有掩码。
 let configState = { profiles: [], templates: [], active_id: "", applied_profile_id: null, selection_pending: false, proxy_port: 18991, sandbox_port: 8990, reuse_system_ssh: false, experimental_codex_enabled: false, codex_network: { mode: "auto", proxy_url: "" }, codex_network_resolved: { source: "direct", proxy_scheme: null } };
+let lastBootSequence = -1;
 let pendingConfirm = null;          // 危险操作（清 key / 删除）的「再点一次确认」态
 
 const PAGE_META = {
@@ -561,41 +562,32 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   setPage(SKILLS_PREVIEW ? "skills" : "switch");
   await profileController.loadConfig();
+  const applyBootPublication = (publication) => {
+    if (!publication || !Number.isSafeInteger(publication.sequence) || publication.sequence < 0) return;
+    if (publication.sequence <= lastBootSequence) return;
+    if (!["idle", "starting", "ready", "failed", "attention"].includes(publication.state)) return;
+    lastBootSequence = publication.sequence;
+    const payload = publication.payload;
+    if (publication.state === "failed" && payload) {
+      runtimeController.publishFinalizeUnknown();
+      setMsg("自动启动未成功：" + formatBootFailure(payload) + "\n可检查配置后点「一键开始」重试。", "err");
+      runtimeController.refreshStatus();
+    } else if (publication.state === "attention" && payload) {
+      runtimeController.publishFinalizeUnknown();
+      if (payload.action === "history_choice_required") {
+        runtimeController.showHistoryRecovery(payload);
+        setMsg(payload.msg || "自动启动需要先选择要恢复的历史记录。", "err");
+      }
+      runtimeController.refreshStatus();
+    }
+  };
   try {
-    await Promise.all([
-      listen("boot://failed", (e) => {
-        runtimeController.publishFinalizeUnknown();
-        setMsg("自动启动未成功：" + formatBootFailure(e.payload) + "\n可检查配置后点「一键开始」重试。", "err");
-        runtimeController.refreshStatus();
-      }),
-      listen("boot://attention", (e) => {
-        runtimeController.publishFinalizeUnknown();
-        if (e.payload && e.payload.action === "history_choice_required") {
-          runtimeController.showHistoryRecovery(e.payload);
-          setMsg(e.payload.msg || "自动启动需要先选择要恢复的历史记录。", "err");
-        }
-        runtimeController.refreshStatus();
-      }),
-    ]);
+    await listen("boot://publication", (event) => applyBootPublication(event.payload));
   } catch (e) {
     setMsg("无法订阅自动启动状态：" + e, "err");
   }
   try {
-    const bootError = await call("boot_error");
-    if (bootError) {
-      runtimeController.publishFinalizeUnknown();
-      setMsg("自动启动未成功：" + formatBootFailure(bootError) + "\n可检查配置后点「一键开始」重试。", "err");
-    }
-  } catch (e) {}
-  try {
-    const attention = await call("boot_attention");
-    if (attention) {
-      runtimeController.publishFinalizeUnknown();
-      if (attention.action === "history_choice_required") {
-        runtimeController.showHistoryRecovery(attention);
-        setMsg(attention.msg || "自动启动需要先选择要恢复的历史记录。", "err");
-      }
-    }
+    applyBootPublication(await call("boot_snapshot"));
   } catch (e) {}
   try { els.verLabel.textContent = "v" + (await call("app_version")); } catch (e) {}
   await runtimeController.refreshStatus();

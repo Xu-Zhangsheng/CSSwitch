@@ -36,7 +36,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
     interrupted_environment_runtime_id: Option<&str>,
 ) -> Result<Value, TypedOneClickFailure> {
     let ssh_prevalidation =
-        crate::runtime::sandbox_session::prevalidate_one_click_system_ssh(&app, &cfg, &sbx_home)
+        crate::runtime::sandbox_session::prevalidate_one_click_system_ssh(&app, cfg, &sbx_home)
             .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
     let ssh_stub_transaction = cfg
         .reuse_system_ssh
@@ -197,7 +197,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
         &dir,
         &sbx_home,
         &auth_dir,
-        &cfg,
+        cfg,
         prior_science_for_compensation,
     ) {
         Ok(snapshot) => {
@@ -487,7 +487,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             auth_proof,
             &trace,
             &dir,
-            &cfg,
+            cfg,
             &auth_dir,
             &sbx_home,
             &launch,

@@ -157,6 +157,8 @@ export function mockInvoke(cmd, args) {
           };
         }),
       });
+    case "acknowledge_pending_notice":
+      return Promise.resolve({ status: "already_acknowledged" });
     case "list_templates":
       return Promise.resolve(MOCK_TEMPLATES.filter((t) => t.id !== "codex" || mockStore.experimental_codex_enabled));
     case "create_profile": {
@@ -356,8 +358,8 @@ export function mockInvoke(cmd, args) {
       if (QUERY.get("status") === "partial") return Promise.resolve({ proxy: "green", sandbox: "green", upstream: "amber" });
       if (QUERY.get("status") === "stopped") return Promise.resolve({ proxy: "amber", sandbox: "amber", upstream: "amber" });
       return Promise.resolve({ proxy: "green", sandbox: "green", upstream: "green" });
-    case "boot_error":
-      return Promise.resolve(null);
+    case "boot_snapshot":
+      return Promise.resolve({ sequence: 0, state: "idle", payload: null });
     case "app_version":
       return Promise.resolve("0.0.0-preview");
     case "run_doctor_read_only":

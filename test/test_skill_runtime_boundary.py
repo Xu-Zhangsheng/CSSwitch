@@ -506,8 +506,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         main = (ROOT / "desktop/src/main.js").read_text(encoding="utf-8")
         self.assertEqual(
             main.count("runtimeController.publishFinalizeUnknown();"),
-            4,
+            2,
         )
+        self.assertIn('listen("boot://publication"', main)
+        self.assertIn('call("boot_snapshot")', main)
+        self.assertIn("publication.sequence <= lastBootSequence", main)
+        self.assertNotIn('listen("boot://failed"', main)
+        self.assertNotIn('call("boot_attention")', main)
 
     def test_science_runtime_identity_is_reused_for_serve_status_url_and_stop(self):
         session = sandbox_session_source()

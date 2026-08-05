@@ -57,8 +57,8 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
         {
             let mut app_state = lock(&state);
             app_state.history_recovery = None;
-            app_state.boot_attention = None;
         }
+        crate::clear_boot_attention(&app);
         Ok(())
     })
 }
@@ -133,8 +133,8 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
         {
             let mut app_state = lock(&state);
             app_state.history_recovery = None;
-            app_state.boot_attention = None;
         }
+        crate::clear_boot_attention(&app);
         Ok(())
     })
 }

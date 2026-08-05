@@ -319,8 +319,16 @@ async function loadConfig(options) {
     applyMode(cfg.mode === "official" ? "official" : "proxy");
     renderList();
     showView("list");
-    // 一次性迁移提示（#9 甲）：后端 get_config 读后已清盘，只会出现一次。
-    if (cfg.pending_notice) setMsg(cfg.pending_notice, "ok");
+    if (cfg.pending_notice) {
+      setMsg(cfg.pending_notice, "ok");
+      if (cfg.pending_notice_id) {
+        try {
+          await call("acknowledge_pending_notice", { expectedNoticeId: cfg.pending_notice_id });
+        } catch (_) {
+          // The notice remains durable and will be offered again on a later read.
+        }
+      }
+    }
   } catch (e) {
     setMsg("读取配置失败：" + e, "err");
     if (opts.throwOnError) throw e;

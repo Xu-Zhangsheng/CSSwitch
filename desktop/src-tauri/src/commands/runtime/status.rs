@@ -232,10 +232,6 @@ pub(super) fn status_inner(state: State<'_, SharedAppState>) -> serde_json::Valu
     )
 }
 
-pub(super) fn boot_error_inner(state: State<'_, SharedAppState>) -> Option<serde_json::Value> {
-    lock(state.inner()).boot_error.clone()
-}
-
-pub(super) fn boot_attention_inner(state: State<'_, SharedAppState>) -> Option<serde_json::Value> {
-    lock(state.inner()).boot_attention.take()
+pub(super) fn boot_snapshot_inner(state: State<'_, SharedAppState>) -> serde_json::Value {
+    lock(state.inner()).boot.snapshot()
 }

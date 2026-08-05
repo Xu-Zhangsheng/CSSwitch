@@ -74,16 +74,60 @@ fn decide_launch(cfg: &config::Config) -> LaunchPath {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum BootState {
+pub(crate) enum BootState {
     #[default]
     Idle,
     Starting,
     Ready,
     Failed,
+    Attention,
 }
 
 fn should_begin_boot(state: BootState) -> bool {
-    matches!(state, BootState::Idle | BootState::Failed)
+    matches!(
+        state,
+        BootState::Idle | BootState::Failed | BootState::Attention
+    )
+}
+
+impl BootState {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+            Self::Attention => "attention",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BootPublication {
+    pub(crate) sequence: u64,
+    pub(crate) state: BootState,
+    pub(crate) payload: Option<serde_json::Value>,
+}
+
+impl BootPublication {
+    pub(crate) fn transition(
+        &mut self,
+        state: BootState,
+        payload: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        self.sequence = self.sequence.saturating_add(1);
+        self.state = state;
+        self.payload = payload;
+        self.snapshot()
+    }
+
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "sequence": self.sequence,
+            "state": self.state.code(),
+            "payload": self.payload,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -120,11 +164,9 @@ pub(crate) struct AppState {
     /// Exact private rollback roots whose cleanup previously failed. Paths are
     /// backend-only and retried before the next one-click mutation.
     pub(crate) pending_authority_cleanup: Vec<std::path::PathBuf>,
-    boot: BootState,
-    /// Structured one-click failure DTO (`action/stage/status/message/...`) or a
-    /// legacy plain-message object; never used for stage inference from text.
-    pub(crate) boot_error: Option<serde_json::Value>,
-    pub(crate) boot_attention: Option<serde_json::Value>,
+    /// Monotonic process-local boot publication. Snapshot and event consumers
+    /// observe the same sequence/state/payload envelope.
+    pub(crate) boot: BootPublication,
 }
 
 #[derive(Clone)]
@@ -366,28 +408,40 @@ fn run_native_exit_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: Na
     run_native_exit_event_with(app, event, |app, _| cleanup(app));
 }
 
-fn mark_boot_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, failure: serde_json::Value) {
+pub(crate) fn publish_boot_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    next: BootState,
+    payload: Option<serde_json::Value>,
+) -> serde_json::Value {
     let state = app.state::<SharedAppState>();
-    {
+    let publication = {
         let mut st = lock(state.inner());
-        st.boot = BootState::Failed;
-        st.boot_error = Some(failure.clone());
-        st.boot_attention = None;
-    }
+        st.boot.transition(next, payload)
+    };
+    let _ = app.emit("boot://publication", publication.clone());
+    publication
+}
+
+pub(crate) fn clear_boot_attention<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let state = app.state::<SharedAppState>();
+    let publication = {
+        let mut st = lock(state.inner());
+        if st.boot.state != BootState::Attention {
+            return;
+        }
+        st.boot.transition(BootState::Idle, None)
+    };
+    let _ = app.emit("boot://publication", publication);
+}
+
+fn mark_boot_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, failure: serde_json::Value) {
+    publish_boot_state(app, BootState::Failed, Some(failure));
     show_main_window(app);
-    let _ = app.emit("boot://failed", failure);
 }
 
 fn mark_boot_attention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, value: serde_json::Value) {
-    let state = app.state::<SharedAppState>();
-    {
-        let mut st = lock(state.inner());
-        st.boot = BootState::Idle;
-        st.boot_error = None;
-        st.boot_attention = Some(value.clone());
-    }
+    publish_boot_state(app, BootState::Attention, Some(value));
     show_main_window(app);
-    let _ = app.emit("boot://attention", value);
 }
 
 fn boot_prepare_failure(message: impl Into<String>) -> serde_json::Value {
@@ -459,18 +513,12 @@ fn run_boot_decision_with<R, Load, Decide, Open, Boot, Project, Show>(
     let state = app.state::<SharedAppState>();
     match decide(&cfg) {
         LaunchPath::ShowPanel => {
-            let mut st = lock(state.inner());
-            st.boot = BootState::Idle;
-            st.boot_error = None;
-            st.boot_attention = None;
+            publish_boot_state(&app, BootState::Idle, None);
             show(&app);
         }
         LaunchPath::OpenOfficial => match open_official() {
             Ok(()) => {
-                let mut st = lock(state.inner());
-                st.boot = BootState::Idle;
-                st.boot_error = None;
-                st.boot_attention = None;
+                publish_boot_state(&app, BootState::Idle, None);
             }
             Err(e) => mark_boot_failed(&app, boot_prepare_failure(e)),
         },
@@ -481,10 +529,7 @@ fn run_boot_decision_with<R, Load, Decide, Open, Boot, Project, Show>(
                 Ok(value) => {
                     match project_consumer_state(&value).map(|projection| projection.disposition) {
                         Ok(runtime::finalize_consumer::FinalizeConsumerDisposition::Ready) => {
-                            let mut st = lock(state.inner());
-                            st.boot = BootState::Ready;
-                            st.boot_error = None;
-                            st.boot_attention = None;
+                            publish_boot_state(&app, BootState::Ready, None);
                         }
                         Ok(runtime::finalize_consumer::FinalizeConsumerDisposition::Attention) => {
                             mark_boot_attention(&app, value);
@@ -525,16 +570,16 @@ fn run_boot_coordinator_with<R, Execute, Show>(
     Execute: FnOnce(tauri::AppHandle<R>),
     Show: FnOnce(&tauri::AppHandle<R>),
 {
-    {
+    let publication = {
         let state = app.state::<SharedAppState>();
         let mut st = lock(state.inner());
-        if !should_begin_boot(st.boot) {
+        if !should_begin_boot(st.boot.state) {
             show(&app);
             return;
         }
-        st.boot = BootState::Starting;
-    }
-
+        st.boot.transition(BootState::Starting, None)
+    };
+    let _ = app.emit("boot://publication", publication);
     execute(app);
 }
 
@@ -594,6 +639,7 @@ pub fn run() {
             commands::codex::codex_downgrade_preview,
             commands::codex::codex_downgrade_export_all,
             commands::profiles::get_config,
+            commands::profiles::acknowledge_pending_notice,
             commands::profiles::list_templates,
             commands::runtime::set_settings,
             commands::runtime::set_mode,
@@ -615,8 +661,7 @@ pub fn run() {
             commands::runtime::science_runtime_preflight,
             commands::runtime::open_science_download_page,
             commands::runtime::status,
-            commands::runtime::boot_error,
-            commands::runtime::boot_attention,
+            commands::runtime::boot_snapshot,
             commands::runtime::open_url,
             commands::skill_install::install_local_skill_package,
             commands::skill_listing::list_installed_skills,
@@ -681,8 +726,9 @@ mod tests {
         cleanup_for_exit, cleanup_for_exit_with, decide_launch_with_auto_boot, load_boot_config,
         lock, production_boot_science_command, production_native_exit_cleanup,
         run_boot_decision_with, run_native_exit_event_with, run_second_instance_callback_with,
-        run_startup_config_sequence, should_begin_boot, AppState, BootScienceCommand, BootState,
-        LaunchPath, NativeExitCleanup, NativeExitEvent, SharedAppState, SharedLifecycle,
+        run_startup_config_sequence, should_begin_boot, AppState, BootPublication,
+        BootScienceCommand, BootState, LaunchPath, NativeExitCleanup, NativeExitEvent,
+        SharedAppState, SharedLifecycle,
     };
 
     #[test]
@@ -699,7 +745,7 @@ mod tests {
         });
         for (projected, expected_boot) in [
             (FinalizeConsumerDisposition::Ready, BootState::Ready),
-            (FinalizeConsumerDisposition::Attention, BootState::Idle),
+            (FinalizeConsumerDisposition::Attention, BootState::Attention),
             (FinalizeConsumerDisposition::Manual, BootState::Failed),
         ] {
             let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
@@ -723,21 +769,21 @@ mod tests {
                 |_| {},
             );
             let authority = lock(&state);
-            assert_eq!(authority.boot, expected_boot);
+            assert_eq!(authority.boot.state, expected_boot);
+            assert_eq!(authority.boot.sequence, 1);
             match projected {
                 FinalizeConsumerDisposition::Ready => {
-                    assert!(authority.boot_error.is_none());
-                    assert!(authority.boot_attention.is_none());
+                    assert!(authority.boot.payload.is_none());
                 }
                 FinalizeConsumerDisposition::Attention => {
-                    assert_eq!(authority.boot_attention.as_ref(), Some(&dto));
-                    assert!(authority.boot_error.is_none());
+                    assert_eq!(authority.boot.payload.as_ref(), Some(&dto));
                 }
                 FinalizeConsumerDisposition::Manual => {
-                    assert_eq!(authority.boot_error.as_ref(), Some(&dto));
-                    assert!(authority.boot_attention.is_none());
+                    assert_eq!(authority.boot.payload.as_ref(), Some(&dto));
                 }
             }
+            assert_eq!(authority.boot.snapshot()["sequence"], 1);
+            assert_eq!(authority.boot.snapshot()["state"], expected_boot.code());
         }
 
         let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
@@ -757,8 +803,8 @@ mod tests {
             |_| {},
         );
         let authority = lock(&state);
-        assert_eq!(authority.boot, BootState::Failed);
-        assert_eq!(authority.boot_error.as_ref(), Some(&dto));
+        assert_eq!(authority.boot.state, BootState::Failed);
+        assert_eq!(authority.boot.payload.as_ref(), Some(&dto));
     }
 
     #[test]
@@ -1208,6 +1254,7 @@ mod tests {
     fn should_begin_boot_only_from_idle_or_failed() {
         assert!(should_begin_boot(BootState::Idle));
         assert!(should_begin_boot(BootState::Failed));
+        assert!(should_begin_boot(BootState::Attention));
         assert!(!should_begin_boot(BootState::Starting));
         assert!(!should_begin_boot(BootState::Ready));
     }
@@ -1227,13 +1274,16 @@ mod tests {
         for initial in [
             BootState::Idle,
             BootState::Failed,
+            BootState::Attention,
             BootState::Starting,
             BootState::Ready,
         ] {
             let mut authority = AppState::default();
-            authority.boot = initial;
-            authority.boot_error = Some(serde_json::json!({"sentinel": "error"}));
-            authority.boot_attention = Some(serde_json::json!({"sentinel": "attention"}));
+            authority.boot = BootPublication {
+                sequence: 7,
+                state: initial,
+                payload: Some(serde_json::json!({"sentinel": "payload"})),
+            };
             let state: SharedAppState = Arc::new(Mutex::new(authority));
             let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
             let app = tauri::test::mock_builder()
@@ -1251,7 +1301,7 @@ mod tests {
                 app.handle(),
                 |app| {
                     execute_count.set(execute_count.get() + 1);
-                    assert_eq!(lock(&state).boot, BootState::Starting);
+                    assert_eq!(lock(&state).boot.state, BootState::Starting);
                     run_boot_decision_with(
                         app,
                         || {
@@ -1289,36 +1339,36 @@ mod tests {
             );
 
             let authority = lock(&state);
-            if matches!(initial, BootState::Idle | BootState::Failed) {
+            if matches!(
+                initial,
+                BootState::Idle | BootState::Failed | BootState::Attention
+            ) {
                 assert_eq!(execute_count.get(), 1, "initial state: {initial:?}");
                 assert_eq!(load_count.get(), 1, "initial state: {initial:?}");
                 assert_eq!(decision_count.get(), 1, "initial state: {initial:?}");
                 assert_eq!(command_count.get(), 1, "initial state: {initial:?}");
                 assert_eq!(show_count.get(), 0, "initial state: {initial:?}");
-                assert_eq!(authority.boot, BootState::Ready);
-                assert!(authority.boot_error.is_none());
-                assert!(authority.boot_attention.is_none());
+                assert_eq!(authority.boot.state, BootState::Ready);
+                assert_eq!(authority.boot.sequence, 9);
+                assert!(authority.boot.payload.is_none());
             } else {
                 assert_eq!(execute_count.get(), 0, "initial state: {initial:?}");
                 assert_eq!(load_count.get(), 0, "initial state: {initial:?}");
                 assert_eq!(decision_count.get(), 0, "initial state: {initial:?}");
                 assert_eq!(command_count.get(), 0, "initial state: {initial:?}");
                 assert_eq!(show_count.get(), 1, "initial state: {initial:?}");
-                assert_eq!(authority.boot, initial);
+                assert_eq!(authority.boot.state, initial);
+                assert_eq!(authority.boot.sequence, 7);
                 assert_eq!(
-                    authority.boot_error,
-                    Some(serde_json::json!({"sentinel": "error"}))
-                );
-                assert_eq!(
-                    authority.boot_attention,
-                    Some(serde_json::json!({"sentinel": "attention"}))
+                    authority.boot.payload,
+                    Some(serde_json::json!({"sentinel": "payload"}))
                 );
             }
         }
         assert_eq!(
             *choices.borrow(),
-            vec![None, None],
-            "Idle and Failed callbacks must both pass no runtime choice"
+            vec![None, None, None],
+            "Idle, Failed, and Attention callbacks must pass no runtime choice"
         );
     }
 }

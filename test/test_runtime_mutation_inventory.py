@@ -111,10 +111,10 @@ EXPECTED_OPERATIONS = {
     "op.update-connection",
 }
 EXPECTED_SURFACE_CONTRACT = {
+    "acknowledge_pending_notice": ("config-nonruntime", "none"),
     "app_version": ("read-only", "none"),
     "apply_profile_preset_sync": ("intent-mutation", "op.sync-preset"),
-    "boot_attention": ("ui-one-shot", "none"),
-    "boot_error": ("read-only", "none"),
+    "boot_snapshot": ("read-only", "none"),
     "clear_profile_key": ("runtime-mutation", "op.revoke-profile"),
     "codex_auth_cancel": ("runtime-mutation", "op.codex-auth-cancel"),
     "codex_auth_logout": ("runtime-mutation", "op.codex-logout"),
@@ -128,7 +128,7 @@ EXPECTED_SURFACE_CONTRACT = {
     "delete_profile": ("runtime-mutation", "op.revoke-profile"),
     "fetch_models": ("runtime-mutation", "op.codex-catalog-mutation"),
     "finalize_consumer_state": ("read-only", "none"),
-    "get_config": ("config-nonruntime", "none"),
+    "get_config": ("read-only", "none"),
     "install_local_skill_package": ("host-bridge-mutation", "op.install-local-skill"),
     "list_installed_skills": ("read-only", "none"),
     "list_templates": ("read-only", "none"),
@@ -157,10 +157,10 @@ EXPECTED_SURFACE_CONTRACT = {
     "validate_profile_catalog_model": ("transient-probe", "none"),
 }
 EXPECTED_IMPLICIT_OPERATION_CONTRACT = {
+    "acknowledge_pending_notice": {"op.startup-config-migration"},
     "codex_auth_status": {"op.startup-config-migration"},
     "codex_downgrade_preview": {"op.startup-config-migration"},
     "create_profile": {"op.startup-config-migration"},
-    "get_config": {"op.startup-config-migration"},
     "list_templates": {"op.startup-config-migration"},
     "preview_profile_preset_sync": {"op.startup-config-migration"},
     "science_runtime_preflight": {"op.startup-config-migration"},
@@ -492,16 +492,18 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             {
                 name: (surface[name]["classification"], surface[name]["operation_id"])
                 for name in (
-                    "boot_attention",
+                    "acknowledge_pending_notice",
+                    "boot_snapshot",
                     "create_profile",
                     "get_config",
                     "update_profile_metadata",
                 )
             },
             {
-                "boot_attention": ("ui-one-shot", "none"),
+                "acknowledge_pending_notice": ("config-nonruntime", "none"),
+                "boot_snapshot": ("read-only", "none"),
                 "create_profile": ("config-nonruntime", "none"),
-                "get_config": ("config-nonruntime", "none"),
+                "get_config": ("read-only", "none"),
                 "update_profile_metadata": ("config-nonruntime", "none"),
             },
         )

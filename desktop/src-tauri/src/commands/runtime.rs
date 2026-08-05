@@ -133,13 +133,8 @@ pub(crate) fn status(state: State<'_, SharedAppState>) -> serde_json::Value {
 }
 
 #[tauri::command]
-pub(crate) fn boot_error(state: State<'_, SharedAppState>) -> Option<serde_json::Value> {
-    status::boot_error_inner(state)
-}
-
-#[tauri::command]
-pub(crate) fn boot_attention(state: State<'_, SharedAppState>) -> Option<serde_json::Value> {
-    status::boot_attention_inner(state)
+pub(crate) fn boot_snapshot(state: State<'_, SharedAppState>) -> serde_json::Value {
+    status::boot_snapshot_inner(state)
 }
 
 #[tauri::command]
