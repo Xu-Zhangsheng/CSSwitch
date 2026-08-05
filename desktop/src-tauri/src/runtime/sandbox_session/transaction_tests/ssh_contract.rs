@@ -586,11 +586,14 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         .expect("one-click product Rust source must parse");
     let cold_file = syn::parse_file(include_str!("../one_click/cold.rs"))
         .expect("cold one-click Rust source must parse");
+    let science_phase_file = syn::parse_file(include_str!("../one_click/cold/science_phase.rs"))
+        .expect("managed Science phase Rust source must parse");
     let ssh = syn::parse_file(include_str!("../ssh_preflight.rs"))
         .expect("ssh_preflight product Rust source must parse");
     let mut forbidden_cfg_macros = ForbiddenCfgMacros::default();
     forbidden_cfg_macros.visit_file(&one_click_file);
     forbidden_cfg_macros.visit_file(&cold_file);
+    forbidden_cfg_macros.visit_file(&science_phase_file);
     forbidden_cfg_macros.visit_file(&ssh);
     assert_eq!(
         forbidden_cfg_macros.0, 0,
@@ -601,6 +604,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let prevalidation = top_level(&ssh, "prevalidate_one_click_system_ssh");
     let one_click = top_level(&one_click_file, "one_click_login_with_options");
     let cold = top_level(&cold_file, "run_cold_one_click");
+    let science_phase = top_level(&science_phase_file, "run_managed_science_launch_phase");
     assert!(
         returns_result_pathbuf_string(validator),
         "shared wrapper validator must return Result<PathBuf, String>"
@@ -608,6 +612,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let mut product_environment = ProductEnvironmentFacts::default();
     product_environment.visit_file(&one_click_file);
     product_environment.visit_file(&cold_file);
+    product_environment.visit_file(&science_phase_file);
     product_environment.visit_file(&ssh);
     product_environment.environment_paths.sort();
     assert_eq!(
@@ -633,6 +638,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         ("pre-OAuth SSH validator", prevalidation),
         ("one-click entry path", one_click),
         ("cold one-click product path", cold),
+        ("managed Science launch phase", science_phase),
     ] {
         reject_cfg(&function.attrs, name);
     }
@@ -848,16 +854,38 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     );
     let mut one_click_cfg = CfgAttributes::default();
     one_click_cfg.visit_block(&cold.block);
+    one_click_cfg.visit_block(&science_phase.block);
     assert_eq!(
         one_click_cfg.0,
         ["test".to_string(), "test".to_string()],
         "one-click may contain only the exact host-proof and late-failure cfg(test) seams"
     );
-    let late_seam_statements = transaction_body
+    let phase_dispatch_statements = transaction_body
         .stmts
         .iter()
         .enumerate()
         .filter(|(_, statement)| {
+            statement_facts(statement)
+                .calls
+                .iter()
+                .any(|call| call == "run_managed_science_launch_phase")
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        phase_dispatch_statements.len(),
+        1,
+        "transaction body must contain exactly one managed Science phase dispatch"
+    );
+    assert!(
+        oauth_statements[0] < phase_dispatch_statements[0],
+        "managed Science launch must remain after OAuth mutation"
+    );
+    let late_seam_statements = science_phase
+        .block
+        .stmts
+        .iter()
+        .filter(|statement| {
             let facts = statement_facts(statement);
             facts.has_cfg
                 && facts
@@ -872,16 +900,10 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
                             && cfg_tokens(&expression.attrs[0]) == "test"
                 )
         })
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
+        .count();
     assert_eq!(
-        late_seam_statements.len(),
-        1,
-        "transaction body must contain exactly one top-level exact cfg(test) late-failure seam"
-    );
-    assert!(
-        oauth_statements[0] < late_seam_statements[0],
-        "the sole transaction cfg(test) seam must remain after OAuth mutation"
+        late_seam_statements, 1,
+        "managed Science phase must contain exactly one top-level exact cfg(test) late-failure seam"
     );
 
     let wrapper_locals = validator

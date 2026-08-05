@@ -202,6 +202,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let pending_cleanup_source = include_str!("../pending_cleanup.rs");
     let gateway_recovery_source = include_str!("../../proxy_lifecycle/recovery.rs");
     let cold_source = include_str!("../one_click/cold.rs");
+    let science_phase_source = include_str!("../one_click/cold/science_phase.rs");
     let healthy_reopen_source = include_str!("../one_click/healthy_reopen.rs");
     let profile_reconcile_source = include_str!("../../profile_switch.rs");
     let auto_boot_source = include_str!("../../../lib.rs");
@@ -570,8 +571,12 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     );
     let file = syn::parse_file(source).expect("one-click product Rust source must parse");
     let cold_file = syn::parse_file(cold_source).expect("cold one-click Rust source must parse");
+    let science_phase_file = syn::parse_file(science_phase_source)
+        .expect("managed Science phase Rust source must parse");
     let cold = top_level(&cold_file, "run_cold_one_click")
         .expect("cold one-click coordinator must remain module-level");
+    let science_phase = top_level(&science_phase_file, "run_managed_science_launch_phase")
+        .expect("managed Science launch phase must remain module-level");
     let recovery_restart = top_level(&file, "restart_managed_science_with_budget")
         .expect("DB recovery restart must remain a module-level bounded helper");
     assert!(
@@ -672,11 +677,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "prepare_science_ssh_bridge",
         "revoke_science_ssh_bridge",
         "ensure_active",
-        "spawn_launch",
-        "accept_launch_script",
-        "verify_health",
-        "verify_identity",
-        "commit_launch",
+        "run_managed_science_launch_phase",
     ] {
         assert!(
             transaction.calls.iter().any(|call| call == required),
@@ -684,20 +685,57 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         );
     }
     assert!(
-            !transaction.methods.iter().any(|method| method == "spawn")
-                && !transaction.methods.iter().any(|method| method == "wait")
-                && !transaction.methods.iter().any(|method| method == "status"),
-            "the one-click coordinator must use the typed ScienceHostAdapter instead of interpreting shell process methods"
-        );
-    assert!(
-            transaction
-                .methods
+        !transaction.calls.iter().any(|call| call == "spawn_launch")
+            && !transaction
+                .calls
                 .iter()
-                .filter(|method| *method == "validate_science_restore_root")
-                .count()
-                >= 3,
-            "one-click must revalidate exact Science/opaque-root bindings before protected writes and immediately before spawn"
+                .any(|call| call == "accept_launch_script")
+            && !transaction.calls.iter().any(|call| call == "verify_health")
+            && !transaction
+                .calls
+                .iter()
+                .any(|call| call == "verify_identity")
+            && !transaction.calls.iter().any(|call| call == "commit_launch"),
+        "the cold coordinator must delegate managed Science launch/health/receipt ownership"
+    );
+    assert!(
+        transaction
+            .methods
+            .iter()
+            .filter(|method| *method == "validate_science_restore_root")
+            .count()
+            >= 1,
+        "cold orchestration must validate the exact Science restore root before protected writes"
+    );
+    let mut science_phase_flow = FlowFacts::default();
+    science_phase_flow.visit_item_fn(science_phase);
+    for required in [
+        "spawn_launch",
+        "accept_launch_script",
+        "verify_health",
+        "verify_identity",
+        "commit_launch",
+    ] {
+        assert!(
+            science_phase_flow.calls.iter().any(|call| call == required),
+            "the managed Science phase must own the {required} edge"
         );
+    }
+    assert!(
+        science_phase_flow
+            .methods
+            .iter()
+            .filter(|method| *method == "validate_science_restore_root")
+            .count()
+            >= 2,
+        "managed Science launch must revalidate exact Science/opaque-root bindings immediately before spawn"
+    );
+    assert!(
+        !science_phase_flow.methods.iter().any(|method| method == "spawn")
+            && !science_phase_flow.methods.iter().any(|method| method == "wait")
+            && !science_phase_flow.methods.iter().any(|method| method == "status"),
+        "the managed Science phase must use the typed ScienceHostAdapter instead of interpreting shell process methods"
+    );
     let mut recovery_restart_flow = FlowFacts::default();
     recovery_restart_flow.visit_item_fn(recovery_restart);
     for required in [

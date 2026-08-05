@@ -323,6 +323,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         one_click_runtime = (
             ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
         ).read_text()
+        science_phase_runtime = (
+            ROOT
+            / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
+        ).read_text()
 
         submission = js.split("function catalogSubmission(kind)", 1)[1].split(
             "function catalogRolesChanged", 1
@@ -359,27 +363,47 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("setBrowserFallback(r.fallback_url)", one_click)
 
         gateway_ready = one_click_runtime.index("verify_gateway_model_catalog_traced(")
-        science_spawn = one_click_runtime.index(
-            "ScienceHostAdapter::spawn_launch", gateway_ready
+        science_dispatch = one_click_runtime.index(
+            "run_managed_science_launch_phase(", gateway_ready
         )
-        self.assertLess(gateway_ready, science_spawn)
-        self.assertEqual(one_click_runtime.count("write_one_click_checkpoint("), 8)
-        checkpoint_stages = re.findall(
+        verify_catalog = one_click_runtime.index(
+            "RuntimeTransactionPhase::VerifyScienceCatalog", science_dispatch
+        )
+        self.assertLess(gateway_ready, science_dispatch)
+        self.assertLess(science_dispatch, verify_catalog)
+        self.assertIn("ScienceHostAdapter::spawn_launch", science_phase_runtime)
+        self.assertNotIn("ScienceHostAdapter::spawn_launch", one_click_runtime)
+        self.assertEqual(
+            one_click_runtime.count("write_one_click_checkpoint(")
+            + science_phase_runtime.count("write_one_click_checkpoint("),
+            8,
+        )
+        cold_checkpoint_stages = re.findall(
             r"(?s)write_one_click_checkpoint\(\s*&dir,\s*&transaction_identity,\s*"
             r"&mut journal_progress,\s*config::RuntimeTransactionPhase::(\w+),\s*\)",
             one_click_runtime,
         )
+        science_checkpoint_stages = re.findall(
+            r"(?s)write_one_click_checkpoint\(\s*dir,\s*transaction_identity,\s*"
+            r"journal_progress,\s*config::RuntimeTransactionPhase::(\w+),\s*\)",
+            science_phase_runtime,
+        )
         self.assertEqual(
-            checkpoint_stages,
+            cold_checkpoint_stages,
             [
                 "StopOldScience",
                 "StartGateway",
                 "AuthoritySnapshotActive",
+                "VerifyScienceCatalog",
+            ],
+        )
+        self.assertEqual(
+            science_checkpoint_stages,
+            [
                 "StartScienceEnvironmentPending",
                 "WaitScienceDbReverify",
                 "RestartScienceAfterDbHeal",
                 "VerifyScienceDbAfterRestart",
-                "VerifyScienceCatalog",
             ],
         )
         self.assertRegex(
@@ -507,8 +531,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertIn("sandbox_listener_matches_runtime(healthy.port", science_host)
         self.assertIn("ScienceHostAdapter::url(sport, &launch_runtime)", session)
-        self.assertIn(
-            "ScienceHostAdapter::validate_launch_runtime(&launch_runtime)", session
+        self.assertRegex(
+            session,
+            r"ScienceHostAdapter::validate_launch_runtime\(&?launch_runtime\)",
         )
         self.assertIn("configure_science_stop_script_command(", science)
         self.assertIn("Path::new(&runtime.path)", science)
@@ -633,6 +658,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
                     ROOT
                     / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
                 ).read_text(),
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
+                ).read_text(),
             )
         )
         runtime_lifecycle = runtime_command_module("lifecycle")
@@ -721,7 +750,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         }
         production = "\n".join(production_sources.values())
         executable_path = rust_root / "runtime/science/executable.rs"
-        one_click_path = rust_root / "runtime/sandbox_session/one_click.rs"
+        science_phase_path = (
+            rust_root / "runtime/sandbox_session/one_click/cold/science_phase.rs"
+        )
         self.assertIn(
             "pub(crate) fn science_runtime_preflight",
             production_sources[executable_path],
@@ -732,7 +763,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertIn(
             "ScienceHostAdapter::spawn_launch",
-            production_sources[one_click_path],
+            production_sources[science_phase_path],
         )
         for bypass in (
             "probe_known_runtime(",
@@ -760,6 +791,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
                 (
                     ROOT
                     / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
+                ).read_text(),
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
                 ).read_text(),
             )
         )

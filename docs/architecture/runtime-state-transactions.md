@@ -167,9 +167,11 @@ snapshot ticket、cleanup path、credential 或写能力。
 6. 从同一 candidate Science identity 计算一次 64-hex fingerprint，并从已登记 authority snapshot 取得一次经验证的 `managed_id` ticket；首个 V2 checkpoint 同时携带两者；
 7. 准备 virtual login 与 SSH bridge；
 8. 启动/复用 Gateway，校验 model catalog；
-9. 通过 `ScienceHostAdapter` 启动 Science，按 typed exposure/health/identity phase 校验
-   listener、binary、data-dir 并提交 managed receipt；
-10. 复核 Science DB/catalog；
+9. cold coordinator 把冻结的 Gateway/SSH/authority/transaction 输入交给独立 managed Science
+   launch phase owner；该 owner 通过 `ScienceHostAdapter` 启动 Science，按 typed
+   exposure/health/identity phase 校验 listener、binary、data-dir 并提交 managed receipt；
+10. 同一 phase owner 复核 Science DB；需要修复时 exact-stop 首次 receipt、执行一次 bounded
+    restart、提交 fresh receipt 并复核 DB。返回 coordinator 后再推进 catalog checkpoint；
 11. best-effort 配置 Skill route/connector；该步骤可能写 route marker 并调用运行中 Science control；
 12. 计算 binding 并持久化 finalize intent；随后 best-effort 打开 UI 并构造成功结果，再把
     authority manifest 转为 cleanup-only/清理，最后按同一完整 V2 identity 原子提交 binding 并清 journal。
