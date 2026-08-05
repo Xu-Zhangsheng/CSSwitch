@@ -201,6 +201,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let command_projection_source = include_str!("../../../commands/runtime/one_click.rs");
     let pending_cleanup_source = include_str!("../pending_cleanup.rs");
     let gateway_recovery_source = include_str!("../../proxy_lifecycle/recovery.rs");
+    let cold_source = include_str!("../one_click/cold.rs");
     let healthy_reopen_source = include_str!("../one_click/healthy_reopen.rs");
     let profile_reconcile_source = include_str!("../../profile_switch.rs");
     let auto_boot_source = include_str!("../../../lib.rs");
@@ -408,14 +409,14 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && !gateway_recovery_source.contains("pub(crate) fn record(&self)"),
         "the terminal Gateway handoff must remain non-Clone and expose only consuming transfer APIs"
     );
-    let prior_intent = source
+    let prior_intent = cold_source
         .find("let intent = begin_prior_stop_intent")
         .expect("prior Science durable intent must remain on the production path");
-    let prior_stop = source[prior_intent..]
+    let prior_stop = cold_source[prior_intent..]
         .find("ScienceHostAdapter::stop")
         .map(|index| index + prior_intent)
         .expect("prior Science exact stop must remain after durable intent");
-    let prior_outcome = source[prior_stop..]
+    let prior_outcome = cold_source[prior_stop..]
         .find("publish_prior_stop_outcome")
         .map(|index| index + prior_stop)
         .expect("prior Science typed outcome must be published after the stop effect");
@@ -423,14 +424,14 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         prior_intent < prior_stop && prior_stop < prior_outcome,
         "durable PriorStopIntent must precede the exact stop and typed outcome publication"
     );
-    let success_finalize = source
+    let success_finalize = cold_source
         .rfind("begin_one_click_finalize(")
         .expect("success path must publish a finalize intent");
-    let authority_conversion = source[success_finalize..]
+    let authority_conversion = cold_source[success_finalize..]
         .find("prepare_success(&mut value)")
         .map(|index| index + success_finalize)
         .expect("success finalize must convert authority to cleanup-only");
-    let finalize_completion = source[authority_conversion..]
+    let finalize_completion = cold_source[authority_conversion..]
         .find("complete_one_click_finalize")
         .map(|index| index + authority_conversion)
         .expect("success finalize must atomically commit binding and clear journal");
@@ -440,16 +441,16 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     );
     assert!(
         source.contains("fn preserve_interrupted_success_finalize(")
-            && source.matches("prepare_success(&mut value).is_err()").count() == 2
-            && source
+            && cold_source.matches("prepare_success(&mut value).is_err()").count() == 2
+            && cold_source
                 .matches("complete_one_click_finalize(&dir, &mut journal_progress).is_err()")
                 .count()
                 == 2
-            && source
+            && cold_source
                 .matches("trace.finish(\"degraded=success_finalize_pending\");")
                 .count()
                 == 4
-            && source.matches("return Ok(value);").count() >= 4,
+            && cold_source.matches("return Ok(value);").count() >= 4,
         "authority conversion or atomic completion failure must preserve the finalize journal and return degraded instead of entering legacy compensation"
     );
     let ordinary_constructor = source
@@ -568,15 +569,16 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "incomplete pre-launch compensation must remain typed degraded"
     );
     let file = syn::parse_file(source).expect("one-click product Rust source must parse");
-    let one_click = top_level(&file, "one_click_login_with_options")
-        .expect("one-click product function must remain module-level");
+    let cold_file = syn::parse_file(cold_source).expect("cold one-click Rust source must parse");
+    let cold = top_level(&cold_file, "run_cold_one_click")
+        .expect("cold one-click coordinator must remain module-level");
     let recovery_restart = top_level(&file, "restart_managed_science_with_budget")
         .expect("DB recovery restart must remain a module-level bounded helper");
     assert!(
         top_level(&file, "compensate_one_click_failure").is_some(),
         "one-click must expose one release-visible failure compensation helper"
     );
-    let snapshot_index = one_click
+    let snapshot_index = cold
         .block
         .stmts
         .iter()
@@ -588,7 +590,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             )
         })
         .expect("one-click must capture AuthorityTransaction before mutation");
-    let transaction_index = one_click
+    let transaction_index = cold
         .block
         .stmts
         .iter()
@@ -605,7 +607,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         snapshot_index + 4,
         "AuthorityTransaction must be followed by the verified ticket, frozen V2 identity, PreJournalAbort progress, and transaction_result"
     );
-    let frozen_identity_locals = one_click.block.stmts[snapshot_index + 1..transaction_index]
+    let frozen_identity_locals = cold.block.stmts[snapshot_index + 1..transaction_index]
         .iter()
         .map(|statement| match statement {
             Stmt::Local(local) => local_name(local).expect("identity freeze must use named locals"),
@@ -618,11 +620,11 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "snapshot ticket, transaction identity, and PreJournalAbort progress must be frozen exactly once before protected mutation"
     );
     assert_eq!(
-        one_click.block.stmts.len(),
+        cold.block.stmts.len(),
         transaction_index + 2,
         "transaction_result must still be followed only by its final match"
     );
-    let transaction_statement = &one_click.block.stmts[transaction_index];
+    let transaction_statement = &cold.block.stmts[transaction_index];
     let transaction_local = match transaction_statement {
         Stmt::Local(local)
             if local_name(local).is_some_and(|name| name == "transaction_result") =>
@@ -634,7 +636,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         }
     };
     let mut transaction_locals = TransactionLocalCount::default();
-    transaction_locals.visit_item_fn(one_click);
+    transaction_locals.visit_item_fn(cold);
     assert_eq!(
         transaction_locals.0, 1,
         "one-click must contain exactly one transaction_result local"
@@ -779,7 +781,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "transaction_result closure must neither commit nor compensate its own snapshot"
     );
 
-    let final_statement = one_click
+    let final_statement = cold
         .block
         .stmts
         .last()
@@ -879,7 +881,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     );
 
     let mut post_snapshot = FlowFacts::default();
-    for statement in one_click.block.stmts.iter().skip(snapshot_index + 1) {
+    for statement in cold.block.stmts.iter().skip(snapshot_index + 1) {
         post_snapshot.visit_stmt(statement);
     }
     assert_eq!(

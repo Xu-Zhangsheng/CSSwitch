@@ -39,10 +39,9 @@ class ProfilePinContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, pin)
 
-        one_click_source = (
-            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
+        one_click = (
+            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
         ).read_text()
-        one_click = one_click_source.split("fn one_click_login_with_options", 1)[1]
         self.assertRegex(
             one_click,
             r"begin_one_click_finalize\(\s*&dir,\s*&transaction_identity,\s*"

@@ -581,13 +581,16 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         expression_path(&initializer.expr).as_deref() == Some("None")
     }
 
-    // SSH validators live in ssh_preflight; orchestration lives in one_click.
+    // SSH validators live in ssh_preflight; entry dispatch and cold orchestration stay separate.
     let one_click_file = syn::parse_file(include_str!("../one_click.rs"))
         .expect("one-click product Rust source must parse");
+    let cold_file = syn::parse_file(include_str!("../one_click/cold.rs"))
+        .expect("cold one-click Rust source must parse");
     let ssh = syn::parse_file(include_str!("../ssh_preflight.rs"))
         .expect("ssh_preflight product Rust source must parse");
     let mut forbidden_cfg_macros = ForbiddenCfgMacros::default();
     forbidden_cfg_macros.visit_file(&one_click_file);
+    forbidden_cfg_macros.visit_file(&cold_file);
     forbidden_cfg_macros.visit_file(&ssh);
     assert_eq!(
         forbidden_cfg_macros.0, 0,
@@ -597,12 +600,14 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let running = top_level(&ssh, "validate_running_system_ssh_bridge");
     let prevalidation = top_level(&ssh, "prevalidate_one_click_system_ssh");
     let one_click = top_level(&one_click_file, "one_click_login_with_options");
+    let cold = top_level(&cold_file, "run_cold_one_click");
     assert!(
         returns_result_pathbuf_string(validator),
         "shared wrapper validator must return Result<PathBuf, String>"
     );
     let mut product_environment = ProductEnvironmentFacts::default();
     product_environment.visit_file(&one_click_file);
+    product_environment.visit_file(&cold_file);
     product_environment.visit_file(&ssh);
     product_environment.environment_paths.sort();
     assert_eq!(
@@ -626,7 +631,8 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         ("shared wrapper validator", validator),
         ("running SSH validator", running),
         ("pre-OAuth SSH validator", prevalidation),
-        ("one-click product path", one_click),
+        ("one-click entry path", one_click),
+        ("cold one-click product path", cold),
     ] {
         reject_cfg(&function.attrs, name);
     }
@@ -703,7 +709,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
             );
     }
 
-    let prevalidate_statement = one_click
+    let prevalidate_statement = cold
         .block
         .stmts
         .iter()
@@ -716,8 +722,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         })
         .expect("one-click must execute prevalidation in a top-level local statement");
     assert_eq!(
-        one_click
-            .block
+        cold.block
             .stmts
             .iter()
             .filter(|statement| {
@@ -731,7 +736,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         "one-click must execute exactly one direct prevalidation call"
     );
     assert_eq!(
-        statement_direct_call_arguments(&one_click.block.stmts[prevalidate_statement]),
+        statement_direct_call_arguments(&cold.block.stmts[prevalidate_statement]),
         Some(vec![
             "app".to_string(),
             "cfg".to_string(),
@@ -741,7 +746,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     );
     assert!(
         statement_propagates_direct_call(
-            &one_click.block.stmts[prevalidate_statement],
+            &cold.block.stmts[prevalidate_statement],
             "crate::runtime::sandbox_session::prevalidate_one_click_system_ssh",
         ),
         "one-click must propagate the prevalidation Result with an exact Try(Call)"
@@ -770,10 +775,17 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         .expect("one-click must decide its route from immutable facts");
     assert!(
         entry_facts_statement < entry_decision_statement
-            && entry_decision_statement < prevalidate_statement,
-        "one-click must capture facts and decide healthy versus mutating before SSH prevalidation"
+            && !function_facts(one_click)
+                .calls
+                .iter()
+                .any(|call| call == "prevalidate_one_click_system_ssh")
+            && function_facts(one_click)
+                .calls
+                .iter()
+                .any(|call| call == "run_cold_one_click"),
+        "one-click must decide the route before delegating all cold SSH effects"
     );
-    let authority_transaction_statement = one_click
+    let authority_transaction_statement = cold
         .block
         .stmts
         .iter()
@@ -785,7 +797,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
             )
         })
         .expect("one-click authority transaction statement must exist");
-    let transaction_statement = one_click
+    let transaction_statement = cold
         .block
         .stmts
         .iter()
@@ -803,7 +815,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         "SSH prevalidation must precede authority transaction capture and the mutation transaction"
     );
     assert!(
-        one_click.block.stmts[..transaction_statement]
+        cold.block.stmts[..transaction_statement]
             .iter()
             .all(|statement| !statement_facts(statement)
                 .calls
@@ -811,7 +823,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
                 .any(|call| call == "ensure_virtual_login")),
         "one-click must not execute OAuth mutation before transaction_result"
     );
-    let transaction_local = match &one_click.block.stmts[transaction_statement] {
+    let transaction_local = match &cold.block.stmts[transaction_statement] {
         Stmt::Local(local) => local,
         _ => unreachable!(),
     };
@@ -835,7 +847,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         "transaction body must contain exactly one top-level OAuth mutation statement"
     );
     let mut one_click_cfg = CfgAttributes::default();
-    one_click_cfg.visit_block(&one_click.block);
+    one_click_cfg.visit_block(&cold.block);
     assert_eq!(
         one_click_cfg.0,
         ["test".to_string(), "test".to_string()],

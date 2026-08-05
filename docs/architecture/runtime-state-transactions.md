@@ -30,7 +30,8 @@
 | `AppState` / `SharedLifecycle` 类型与进程级组合 | `desktop/src-tauri/src/lib.rs` |
 | command 级 mode/settings/stop/quit 串行编排 | `commands/runtime/lifecycle.rs` |
 | 一键 IPC、锁外 auth preflight 与 UI failure 投影 | `commands/runtime/one_click.rs` |
-| typed entry decision、protected projection、journal recovery、route reconcile、SSH preflight 与一键事务 | `runtime/sandbox_session/` |
+| typed entry decision、protected projection、journal recovery 与 healthy / cold branch dispatch | `runtime/sandbox_session/one_click.rs` |
+| mutating cold/recovery 的 prior stop、SSH、authority、Gateway、Science、route、finalize 与 compensation 编排 | `runtime/sandbox_session/one_click/cold.rs` |
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
 | one-click authority capture、verified ticket、restore 与 cleanup 接口 | `runtime/sandbox_session/authority_transaction.rs` |
 | history exact stop、snapshot、credential publication、finalize 与 resume handoff | `runtime/sandbox_session/history_recovery.rs` |
@@ -155,10 +156,10 @@ snapshot ticket、cleanup path、credential 或写能力。
    recovery 或业务 route；每个 recovery effect 后必须重采 facts 再决策。Gateway terminal exact
    record 只经不可序列化、process-local affine handoff 交给同一次 one-click，首个 checkpoint
    只能用完整记录 CAS 接管；
-3. coordinator 在任何 branch-specific effect 前用 immutable facts 区分 healthy reopen 与 mutating
-   cold/recovery。healthy 不再读取或消费 pending-cleanup，也不 capture SSH stub；mutating 分支先重试
-   exact pending cleanup，只有实际清理后才重新采集 facts，再完成真实 config、alias、wrapper、
-   sidecar/stub 预检；
+3. entry façade 在任何 branch-specific effect 前用 immutable facts 区分 healthy reopen 与 mutating
+   cold/recovery；healthy 进入独立 reopen owner，不读取或消费 pending-cleanup，也不 capture SSH stub；
+   mutating 分支先重试 exact pending cleanup，只有实际清理后才重新采集 facts，再把冻结的 branch
+   输入交给独立 cold coordinator 完成真实 config、alias、wrapper、sidecar/stub 预检与后续事务；
 4. 从 managed launch receipt 生成脱敏 durable recipe，先持久化 `PriorStopIntent`，再精确停止
    prior Science，并立即持久化 `PriorStopOutcome`（`ExactStopped|NotStopped|Unknown`）；
 5. 通过 `AuthorityTransaction` 固定 opaque roots、捕获 protected projection，并持久登记
@@ -322,7 +323,9 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- V2 compensation schema 已有状态/步骤类型，但 one-click 生产补偿没有持久化逐步进度；
+- cold one-click 已与 entry/healthy owner 分离，但其内部仍顺序拥有 prior stop、authority、Gateway、
+  Science、route、finalize 与 aggregate compensation；V2 compensation schema 已有状态/步骤类型，
+  生产补偿仍没有持久化逐步进度；
 - canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
   protected snapshot 与 cleanup/finalize 收敛 credential publication。其他直接 full-snapshot restore
   与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；

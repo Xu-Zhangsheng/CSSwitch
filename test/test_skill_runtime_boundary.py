@@ -320,9 +320,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         one_click_source = (
             ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
         ).read_text()
-        one_click_runtime = one_click_source.split(
-            "fn one_click_login_with_options", 1
-        )[1]
+        one_click_runtime = (
+            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
+        ).read_text()
 
         submission = js.split("function catalogSubmission(kind)", 1)[1].split(
             "function catalogRolesChanged", 1
@@ -623,7 +623,18 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ScienceStopRequest::exact", science_lifecycle)
 
     def test_s4_science_host_adapter_owns_launch_health_receipt_and_stop_facade(self):
-        one_click = sandbox_session_one_click_source()
+        one_click = "\n".join(
+            (
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
+                ).read_text(),
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
+                ).read_text(),
+            )
+        )
         runtime_lifecycle = runtime_command_module("lifecycle")
         host = (
             ROOT / "desktop/src-tauri/src/runtime/science/host_adapter.rs"
@@ -740,9 +751,18 @@ class SkillRuntimeBoundary(unittest.TestCase):
             self.assertNotIn(bypass, production)
 
     def test_s5_authority_transaction_owns_capture_restore_cleanup_facade(self):
-        one_click = (
-            ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
-        ).read_text()
+        one_click = "\n".join(
+            (
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
+                ).read_text(),
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
+                ).read_text(),
+            )
+        )
         facade = (
             ROOT
             / "desktop/src-tauri/src/runtime/sandbox_session/authority_transaction.rs"
