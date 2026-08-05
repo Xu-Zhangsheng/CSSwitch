@@ -49,6 +49,68 @@ fn terminal_gateway_record(binding: Option<RuntimeBindingCommit>) -> config::Run
     }
 }
 
+fn record_compensation_step(
+    dir: &Path,
+    progress: &mut OneClickJournalProgress,
+    step: config::RuntimeCompensationStep,
+    outcome: config::RuntimeCompensationStepState,
+) {
+    begin_one_click_compensation_step(dir, progress, step).unwrap();
+    if step == config::RuntimeCompensationStep::AuthorityRestore {
+        let restored_runtime_transaction = match progress {
+            OneClickJournalProgress::Compensating {
+                restored_runtime_transaction,
+                ..
+            } => restored_runtime_transaction.as_ref().clone(),
+            _ => panic!("authority restore test step requires compensation progress"),
+        };
+        config::update(dir, |current| {
+            current.runtime_transaction = restored_runtime_transaction.clone()
+        })
+        .unwrap();
+        finish_one_click_authority_restore_step(dir, progress, outcome).unwrap();
+    } else {
+        finish_one_click_compensation_step(dir, progress, step, outcome).unwrap();
+    }
+}
+
+fn record_successful_test_compensation(dir: &Path, progress: &mut OneClickJournalProgress) {
+    record_compensation_step(
+        dir,
+        progress,
+        config::RuntimeCompensationStep::ScienceCleanup,
+        config::RuntimeCompensationStepState::Skipped {
+            cause: config::RuntimeCompensationSkipCause::NoScienceCandidate,
+        },
+    );
+    record_compensation_step(
+        dir,
+        progress,
+        config::RuntimeCompensationStep::SshCleanup,
+        config::RuntimeCompensationStepState::Succeeded,
+    );
+    record_compensation_step(
+        dir,
+        progress,
+        config::RuntimeCompensationStep::AuthorityRestore,
+        config::RuntimeCompensationStepState::Succeeded,
+    );
+    record_compensation_step(
+        dir,
+        progress,
+        config::RuntimeCompensationStep::PriorScienceRestart,
+        config::RuntimeCompensationStepState::Skipped {
+            cause: config::RuntimeCompensationSkipCause::NoPriorScience,
+        },
+    );
+    record_compensation_step(
+        dir,
+        progress,
+        config::RuntimeCompensationStep::SnapshotCleanup,
+        config::RuntimeCompensationStepState::Succeeded,
+    );
+}
+
 #[test]
 fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
     let dir = isolated_tmpdir("durable-compensation-journal");
@@ -79,6 +141,10 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
         pre_journal_marker.state,
         config::RuntimeCompensationState::InProgress
     );
+    assert_eq!(
+        pre_journal_marker.steps,
+        config::pending_one_click_compensation_steps()
+    );
     assert!(matches!(
         &pre_journal,
         OneClickJournalProgress::Compensating {
@@ -88,12 +154,28 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
         } if active_runtime_transaction.as_ref().is_none()
             && compensation.as_ref() == &pre_journal_marker
     ));
-    finish_one_click_compensation(
+    begin_one_click_compensation_step(
         &dir,
         &mut pre_journal,
-        vec![config::RuntimeCompensationStep::ScienceCleanup],
+        config::RuntimeCompensationStep::ScienceCleanup,
     )
     .unwrap();
+    let science_intent = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    assert_eq!(
+        science_intent.steps[0].outcome,
+        config::RuntimeCompensationStepState::InProgress
+    );
+    finish_one_click_compensation_step(
+        &dir,
+        &mut pre_journal,
+        config::RuntimeCompensationStep::ScienceCleanup,
+        config::RuntimeCompensationStepState::Failed,
+    )
+    .unwrap();
+    finish_one_click_compensation(&dir, &mut pre_journal).unwrap();
 
     config::save_to(&dir, &runtime_journal_test_config(None, None)).unwrap();
     let mut progress = OneClickJournalProgress::PreJournalAbort {
@@ -122,12 +204,57 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
         OneClickJournalProgress::Compensating { compensation, .. }
             if compensation.as_ref() == &in_progress
     ));
+    let active_business_record = config::load_from(&dir).unwrap().runtime_transaction;
+    config::update(&dir, |current| current.runtime_transaction = None).unwrap();
+    assert!(
+        begin_one_click_compensation_step(
+            &dir,
+            &mut progress,
+            config::RuntimeCompensationStep::ScienceCleanup,
+        )
+        .unwrap_err()
+        .contains("drifted runtime journal"),
+        "pre-authority steps must reject a premature restored business record"
+    );
+    config::update(&dir, |current| {
+        current.runtime_transaction = active_business_record.clone()
+    })
+    .unwrap();
 
-    let failed_steps = vec![
+    record_compensation_step(
+        &dir,
+        &mut progress,
+        config::RuntimeCompensationStep::ScienceCleanup,
+        config::RuntimeCompensationStepState::Succeeded,
+    );
+    record_compensation_step(
+        &dir,
+        &mut progress,
         config::RuntimeCompensationStep::SshCleanup,
+        config::RuntimeCompensationStepState::Failed,
+    );
+    record_compensation_step(
+        &dir,
+        &mut progress,
         config::RuntimeCompensationStep::AuthorityRestore,
-    ];
-    finish_one_click_compensation(&dir, &mut progress, failed_steps.clone()).unwrap();
+        config::RuntimeCompensationStepState::Failed,
+    );
+    config::update(&dir, |current| {
+        current.runtime_transaction = active_business_record.clone()
+    })
+    .unwrap();
+    assert!(
+        begin_one_click_compensation_step(
+            &dir,
+            &mut progress,
+            config::RuntimeCompensationStep::PriorScienceRestart,
+        )
+        .unwrap_err()
+        .contains("drifted runtime journal"),
+        "post-authority steps must reject drift back to the active business record"
+    );
+    config::update(&dir, |current| current.runtime_transaction = None).unwrap();
+    finish_one_click_compensation(&dir, &mut progress).unwrap();
     let incomplete = config::load_from(&dir)
         .unwrap()
         .runtime_compensation
@@ -135,7 +262,12 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
         .clone();
     assert_eq!(
         incomplete.state,
-        config::RuntimeCompensationState::Incomplete { failed_steps }
+        config::RuntimeCompensationState::Incomplete {
+            failed_steps: vec![
+                config::RuntimeCompensationStep::SshCleanup,
+                config::RuntimeCompensationStep::AuthorityRestore,
+            ],
+        }
     );
     assert!(matches!(
         &progress,
@@ -156,8 +288,8 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
     )
     .unwrap();
     begin_one_click_compensation(&dir, &identity, &mut completed, None).unwrap();
-    config::update(&dir, |current| current.runtime_transaction = None).unwrap();
-    finish_one_click_compensation(&dir, &mut completed, Vec::new()).unwrap();
+    record_successful_test_compensation(&dir, &mut completed);
+    finish_one_click_compensation(&dir, &mut completed).unwrap();
     let completed_config = config::load_from(&dir).unwrap();
     assert!(completed_config.runtime_compensation.is_none());
     assert!(completed_config.runtime_transaction.is_none());
@@ -183,7 +315,8 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
         Some(prior_transaction.clone()),
     )
     .unwrap();
-    finish_one_click_compensation(&dir, &mut preserves_prior, Vec::new()).unwrap();
+    record_successful_test_compensation(&dir, &mut preserves_prior);
+    finish_one_click_compensation(&dir, &mut preserves_prior).unwrap();
     let prior_preserved = config::load_from(&dir).unwrap();
     assert_eq!(
         prior_preserved.runtime_transaction.as_ref(),

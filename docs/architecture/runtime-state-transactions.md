@@ -13,7 +13,7 @@
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
 | in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
-| in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1 | 持久；只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket 与 aggregate state；与 `runtime_transaction` 分离 |
+| in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1/V2 | 持久；V1 只兼容读取并阻断 mutation；当前 V2 只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket、aggregate state 与五个 typed step state；与 `runtime_transaction` 分离 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | `science-managed-launch.v1.json` + live listener identity | 持久 receipt 与 live 组合 |
 | virtual login | Science credential files + CSSwitch `virtual-org.v1.json` marker | 分属 Science/CSSwitch |
@@ -101,13 +101,19 @@ fresh process 会重放同一 finalize intent：
 避免遗忘 recovery snapshot。两种 crash window 都不会退回 destructive
 recovery。coordinator 仍拥有 operation trace、Gateway/SSH 顺序与唯一 success/failure dispatch；
 专属 cold compensation phase 拥有 `CompensationOutcome` 聚合与 frontend DTO/text/recovery
-projection。O1-E1 在首个补偿 effect 前以 path-free one-click identity 和当前完整 business record CAS 发布独立
-`runtime_compensation / in_progress`，authority restore 精确恢复补偿前 `runtime_transaction` 时保留该记录；
-全部步骤完成后才清除，失败则写 `incomplete + failed_steps`。因此原业务 journal 与补偿 crash marker
+projection。O1-E2 在首个补偿 effect 前以 path-free one-click identity 和当前完整 business record CAS 发布独立
+`runtime_compensation V2 / in_progress` 及固定五步 pending plan；Science cleanup、SSH cleanup、authority restore、
+prior Science restart 与 snapshot cleanup 各自只允许以完整 compensation record CAS 从
+`pending -> in_progress -> succeeded|failed|skipped(cause)`。补偿进度同时只持有一个 expected business record：
+authority restore 前只能是 active record；该 restore 的 outcome 写入点按实际 config 结果单向切换到 restored
+record，随后所有步骤与 aggregate completion 都只接受切换后的单值，不能在两侧任选。任一步 intent 不能发布时不执行该步及后续 effect；
+任一步 outcome 不能发布时停止后续 effect 并保留恢复快照。authority restore 精确恢复补偿前
+`runtime_transaction` 时保留最新 step state；全部步骤完成后才清除，失败则从 typed step outcome 推导
+`incomplete + failed_steps`。因此原业务 journal 与补偿 crash marker
 可以同时存在。fresh entry 与 normal mode/settings/profile/Codex auth/settings/downgrade mutation、
 selection/read-model 均把任一 journal 打开视为 blocked/manual；显式 `stop_all` / `quit` 与 native-exit
 cleanup 仍是只减小运行态暴露的 terminal cleanup，不写 config/credential，允许在 marker 打开时停机。
-本阶段没有自动重放，也没有把 aggregate outcome 升级为逐 step intent/outcome。
+V1 marker 仍可严格读取并阻断，但不会被生产路径升级、推进或清除；本阶段没有 fresh-process 自动重放或收敛。
 
 `GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
 health、catalog fingerprint、generation/write-back 与 child ownership 核心，但只在全部接受
@@ -194,12 +200,15 @@ fail-closed。
 统一失败补偿也受完整记录约束：`Journaled` progress 使用完整上一条 business record；
 `PreJournalAbort` 使用 authority capture 前冻结的完整 `runtime_transaction`。两者都只在当前 config
 仍与该精确值一致且没有 sibling compensation 时，原子发布独立、path-free 的
-`runtime_compensation / in_progress` 并进入 `Compensating`。该 durable intent 在 stop Gateway、恢复 authority tree 或 AppState 等首个
-补偿 effect 前完成。authority restore 同时 CAS 当前业务 record 与 compensation record，再恢复捕获前
-config，并只把独立 compensation record 覆盖回去；因此原 profile-switch / history / legacy journal
-不会被补偿 crash marker 取代。该 marker 不复制 prior-stop recipe、absolute runtime path、message 或
-credential。终态写入 CAS 独立 record 以及允许的补偿前/恢复后 business record：全部成功时清除，失败时以 canonical、
-无重复的 typed `failed_steps` 写 `incomplete`。任一 retarget 都保留当前整份 config、authority、
+`runtime_compensation V2 / in_progress`、固定五步 pending plan 并进入 `Compensating`。aggregate durable intent
+在首个补偿 effect 前完成；每个 top-level effect 又必须先把自己的 step 从 `pending` CAS 为 `in_progress`，
+effect 返回后再 CAS 为 `succeeded|failed|skipped(cause)`，前后转换都绑定完整 compensation record 与当前
+唯一 expected business record。authority restore 同时 CAS 当前业务 record 与最新
+compensation record，再恢复捕获前 config，并只把独立 compensation record 覆盖回去；因此原
+profile-switch / history / legacy journal 不会被补偿 crash marker 取代。该 marker 不复制 prior-stop recipe、
+absolute runtime path、message 或 credential。终态写入 CAS 独立 record 以及允许的补偿前/恢复后 business
+record：全部成功时清除，失败时从 typed step outcome 推导 canonical `failed_steps` 并写 `incomplete`。
+任一 retarget 都保留当前整份 config、authority、
 运行态与 recovery snapshot，不执行 blind rollback。
 
 首个 post-snapshot checkpoint 原子提交失败、且 protected mutation 尚未开始时，同一进程仍可
@@ -340,8 +349,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
-  finalize。O1-E1 已持久化 aggregate compensation 的 begin/final outcome 并与原 transaction 分离，
-  但每个 effect 前后的 stepwise intent/outcome、fresh-process replay 与自动收敛仍未实现；
+  finalize。O1-E2 已把五个 top-level compensation effect 的 durable intent/outcome 与原 transaction 分离，
+  但 fresh-process replay 与自动收敛仍未实现；
 - canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
   protected snapshot 与 cleanup/finalize 收敛 credential publication。其他直接 full-snapshot restore
   与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；

@@ -74,6 +74,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.route-configuration-v1",
     "record.runtime-binding-v1",
     "record.runtime-compensation-v1",
+    "record.runtime-compensation-v2",
     "record.runtime-transaction-v1",
     "record.runtime-transaction-v2",
     "record.sandbox-ssh-stub-v2",

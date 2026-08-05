@@ -9500,6 +9500,7 @@ fn o1_e1_in_progress_compensation() -> config::RuntimeCompensationJournal {
         )
         .unwrap(),
         state: config::RuntimeCompensationState::InProgress,
+        steps: Vec::new(),
     }
 }
 

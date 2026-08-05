@@ -822,6 +822,7 @@ pub(super) enum OneClickJournalProgress {
     Compensating {
         active_runtime_transaction: Box<Option<config::RuntimeTransactionRecord>>,
         restored_runtime_transaction: Box<Option<config::RuntimeTransactionRecord>>,
+        expected_runtime_transaction: Box<Option<config::RuntimeTransactionRecord>>,
         compensation: Box<config::RuntimeCompensationJournal>,
         registered_ticket: config::RuntimeSnapshotTicket,
     },
@@ -897,11 +898,11 @@ impl OneClickJournalProgress {
                 config::RuntimeTransactionRecord::V2(record.clone()),
             )),
             Self::Compensating {
-                active_runtime_transaction,
+                expected_runtime_transaction,
                 compensation,
                 ..
             } => RuntimeTransactionRestoreExpectation::ExactPreservingCompensation {
-                runtime_transaction: active_runtime_transaction.as_ref().clone(),
+                runtime_transaction: expected_runtime_transaction.as_ref().clone(),
                 compensation: compensation.as_ref().clone(),
             },
             Self::CompensationFinished { .. } => RuntimeTransactionRestoreExpectation::Exact(None),
@@ -1464,17 +1465,19 @@ pub(super) fn begin_one_click_compensation(
             );
         }
         let next = config::RuntimeCompensationJournal {
-            schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+            schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2,
             compensation_id: config::new_id(),
             target_profile_id: identity.target_profile_id.clone(),
             runtime_fingerprint: identity.runtime_fingerprint.clone(),
             snapshot_ticket: identity.snapshot_ticket.clone(),
             state: config::RuntimeCompensationState::InProgress,
+            steps: config::pending_one_click_compensation_steps(),
         };
         current.runtime_compensation = Some(next.clone());
         Ok((next, true))
     })?;
     *progress = OneClickJournalProgress::Compensating {
+        expected_runtime_transaction: Box::new(active_runtime_transaction.clone()),
         active_runtime_transaction: Box::new(active_runtime_transaction),
         restored_runtime_transaction: Box::new(restored_runtime_transaction),
         compensation: Box::new(compensation),
@@ -1483,12 +1486,225 @@ pub(super) fn begin_one_click_compensation(
     Ok(())
 }
 
+fn update_one_click_compensation_step(
+    dir: &Path,
+    progress: &mut OneClickJournalProgress,
+    step: config::RuntimeCompensationStep,
+    expected_outcome: config::RuntimeCompensationStepState,
+    next_outcome: config::RuntimeCompensationStepState,
+) -> Result<(), String> {
+    let (
+        active_runtime_transaction,
+        restored_runtime_transaction,
+        expected_runtime_transaction,
+        expected,
+        registered_ticket,
+    ) = match progress {
+        OneClickJournalProgress::Compensating {
+            active_runtime_transaction,
+            restored_runtime_transaction,
+            expected_runtime_transaction,
+            compensation,
+            registered_ticket,
+        } => (
+            active_runtime_transaction.as_ref().clone(),
+            restored_runtime_transaction.as_ref().clone(),
+            expected_runtime_transaction.as_ref().clone(),
+            compensation.as_ref().clone(),
+            registered_ticket.clone(),
+        ),
+        _ => return Err("one-click compensation step has no durable intent".into()),
+    };
+    if expected.schema_version != config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2
+        || expected.state != config::RuntimeCompensationState::InProgress
+    {
+        return Err("one-click compensation step requires an active V2 journal".into());
+    }
+    let transition_valid = matches!(
+        (expected_outcome, next_outcome),
+        (
+            config::RuntimeCompensationStepState::Pending,
+            config::RuntimeCompensationStepState::InProgress
+        )
+    ) || (expected_outcome
+        == config::RuntimeCompensationStepState::InProgress
+        && next_outcome.is_terminal());
+    if !transition_valid {
+        return Err("one-click compensation step transition is invalid".into());
+    }
+    let Some(step_index) = expected
+        .steps
+        .iter()
+        .position(|candidate| candidate.step == step)
+    else {
+        return Err("one-click compensation step is not part of the durable plan".into());
+    };
+    if expected.steps[step_index].outcome != expected_outcome
+        || expected.steps[..step_index]
+            .iter()
+            .any(|candidate| !candidate.outcome.is_terminal())
+        || expected.steps[step_index + 1..]
+            .iter()
+            .any(|candidate| candidate.outcome != config::RuntimeCompensationStepState::Pending)
+    {
+        return Err("one-click compensation step rejected non-canonical progress".into());
+    }
+    let next = config::update_result(dir, |current| {
+        if current.runtime_compensation.as_ref() != Some(&expected)
+            || current.runtime_transaction != expected_runtime_transaction
+        {
+            return Err(
+                "one-click compensation step found a drifted runtime journal; preserved the current transaction"
+                    .into(),
+            );
+        }
+        let mut record = expected.clone();
+        record.steps[step_index].outcome = next_outcome;
+        current.runtime_compensation = Some(record.clone());
+        Ok((record, true))
+    })?;
+    *progress = OneClickJournalProgress::Compensating {
+        active_runtime_transaction: Box::new(active_runtime_transaction),
+        restored_runtime_transaction: Box::new(restored_runtime_transaction),
+        expected_runtime_transaction: Box::new(expected_runtime_transaction),
+        compensation: Box::new(next),
+        registered_ticket,
+    };
+    Ok(())
+}
+
+pub(super) fn begin_one_click_compensation_step(
+    dir: &Path,
+    progress: &mut OneClickJournalProgress,
+    step: config::RuntimeCompensationStep,
+) -> Result<(), String> {
+    update_one_click_compensation_step(
+        dir,
+        progress,
+        step,
+        config::RuntimeCompensationStepState::Pending,
+        config::RuntimeCompensationStepState::InProgress,
+    )
+}
+
+pub(super) fn finish_one_click_compensation_step(
+    dir: &Path,
+    progress: &mut OneClickJournalProgress,
+    step: config::RuntimeCompensationStep,
+    outcome: config::RuntimeCompensationStepState,
+) -> Result<(), String> {
+    if step == config::RuntimeCompensationStep::AuthorityRestore {
+        return Err(
+            "authority restore outcome requires the dedicated business-record transition".into(),
+        );
+    }
+    update_one_click_compensation_step(
+        dir,
+        progress,
+        step,
+        config::RuntimeCompensationStepState::InProgress,
+        outcome,
+    )
+}
+
+pub(super) fn finish_one_click_authority_restore_step(
+    dir: &Path,
+    progress: &mut OneClickJournalProgress,
+    outcome: config::RuntimeCompensationStepState,
+) -> Result<(), String> {
+    if !outcome.is_terminal() {
+        return Err("authority restore outcome must be terminal".into());
+    }
+    let (
+        active_runtime_transaction,
+        restored_runtime_transaction,
+        expected_runtime_transaction,
+        expected,
+        registered_ticket,
+    ) = match progress {
+        OneClickJournalProgress::Compensating {
+            active_runtime_transaction,
+            restored_runtime_transaction,
+            expected_runtime_transaction,
+            compensation,
+            registered_ticket,
+        } => (
+            active_runtime_transaction.as_ref().clone(),
+            restored_runtime_transaction.as_ref().clone(),
+            expected_runtime_transaction.as_ref().clone(),
+            compensation.as_ref().clone(),
+            registered_ticket.clone(),
+        ),
+        _ => return Err("authority restore outcome has no durable intent".into()),
+    };
+    if expected.schema_version != config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2
+        || expected.state != config::RuntimeCompensationState::InProgress
+        || expected_runtime_transaction != active_runtime_transaction
+    {
+        return Err("authority restore outcome rejected a crossed business-record boundary".into());
+    }
+    let Some(step_index) = expected
+        .steps
+        .iter()
+        .position(|candidate| candidate.step == config::RuntimeCompensationStep::AuthorityRestore)
+    else {
+        return Err("authority restore step is not part of the durable plan".into());
+    };
+    if expected.steps[step_index].outcome != config::RuntimeCompensationStepState::InProgress
+        || expected.steps[..step_index]
+            .iter()
+            .any(|candidate| !candidate.outcome.is_terminal())
+        || expected.steps[step_index + 1..]
+            .iter()
+            .any(|candidate| candidate.outcome != config::RuntimeCompensationStepState::Pending)
+    {
+        return Err("authority restore outcome rejected non-canonical progress".into());
+    }
+    let require_restored = outcome == config::RuntimeCompensationStepState::Succeeded;
+    let (next, next_runtime_transaction) = config::update_result(dir, |current| {
+        if current.runtime_compensation.as_ref() != Some(&expected) {
+            return Err(
+                "authority restore outcome found a drifted compensation journal; preserved the current transaction"
+                    .into(),
+            );
+        }
+        let observed_runtime_transaction = if current.runtime_transaction
+            == restored_runtime_transaction
+        {
+            restored_runtime_transaction.clone()
+        } else if !require_restored && current.runtime_transaction == expected_runtime_transaction {
+            expected_runtime_transaction.clone()
+        } else {
+            return Err(
+                "authority restore outcome found a drifted business record; preserved the current transaction"
+                    .into(),
+            );
+        };
+        let mut record = expected.clone();
+        record.steps[step_index].outcome = outcome;
+        current.runtime_compensation = Some(record.clone());
+        Ok(((record, observed_runtime_transaction), true))
+    })?;
+    *progress = OneClickJournalProgress::Compensating {
+        active_runtime_transaction: Box::new(active_runtime_transaction),
+        restored_runtime_transaction: Box::new(restored_runtime_transaction),
+        expected_runtime_transaction: Box::new(next_runtime_transaction),
+        compensation: Box::new(next),
+        registered_ticket,
+    };
+    Ok(())
+}
+
 pub(super) fn finish_one_click_compensation(
     dir: &Path,
     progress: &mut OneClickJournalProgress,
-    failed_steps: Vec<config::RuntimeCompensationStep>,
 ) -> Result<(), String> {
-    let (active_runtime_transaction, restored_runtime_transaction, expected) = match progress {
+    let (
+        active_runtime_transaction,
+        restored_runtime_transaction,
+        expected_runtime_transaction,
+        expected,
+    ) = match progress {
         OneClickJournalProgress::PreJournalAbort { .. }
         | OneClickJournalProgress::CompensationFinished { .. }
         | OneClickJournalProgress::Finalized { .. } => return Ok(()),
@@ -1498,31 +1714,46 @@ pub(super) fn finish_one_click_compensation(
         OneClickJournalProgress::Compensating {
             active_runtime_transaction,
             restored_runtime_transaction,
+            expected_runtime_transaction,
             compensation,
             ..
         } => (
             active_runtime_transaction.as_ref().clone(),
             restored_runtime_transaction.as_ref().clone(),
+            expected_runtime_transaction.as_ref().clone(),
             compensation.as_ref().clone(),
         ),
     };
     if expected.state != config::RuntimeCompensationState::InProgress {
         return Err("one-click compensation completion has no durable intent".into());
     }
-    for (index, step) in failed_steps.iter().enumerate() {
-        if failed_steps[..index].contains(step) {
-            return Err("one-click compensation completion repeats a failed step".into());
-        }
+    if expected
+        .steps
+        .iter()
+        .any(|progress| progress.outcome == config::RuntimeCompensationStepState::InProgress)
+    {
+        return Err("one-click compensation completion found an unfinished step".into());
+    }
+    let failed_steps = expected
+        .steps
+        .iter()
+        .filter_map(|progress| {
+            (progress.outcome == config::RuntimeCompensationStepState::Failed)
+                .then_some(progress.step)
+        })
+        .collect::<Vec<_>>();
+    if failed_steps.is_empty()
+        && expected
+            .steps
+            .iter()
+            .any(|progress| !progress.outcome.is_terminal())
+    {
+        return Err("one-click compensation completion found a pending step".into());
     }
     let registered_ticket = progress.registered_ticket().clone();
     let next = config::update_result(dir, |current| {
-        let runtime_transaction_matches = if failed_steps.is_empty() {
-            current.runtime_transaction == restored_runtime_transaction
-        } else {
-            current.runtime_transaction == restored_runtime_transaction
-                || current.runtime_transaction == active_runtime_transaction
-        };
-        if current.runtime_compensation.as_ref() != Some(&expected) || !runtime_transaction_matches
+        if current.runtime_compensation.as_ref() != Some(&expected)
+            || current.runtime_transaction != expected_runtime_transaction
         {
             return Err(
                 "one-click compensation completion found a drifted runtime journal; preserved the current transaction"
@@ -1545,6 +1776,7 @@ pub(super) fn finish_one_click_compensation(
         Some(compensation) => OneClickJournalProgress::Compensating {
             active_runtime_transaction: Box::new(active_runtime_transaction),
             restored_runtime_transaction: Box::new(restored_runtime_transaction),
+            expected_runtime_transaction: Box::new(expected_runtime_transaction),
             compensation: Box::new(compensation),
             registered_ticket,
         },

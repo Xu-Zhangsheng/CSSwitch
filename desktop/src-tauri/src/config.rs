@@ -746,6 +746,40 @@ pub enum RuntimeCompensationStep {
     SnapshotCleanup,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCompensationSkipCause {
+    NoScienceCandidate,
+    NoPriorScience,
+    CrossRuntimeEnvironment,
+    BlockedByScienceCleanup,
+    BlockedByAuthorityRestore,
+    SnapshotPreserved,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeCompensationStepState {
+    Pending,
+    InProgress,
+    Succeeded,
+    Failed,
+    Skipped { cause: RuntimeCompensationSkipCause },
+}
+
+impl RuntimeCompensationStepState {
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Skipped { .. })
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeCompensationStepProgress {
+    pub step: RuntimeCompensationStep,
+    pub outcome: RuntimeCompensationStepState,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeCompensationState {
@@ -757,10 +791,29 @@ pub enum RuntimeCompensationState {
 }
 
 pub const RUNTIME_COMPENSATION_SCHEMA_VERSION_V1: u32 = 1;
+pub const RUNTIME_COMPENSATION_SCHEMA_VERSION_V2: u32 = 2;
 
-/// Credential- and path-free durable owner for aggregate one-click
-/// compensation. Business transaction details stay in `runtime_transaction`;
-/// this record only proves which snapshot-backed compensation is in flight.
+pub(crate) const ONE_CLICK_COMPENSATION_STEPS: [RuntimeCompensationStep; 5] = [
+    RuntimeCompensationStep::ScienceCleanup,
+    RuntimeCompensationStep::SshCleanup,
+    RuntimeCompensationStep::AuthorityRestore,
+    RuntimeCompensationStep::PriorScienceRestart,
+    RuntimeCompensationStep::SnapshotCleanup,
+];
+
+pub(crate) fn pending_one_click_compensation_steps() -> Vec<RuntimeCompensationStepProgress> {
+    ONE_CLICK_COMPENSATION_STEPS
+        .into_iter()
+        .map(|step| RuntimeCompensationStepProgress {
+            step,
+            outcome: RuntimeCompensationStepState::Pending,
+        })
+        .collect()
+}
+
+/// Credential- and path-free durable owner for one-click compensation.
+/// Business transaction details stay in `runtime_transaction`; V1 records only
+/// aggregate progress, while V2 also records the fixed top-level step states.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeCompensationJournal {
@@ -770,6 +823,8 @@ pub struct RuntimeCompensationJournal {
     pub runtime_fingerprint: String,
     pub snapshot_ticket: RuntimeSnapshotTicket,
     pub state: RuntimeCompensationState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<RuntimeCompensationStepProgress>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1108,6 +1163,54 @@ fn validate_runtime_transaction_v1(journal: &RuntimeTransactionV1) -> Result<(),
         Ok(())
     } else {
         Err("unknown or malformed V1 runtime_transaction stage".into())
+    }
+}
+
+fn valid_runtime_compensation_steps(journal: &RuntimeCompensationJournal) -> bool {
+    if journal.steps.len() != ONE_CLICK_COMPENSATION_STEPS.len()
+        || journal
+            .steps
+            .iter()
+            .zip(ONE_CLICK_COMPENSATION_STEPS)
+            .any(|(progress, expected)| progress.step != expected)
+    {
+        return false;
+    }
+    let mut open_or_pending_seen = false;
+    for progress in &journal.steps {
+        match progress.outcome {
+            RuntimeCompensationStepState::Pending => open_or_pending_seen = true,
+            RuntimeCompensationStepState::InProgress => {
+                if open_or_pending_seen {
+                    return false;
+                }
+                open_or_pending_seen = true;
+            }
+            terminal if terminal.is_terminal() => {
+                if open_or_pending_seen {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    match &journal.state {
+        RuntimeCompensationState::InProgress => true,
+        RuntimeCompensationState::Incomplete { failed_steps } => {
+            !journal
+                .steps
+                .iter()
+                .any(|progress| progress.outcome == RuntimeCompensationStepState::InProgress)
+                && journal
+                    .steps
+                    .iter()
+                    .filter_map(|progress| {
+                        (progress.outcome == RuntimeCompensationStepState::Failed)
+                            .then_some(progress.step)
+                    })
+                    .eq(failed_steps.iter().copied())
+        }
+        RuntimeCompensationState::NotStarted => false,
     }
 }
 
@@ -2721,7 +2824,14 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
             RuntimeCompensationState::InProgress => true,
             RuntimeCompensationState::NotStarted => false,
         };
-        if compensation.schema_version != RUNTIME_COMPENSATION_SCHEMA_VERSION_V1
+        let schema_valid = match compensation.schema_version {
+            RUNTIME_COMPENSATION_SCHEMA_VERSION_V1 => compensation.steps.is_empty(),
+            RUNTIME_COMPENSATION_SCHEMA_VERSION_V2 => {
+                valid_runtime_compensation_steps(compensation)
+            }
+            _ => false,
+        };
+        if !schema_valid
             || compensation.compensation_id.is_empty()
             || compensation.target_profile_id.is_empty()
             || !valid_runtime_fingerprint(&compensation.runtime_fingerprint)
@@ -2731,7 +2841,7 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "runtime_compensation must be a path-free registered aggregate progress record",
+                "runtime_compensation must be a path-free registered step progress record",
             ));
         }
     }
@@ -3895,7 +4005,7 @@ mod tests {
             );
         }
 
-        let compensation = RuntimeCompensationJournal {
+        let legacy_compensation = RuntimeCompensationJournal {
             schema_version: RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
             compensation_id: "compensation-id".into(),
             target_profile_id: "target-profile".into(),
@@ -3905,6 +4015,7 @@ mod tests {
             )
             .unwrap(),
             state: RuntimeCompensationState::InProgress,
+            steps: Vec::new(),
         };
         let mut prior_business = valid_one_click_v2(RuntimeTransactionPhase::StartGateway);
         prior_business.prior_stop = RuntimePriorStopState::Outcome {
@@ -3919,6 +4030,28 @@ mod tests {
             outcome: RuntimePriorStopOutcome::ExactStopped,
         };
         let prior_transaction = RuntimeTransactionRecord::V2(prior_business);
+        let legacy_config = Config {
+            runtime_transaction: Some(prior_transaction.clone()),
+            runtime_compensation: Some(legacy_compensation.clone()),
+            ..Default::default()
+        };
+        save_to(&dir, &legacy_config).unwrap();
+        assert_eq!(
+            load_from(&dir).unwrap().runtime_compensation.as_ref(),
+            Some(&legacy_compensation)
+        );
+        let compensation = RuntimeCompensationJournal {
+            schema_version: RUNTIME_COMPENSATION_SCHEMA_VERSION_V2,
+            compensation_id: "stepwise-compensation-id".into(),
+            target_profile_id: "target-profile".into(),
+            runtime_fingerprint: "a".repeat(64),
+            snapshot_ticket: RuntimeSnapshotTicket::verified(
+                ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+            )
+            .unwrap(),
+            state: RuntimeCompensationState::InProgress,
+            steps: pending_one_click_compensation_steps(),
+        };
         let config_with_compensation = Config {
             runtime_transaction: Some(prior_transaction.clone()),
             runtime_compensation: Some(compensation.clone()),
@@ -4085,10 +4218,30 @@ mod tests {
                 )
                 .unwrap(),
                 state: RuntimeCompensationState::NotStarted,
+                steps: Vec::new(),
             }),
             ..Default::default()
         };
         assert!(save_to(&dir, &invalid_compensation_owner).is_err());
+
+        let mut invalid_step_order = pending_one_click_compensation_steps();
+        invalid_step_order.swap(0, 1);
+        let invalid_stepwise_compensation = Config {
+            runtime_compensation: Some(RuntimeCompensationJournal {
+                schema_version: RUNTIME_COMPENSATION_SCHEMA_VERSION_V2,
+                compensation_id: "invalid-step-order".into(),
+                target_profile_id: "target-profile".into(),
+                runtime_fingerprint: "a".repeat(64),
+                snapshot_ticket: RuntimeSnapshotTicket::verified(
+                    ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+                )
+                .unwrap(),
+                state: RuntimeCompensationState::InProgress,
+                steps: invalid_step_order,
+            }),
+            ..Default::default()
+        };
+        assert!(save_to(&dir, &invalid_stepwise_compensation).is_err());
 
         for (field, value) in [
             (

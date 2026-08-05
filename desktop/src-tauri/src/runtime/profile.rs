@@ -861,6 +861,7 @@ mod tests {
             )
             .unwrap(),
             state: config::RuntimeCompensationState::InProgress,
+            steps: Vec::new(),
         }
     }
 

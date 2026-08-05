@@ -320,7 +320,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         })
         .expect("one-click V2 writer must remain discoverable");
     let compensation_journal = source
-        .split("pub(super) fn begin_one_click_compensation")
+        .split("pub(super) fn begin_one_click_compensation(")
         .nth(1)
         .and_then(|tail| {
             tail.split("pub(super) fn validate_interrupted_science_transaction_entry")
@@ -353,50 +353,116 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && one_click_writer
                 .contains("let expected_record = progress.journaled_record().cloned()")
             && one_click_writer.contains("journal == expected")
-            && one_click_writer.contains("RuntimeTransactionRecord::V2(next.clone())")
-            && one_click_terminal_writers.contains("fn begin_one_click_finalize")
-            && one_click_terminal_writers.contains(
-                "next.finalize = config::RuntimeFinalizeState::Intent"
-            )
+            && one_click_writer.contains("RuntimeTransactionRecord::V2(next.clone())"),
+        "one-click progress and checkpoint writer must retain complete-record ownership"
+    );
+    assert!(
+        one_click_terminal_writers.contains("fn begin_one_click_finalize")
+            && one_click_terminal_writers
+                .contains("next.finalize = config::RuntimeFinalizeState::Intent")
             && one_click_terminal_writers.contains("fn complete_one_click_finalize")
             && one_click_terminal_writers.contains("fn replay_interrupted_one_click_finalize")
-            && one_click_terminal_writers.contains("replay_finalize_authority_cleanup(state, ticket)")
-            && one_click_terminal_writers.contains("current.runtime_binding = Some(binding.clone())")
+            && one_click_terminal_writers
+                .contains("replay_finalize_authority_cleanup(state, ticket)")
+            && one_click_terminal_writers
+                .contains("current.runtime_binding = Some(binding.clone())")
             && one_click_terminal_writers.contains("current.runtime_transaction = None")
             && one_click_terminal_writers.contains("OneClickJournalProgress::Finalized")
-            && source.contains(
-                "journal.compensation == config::RuntimeCompensationState::NotStarted"
-            )
+            && source
+                .contains("journal.compensation == config::RuntimeCompensationState::NotStarted")
             && source.contains(
                 "journal.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted"
-            )
-            && compensation_source.contains("journal_progress.restore_expectation()")
-            && compensation_journal.contains("fn finish_one_click_compensation")
-            && compensation_journal.contains(
-                "state: config::RuntimeCompensationState::InProgress"
-            )
-            && compensation_journal.contains(
-                "record.state = config::RuntimeCompensationState::Incomplete"
-            )
-            && compensation_journal.contains("current.runtime_compensation = None")
-            && compensation_journal.contains("current.runtime_compensation = Some(next.clone())")
-            && compensation_journal.contains("RuntimeCompensationJournal")
-            && one_click_progress.contains("runtime_transaction: Box<Option<")
-            && compensation_source.find("begin_one_click_compensation(")
-                < compensation_source.find("let cross_runtime_environment")
-            && compensation_source.contains(
-                "finish_one_click_compensation(dir, journal_progress, failed_steps)"
-            )
-            && recovery_source.contains(
-                "RuntimeTransactionRestoreExpectation::ExactPreservingCompensation"
-            )
+            ),
+        "one-click finalize writers must remain replayable complete-record transitions"
+    );
+    let compensation_contracts = [
+        (
+            "restore expectation",
+            compensation_source.contains("journal_progress.restore_expectation()"),
+        ),
+        (
+            "aggregate finish",
+            compensation_journal.contains("fn finish_one_click_compensation"),
+        ),
+        (
+            "step intent writer",
+            compensation_journal.contains("fn begin_one_click_compensation_step"),
+        ),
+        (
+            "step outcome writer",
+            compensation_journal.contains("fn finish_one_click_compensation_step"),
+        ),
+        (
+            "authority boundary writer",
+            compensation_journal.contains("fn finish_one_click_authority_restore_step"),
+        ),
+        (
+            "single expected business record",
+            one_click_progress.contains("expected_runtime_transaction: Box<Option<")
+                && compensation_journal
+                    .contains("current.runtime_transaction != expected_runtime_transaction"),
+        ),
+        (
+            "V2 schema",
+            compensation_journal
+                .contains("schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2"),
+        ),
+        (
+            "fixed pending plan",
+            compensation_journal.contains("steps: config::pending_one_click_compensation_steps()"),
+        ),
+        (
+            "aggregate in progress",
+            compensation_journal.contains("state: config::RuntimeCompensationState::InProgress"),
+        ),
+        (
+            "derived incomplete",
+            compensation_journal
+                .contains("record.state = config::RuntimeCompensationState::Incomplete"),
+        ),
+        (
+            "successful clear",
+            compensation_journal.contains("current.runtime_compensation = None"),
+        ),
+        (
+            "initial durable publish",
+            compensation_journal.contains("current.runtime_compensation = Some(next.clone())"),
+        ),
+        (
+            "typed journal",
+            compensation_journal.contains("RuntimeCompensationJournal"),
+        ),
+        (
+            "business record owner",
+            one_click_progress.contains("runtime_transaction: Box<Option<"),
+        ),
+        (
+            "intent before effect planning",
+            compensation_source.find("begin_one_click_compensation(")
+                < compensation_source.find("let cross_runtime_environment"),
+        ),
+        (
+            "production aggregate finish",
+            compensation_source.contains("finish_one_click_compensation(dir, journal_progress)"),
+        ),
+    ];
+    let missing_compensation_contracts = compensation_contracts
+        .into_iter()
+        .filter_map(|(name, present)| (!present).then_some(name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing_compensation_contracts.is_empty(),
+        "durable compensation must publish and advance exact V2 step state around the production effect funnel; missing={missing_compensation_contracts:?}"
+    );
+    assert!(
+        recovery_source
+            .contains("RuntimeTransactionRestoreExpectation::ExactPreservingCompensation")
             && recovery_source.contains("current.runtime_compensation =")
             && recovery_source.contains("Some(compensation.clone())")
-            && recovery_source.contains(
-                "current.runtime_transaction.as_ref() != expected.as_ref()"
-            )
+            && recovery_source
+                .contains("current.runtime_transaction.as_ref() != expected.as_ref()")
             && restore_guard < first_restore_effect,
-        "one-click checkpoints, replayable finalize, and durable compensation must CAS the complete current V2 state and preserve canonical writer fields"
+        "authority restore must preserve the exact durable compensation record before effects"
     );
     assert!(
         source.contains("fn config_authority_matches(")

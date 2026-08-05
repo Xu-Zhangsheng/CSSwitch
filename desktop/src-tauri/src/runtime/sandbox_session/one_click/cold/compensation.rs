@@ -72,6 +72,35 @@ impl CompensationStepOutcome {
             Self::Succeeded | Self::Skipped(_) => None,
         }
     }
+
+    fn durable_state(&self) -> config::RuntimeCompensationStepState {
+        match self {
+            Self::Succeeded => config::RuntimeCompensationStepState::Succeeded,
+            Self::Failed(_) => config::RuntimeCompensationStepState::Failed,
+            Self::Skipped(cause) => config::RuntimeCompensationStepState::Skipped {
+                cause: match cause {
+                    CompensationSkipCause::NoScienceCandidate => {
+                        config::RuntimeCompensationSkipCause::NoScienceCandidate
+                    }
+                    CompensationSkipCause::NoPriorScience => {
+                        config::RuntimeCompensationSkipCause::NoPriorScience
+                    }
+                    CompensationSkipCause::CrossRuntimeEnvironment => {
+                        config::RuntimeCompensationSkipCause::CrossRuntimeEnvironment
+                    }
+                    CompensationSkipCause::BlockedByScienceCleanup => {
+                        config::RuntimeCompensationSkipCause::BlockedByScienceCleanup
+                    }
+                    CompensationSkipCause::BlockedByAuthorityRestore => {
+                        config::RuntimeCompensationSkipCause::BlockedByAuthorityRestore
+                    }
+                    CompensationSkipCause::SnapshotPreserved => {
+                        config::RuntimeCompensationSkipCause::SnapshotPreserved
+                    }
+                },
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,6 +234,55 @@ impl CompensationOutcome {
     }
 }
 
+fn persist_compensation_step_intent(
+    dir: &Path,
+    trace: &OperationTrace,
+    authority_transaction: &mut AuthorityTransaction,
+    journal_progress: &mut OneClickJournalProgress,
+    original_kind: OneClickFailureKind,
+    step: config::RuntimeCompensationStep,
+) -> Result<(), TypedOneClickFailure> {
+    begin_one_click_compensation_step(dir, journal_progress, step).map_err(|error| {
+        authority_transaction.preserve_recovery();
+        trace.finish("error=compensation_step_intent_not_persisted");
+        TypedOneClickFailure::new(
+            original_kind,
+            format!(
+                "补偿步骤开始前无法持久化 exact step intent；未执行该步骤及后续 effect，已保留恢复快照并要求人工恢复：{error}"
+            ),
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+    })
+}
+
+fn persist_compensation_step_outcome(
+    dir: &Path,
+    trace: &OperationTrace,
+    authority_transaction: &mut AuthorityTransaction,
+    journal_progress: &mut OneClickJournalProgress,
+    original_kind: OneClickFailureKind,
+    step: config::RuntimeCompensationStep,
+    outcome: &CompensationStepOutcome,
+) -> Result<(), TypedOneClickFailure> {
+    let durable_outcome = outcome.durable_state();
+    let result = if step == config::RuntimeCompensationStep::AuthorityRestore {
+        finish_one_click_authority_restore_step(dir, journal_progress, durable_outcome)
+    } else {
+        finish_one_click_compensation_step(dir, journal_progress, step, durable_outcome)
+    };
+    result.map_err(|error| {
+            authority_transaction.preserve_recovery();
+            trace.finish("error=compensation_step_outcome_not_persisted");
+            TypedOneClickFailure::new(
+                original_kind,
+                format!(
+                    "补偿步骤结果无法持久化；已停止后续 effect、保留当前 journal 与恢复快照并要求人工恢复：{error}"
+                ),
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+        })
+}
+
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     app: &tauri::AppHandle<R>,
@@ -260,6 +338,14 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     );
     let science_cleanup_required = failure.rollback.launch_environment.may_be_exposed()
         || failure.rollback.launch_token.is_some();
+    persist_compensation_step_intent(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::ScienceCleanup,
+    )?;
     let cleanup = if failure.rollback.candidate_stop_proof
         == ManagedScienceCandidateStopProof::Unproven
     {
@@ -317,6 +403,22 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         }
         result.map(|_| ()).map_err(|error| error.to_string())
     };
+    let science_cleanup = match cleanup.as_ref() {
+        Ok(()) if science_cleanup_required => CompensationStepOutcome::Succeeded,
+        Ok(()) => CompensationStepOutcome::Skipped(CompensationSkipCause::NoScienceCandidate),
+        Err(error) => CompensationStepOutcome::Failed(CompensationCause::ScienceCleanup {
+            safe_detail: error.to_string(),
+        }),
+    };
+    persist_compensation_step_outcome(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::ScienceCleanup,
+        &science_cleanup,
+    )?;
     if let Err(cleanup_error) = cleanup.as_ref() {
         let outcome =
             CompensationOutcome::blocked_by_science_cleanup(cleanup_error.to_string(), environment);
@@ -326,11 +428,7 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             }
         }
         authority_transaction.preserve_recovery();
-        if let Err(journal_error) = finish_one_click_compensation(
-            dir,
-            journal_progress,
-            vec![config::RuntimeCompensationStep::ScienceCleanup],
-        ) {
+        if let Err(journal_error) = finish_one_click_compensation(dir, journal_progress) {
             trace.finish("error=compensation_failure_not_persisted");
             return Err(TypedOneClickFailure::new(
                 original_kind,
@@ -352,12 +450,41 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
                 .with_safe_cause(phase.cause_code(), "authority cleanup typed failure"),
         );
     }
-    let ssh_cleanup = match failure.rollback.ssh_stub_transaction.as_ref() {
+    persist_compensation_step_intent(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::SshCleanup,
+    )?;
+    let ssh_cleanup_result = match failure.rollback.ssh_stub_transaction.as_ref() {
         Some(transaction) => transaction.compensate(&sandbox_home()),
         None => crate::runtime::settings::remove_managed_sandbox_ssh_stub(&sandbox_home()),
     };
+    let ssh_cleanup = match ssh_cleanup_result {
+        Ok(_) => CompensationStepOutcome::Succeeded,
+        Err(_) => CompensationStepOutcome::Failed(CompensationCause::SshCleanup),
+    };
+    persist_compensation_step_outcome(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::SshCleanup,
+        &ssh_cleanup,
+    )?;
+    persist_compensation_step_intent(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::AuthorityRestore,
+    )?;
     let runtime_transaction_restore = journal_progress.restore_expectation();
-    let rollback = authority_transaction.restore(
+    let rollback_result = authority_transaction.restore(
         app,
         dir,
         state,
@@ -366,7 +493,28 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         failure.rollback.proxy_action,
         &runtime_transaction_restore,
     );
-    let prior_restart = if rollback.is_ok() && !cross_runtime_environment {
+    let authority_restore = match rollback_result {
+        Ok(()) => CompensationStepOutcome::Succeeded,
+        Err(_) => CompensationStepOutcome::Failed(CompensationCause::AuthorityRestore),
+    };
+    persist_compensation_step_outcome(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::AuthorityRestore,
+        &authority_restore,
+    )?;
+    persist_compensation_step_intent(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::PriorScienceRestart,
+    )?;
+    let prior_restart = if authority_restore.succeeded() && !cross_runtime_environment {
         match prior_science {
             Some(prior) => match restart_prior_science(app, state, lifecycle, auth_proof, prior) {
                 Ok(()) => CompensationStepOutcome::Succeeded,
@@ -381,20 +529,19 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     } else {
         CompensationStepOutcome::Skipped(CompensationSkipCause::BlockedByAuthorityRestore)
     };
+    persist_compensation_step_outcome(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::PriorScienceRestart,
+        &prior_restart,
+    )?;
     let mut outcome = CompensationOutcome {
-        science_cleanup: if science_cleanup_required {
-            CompensationStepOutcome::Succeeded
-        } else {
-            CompensationStepOutcome::Skipped(CompensationSkipCause::NoScienceCandidate)
-        },
-        ssh_cleanup: match ssh_cleanup {
-            Ok(_) => CompensationStepOutcome::Succeeded,
-            Err(_) => CompensationStepOutcome::Failed(CompensationCause::SshCleanup),
-        },
-        authority_restore: match rollback {
-            Ok(()) => CompensationStepOutcome::Succeeded,
-            Err(_) => CompensationStepOutcome::Failed(CompensationCause::AuthorityRestore),
-        },
+        science_cleanup,
+        ssh_cleanup,
+        authority_restore,
         prior_science_restart: prior_restart,
         snapshot_cleanup: CompensationStepOutcome::Skipped(
             CompensationSkipCause::SnapshotPreserved,
@@ -410,6 +557,14 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             *disposition = PriorScienceDisposition::Restored;
         }
     }
+    persist_compensation_step_intent(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::SnapshotCleanup,
+    )?;
     outcome.snapshot_cleanup = if authorities_restored {
         match authority_transaction.cleanup_when_expendable() {
             Ok(_) => CompensationStepOutcome::Succeeded,
@@ -421,34 +576,16 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         authority_transaction.preserve_recovery();
         CompensationStepOutcome::Skipped(CompensationSkipCause::SnapshotPreserved)
     };
-    let failed_steps = [
-        (
-            &outcome.science_cleanup,
-            config::RuntimeCompensationStep::ScienceCleanup,
-        ),
-        (
-            &outcome.ssh_cleanup,
-            config::RuntimeCompensationStep::SshCleanup,
-        ),
-        (
-            &outcome.authority_restore,
-            config::RuntimeCompensationStep::AuthorityRestore,
-        ),
-        (
-            &outcome.prior_science_restart,
-            config::RuntimeCompensationStep::PriorScienceRestart,
-        ),
-        (
-            &outcome.snapshot_cleanup,
-            config::RuntimeCompensationStep::SnapshotCleanup,
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(outcome, step)| {
-        matches!(outcome, CompensationStepOutcome::Failed(_)).then_some(step)
-    })
-    .collect::<Vec<_>>();
-    if let Err(journal_error) = finish_one_click_compensation(dir, journal_progress, failed_steps) {
+    persist_compensation_step_outcome(
+        dir,
+        trace,
+        authority_transaction,
+        journal_progress,
+        original_kind,
+        config::RuntimeCompensationStep::SnapshotCleanup,
+        &outcome.snapshot_cleanup,
+    )?;
+    if let Err(journal_error) = finish_one_click_compensation(dir, journal_progress) {
         authority_transaction.preserve_recovery();
         trace.finish("error=compensation_completion_not_persisted");
         return Err(TypedOneClickFailure::new(
