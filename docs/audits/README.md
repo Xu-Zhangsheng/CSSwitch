@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [O1-C managed Science launch phase closure（2026-08-05）](2026-08-05-o1-c-science-launch-phase.md)：managed Science launch phase 机械切分、独立复审与 exact-SHA source gate closure。
 - [O1-B cold one-click coordinator closure（2026-08-05）](2026-08-05-o1-b-cold-coordinator.md)：entry / mutating cold coordinator 机械切分、独立审查与 exact-SHA source gate closure。
 - [F1-A durable history recovery closure（2026-08-05）](2026-08-05-f1-a-history-recovery.md)：typed V2 history transaction、credential before-image / crash replay、restore/resume handoff、独立审查与 exact-SHA source gate closure。
 - [C1-A cross-process config writer fence closure（2026-08-05）](2026-08-05-c1-a-config-writer-fence.md)：canonical config writer fence、真实双进程/锁 identity 负向测试、独立审查与 exact-SHA source gate closure。
