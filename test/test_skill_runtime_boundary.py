@@ -450,7 +450,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertNotIn("replay_interrupted_one_click_finalize", one_click_command)
         recovery_projection = one_click_source.split(
             "fn typed_interrupted_gateway_recovery_error", 1
-        )[1].split("#[allow(dead_code)]\nfn stop_sandbox_state", 1)[0]
+        )[1].split("fn stop_sandbox_state", 1)[0]
         self.assertIn("error.kind()", recovery_projection)
         self.assertIn("error.recovery()", recovery_projection)
         self.assertRegex(

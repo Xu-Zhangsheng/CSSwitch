@@ -207,6 +207,12 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let healthy_reopen_source = include_str!("../one_click/healthy_reopen.rs");
     let profile_reconcile_source = include_str!("../../profile_switch.rs");
     let auto_boot_source = include_str!("../../../lib.rs");
+    let config_source = include_str!("../../../config.rs");
+    let profile_source = include_str!("../../profile.rs");
+    let finalize_consumer_source = include_str!("../../finalize_consumer.rs");
+    let history_recovery_source = include_str!("../history_recovery.rs");
+    let lifecycle_command_source = include_str!("../../../commands/runtime/lifecycle.rs");
+    let codex_command_source = include_str!("../../../commands/codex.rs");
 
     let failure_production = failure_source
         .split("#[cfg(test)]\nmod tests")
@@ -252,10 +258,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let gateway_projection = source
         .split("fn typed_interrupted_gateway_recovery_error")
         .nth(1)
-        .and_then(|tail| {
-            tail.split("#[allow(dead_code)]\nfn stop_sandbox_state")
-                .next()
-        })
+        .and_then(|tail| tail.split("fn stop_sandbox_state").next())
         .expect("interrupted Gateway runtime projection must remain discoverable");
     assert!(
         gateway_projection.contains("error.kind()")
@@ -316,6 +319,14 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
                 .next()
         })
         .expect("one-click V2 writer must remain discoverable");
+    let compensation_journal = source
+        .split("pub(super) fn begin_one_click_compensation")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(super) fn validate_interrupted_science_transaction_entry")
+                .next()
+        })
+        .expect("durable one-click compensation journal writers must remain discoverable");
     let one_click_terminal_writers = source
         .split("pub(super) fn clear_one_click_transaction")
         .nth(1)
@@ -334,7 +345,8 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     assert!(
         one_click_progress.contains("record: config::RuntimeTransactionV2")
             && one_click_progress.contains("Self::Finalized { .. } =>")
-            && one_click_progress.contains("RuntimeTransactionRestoreExpectation::Exact(Some(")
+            && one_click_progress
+                .contains("RuntimeTransactionRestoreExpectation::ExactPreservingCompensation")
             && one_click_progress.contains(
                 "Self::Finalized { .. } => RuntimeTransactionRestoreExpectation::Exact(None)"
             )
@@ -359,11 +371,32 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
                 "journal.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted"
             )
             && compensation_source.contains("journal_progress.restore_expectation()")
+            && compensation_journal.contains("fn finish_one_click_compensation")
+            && compensation_journal.contains(
+                "state: config::RuntimeCompensationState::InProgress"
+            )
+            && compensation_journal.contains(
+                "record.state = config::RuntimeCompensationState::Incomplete"
+            )
+            && compensation_journal.contains("current.runtime_compensation = None")
+            && compensation_journal.contains("current.runtime_compensation = Some(next.clone())")
+            && compensation_journal.contains("RuntimeCompensationJournal")
+            && one_click_progress.contains("runtime_transaction: Box<Option<")
+            && compensation_source.find("begin_one_click_compensation(")
+                < compensation_source.find("let cross_runtime_environment")
+            && compensation_source.contains(
+                "finish_one_click_compensation(dir, journal_progress, failed_steps)"
+            )
+            && recovery_source.contains(
+                "RuntimeTransactionRestoreExpectation::ExactPreservingCompensation"
+            )
+            && recovery_source.contains("current.runtime_compensation =")
+            && recovery_source.contains("Some(compensation.clone())")
             && recovery_source.contains(
                 "current.runtime_transaction.as_ref() != expected.as_ref()"
             )
             && restore_guard < first_restore_effect,
-        "one-click checkpoints, replayable finalize, and compensation restore must CAS the complete current V2 state and preserve canonical writer fields"
+        "one-click checkpoints, replayable finalize, and durable compensation must CAS the complete current V2 state and preserve canonical writer fields"
     );
     assert!(
         source.contains("fn config_authority_matches(")
@@ -399,6 +432,28 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && runtime_entry.contains("replay_interrupted_one_click_finalize")
             && runtime_entry.contains("one_click_login_after_gateway_recovery"),
         "the runtime entry facade must exclusively own finalize/Gateway recovery and consuming handoff"
+    );
+    assert!(
+        config_source.contains(
+            "self.runtime_transaction.is_some() || self.runtime_compensation.is_some()"
+        ) && config_source.contains("if cfg.has_open_runtime_journal()")
+            && command_projection_source.contains("cfg.has_open_runtime_journal()")
+            && profile_source.contains("if cfg.has_open_runtime_journal()")
+            && finalize_consumer_source.contains("if cfg.has_open_runtime_journal()")
+            && history_recovery_source.matches("has_open_runtime_journal()").count() >= 3
+            && lifecycle_command_source
+                .matches("config::require_no_runtime_transaction")
+                .count()
+                >= 4
+            && codex_command_source
+                .matches("config::require_no_runtime_transaction")
+                .count()
+                >= 5
+            && profile_source
+                .matches("config::require_no_runtime_transaction")
+                .count()
+                >= 7,
+        "every normal entry, mutation guard, and read-model consumer must fail closed for either the business journal or the durable compensation journal"
     );
     assert!(
         gateway_recovery_source.contains(

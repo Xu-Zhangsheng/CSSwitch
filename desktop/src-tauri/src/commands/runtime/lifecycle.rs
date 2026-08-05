@@ -41,6 +41,8 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
     // 作废任何在途启动，防被停后又拿旧配置写回运行态。
     lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         let dir = config::default_dir();
+        let preflight = config::load_from(&dir).map_err(|error| error.to_string())?;
+        config::require_no_runtime_transaction(&preflight)?;
         if mode == "official" {
             lifecycle.bump_generation();
             let mut st = lock(&state);
@@ -49,9 +51,13 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
             })?;
             st.stop_proxy();
         }
-        config::update(&dir, {
+        config::update_result(&dir, {
             let mode = mode.clone();
-            move |c| c.mode = mode
+            move |c| {
+                config::require_no_runtime_transaction(c)?;
+                c.mode = mode;
+                Ok(((), true))
+            }
         })
         .map_err(|e| e.to_string())?;
         {
@@ -100,6 +106,7 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
     lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         let dir = config::default_dir();
         let old = config::load_from(&dir).map_err(|e| e.to_string())?;
+        config::require_no_runtime_transaction(&old)?;
         let teardown = settings_change_needs_teardown(
             old.proxy_port,
             cfg.proxy_port,
@@ -124,10 +131,12 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
             remove_managed_sandbox_ssh_stub(&crate::runtime::science::sandbox_home())?;
         }
         // 拆链路成功（或无需拆）→ 才落盘新端口，保证 config 与运行态一致。
-        config::update(&dir, move |c| {
+        config::update_result(&dir, move |c| {
+            config::require_no_runtime_transaction(c)?;
             c.proxy_port = cfg.proxy_port;
             c.sandbox_port = cfg.sandbox_port;
             c.reuse_system_ssh = cfg.reuse_system_ssh;
+            Ok(((), true))
         })
         .map_err(|e| e.to_string())?;
         {

@@ -426,6 +426,8 @@ fn run_downgrade_mutation_at(
     success: Value,
     stop_runtime: impl FnOnce() -> Result<(), String>,
 ) -> Result<DowngradeCommandOutcome, String> {
+    let preflight = config::load_from(dir).map_err(|error| error.to_string())?;
+    config::require_no_runtime_transaction(&preflight)?;
     stop_runtime()?;
     Ok(downgrade_command_outcome(
         config::downgrade_to_v2_and_latch(dir, actions, Some(destination), expected_fingerprint),
@@ -533,6 +535,7 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
     let cfg = config::load_from(&config::default_dir()).map_err(|error| {
         format!("读取配置失败；为避免遗漏残留 Codex Science，认证未变更：{error}")
     })?;
+    config::require_no_runtime_transaction(&cfg)?;
     let active_profile_is_codex = cfg
         .active_profile()
         .is_some_and(|profile| profile.template_id == "codex");
@@ -598,11 +601,15 @@ fn set_experimental_codex_enabled_at(
     enabled: bool,
     before_disable: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
+    let preflight = config::load_from(dir).map_err(|error| error.to_string())?;
+    config::require_no_runtime_transaction(&preflight)?;
     if !enabled {
         before_disable()?;
     }
-    config::update(dir, move |cfg| {
+    config::update_result(dir, move |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
         cfg.experimental_codex_enabled = enabled;
+        Ok(((), true))
     })
     .map_err(|error| error.to_string())?;
     Ok(json!({ "experimental_codex_enabled": enabled }))
@@ -614,10 +621,14 @@ fn set_codex_network_at(
     resolved: &csswitch_codex_network::ResolvedCodexNetworkRoute,
     before_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
+    let preflight = config::load_from(dir).map_err(|error| error.to_string())?;
+    config::require_no_runtime_transaction(&preflight)?;
     before_commit()?;
     let mode = settings.mode;
-    config::update(dir, move |cfg| {
+    config::update_result(dir, move |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
         cfg.codex_network = settings;
+        Ok(((), true))
     })
     .map_err(|error| error.to_string())?;
     Ok(json!({
@@ -1799,6 +1810,7 @@ fn start_codex_login_inner<R: tauri::Runtime>(
         |_| -> Result<_, RuntimeCommandError> {
             let cfg = config::load_from(&config::default_dir())
                 .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            config::require_no_runtime_transaction(&cfg).map_err(RuntimeCommandError::from)?;
             config::require_template_enabled(&cfg, "codex").map_err(RuntimeCommandError::from)?;
             let route =
                 csswitch_codex_network::resolve_from_process(&cfg.codex_network).map_err(|_| {
@@ -1810,6 +1822,10 @@ fn start_codex_login_inner<R: tauri::Runtime>(
             let operation_id = reservation.operation_id.clone();
             let process = (|| -> Result<_, RuntimeCommandError> {
                 prepare_codex_auth_mutation(app, state, lifecycle)
+                    .map_err(RuntimeCommandError::from)?;
+                let current = config::load_from(&config::default_dir())
+                    .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+                config::require_no_runtime_transaction(&current)
                     .map_err(RuntimeCommandError::from)?;
                 let process = spawn_sidecar(app, action, &operation_id, &route)
                     .map_err(RuntimeCommandError::from)?;
@@ -2067,6 +2083,7 @@ pub(crate) async fn codex_auth_logout(
 ) -> Result<Value, RuntimeCommandError> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
+    let completion_lifecycle = lifecycle.clone();
     let supervisor = supervisor.inner().clone();
     let logout_supervisor = supervisor.clone();
     let logout_app = app.clone();
@@ -2075,8 +2092,13 @@ pub(crate) async fn codex_auth_logout(
     })
     .await?;
     crate::run_blocking_typed(move || {
-        complete_codex_logout_inner(&logout_supervisor, mutation, |mutation| {
-            run_codex_logout_sidecar(&logout_app, mutation)
+        completion_lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+            let current = config::load_from(&config::default_dir())
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            config::require_no_runtime_transaction(&current).map_err(RuntimeCommandError::from)?;
+            complete_codex_logout_inner(&logout_supervisor, mutation, |mutation| {
+                run_codex_logout_sidecar(&logout_app, mutation)
+            })
         })
     })
     .await
@@ -3563,6 +3585,20 @@ mod tests {
         dir
     }
 
+    fn o1_e1_codex_compensation_marker() -> config::RuntimeCompensationJournal {
+        config::RuntimeCompensationJournal {
+            schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+            compensation_id: "o1-e1-codex-guard".into(),
+            target_profile_id: "codex-r0-f".into(),
+            runtime_fingerprint: "d".repeat(64),
+            snapshot_ticket: config::RuntimeSnapshotTicket::verified(
+                ".one-click-rollback-fedcba9876543210fedcba9876543210".into(),
+            )
+            .unwrap(),
+            state: config::RuntimeCompensationState::InProgress,
+        }
+    }
+
     fn r0_proxy_state(provider: &str) -> (SharedAppState, u32) {
         let child = Command::new("/bin/sleep")
             .arg("30")
@@ -3757,6 +3793,31 @@ mod tests {
         let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
 
         if requested == "login-prepare" {
+            config::update(&config_dir, |cfg| {
+                cfg.runtime_compensation = Some(o1_e1_codex_compensation_marker())
+            })
+            .unwrap();
+            let (guarded_state, guarded_pid) = r0_proxy_state("codex");
+            let guarded = match start_codex_login_inner(
+                app.handle(),
+                &guarded_state,
+                lifecycle.as_ref(),
+                &supervisor,
+                CodexAuthAction::LoginBrowser,
+                |_, _, _, _| panic!("open compensation marker must reject before sidecar spawn"),
+            ) {
+                Ok(_) => panic!("open compensation marker must reject Codex login"),
+                Err(error) => error,
+            };
+            assert!(guarded
+                .to_string()
+                .contains("runtime_transaction_in_progress"));
+            assert!(r0_process_is_running(guarded_pid));
+            assert!(lock(&guarded_state).proxy.is_some());
+            assert!(supervisor.snapshot().is_none());
+            lock(&guarded_state).stop_proxy();
+            config::update(&config_dir, |cfg| cfg.runtime_compensation = None).unwrap();
+
             let (other_state, other_pid) = r0_proxy_state("deepseek");
             let other_result = start_codex_login_inner(
                 app.handle(),
@@ -3880,6 +3941,25 @@ mod tests {
 
         if requested == "logout-failure" {
             let (codex_state, codex_pid) = r0_proxy_state("codex");
+            config::update(&config_dir, |cfg| {
+                cfg.runtime_compensation = Some(o1_e1_codex_compensation_marker())
+            })
+            .unwrap();
+            let guarded = match prepare_codex_logout_inner(
+                app.handle(),
+                &codex_state,
+                lifecycle.as_ref(),
+                &supervisor,
+            ) {
+                Ok(_) => panic!("open compensation marker must reject Codex logout"),
+                Err(error) => error,
+            };
+            assert!(guarded
+                .to_string()
+                .contains("runtime_transaction_in_progress"));
+            assert!(r0_process_is_running(codex_pid));
+            assert!(lock(&codex_state).proxy.is_some());
+            config::update(&config_dir, |cfg| cfg.runtime_compensation = None).unwrap();
             let mutation = prepare_codex_logout_inner(
                 app.handle(),
                 &codex_state,
@@ -3970,6 +4050,28 @@ mod tests {
         }
 
         if requested == "disable-config" {
+            config::update(&config_dir, |cfg| {
+                cfg.runtime_compensation = Some(o1_e1_codex_compensation_marker())
+            })
+            .unwrap();
+            let guarded_before = fs::read(config_dir.join("config.json")).unwrap();
+            let side_effect_called = std::cell::Cell::new(false);
+            let guarded = set_experimental_codex_enabled_at(&config_dir, false, || {
+                side_effect_called.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+            assert!(
+                guarded.contains("runtime_transaction_in_progress"),
+                "{guarded}"
+            );
+            assert!(!side_effect_called.get());
+            assert_eq!(
+                fs::read(config_dir.join("config.json")).unwrap(),
+                guarded_before
+            );
+            config::update(&config_dir, |cfg| cfg.runtime_compensation = None).unwrap();
+
             let before = fs::read(config_dir.join("config.json")).unwrap();
             let (other_state, other_pid) = r0_proxy_state("deepseek");
             let fault = config::test_arm_update_commit_failure(config_dir.clone());
@@ -3999,6 +4101,30 @@ mod tests {
         }
 
         if requested == "network-config" {
+            config::update(&config_dir, |cfg| {
+                cfg.runtime_compensation = Some(o1_e1_codex_compensation_marker())
+            })
+            .unwrap();
+            let guarded_before = fs::read(config_dir.join("config.json")).unwrap();
+            let side_effect_called = std::cell::Cell::new(false);
+            let settings = csswitch_codex_network::CodexNetworkSettings::default();
+            let resolved = csswitch_codex_network::direct_route();
+            let guarded = set_codex_network_at(&config_dir, settings, &resolved, || {
+                side_effect_called.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+            assert!(
+                guarded.contains("runtime_transaction_in_progress"),
+                "{guarded}"
+            );
+            assert!(!side_effect_called.get());
+            assert_eq!(
+                fs::read(config_dir.join("config.json")).unwrap(),
+                guarded_before
+            );
+            config::update(&config_dir, |cfg| cfg.runtime_compensation = None).unwrap();
+
             let before = fs::read(config_dir.join("config.json")).unwrap();
             let settings = csswitch_codex_network::CodexNetworkSettings::default();
             let resolved = csswitch_codex_network::direct_route();

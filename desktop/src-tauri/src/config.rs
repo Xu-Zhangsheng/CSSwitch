@@ -756,6 +756,22 @@ pub enum RuntimeCompensationState {
     },
 }
 
+pub const RUNTIME_COMPENSATION_SCHEMA_VERSION_V1: u32 = 1;
+
+/// Credential- and path-free durable owner for aggregate one-click
+/// compensation. Business transaction details stay in `runtime_transaction`;
+/// this record only proves which snapshot-backed compensation is in flight.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeCompensationJournal {
+    pub schema_version: u32,
+    pub compensation_id: String,
+    pub target_profile_id: String,
+    pub runtime_fingerprint: String,
+    pub snapshot_ticket: RuntimeSnapshotTicket,
+    pub state: RuntimeCompensationState,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeGatewayStopOutcome {
@@ -1120,6 +1136,15 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
     ) {
         return Err("runtime_transaction V2 incomplete compensation has no failed step".into());
     }
+    if let RuntimeCompensationState::Incomplete { failed_steps } = &journal.compensation {
+        for (index, step) in failed_steps.iter().enumerate() {
+            if failed_steps[..index].contains(step) {
+                return Err(
+                    "runtime_transaction V2 incomplete compensation repeats a failed step".into(),
+                );
+            }
+        }
+    }
 
     let prior_stop_valid = match &journal.prior_stop {
         RuntimePriorStopState::NotRequired => true,
@@ -1429,6 +1454,11 @@ pub struct Config {
     pub runtime_binding: Option<RuntimeBindingCommit>,
     #[serde(default)]
     pub runtime_transaction: Option<RuntimeTransactionRecord>,
+    /// Durable one-click compensation progress. Kept separate so rollback can
+    /// restore the exact pre-operation runtime transaction without erasing the
+    /// crash marker for the compensation that is currently executing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_compensation: Option<RuntimeCompensationJournal>,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
@@ -1449,6 +1479,7 @@ impl Default for Config {
             pending_notice: None,
             runtime_binding: None,
             runtime_transaction: None,
+            runtime_compensation: None,
             extra: BTreeMap::new(),
         }
     }
@@ -1464,7 +1495,7 @@ pub(crate) fn require_template_enabled(cfg: &Config, template_id: &str) -> Resul
 }
 
 pub(crate) fn require_no_runtime_transaction(cfg: &Config) -> Result<(), String> {
-    if cfg.runtime_transaction.is_some() {
+    if cfg.has_open_runtime_journal() {
         Err(
             "code=runtime_transaction_in_progress 运行时事务尚未结束；请先完成恢复或重试一键开始。"
                 .into(),
@@ -1475,6 +1506,10 @@ pub(crate) fn require_no_runtime_transaction(cfg: &Config) -> Result<(), String>
 }
 
 impl Config {
+    pub fn has_open_runtime_journal(&self) -> bool {
+        self.runtime_transaction.is_some() || self.runtime_compensation.is_some()
+    }
+
     /// 当前选择 profile（active_id 空或悬空 → None）。
     pub fn active_profile(&self) -> Option<&Profile> {
         if self.active_id.is_empty() {
@@ -1848,6 +1883,7 @@ pub fn migrate_v3_to_v4(v3: crate::config_legacy::ConfigV3) -> io::Result<Config
         pending_notice,
         runtime_binding: None,
         runtime_transaction: None,
+        runtime_compensation: None,
         extra: v3.extra,
     })
 }
@@ -2660,11 +2696,42 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
         "pending_notice",
         "runtime_binding",
         "runtime_transaction",
+        "runtime_compensation",
     ] {
         if cfg.extra.contains_key(reserved) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("config extension 与 canonical 字段冲突：{reserved}"),
+            ));
+        }
+    }
+    if let Some(compensation) = cfg.runtime_compensation.as_ref() {
+        let state_valid = matches!(
+            compensation.state,
+            RuntimeCompensationState::InProgress | RuntimeCompensationState::Incomplete { .. }
+        );
+        let failed_steps_valid = match &compensation.state {
+            RuntimeCompensationState::Incomplete { failed_steps } => {
+                !failed_steps.is_empty()
+                    && failed_steps
+                        .iter()
+                        .enumerate()
+                        .all(|(index, step)| !failed_steps[..index].contains(step))
+            }
+            RuntimeCompensationState::InProgress => true,
+            RuntimeCompensationState::NotStarted => false,
+        };
+        if compensation.schema_version != RUNTIME_COMPENSATION_SCHEMA_VERSION_V1
+            || compensation.compensation_id.is_empty()
+            || compensation.target_profile_id.is_empty()
+            || !valid_runtime_fingerprint(&compensation.runtime_fingerprint)
+            || !valid_runtime_snapshot_ticket(&compensation.snapshot_ticket.managed_id)
+            || !state_valid
+            || !failed_steps_valid
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "runtime_compensation must be a path-free registered aggregate progress record",
             ));
         }
     }
@@ -3286,6 +3353,7 @@ fn downgrade_to_v2_unlocked(
     let (secure, _fence) =
         open_config_writer(dir, true).map_err(|error| DowngradeError::safe(error.to_string()))?;
     let cfg = load_from_secure(&secure).map_err(|error| DowngradeError::safe(error.to_string()))?;
+    require_no_runtime_transaction(&cfg).map_err(DowngradeError::safe)?;
     let preview = prepare_downgrade_to_v2(&cfg, actions)?;
     if expected_fingerprint
         .is_some_and(|expected| expected.is_empty() || expected != preview.fingerprint)
@@ -3399,6 +3467,17 @@ where
     if changed {
         ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
+        #[cfg(test)]
+        if CONFIG_UPDATE_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|(thread, armed_dir)| {
+                *thread == std::thread::current().id() && armed_dir == dir
+            })
+        {
+            return Err("test-only config update commit failure".into());
+        }
         save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
     }
     Ok(result)
@@ -3815,6 +3894,72 @@ mod tests {
                 Some(&expected)
             );
         }
+
+        let compensation = RuntimeCompensationJournal {
+            schema_version: RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+            compensation_id: "compensation-id".into(),
+            target_profile_id: "target-profile".into(),
+            runtime_fingerprint: "a".repeat(64),
+            snapshot_ticket: RuntimeSnapshotTicket::verified(
+                ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+            )
+            .unwrap(),
+            state: RuntimeCompensationState::InProgress,
+        };
+        let mut prior_business = valid_one_click_v2(RuntimeTransactionPhase::StartGateway);
+        prior_business.prior_stop = RuntimePriorStopState::Outcome {
+            recipe: RuntimePriorScienceRecipe {
+                port: 8766,
+                runtime_path: PathBuf::from("/Users/private/Claude Science"),
+                runtime_source: "managed".into(),
+                runtime_version: Some("1.0".into()),
+                runtime_fingerprint: "b".repeat(64),
+                launch_receipt_digest: "c".repeat(64),
+            },
+            outcome: RuntimePriorStopOutcome::ExactStopped,
+        };
+        let prior_transaction = RuntimeTransactionRecord::V2(prior_business);
+        let config_with_compensation = Config {
+            runtime_transaction: Some(prior_transaction.clone()),
+            runtime_compensation: Some(compensation.clone()),
+            ..Default::default()
+        };
+        save_to(&dir, &config_with_compensation).unwrap();
+        let loaded = load_from(&dir).unwrap();
+        assert_eq!(
+            loaded.runtime_transaction.as_ref(),
+            Some(&prior_transaction)
+        );
+        assert_eq!(loaded.runtime_compensation.as_ref(), Some(&compensation));
+        assert!(loaded.has_open_runtime_journal());
+        let compensation_only = Config {
+            runtime_transaction: None,
+            ..loaded.clone()
+        };
+        assert!(compensation_only.has_open_runtime_journal());
+        assert!(require_no_runtime_transaction(&compensation_only).is_err());
+        let wire = fs::read_to_string(config_path(&dir)).unwrap();
+        assert!(wire.contains("\"runtime_compensation\""));
+        let compensation_wire = serde_json::to_string(
+            serde_json::from_str::<serde_json::Value>(&wire).unwrap()["runtime_compensation"]
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        for forbidden in [
+            "api_key",
+            "base_url",
+            "credential",
+            "runtime_path",
+            "prior_stop",
+            "message",
+            "/Users/",
+        ] {
+            assert!(
+                !compensation_wire.contains(forbidden),
+                "compensation journal leaked `{forbidden}`: {compensation_wire}"
+            );
+        }
     }
 
     #[test]
@@ -3884,6 +4029,24 @@ mod tests {
         )
         .is_err());
 
+        for failed_steps in [
+            serde_json::json!([]),
+            serde_json::json!(["ssh_cleanup", "ssh_cleanup"]),
+        ] {
+            let mut illegal_compensation = serde_json::to_value(RuntimeTransactionRecord::V2(
+                valid_one_click_v2(RuntimeTransactionPhase::AuthoritySnapshotActive),
+            ))
+            .unwrap();
+            illegal_compensation["compensation"] = serde_json::json!({
+                "state": "incomplete",
+                "failed_steps": failed_steps
+            });
+            assert!(
+                serde_json::from_value::<RuntimeTransactionRecord>(illegal_compensation).is_err(),
+                "incomplete compensation must have unique failed steps"
+            );
+        }
+
         let mut history_resume_with_snapshot = serde_json::to_value(RuntimeTransactionRecord::V2(
             valid_history_v2(RuntimeTransactionPhase::ResumeAfterHistoryRestore),
         ))
@@ -3909,6 +4072,23 @@ mod tests {
             history_without_config_authority
         )
         .is_err());
+
+        let dir = tmpdir();
+        let invalid_compensation_owner = Config {
+            runtime_compensation: Some(RuntimeCompensationJournal {
+                schema_version: RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+                compensation_id: "invalid".into(),
+                target_profile_id: "target-profile".into(),
+                runtime_fingerprint: "a".repeat(64),
+                snapshot_ticket: RuntimeSnapshotTicket::verified(
+                    ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+                )
+                .unwrap(),
+                state: RuntimeCompensationState::NotStarted,
+            }),
+            ..Default::default()
+        };
+        assert!(save_to(&dir, &invalid_compensation_owner).is_err());
 
         for (field, value) in [
             (

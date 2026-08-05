@@ -701,6 +701,7 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
     };
     let mut snapshot_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket,
+        runtime_transaction: Box::new(config::load_from(&config_dir).unwrap().runtime_transaction),
     };
     write_one_click_checkpoint(
         &config_dir,
@@ -756,6 +757,7 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
     };
     let mut panic_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: panic_ticket,
+        runtime_transaction: Box::new(config::load_from(&config_dir).unwrap().runtime_transaction),
     };
     write_one_click_checkpoint(
         &config_dir,

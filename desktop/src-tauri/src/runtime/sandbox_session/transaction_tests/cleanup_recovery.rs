@@ -137,6 +137,7 @@ fn success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows(
         };
         let mut progress = OneClickJournalProgress::PreJournalAbort {
             registered_ticket: ticket,
+            runtime_transaction: Box::new(cfg.runtime_transaction.clone()),
         };
         write_one_click_checkpoint(
             &config_dir,

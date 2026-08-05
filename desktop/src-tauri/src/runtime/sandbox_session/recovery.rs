@@ -33,8 +33,11 @@ use super::pending_cleanup::{
 
 #[allow(clippy::large_enum_variant)]
 pub(super) enum RuntimeTransactionRestoreExpectation {
-    Unchecked,
     Exact(Option<config::RuntimeTransactionRecord>),
+    ExactPreservingCompensation {
+        runtime_transaction: Option<config::RuntimeTransactionRecord>,
+        compensation: config::RuntimeCompensationJournal,
+    },
     ExactConfig(Box<config::Config>),
 }
 
@@ -835,9 +838,15 @@ impl OneClickAuthoritySnapshot {
     ) -> Result<(), String> {
         let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
         let authority_matches = match runtime_transaction {
-            RuntimeTransactionRestoreExpectation::Unchecked => true,
             RuntimeTransactionRestoreExpectation::Exact(expected) => {
                 current.runtime_transaction.as_ref() == expected.as_ref()
+            }
+            RuntimeTransactionRestoreExpectation::ExactPreservingCompensation {
+                runtime_transaction,
+                compensation,
+            } => {
+                current.runtime_transaction == *runtime_transaction
+                    && current.runtime_compensation.as_ref() == Some(compensation)
             }
             RuntimeTransactionRestoreExpectation::ExactConfig(expected) => current == **expected,
         };
@@ -865,9 +874,6 @@ impl OneClickAuthoritySnapshot {
             }
         }
         let config_restore = match runtime_transaction {
-            RuntimeTransactionRestoreExpectation::Unchecked => {
-                config::save_to(config_dir, &self.config).map_err(|error| error.to_string())
-            }
             RuntimeTransactionRestoreExpectation::Exact(expected) => {
                 config::update_result(config_dir, |current| {
                     if current.runtime_transaction.as_ref() != expected.as_ref() {
@@ -877,6 +883,19 @@ impl OneClickAuthoritySnapshot {
                     Ok(((), true))
                 })
             }
+            RuntimeTransactionRestoreExpectation::ExactPreservingCompensation {
+                runtime_transaction,
+                compensation,
+            } => config::update_result(config_dir, |current| {
+                if current.runtime_transaction != *runtime_transaction
+                    || current.runtime_compensation.as_ref() != Some(compensation)
+                {
+                    return Err("one-click compensation found a retargeted durable compensation journal; preserved the current config and recovery snapshot".into());
+                }
+                *current = self.config.clone();
+                current.runtime_compensation = Some(compensation.clone());
+                Ok(((), true))
+            }),
             RuntimeTransactionRestoreExpectation::ExactConfig(expected) => {
                 config::update_result(config_dir, |current| {
                     if current != expected.as_ref() {

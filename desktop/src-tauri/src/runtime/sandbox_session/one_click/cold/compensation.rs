@@ -214,13 +214,17 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     dir: &Path,
     trace: &OperationTrace,
     authority_transaction: &mut AuthorityTransaction,
-    journal_progress: &OneClickJournalProgress,
+    transaction_identity: &OneClickTransactionIdentity,
+    journal_progress: &mut OneClickJournalProgress,
     prior_science: Option<&PriorScienceContext>,
     failure: OneClickFailure,
     mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
 ) -> Result<Value, TypedOneClickFailure> {
     let original_kind = failure.typed.kind();
-    if let OneClickJournalProgress::PreJournalAbort { registered_ticket } = journal_progress {
+    if let OneClickJournalProgress::PreJournalAbort {
+        registered_ticket, ..
+    } = journal_progress
+    {
         let in_memory_ticket = authority_transaction.registered_snapshot_ticket();
         if in_memory_ticket.as_ref() != Ok(registered_ticket) {
             authority_transaction.preserve_recovery();
@@ -231,6 +235,22 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             )
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
+    }
+    if let Err(error) = begin_one_click_compensation(
+        dir,
+        transaction_identity,
+        journal_progress,
+        authority_transaction.captured_runtime_transaction(),
+    ) {
+        authority_transaction.preserve_recovery();
+        trace.finish("error=compensation_intent_not_persisted");
+        return Err(TypedOneClickFailure::new(
+            original_kind,
+            format!(
+                "补偿开始前无法持久化 exact runtime journal；未执行补偿 effect，已保留恢复快照并要求人工恢复：{error}"
+            ),
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
     }
     let cross_runtime_environment = failure.rollback.launch_environment.may_be_exposed()
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
@@ -306,6 +326,18 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             }
         }
         authority_transaction.preserve_recovery();
+        if let Err(journal_error) = finish_one_click_compensation(
+            dir,
+            journal_progress,
+            vec![config::RuntimeCompensationStep::ScienceCleanup],
+        ) {
+            trace.finish("error=compensation_failure_not_persisted");
+            return Err(TypedOneClickFailure::new(
+                original_kind,
+                format!("补偿失败状态无法持久化；已保留恢复快照并要求人工恢复：{journal_error}"),
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
         trace.finish("error=compensation_restore_blocked_science_cleanup_unproven");
         let cleanup_failure = cleanup_required_error(
             AuthorityCleanupPhase::Cleanup,
@@ -389,6 +421,42 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         authority_transaction.preserve_recovery();
         CompensationStepOutcome::Skipped(CompensationSkipCause::SnapshotPreserved)
     };
+    let failed_steps = [
+        (
+            &outcome.science_cleanup,
+            config::RuntimeCompensationStep::ScienceCleanup,
+        ),
+        (
+            &outcome.ssh_cleanup,
+            config::RuntimeCompensationStep::SshCleanup,
+        ),
+        (
+            &outcome.authority_restore,
+            config::RuntimeCompensationStep::AuthorityRestore,
+        ),
+        (
+            &outcome.prior_science_restart,
+            config::RuntimeCompensationStep::PriorScienceRestart,
+        ),
+        (
+            &outcome.snapshot_cleanup,
+            config::RuntimeCompensationStep::SnapshotCleanup,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(outcome, step)| {
+        matches!(outcome, CompensationStepOutcome::Failed(_)).then_some(step)
+    })
+    .collect::<Vec<_>>();
+    if let Err(journal_error) = finish_one_click_compensation(dir, journal_progress, failed_steps) {
+        authority_transaction.preserve_recovery();
+        trace.finish("error=compensation_completion_not_persisted");
+        return Err(TypedOneClickFailure::new(
+            original_kind,
+            format!("补偿结果无法持久化；已保留当前 journal 并要求人工恢复：{journal_error}"),
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+    }
     trace.finish(
         if authorities_restored && outcome.environment.is_uncertain() {
             "error=one_click_transaction_compensated environment=uncertain"

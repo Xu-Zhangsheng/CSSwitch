@@ -3543,8 +3543,27 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
         && fs::metadata(&stable_authority)
             .is_ok_and(|metadata| metadata.permissions().mode() & 0o777 == 0o600);
     let config_after = config::load_from(&config_dir).ok();
-    let stable_authority_restored =
-        stable_file_restored && config_after.as_ref() == Some(&config_before);
+    let expected_failed_step = if oracle == "cleanup-degraded" {
+        config::RuntimeCompensationStep::SnapshotCleanup
+    } else {
+        config::RuntimeCompensationStep::PriorScienceRestart
+    };
+    let durable_compensation_record = config_after
+        .as_ref()
+        .and_then(|current| current.runtime_compensation.as_ref())
+        .is_some_and(|record| {
+            record.state
+                == config::RuntimeCompensationState::Incomplete {
+                    failed_steps: vec![expected_failed_step],
+                }
+        });
+    let mut config_after_without_journal = config_after.clone();
+    if let Some(current) = config_after_without_journal.as_mut() {
+        current.runtime_compensation = None;
+    }
+    let stable_authority_restored = stable_file_restored
+        && durable_compensation_record
+        && config_after_without_journal.as_ref() == Some(&config_before);
     let gateway_after = {
         let authority = lock(&state);
         crate::proc::http_gateway_health(
@@ -3621,8 +3640,8 @@ fn run_prior_restart_failure_oracle(oracle: &str) {
     );
     assert!(
             stable_authority_restored && gateway_restored && candidate_gone && prior_gone,
-            "authority and prior Gateway must restore before the prior Science recovery decision: stable={stable_authority_restored}, stable_file={stable_file_restored}, config_equal={}, gateway={gateway_restored}, candidate_gone={candidate_gone}, prior_gone={prior_gone}, gateway_health_present={}",
-            config_after.as_ref() == Some(&config_before),
+            "authority and prior Gateway must restore before the prior Science recovery decision while retaining only the durable compensation journal: stable={stable_authority_restored}, stable_file={stable_file_restored}, config_equal_without_journal={}, durable_compensation={durable_compensation_record}, gateway={gateway_restored}, candidate_gone={candidate_gone}, prior_gone={prior_gone}, gateway_health_present={}",
+            config_after_without_journal.as_ref() == Some(&config_before),
             gateway_after.is_some()
         );
     if oracle == "cleanup-degraded" {
@@ -9470,6 +9489,20 @@ fn r0_d_config(home: &Path, sandbox_port: u16, proxy_port: u16) -> PathBuf {
     config_dir
 }
 
+fn o1_e1_in_progress_compensation() -> config::RuntimeCompensationJournal {
+    config::RuntimeCompensationJournal {
+        schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+        compensation_id: "o1-e1-mutation-guard".into(),
+        target_profile_id: "guarded-profile".into(),
+        runtime_fingerprint: "a".repeat(64),
+        snapshot_ticket: config::RuntimeSnapshotTicket::verified(
+            ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+        )
+        .unwrap(),
+        state: config::RuntimeCompensationState::InProgress,
+    }
+}
+
 #[test]
 #[ignore = "source-gate parents execute exact isolated R0-D lifecycle cases with temp HOME, fake processes, and dynamic loopback ports"]
 fn isolated_r0_d_lifecycle_command_contract() {
@@ -9496,6 +9529,34 @@ fn isolated_r0_d_lifecycle_command_contract() {
     let handle = app.handle().clone();
 
     if requested == "set-mode" {
+        let guard_home = root.join("mode-journal-guard-home");
+        fs::create_dir_all(&guard_home).unwrap();
+        let config_dir = r0_d_config(&guard_home, free_port(), free_port());
+        config::update(&config_dir, |current| {
+            current.runtime_compensation = Some(o1_e1_in_progress_compensation())
+        })
+        .unwrap();
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let failed = super::lifecycle::set_mode_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle.clone(),
+            "official".into(),
+        )
+        .unwrap_err();
+        assert!(
+            failed.contains("runtime_transaction_in_progress"),
+            "{failed}"
+        );
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert!(lock(&state).proxy.is_some());
+        assert!(r0_d_process_is_running(proxy_pid));
+        lock(&state).stop_proxy();
+
         let stop_home = root.join("mode-stop-home");
         fs::create_dir_all(&stop_home).unwrap();
         let sandbox_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -9542,6 +9603,38 @@ fn isolated_r0_d_lifecycle_command_contract() {
     }
 
     if requested == "set-settings" {
+        let guard_home = root.join("settings-journal-guard-home");
+        fs::create_dir_all(&guard_home).unwrap();
+        let config_dir = r0_d_config(&guard_home, free_port(), free_port());
+        config::update(&config_dir, |current| {
+            current.runtime_compensation = Some(o1_e1_in_progress_compensation())
+        })
+        .unwrap();
+        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_d_proxy_state();
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let generation = lifecycle.current_generation();
+        let failed = super::lifecycle::set_settings_inner(
+            handle.clone(),
+            state.clone(),
+            lifecycle.clone(),
+            super::lifecycle::UiSettings {
+                proxy_port: free_port(),
+                sandbox_port: free_port(),
+                reuse_system_ssh: false,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            failed.contains("runtime_transaction_in_progress"),
+            "{failed}"
+        );
+        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert!(lock(&state).proxy.is_some());
+        assert!(r0_d_process_is_running(proxy_pid));
+        lock(&state).stop_proxy();
+
         let stop_home = root.join("settings-stop-home");
         fs::create_dir_all(&stop_home).unwrap();
         let sandbox_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();

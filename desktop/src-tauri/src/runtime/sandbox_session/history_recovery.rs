@@ -527,7 +527,7 @@ fn begin_history_transaction(
 ) -> Result<config::RuntimeTransactionV2, String> {
     let config_authority_fingerprint = history_config_authority_fingerprint(config)?;
     config::update_result(dir, |current| {
-        if current != config || current.runtime_transaction.is_some() {
+        if current != config || current.has_open_runtime_journal() {
             return Err("history recovery config authority drifted before durable intent".into());
         }
         let record = config::RuntimeTransactionV2 {
@@ -691,8 +691,7 @@ fn compensate_history_failure<R: Runtime>(
 fn project_resume_failure(failure: TypedOneClickFailure) -> Value {
     let journal_open = config::load_from(&config::default_dir())
         .ok()
-        .and_then(|cfg| cfg.runtime_transaction)
-        .is_some();
+        .is_some_and(|cfg| cfg.has_open_runtime_journal());
     failure
         .apply_open_journal_degraded(journal_open)
         .project_dto()
@@ -823,7 +822,7 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
     if cfg.mode != "proxy" {
         return Err("当前已不是第三方模型模式，本次历史恢复选择已作废".into());
     }
-    if cfg.runtime_transaction.is_some() {
+    if cfg.has_open_runtime_journal() {
         return Err("当前有新的运行事务尚未完成，已拒绝覆盖其历史身份".into());
     }
     let active_profile_id = cfg

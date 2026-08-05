@@ -272,6 +272,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
         },
         None => OneClickJournalProgress::PreJournalAbort {
             registered_ticket: snapshot_ticket,
+            runtime_transaction: Box::new(cfg.runtime_transaction.clone()),
         },
     };
     let transaction_result = (|| -> Result<Value, OneClickFailure> {
@@ -612,7 +613,8 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             &dir,
             &trace,
             &mut authority_transaction,
-            &journal_progress,
+            &transaction_identity,
+            &mut journal_progress,
             prior_science_for_compensation,
             failure,
             reconcile_disposition,

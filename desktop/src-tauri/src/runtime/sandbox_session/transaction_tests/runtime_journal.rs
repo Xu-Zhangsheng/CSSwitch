@@ -50,6 +50,182 @@ fn terminal_gateway_record(binding: Option<RuntimeBindingCommit>) -> config::Run
 }
 
 #[test]
+fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
+    let dir = isolated_tmpdir("durable-compensation-journal");
+    let ticket = config::RuntimeSnapshotTicket::verified(
+        ".one-click-rollback-0123456789abcdef0123456789abcdef".into(),
+    )
+    .unwrap();
+    let identity = OneClickTransactionIdentity {
+        target_profile_id: "target".into(),
+        runtime_fingerprint: "d".repeat(64),
+        snapshot_ticket: ticket.clone(),
+        previous_binding: None,
+        profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
+    };
+    config::save_to(&dir, &runtime_journal_test_config(None, None)).unwrap();
+    let mut pre_journal = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: ticket.clone(),
+        runtime_transaction: Box::new(None),
+    };
+    begin_one_click_compensation(&dir, &identity, &mut pre_journal, None).unwrap();
+    let pre_journal_marker = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    assert_eq!(
+        pre_journal_marker.state,
+        config::RuntimeCompensationState::InProgress
+    );
+    assert!(matches!(
+        &pre_journal,
+        OneClickJournalProgress::Compensating {
+            active_runtime_transaction,
+            compensation,
+            ..
+        } if active_runtime_transaction.as_ref().is_none()
+            && compensation.as_ref() == &pre_journal_marker
+    ));
+    finish_one_click_compensation(
+        &dir,
+        &mut pre_journal,
+        vec![config::RuntimeCompensationStep::ScienceCleanup],
+    )
+    .unwrap();
+
+    config::save_to(&dir, &runtime_journal_test_config(None, None)).unwrap();
+    let mut progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: ticket.clone(),
+        runtime_transaction: Box::new(None),
+    };
+    write_one_click_checkpoint(
+        &dir,
+        &identity,
+        &mut progress,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+    )
+    .unwrap();
+    begin_one_click_compensation(&dir, &identity, &mut progress, None).unwrap();
+    let in_progress = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap()
+        .clone();
+    assert_eq!(
+        in_progress.state,
+        config::RuntimeCompensationState::InProgress
+    );
+    assert!(matches!(
+        &progress,
+        OneClickJournalProgress::Compensating { compensation, .. }
+            if compensation.as_ref() == &in_progress
+    ));
+
+    let failed_steps = vec![
+        config::RuntimeCompensationStep::SshCleanup,
+        config::RuntimeCompensationStep::AuthorityRestore,
+    ];
+    finish_one_click_compensation(&dir, &mut progress, failed_steps.clone()).unwrap();
+    let incomplete = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap()
+        .clone();
+    assert_eq!(
+        incomplete.state,
+        config::RuntimeCompensationState::Incomplete { failed_steps }
+    );
+    assert!(matches!(
+        &progress,
+        OneClickJournalProgress::Compensating { compensation, .. }
+            if compensation.as_ref() == &incomplete
+    ));
+
+    config::save_to(&dir, &runtime_journal_test_config(None, None)).unwrap();
+    let mut completed = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: ticket.clone(),
+        runtime_transaction: Box::new(None),
+    };
+    write_one_click_checkpoint(
+        &dir,
+        &identity,
+        &mut completed,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+    )
+    .unwrap();
+    begin_one_click_compensation(&dir, &identity, &mut completed, None).unwrap();
+    config::update(&dir, |current| current.runtime_transaction = None).unwrap();
+    finish_one_click_compensation(&dir, &mut completed, Vec::new()).unwrap();
+    let completed_config = config::load_from(&dir).unwrap();
+    assert!(completed_config.runtime_compensation.is_none());
+    assert!(completed_config.runtime_transaction.is_none());
+    assert!(matches!(
+        completed,
+        OneClickJournalProgress::CompensationFinished { .. }
+    ));
+
+    let prior_transaction = config::RuntimeTransactionRecord::V2(terminal_gateway_record(None));
+    config::save_to(
+        &dir,
+        &runtime_journal_test_config(None, Some(prior_transaction.clone())),
+    )
+    .unwrap();
+    let mut preserves_prior = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: ticket.clone(),
+        runtime_transaction: Box::new(Some(prior_transaction.clone())),
+    };
+    begin_one_click_compensation(
+        &dir,
+        &identity,
+        &mut preserves_prior,
+        Some(prior_transaction.clone()),
+    )
+    .unwrap();
+    finish_one_click_compensation(&dir, &mut preserves_prior, Vec::new()).unwrap();
+    let prior_preserved = config::load_from(&dir).unwrap();
+    assert_eq!(
+        prior_preserved.runtime_transaction.as_ref(),
+        Some(&prior_transaction)
+    );
+    assert!(prior_preserved.runtime_compensation.is_none());
+
+    config::save_to(&dir, &runtime_journal_test_config(None, None)).unwrap();
+    let mut drifted = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: ticket,
+        runtime_transaction: Box::new(None),
+    };
+    write_one_click_checkpoint(
+        &dir,
+        &identity,
+        &mut drifted,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+    )
+    .unwrap();
+    config::update(&dir, |current| {
+        current
+            .runtime_transaction
+            .as_mut()
+            .and_then(config::RuntimeTransactionRecord::as_v2_mut)
+            .unwrap()
+            .phase = config::RuntimeTransactionPhase::StartGateway;
+    })
+    .unwrap();
+    let before_rejection = std::fs::read(dir.join("config.json")).unwrap();
+    assert!(
+        begin_one_click_compensation(&dir, &identity, &mut drifted, None)
+            .unwrap_err()
+            .contains("drifted runtime journal")
+    );
+    assert_eq!(
+        std::fs::read(dir.join("config.json")).unwrap(),
+        before_rejection
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transitions() {
     let dir = isolated_tmpdir("gateway-prior-finalize-protocol");
     let previous = RuntimeBindingCommit {
@@ -370,6 +546,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     };
     let mut progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket.clone(),
+        runtime_transaction: Box::new(config::load_from(&dir).unwrap().runtime_transaction),
     };
     write_one_click_checkpoint(
         &dir,
@@ -571,6 +748,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     retargeted_handoff_identity.profile_switch_handoff = Some(retargeted_profile_switch);
     let mut retargeted_handoff_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket.clone(),
+        runtime_transaction: Box::new(Some(profile_switch_record.clone())),
     };
     let handoff_error = write_one_click_checkpoint(
         &dir,
@@ -606,6 +784,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     let before_field_drift_rejection = std::fs::read(dir.join("config.json")).unwrap();
     let mut field_drift_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket.clone(),
+        runtime_transaction: Box::new(config::load_from(&dir).unwrap().runtime_transaction),
     };
     let field_drift_error = write_one_click_checkpoint(
         &dir,
@@ -643,6 +822,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         let before = std::fs::read(dir.join("config.json")).unwrap();
         let mut rejected_progress = OneClickJournalProgress::PreJournalAbort {
             registered_ticket: snapshot_ticket.clone(),
+            runtime_transaction: Box::new(replacement.clone()),
         };
         let error = write_one_click_checkpoint(
             &dir,
@@ -823,6 +1003,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     .unwrap();
     let mut handoff_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: snapshot_ticket.clone(),
+        runtime_transaction: Box::new(Some(profile_switch_record.clone())),
     };
     write_one_click_checkpoint(
         &dir,
@@ -887,6 +1068,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     };
     let mut compensation_progress = OneClickJournalProgress::PreJournalAbort {
         registered_ticket: compensation_ticket,
+        runtime_transaction: Box::new(None),
     };
     write_one_click_checkpoint(
         &compensation_dir,
@@ -937,11 +1119,14 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         &crate::lifecycle::Lifecycle::default(),
         &compensation_dir,
         &mut authority_transaction,
-        &compensation_progress,
+        &compensation_identity,
+        &mut compensation_progress,
         launch_runtime,
     )
     .expect_err("production compensation must fail closed after journal drift");
-    assert!(error.to_string().contains("compensation_restore_failed"));
+    assert!(error
+        .to_string()
+        .contains("无法持久化 exact runtime journal"));
     assert_eq!(
         std::fs::read(compensation_dir.join("config.json")).unwrap(),
         drifted_bytes,

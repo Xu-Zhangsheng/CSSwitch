@@ -99,7 +99,7 @@ pub(crate) fn selection_pending_from_config(cfg: &config::Config) -> Result<bool
     let Some(profile) = cfg.active_profile() else {
         return Ok(false);
     };
-    if cfg.runtime_transaction.is_some() {
+    if cfg.has_open_runtime_journal() {
         return Ok(true);
     }
     let Some(binding) = cfg.runtime_binding.as_ref() else {
@@ -190,6 +190,7 @@ pub(crate) fn acknowledge_pending_notice_inner(
         return Err("pending notice id 无效".into());
     }
     config::update_result(dir, |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
         let Some(notice) = cfg.pending_notice.as_deref() else {
             return Ok((json!({"status": "already_acknowledged"}), false));
         };
@@ -434,7 +435,12 @@ pub(crate) fn create_profile_with_catalog_inner(
     {
         return Err("中转 / 自定义端点必须选择或填写一个模型，未创建。".to_string());
     }
-    config::update(dir, |c| c.profiles.push(p)).map_err(|e| e.to_string())?;
+    config::update_result(dir, |c| {
+        config::require_no_runtime_transaction(c)?;
+        c.profiles.push(p);
+        Ok(((), true))
+    })
+    .map_err(|e| e.to_string())?;
     Ok(id)
 }
 
@@ -496,6 +502,7 @@ pub(crate) fn ensure_codex_profile_inner(dir: &Path) -> Result<EnsureCodexProfil
         extra: Default::default(),
     };
     config::update_result(dir, |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
         config::require_template_enabled(cfg, "codex")?;
         if let Some(existing) = cfg.profiles.iter().find(|p| is_canonical_codex_profile(p)) {
             return Ok((
@@ -531,11 +538,13 @@ pub(crate) fn update_profile_metadata_inner(
     {
         return Err(format!("找不到 profile：{id}"));
     }
-    config::update(dir, |c| {
+    config::update_result(dir, |c| {
+        config::require_no_runtime_transaction(c)?;
         if let Some(p) = c.profile_by_id_mut(id) {
             p.name = name.to_string();
             p.notes = notes.map(str::to_string);
         }
+        Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -839,6 +848,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d.join(".csswitch")
+    }
+
+    fn o1_e1_profile_compensation_marker() -> config::RuntimeCompensationJournal {
+        config::RuntimeCompensationJournal {
+            schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+            compensation_id: "o1-e1-profile-guard".into(),
+            target_profile_id: "guarded-profile".into(),
+            runtime_fingerprint: "e".repeat(64),
+            snapshot_ticket: config::RuntimeSnapshotTicket::verified(
+                ".one-click-rollback-00112233445566778899aabbccddeeff".into(),
+            )
+            .unwrap(),
+            state: config::RuntimeCompensationState::InProgress,
+        }
+    }
+
+    #[test]
+    fn compensation_only_journal_blocks_normal_profile_mutations() {
+        let dir = tmpdir_profile();
+        let id = create_profile_inner(
+            &dir,
+            "glm",
+            "before",
+            Some("test-key"),
+            None,
+            Some("glm-5.2"),
+        )
+        .unwrap();
+        config::update(&dir, |cfg| {
+            cfg.runtime_compensation = Some(o1_e1_profile_compensation_marker())
+        })
+        .unwrap();
+        let before = std::fs::read(dir.join("config.json")).unwrap();
+
+        let create_error = create_profile_inner(
+            &dir,
+            "glm",
+            "blocked",
+            Some("test-key"),
+            None,
+            Some("glm-5.2"),
+        )
+        .unwrap_err();
+        assert!(create_error.contains("runtime_transaction_in_progress"));
+        let metadata_error = update_profile_metadata_inner(&dir, &id, "blocked", None).unwrap_err();
+        assert!(metadata_error.contains("runtime_transaction_in_progress"));
+        assert_eq!(std::fs::read(dir.join("config.json")).unwrap(), before);
     }
 
     // ---------- P2-d: 非 active「如实标记后保存」裁决（明确拒绝才拦；200=已校验；含糊/无响应=落盘但未校验） ----------

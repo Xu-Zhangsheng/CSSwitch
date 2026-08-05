@@ -144,6 +144,7 @@ impl OneClickGatewayPreflightSnapshot {
 pub(crate) struct OneClickEntryPreflight {
     config: Option<config::Config>,
     runtime_transaction: Option<config::RuntimeTransactionRecord>,
+    runtime_compensation: Option<config::RuntimeCompensationJournal>,
     prior_gateway: Option<OneClickGatewayPreflightSnapshot>,
     auth_adapter: String,
 }
@@ -153,6 +154,13 @@ impl OneClickEntryPreflight {
         let cfg = config::load_from(&config::default_dir()).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
+        if cfg.runtime_compensation.is_some() {
+            return Err(TypedOneClickFailure::new(
+                OneClickFailureKind::Prepare,
+                "检测到未完成的 durable compensation journal；本阶段不自动重放，已保留原事务与恢复快照并要求人工恢复。",
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
         let active = cfg.active_profile().ok_or_else(|| {
             typed_one_click_err(
                 OneClickFailureKind::NoActiveProfile,
@@ -177,6 +185,7 @@ impl OneClickEntryPreflight {
                 .unwrap_or(false);
         Ok(Self {
             runtime_transaction: cfg.runtime_transaction.clone(),
+            runtime_compensation: cfg.runtime_compensation.clone(),
             config: (adapter != "codex").then_some(cfg),
             prior_gateway,
             auth_adapter: if needs_codex_proof {
@@ -215,7 +224,9 @@ impl OneClickEntryPreflight {
                     "config_changed_retry：无法复核认证期间的 runtime transaction，请重试。",
                 )
             })?;
-            if current.runtime_transaction != self.runtime_transaction {
+            if current.runtime_transaction != self.runtime_transaction
+                || current.runtime_compensation != self.runtime_compensation
+            {
                 return Err(typed_one_click_err(
                     OneClickFailureKind::PreflightSnapshot,
                     "config_changed_retry：runtime transaction 在认证检查期间发生变化，请重试。",
@@ -802,9 +813,19 @@ pub(super) struct OneClickTransactionIdentity {
 pub(super) enum OneClickJournalProgress {
     PreJournalAbort {
         registered_ticket: config::RuntimeSnapshotTicket,
+        runtime_transaction: Box<Option<config::RuntimeTransactionRecord>>,
     },
     Journaled {
         record: config::RuntimeTransactionV2,
+        registered_ticket: config::RuntimeSnapshotTicket,
+    },
+    Compensating {
+        active_runtime_transaction: Box<Option<config::RuntimeTransactionRecord>>,
+        restored_runtime_transaction: Box<Option<config::RuntimeTransactionRecord>>,
+        compensation: Box<config::RuntimeCompensationJournal>,
+        registered_ticket: config::RuntimeSnapshotTicket,
+    },
+    CompensationFinished {
         registered_ticket: config::RuntimeSnapshotTicket,
     },
     Finalized {
@@ -816,10 +837,16 @@ pub(super) enum OneClickJournalProgress {
 impl OneClickJournalProgress {
     fn registered_ticket(&self) -> &config::RuntimeSnapshotTicket {
         match self {
-            Self::PreJournalAbort { registered_ticket }
+            Self::PreJournalAbort {
+                registered_ticket, ..
+            }
             | Self::Journaled {
                 registered_ticket, ..
             }
+            | Self::Compensating {
+                registered_ticket, ..
+            }
+            | Self::CompensationFinished { registered_ticket }
             | Self::Finalized {
                 registered_ticket, ..
             } => registered_ticket,
@@ -829,26 +856,55 @@ impl OneClickJournalProgress {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn transaction_id(&self) -> Option<&str> {
         match self {
-            Self::PreJournalAbort { .. } => None,
+            Self::PreJournalAbort {
+                runtime_transaction,
+                ..
+            } => runtime_transaction
+                .as_ref()
+                .as_ref()
+                .map(config::RuntimeTransactionRecord::transaction_id),
             Self::Journaled { record, .. } | Self::Finalized { record, .. } => {
                 Some(&record.transaction_id)
             }
+            Self::Compensating {
+                active_runtime_transaction,
+                ..
+            } => active_runtime_transaction
+                .as_ref()
+                .as_ref()
+                .map(config::RuntimeTransactionRecord::transaction_id),
+            Self::CompensationFinished { .. } => None,
         }
     }
 
     pub(super) fn journaled_record(&self) -> Option<&config::RuntimeTransactionV2> {
         match self {
-            Self::PreJournalAbort { .. } | Self::Finalized { .. } => None,
+            Self::PreJournalAbort { .. }
+            | Self::Compensating { .. }
+            | Self::CompensationFinished { .. }
+            | Self::Finalized { .. } => None,
             Self::Journaled { record, .. } => Some(record),
         }
     }
 
     fn restore_expectation(&self) -> RuntimeTransactionRestoreExpectation {
         match self {
-            Self::PreJournalAbort { .. } => RuntimeTransactionRestoreExpectation::Unchecked,
+            Self::PreJournalAbort {
+                runtime_transaction,
+                ..
+            } => RuntimeTransactionRestoreExpectation::Exact(runtime_transaction.as_ref().clone()),
             Self::Journaled { record, .. } => RuntimeTransactionRestoreExpectation::Exact(Some(
                 config::RuntimeTransactionRecord::V2(record.clone()),
             )),
+            Self::Compensating {
+                active_runtime_transaction,
+                compensation,
+                ..
+            } => RuntimeTransactionRestoreExpectation::ExactPreservingCompensation {
+                runtime_transaction: active_runtime_transaction.as_ref().clone(),
+                compensation: compensation.as_ref().clone(),
+            },
+            Self::CompensationFinished { .. } => RuntimeTransactionRestoreExpectation::Exact(None),
             Self::Finalized { .. } => RuntimeTransactionRestoreExpectation::Exact(None),
         }
     }
@@ -1346,6 +1402,153 @@ pub(super) fn write_one_click_checkpoint(
     *progress = OneClickJournalProgress::Journaled {
         record: next_record,
         registered_ticket: identity.snapshot_ticket.clone(),
+    };
+    Ok(())
+}
+
+pub(super) fn begin_one_click_compensation(
+    dir: &Path,
+    identity: &OneClickTransactionIdentity,
+    progress: &mut OneClickJournalProgress,
+    restored_runtime_transaction: Option<config::RuntimeTransactionRecord>,
+) -> Result<(), String> {
+    let registered_ticket = progress.registered_ticket().clone();
+    let active_runtime_transaction = match progress {
+        OneClickJournalProgress::PreJournalAbort {
+            runtime_transaction,
+            ..
+        } => runtime_transaction.as_ref().clone(),
+        OneClickJournalProgress::Journaled { record, .. } => {
+            let snapshot_identity_matches = record.snapshot_ticket.as_ref()
+                == Some(&registered_ticket)
+                || (record.snapshot_ticket.is_none()
+                    && one_click_prior_stop_record_matches(
+                        record,
+                        identity,
+                        &record.transaction_id,
+                    ));
+            if record.operation != config::RuntimeTransactionOperation::OneClick
+                || record.runtime_fingerprint.as_deref()
+                    != Some(identity.runtime_fingerprint.as_str())
+                || !snapshot_identity_matches
+                || record.previous_gateway.is_some()
+                || record.compensation != config::RuntimeCompensationState::NotStarted
+                || record.gateway_stop_outcome != config::RuntimeGatewayStopOutcome::NotAttempted
+                || record.environment_exposure != one_click_phase_exposure(record.phase)
+                || record.finalize != config::RuntimeFinalizeState::NotStarted
+            {
+                return Err("one-click compensation intent rejected an ineligible journal".into());
+            }
+            Some(config::RuntimeTransactionRecord::V2(record.clone()))
+        }
+        OneClickJournalProgress::Compensating { .. }
+        | OneClickJournalProgress::CompensationFinished { .. }
+        | OneClickJournalProgress::Finalized { .. } => {
+            return Err("one-click compensation intent was already published".into())
+        }
+    };
+    if identity.snapshot_ticket != registered_ticket {
+        return Err("one-click compensation intent rejected a replaced snapshot ticket".into());
+    }
+    let compensation = config::update_result(dir, |current| {
+        if !config_authority_matches(
+            current,
+            &identity.target_profile_id,
+            identity.previous_binding.as_ref(),
+        ) || current.runtime_transaction != active_runtime_transaction
+            || current.runtime_compensation.is_some()
+        {
+            return Err(
+                "one-click compensation intent found a drifted runtime journal; preserved the current transaction"
+                    .into(),
+            );
+        }
+        let next = config::RuntimeCompensationJournal {
+            schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+            compensation_id: config::new_id(),
+            target_profile_id: identity.target_profile_id.clone(),
+            runtime_fingerprint: identity.runtime_fingerprint.clone(),
+            snapshot_ticket: identity.snapshot_ticket.clone(),
+            state: config::RuntimeCompensationState::InProgress,
+        };
+        current.runtime_compensation = Some(next.clone());
+        Ok((next, true))
+    })?;
+    *progress = OneClickJournalProgress::Compensating {
+        active_runtime_transaction: Box::new(active_runtime_transaction),
+        restored_runtime_transaction: Box::new(restored_runtime_transaction),
+        compensation: Box::new(compensation),
+        registered_ticket,
+    };
+    Ok(())
+}
+
+pub(super) fn finish_one_click_compensation(
+    dir: &Path,
+    progress: &mut OneClickJournalProgress,
+    failed_steps: Vec<config::RuntimeCompensationStep>,
+) -> Result<(), String> {
+    let (active_runtime_transaction, restored_runtime_transaction, expected) = match progress {
+        OneClickJournalProgress::PreJournalAbort { .. }
+        | OneClickJournalProgress::CompensationFinished { .. }
+        | OneClickJournalProgress::Finalized { .. } => return Ok(()),
+        OneClickJournalProgress::Journaled { .. } => {
+            return Err("one-click compensation completion has no durable intent".into())
+        }
+        OneClickJournalProgress::Compensating {
+            active_runtime_transaction,
+            restored_runtime_transaction,
+            compensation,
+            ..
+        } => (
+            active_runtime_transaction.as_ref().clone(),
+            restored_runtime_transaction.as_ref().clone(),
+            compensation.as_ref().clone(),
+        ),
+    };
+    if expected.state != config::RuntimeCompensationState::InProgress {
+        return Err("one-click compensation completion has no durable intent".into());
+    }
+    for (index, step) in failed_steps.iter().enumerate() {
+        if failed_steps[..index].contains(step) {
+            return Err("one-click compensation completion repeats a failed step".into());
+        }
+    }
+    let registered_ticket = progress.registered_ticket().clone();
+    let next = config::update_result(dir, |current| {
+        let runtime_transaction_matches = if failed_steps.is_empty() {
+            current.runtime_transaction == restored_runtime_transaction
+        } else {
+            current.runtime_transaction == restored_runtime_transaction
+                || current.runtime_transaction == active_runtime_transaction
+        };
+        if current.runtime_compensation.as_ref() != Some(&expected) || !runtime_transaction_matches
+        {
+            return Err(
+                "one-click compensation completion found a drifted runtime journal; preserved the current transaction"
+                    .into(),
+            );
+        }
+        if failed_steps.is_empty() {
+            current.runtime_compensation = None;
+            Ok((None, true))
+        } else {
+            let mut record = expected.clone();
+            record.state = config::RuntimeCompensationState::Incomplete {
+                failed_steps: failed_steps.clone(),
+            };
+            current.runtime_compensation = Some(record.clone());
+            Ok((Some(record), true))
+        }
+    })?;
+    *progress = match next {
+        Some(compensation) => OneClickJournalProgress::Compensating {
+            active_runtime_transaction: Box::new(active_runtime_transaction),
+            restored_runtime_transaction: Box::new(restored_runtime_transaction),
+            compensation: Box::new(compensation),
+            registered_ticket,
+        },
+        None => OneClickJournalProgress::CompensationFinished { registered_ticket },
     };
     Ok(())
 }
@@ -2427,7 +2630,8 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
     lifecycle: &lifecycle::Lifecycle,
     dir: &Path,
     authority_transaction: &mut AuthorityTransaction,
-    journal_progress: &OneClickJournalProgress,
+    transaction_identity: &OneClickTransactionIdentity,
+    journal_progress: &mut OneClickJournalProgress,
     launch_runtime: ScienceRuntimeIdentity,
 ) -> Result<Value, TypedOneClickFailure> {
     let trace = OperationTrace::start(
@@ -2454,6 +2658,7 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
         dir,
         &trace,
         authority_transaction,
+        transaction_identity,
         journal_progress,
         None,
         failure,
@@ -2477,6 +2682,13 @@ fn one_click_login_with_options<R: Runtime>(
     let dir = config::default_dir();
     let cfg = config::load_from(&dir)
         .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
+    if cfg.runtime_compensation.is_some() {
+        return Err(TypedOneClickFailure::new(
+            OneClickFailureKind::Prepare,
+            "检测到未完成的 durable compensation journal；本阶段不自动重放，已保留原事务与恢复快照并要求人工恢复。",
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+    }
     let gateway_terminal_handoff = resolve_gateway_terminal_handoff(
         cfg.runtime_transaction.as_ref(),
         entry_progress.gateway_terminal_handoff,

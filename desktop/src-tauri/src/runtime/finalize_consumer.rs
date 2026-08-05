@@ -59,7 +59,7 @@ fn read_model(cfg: &config::Config) -> Result<FinalizeReadModel, String> {
         Some(_) => BindingRelation::DifferentActive,
     };
     Ok(FinalizeReadModel {
-        journal_disposition: if cfg.runtime_transaction.is_some() {
+        journal_disposition: if cfg.has_open_runtime_journal() {
             JournalDisposition::Open
         } else {
             JournalDisposition::Cleared

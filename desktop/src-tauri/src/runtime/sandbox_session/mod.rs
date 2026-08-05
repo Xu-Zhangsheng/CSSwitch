@@ -40,10 +40,11 @@ pub(crate) use history_recovery::{
 pub(crate) use one_click::one_click_login;
 #[cfg(test)]
 use one_click::{
-    begin_one_click_finalize, begin_prior_stop_intent, clear_one_click_transaction,
-    commit_healthy_reopen_binding, commit_runtime_binding, complete_one_click_finalize,
-    healthy_reopen_transaction_matches, one_click_phase_exposure, publish_prior_stop_outcome,
-    resolve_gateway_terminal_handoff, resolve_profile_switch_handoff, science_health_control_error,
+    begin_one_click_compensation, begin_one_click_finalize, begin_prior_stop_intent,
+    clear_one_click_transaction, commit_healthy_reopen_binding, commit_runtime_binding,
+    complete_one_click_finalize, finish_one_click_compensation, healthy_reopen_transaction_matches,
+    one_click_phase_exposure, publish_prior_stop_outcome, resolve_gateway_terminal_handoff,
+    resolve_profile_switch_handoff, science_health_control_error,
     test_compensate_one_click_failure, write_one_click_checkpoint, OneClickJournalProgress,
     OneClickTransactionIdentity,
 };

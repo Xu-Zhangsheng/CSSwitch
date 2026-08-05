@@ -73,6 +73,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.operon-skill-attachment-v1",
     "record.route-configuration-v1",
     "record.runtime-binding-v1",
+    "record.runtime-compensation-v1",
     "record.runtime-transaction-v1",
     "record.runtime-transaction-v2",
     "record.sandbox-ssh-stub-v2",

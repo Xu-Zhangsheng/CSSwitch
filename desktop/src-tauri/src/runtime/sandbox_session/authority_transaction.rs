@@ -41,6 +41,10 @@ impl AuthorityTransaction {
         self.snapshot.registered_snapshot_ticket()
     }
 
+    pub(super) fn captured_runtime_transaction(&self) -> Option<config::RuntimeTransactionRecord> {
+        self.snapshot.config.runtime_transaction.clone()
+    }
+
     pub(super) fn preserve_recovery(&mut self) {
         self.snapshot.preserve_recovery = true;
     }

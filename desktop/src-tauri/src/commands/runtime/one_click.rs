@@ -232,8 +232,7 @@ pub(super) fn test_arm_history_restore_credential_interrupt(
 pub(super) fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_json::Value {
     let journal_open = config::load_from(&config::default_dir())
         .ok()
-        .and_then(|cfg| cfg.runtime_transaction)
-        .is_some();
+        .is_some_and(|cfg| cfg.has_open_runtime_journal());
     failure
         .apply_open_journal_degraded(journal_open)
         .project_dto()
