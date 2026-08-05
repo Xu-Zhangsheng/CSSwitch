@@ -323,6 +323,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         one_click_runtime = (
             ROOT / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
         ).read_text()
+        compensation_runtime = (
+            ROOT
+            / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/compensation.rs"
+        ).read_text()
         science_phase_runtime = (
             ROOT
             / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
@@ -373,6 +377,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertLess(science_dispatch, verify_catalog)
         self.assertIn("ScienceHostAdapter::spawn_launch", science_phase_runtime)
         self.assertNotIn("ScienceHostAdapter::spawn_launch", one_click_runtime)
+        self.assertIn("fn compensate_one_click_failure", compensation_runtime)
+        self.assertNotIn("fn compensate_one_click_failure", one_click_source)
+        self.assertNotIn("fn compensate_one_click_failure", one_click_runtime)
+        self.assertIn(
+            "pub(super) use compensation::compensate_one_click_failure",
+            one_click_runtime,
+        )
         self.assertEqual(
             one_click_runtime.count("write_one_click_checkpoint(")
             + science_phase_runtime.count("write_one_click_checkpoint("),
@@ -660,6 +671,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
                 ).read_text(),
                 (
                     ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/compensation.rs"
+                ).read_text(),
+                (
+                    ROOT
                     / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
                 ).read_text(),
             )
@@ -791,6 +806,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
                 (
                     ROOT
                     / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
+                ).read_text(),
+                (
+                    ROOT
+                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/compensation.rs"
                 ).read_text(),
                 (
                     ROOT

@@ -98,8 +98,9 @@ fresh process 会重放同一 finalize intent：
 不进入旧 compensation，下一次 production command 会先重放再进入 healthy reopen。空的
 `CleanupOnly` manifest 是 authority 已完成的 durable evidence；manifest 完全缺失时拒绝 finalize，
 避免遗忘 recovery snapshot。两种 crash window 都不会退回 destructive
-recovery。coordinator 仍拥有 operation
-trace、Gateway/SSH 顺序、`CompensationOutcome` 聚合与 frontend DTO/text/recovery projection。
+recovery。coordinator 仍拥有 operation trace、Gateway/SSH 顺序与唯一 success/failure dispatch；
+专属 cold compensation phase 拥有 `CompensationOutcome` 聚合与 frontend DTO/text/recovery
+projection。该切分不改变补偿顺序，也没有把 aggregate compensation 升级为 durable stepwise replay。
 
 `GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
 health、catalog fingerprint、generation/write-back 与 child ownership 核心，但只在全部接受
@@ -325,9 +326,9 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- cold one-click 已与 entry/healthy owner 分离，但其内部仍顺序拥有 prior stop、authority、Gateway、
-  Science、route、finalize 与 aggregate compensation；V2 compensation schema 已有状态/步骤类型，
-  生产补偿仍没有持久化逐步进度；
+- cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
+  各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
+  finalize。V2 compensation schema 已有状态/步骤类型，生产补偿仍没有持久化逐步进度；
 - canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
   protected snapshot 与 cleanup/finalize 收敛 credential publication。其他直接 full-snapshot restore
   与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；

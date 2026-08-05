@@ -586,6 +586,8 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         .expect("one-click product Rust source must parse");
     let cold_file = syn::parse_file(include_str!("../one_click/cold.rs"))
         .expect("cold one-click Rust source must parse");
+    let compensation_file = syn::parse_file(include_str!("../one_click/cold/compensation.rs"))
+        .expect("one-click compensation phase Rust source must parse");
     let science_phase_file = syn::parse_file(include_str!("../one_click/cold/science_phase.rs"))
         .expect("managed Science phase Rust source must parse");
     let ssh = syn::parse_file(include_str!("../ssh_preflight.rs"))
@@ -593,6 +595,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let mut forbidden_cfg_macros = ForbiddenCfgMacros::default();
     forbidden_cfg_macros.visit_file(&one_click_file);
     forbidden_cfg_macros.visit_file(&cold_file);
+    forbidden_cfg_macros.visit_file(&compensation_file);
     forbidden_cfg_macros.visit_file(&science_phase_file);
     forbidden_cfg_macros.visit_file(&ssh);
     assert_eq!(
@@ -604,6 +607,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let prevalidation = top_level(&ssh, "prevalidate_one_click_system_ssh");
     let one_click = top_level(&one_click_file, "one_click_login_with_options");
     let cold = top_level(&cold_file, "run_cold_one_click");
+    let compensation = top_level(&compensation_file, "compensate_one_click_failure");
     let science_phase = top_level(&science_phase_file, "run_managed_science_launch_phase");
     assert!(
         returns_result_pathbuf_string(validator),
@@ -612,6 +616,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
     let mut product_environment = ProductEnvironmentFacts::default();
     product_environment.visit_file(&one_click_file);
     product_environment.visit_file(&cold_file);
+    product_environment.visit_file(&compensation_file);
     product_environment.visit_file(&science_phase_file);
     product_environment.visit_file(&ssh);
     product_environment.environment_paths.sort();
@@ -638,6 +643,7 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         ("pre-OAuth SSH validator", prevalidation),
         ("one-click entry path", one_click),
         ("cold one-click product path", cold),
+        ("one-click compensation phase", compensation),
         ("managed Science launch phase", science_phase),
     ] {
         reject_cfg(&function.attrs, name);

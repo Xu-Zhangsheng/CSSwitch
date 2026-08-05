@@ -1,8 +1,16 @@
 use super::*;
 
+mod compensation;
 mod science_phase;
 
+pub(super) use compensation::compensate_one_click_failure;
 use science_phase::run_managed_science_launch_phase;
+
+#[cfg(test)]
+pub(in super::super) use compensation::{
+    CompensationCause, CompensationEnvironment, CompensationOutcome, CompensationSkipCause,
+    CompensationStepOutcome,
+};
 
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(super) fn run_cold_one_click<R: Runtime>(

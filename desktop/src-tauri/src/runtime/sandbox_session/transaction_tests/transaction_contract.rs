@@ -202,6 +202,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let pending_cleanup_source = include_str!("../pending_cleanup.rs");
     let gateway_recovery_source = include_str!("../../proxy_lifecycle/recovery.rs");
     let cold_source = include_str!("../one_click/cold.rs");
+    let compensation_source = include_str!("../one_click/cold/compensation.rs");
     let science_phase_source = include_str!("../one_click/cold/science_phase.rs");
     let healthy_reopen_source = include_str!("../one_click/healthy_reopen.rs");
     let profile_reconcile_source = include_str!("../../profile_switch.rs");
@@ -357,7 +358,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && source.contains(
                 "journal.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted"
             )
-            && source.contains("journal_progress.restore_expectation()")
+            && compensation_source.contains("journal_progress.restore_expectation()")
             && recovery_source.contains(
                 "current.runtime_transaction.as_ref() != expected.as_ref()"
             )
@@ -528,23 +529,22 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "environment: CompensationEnvironment",
     ] {
         assert!(
-            source.contains(field),
+            compensation_source.contains(field),
             "CompensationOutcome must retain a typed result for {field}"
         );
     }
-    let compensation_source = source
+    let compensation_owner = compensation_source
         .split("fn compensate_one_click_failure")
         .nth(1)
-        .and_then(|tail| tail.split("fn one_click_login_with_options").next())
         .expect("one-click compensation source boundary must remain discoverable");
     assert!(
-        compensation_source.contains("outcome.projected_recovery()")
-            && compensation_source.contains("outcome.render_failure_message"),
+        compensation_owner.contains("outcome.projected_recovery()")
+            && compensation_owner.contains("outcome.render_failure_message"),
         "one-click compensation must derive recovery and diagnostics from CompensationOutcome"
     );
     assert!(
-        !compensation_source.contains("recovery_from_diagnostic_codes")
-            && !compensation_source.contains("message.contains"),
+        !compensation_owner.contains("recovery_from_diagnostic_codes")
+            && !compensation_owner.contains("message.contains"),
         "one-click compensation control flow must never parse rendered diagnostics"
     );
     let incomplete_after_prior_restart = CompensationOutcome {
@@ -571,6 +571,8 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     );
     let file = syn::parse_file(source).expect("one-click product Rust source must parse");
     let cold_file = syn::parse_file(cold_source).expect("cold one-click Rust source must parse");
+    let compensation_file = syn::parse_file(compensation_source)
+        .expect("one-click compensation phase Rust source must parse");
     let science_phase_file = syn::parse_file(science_phase_source)
         .expect("managed Science phase Rust source must parse");
     let cold = top_level(&cold_file, "run_cold_one_click")
@@ -580,8 +582,9 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let recovery_restart = top_level(&file, "restart_managed_science_with_budget")
         .expect("DB recovery restart must remain a module-level bounded helper");
     assert!(
-        top_level(&file, "compensate_one_click_failure").is_some(),
-        "one-click must expose one release-visible failure compensation helper"
+        top_level(&compensation_file, "compensate_one_click_failure").is_some()
+            && top_level(&file, "compensate_one_click_failure").is_none(),
+        "cold compensation phase must exclusively own the release-visible failure helper"
     );
     let snapshot_index = cold
         .block
