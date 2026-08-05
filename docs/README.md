@@ -15,7 +15,8 @@ Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agent
 
 ## 最新基线
 
-- [2026-08-05 O1-D aggregate compensation phase closure](audits/2026-08-05-o1-d-compensation-phase.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入 durable stepwise compensation、read model、Science provenance 或其他候选。
+- [2026-08-05 F1-R unified read model source closure](audits/2026-08-05-f1-r-read-model.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入其他候选。
+- [2026-08-05 O1-D aggregate compensation phase closure](audits/2026-08-05-o1-d-compensation-phase.md)：F1-R 前一阶段的 aggregate compensation phase closure。
 - [2026-08-05 O1-C managed Science launch phase closure](audits/2026-08-05-o1-c-science-launch-phase.md)：O1-D 前一阶段的 managed Science launch phase closure。
 - [2026-08-05 O1-B cold one-click coordinator closure](audits/2026-08-05-o1-b-cold-coordinator.md)：O1-C 前一阶段的 cold one-click coordinator closure。
 - [2026-08-05 F1-A durable history recovery closure](audits/2026-08-05-f1-a-history-recovery.md)：O1-B 前一阶段的 durable history recovery closure。

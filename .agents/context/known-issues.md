@@ -1,30 +1,29 @@
 # 当前已知问题与证据缺口
 
-状态：当前；O1-D source-only closure 已完成，后续阶段尚未重新基线
+状态：当前；F1-R source-only closure 已完成，后续阶段尚未重新基线
 
 最后复核：2026-08-05（Asia/Taipei）
 
 失效条件：quality lineage、Doctor / one-click / history / config / boot read model、Science runtime provenance、release source、artifact、installed/live 或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C 与 O1-D 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
+本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C、O1-D 与 F1-R 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
 ## 当前 source candidate
 
-最近已完成的 implementation closure 是 [O1-D aggregate compensation phase](../../docs/audits/2026-08-05-o1-d-compensation-phase.md)。implementation candidate 为 `a20885a5b8dc2990df1316ec59ea80fe5eb578d5`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
+最近已完成的 implementation closure 是 [F1-R unified read model](../../docs/audits/2026-08-05-f1-r-read-model.md)。implementation candidate 为 `32eb724f2615478cf99438930a9ffe5bc514154b`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
 
-O1-D 当前源码合同：
+F1-R 当前源码合同：
 
-- `compensate_one_click_failure` 与 typed compensation steps / outcome / diagnostics / recovery projection 由 `one_click/cold/compensation.rs` 专属拥有；
-- `run_cold_one_click` 保留唯一 success commit 与唯一 failure compensation dispatch；补偿顺序、checkpoint、CAS、锁、receipt、DTO、文案与 history semantics 未改；
-- fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0` 封口；run `4a7245bf3a4e22ef9912fd58ec56397f` 的 exact-SHA 15-suite gate 为 PASS；
+- `get_config` 只读加载且不再隐式 ack notice；notice 由确定性 identity 与显式 canonical config transaction ack 控制；
+- boot publication 统一携带单调 sequence，frontend 以 subscribe-before-snapshot 和只接收更大 sequence 抵御重复、乱序 delivery；
+- fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0` 封口；run `3d6f85a8fe8670e6aad5314ef12d346d` 的 exact-SHA 15-suite gate 为 PASS；
 - 该候选不证明 artifact、installed/live、真实 provider/Science/SSH、签名、公证或 release。
 
-O1-D 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
+F1-R 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
 
 ## 仍开放的源码与架构问题
 
-- **Runtime MEDIUM**：O1-B 已把 entry façade 与 mutating cold/recovery coordinator 分开，O1-C / O1-D 又分别提取 managed Science launch 与 aggregate compensation phase；cold coordinator 仍编排 prior-stop、authority、Gateway、phase dispatch、route 与 finalize，其他 sibling full-snapshot restore / multi-file crash boundary、typed durable compensation progress 与统一 read model 仍未收敛。
-- **Runtime MEDIUM**：read model 仍由 `get_config` 隐式 ack notice，boot event / pull 没有统一 sequence；这是候选 F1-R，未由 O1-D 授权或实现。
+- **Runtime MEDIUM**：O1-B 已把 entry façade 与 mutating cold/recovery coordinator 分开，O1-C / O1-D 又分别提取 managed Science launch 与 aggregate compensation phase；cold coordinator 仍编排 prior-stop、authority、Gateway、phase dispatch、route 与 finalize，其他 sibling full-snapshot restore / multi-file crash boundary 与 typed durable compensation progress 仍未收敛。
 - **Science update MEDIUM**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
 Post-Q0 表格只保留 F1-0 前的日期化规划事实。F1-0 已改变其首阶段状态，后续范围、非目标与顺序必须重新比较；旧 R3–R11、S7、Post-D0/Post-Q0 表格或 ignored plan 都不能自动授权后续实现。
