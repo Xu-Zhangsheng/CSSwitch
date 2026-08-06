@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [R3 Codex mutation stop owner（2026-08-06）](2026-08-06-r3-codex-mutation-stop-owner.md)：Codex 共享 mutation 的 process-local owner、双窗口 CAS、独立复审与 exact-SHA source gate closure。
 - [R2 set_settings stop owner（2026-08-06）](2026-08-06-r2-set-settings-stop-owner.md)：`set_settings` 的 process-local owner / lock-free wait / CAS、双漂移回归、独立审查与 exact-SHA source gate closure。
 - [R1 set_mode stop owner（2026-08-06）](2026-08-06-r1-set-mode-stop-owner.md)：`set_mode` 的 process-local owner / lock-free wait / CAS、双漂移回归、独立复审与 exact-SHA source gate closure。
 - [A0 冻结基线 Artifact 验收（2026-08-06）](2026-08-06-a0-frozen-baseline-artifact.md)：exact `9cf75d1` 的隔离 Acceptance `.app` 构建身份、内容 manifest、sidecar 空状态与 built-artifact 证据边界。
