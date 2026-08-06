@@ -324,6 +324,12 @@ pub(super) fn test_arm_history_restore_credential_interrupt(
     crate::runtime::sandbox_session::test_arm_history_restore_credential_interrupt()
 }
 
+#[cfg(test)]
+pub(super) fn test_arm_history_replay_interrupt_after_first_restore(
+) -> crate::runtime::sandbox_session::HistoryReplayInterruptAfterFirstRestoreGuard {
+    crate::runtime::sandbox_session::test_arm_history_replay_interrupt_after_first_restore()
+}
+
 pub(super) fn project_one_click_failure(failure: TypedOneClickFailure) -> serde_json::Value {
     let journal_open = config::load_from(&config::default_dir())
         .ok()

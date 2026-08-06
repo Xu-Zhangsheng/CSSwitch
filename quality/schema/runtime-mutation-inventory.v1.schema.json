@@ -192,7 +192,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/Identifier" },
         "mutation_kind": { "enum": ["runtime", "intent", "terminal", "startup", "host-bridge", "config"] },
-        "serialization": { "enum": ["lifecycle", "lifecycle-plus-domain-lease", "app-state-only", "auth-storage-lock", "none", "terminal-best-effort"] },
+        "serialization": { "enum": ["lifecycle", "lifecycle-plus-domain-lease", "lifecycle-plus-domain-lease-plus-cross-process-effect-fence", "app-state-only", "auth-storage-lock", "none", "terminal-best-effort"] },
         "implicit_operation_ids": { "$ref": "#/$defs/StringList" },
         "entrypoints": {
           "type": "array",

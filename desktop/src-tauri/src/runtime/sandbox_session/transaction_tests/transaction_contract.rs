@@ -1144,3 +1144,54 @@ fn o1_e3_compensation_replay_has_one_durable_pre_auth_owner() {
         "diagnostics and stale process-local AppState must not control fresh replay"
     );
 }
+
+#[test]
+fn o1_e4_history_full_snapshot_restore_has_one_durable_effect_owner() {
+    let history_source = include_str!("../history_recovery.rs");
+    let config_source = include_str!("../../../config.rs");
+    let live = history_source
+        .split("pub(crate) fn restore_history_choice_entry")
+        .nth(1)
+        .expect("history restore entry must remain discoverable");
+    let replay = history_source
+        .split("pub(crate) fn replay_interrupted_history_recovery(")
+        .nth(1)
+        .expect("history replay entry must remain discoverable");
+    let begin = history_source
+        .find("fn begin_history_authority_restore(")
+        .expect("history replay must persist an authority-restore intent");
+    let effect = history_source
+        .find("restore_history_authority_from_manifest(&pending, state)?")
+        .expect("history replay must execute the exact full-snapshot restore");
+    let finish = history_source
+        .find("finish_history_authority_restore(&config::default_dir(), &pending)")
+        .expect("history replay must persist the authority-restore outcome");
+
+    assert!(
+        live.find("acquire_runtime_history_effect_lease").unwrap()
+            < live.find("let owned_cfg = config::load_from").unwrap()
+            && live.find("let owned_cfg = config::load_from").unwrap()
+                < live.find("oauth_forge::restore_history_choice(").unwrap(),
+        "live history publication must acquire and revalidate its cross-process effect owner before credential effects"
+    );
+    assert!(
+        replay.find("acquire_runtime_history_effect_lease").unwrap()
+            < replay.find("let cfg = config::load_from").unwrap(),
+        "fresh history replay must acquire the same effect owner before recapturing durable state"
+    );
+    assert!(
+        begin < effect && effect < finish,
+        "history full-snapshot restore must persist intent before effect and outcome after effect"
+    );
+    assert!(
+        config_source.contains("HistoryAuthorityRestorePending")
+            && config_source.contains("HistoryAuthorityRestoreSucceeded")
+            && config_source.contains("acquire_runtime_history_effect_lease")
+            && config_source.contains("RUNTIME_COMPENSATION_AUTH_LOCK_FILE"),
+        "history restore phases and the shared crash-releasing fence must remain durable"
+    );
+    assert!(
+        !history_source.contains("message.contains"),
+        "history restore diagnostics must not control replay"
+    );
+}

@@ -4118,6 +4118,17 @@ fn f1_a_history_crash_and_concurrent_config_recovery_is_owned() {
 }
 
 #[test]
+fn o1_e4_history_full_snapshot_replay_resumes_from_durable_restore_intent() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_r0_history_restore_command_contract",
+        &[(
+            "CSSWITCH_TEST_R0_HISTORY_RESTORE_ORACLE",
+            "credential-crash-replay-restore-interrupt",
+        )],
+    );
+}
+
+#[test]
 fn r0_one_click_history_attention_commits_choice_session_without_starting_science() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_r0_one_click_history_attention",
@@ -4391,6 +4402,7 @@ fn isolated_r0_history_restore_command_contract() {
             | "credential-write-failure"
             | "post-snapshot-config-drift"
             | "credential-crash-replay"
+            | "credential-crash-replay-restore-interrupt"
             | "credential-crash-replay-config-drift"
             | "credential-crash-replay-config-race"
             | "credential-preauth-race-replay"
@@ -4428,6 +4440,7 @@ fn isolated_r0_history_restore_command_contract() {
     if matches!(
         oracle.as_str(),
         "credential-crash-replay"
+            | "credential-crash-replay-restore-interrupt"
             | "credential-crash-replay-config-drift"
             | "credential-crash-replay-config-race"
             | "credential-preauth-race-replay"
@@ -4549,6 +4562,7 @@ fn isolated_r0_history_restore_command_contract() {
     let _credential_interrupt = matches!(
         oracle.as_str(),
         "credential-crash-replay"
+            | "credential-crash-replay-restore-interrupt"
             | "credential-crash-replay-config-drift"
             | "credential-crash-replay-config-race"
             | "credential-preauth-race-replay"
@@ -4590,6 +4604,7 @@ fn isolated_r0_history_restore_command_contract() {
     let interrupted_journal = matches!(
         oracle.as_str(),
         "credential-crash-replay"
+            | "credential-crash-replay-restore-interrupt"
             | "credential-crash-replay-config-drift"
             | "credential-crash-replay-config-race"
             | "credential-preauth-race-replay"
@@ -4612,6 +4627,24 @@ fn isolated_r0_history_restore_command_contract() {
     let _replay_config_writer = (oracle == "credential-crash-replay-config-race")
         .then(sandbox_session::test_arm_history_replay_sibling_config_writer);
     let raced_replay_result = (oracle == "credential-crash-replay-config-race")
+        .then(|| sandbox_session::replay_interrupted_history_recovery_before_auth(&state));
+    let _restore_interrupt = (oracle == "credential-crash-replay-restore-interrupt")
+        .then(super::one_click::test_arm_history_replay_interrupt_after_first_restore);
+    let interrupted_restore_result = (oracle == "credential-crash-replay-restore-interrupt")
+        .then(|| sandbox_session::replay_interrupted_history_recovery_before_auth(&state));
+    let journal_after_interrupted_restore = (oracle == "credential-crash-replay-restore-interrupt")
+        .then(|| config::load_from(&config_dir).unwrap().runtime_transaction)
+        .flatten();
+    let selected_org_after_interrupted_restore = (oracle
+        == "credential-crash-replay-restore-interrupt")
+        .then(|| {
+            fs::read_to_string(science_data.join("active-org.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_str::<serde_json::Value>(&bytes).ok())
+                .and_then(|value| value["org_uuid"].as_str().map(str::to_string))
+        })
+        .flatten();
+    let completed_restore_result = (oracle == "credential-crash-replay-restore-interrupt")
         .then(|| sandbox_session::replay_interrupted_history_recovery_before_auth(&state));
     let (blocked_replay_result, journal_while_blocked, selected_org_while_blocked, replay_result) =
         if oracle == "credential-crash-replay" {
@@ -4824,6 +4857,37 @@ fn isolated_r0_history_restore_command_contract() {
                     && selected_org_after.is_none()
                     && !marker_present_after,
                 "replay must fail closed while Science is live, then restore the exact before-image and clear the journal before unavailable Codex auth is checked: blocked={blocked_replay_result:?}, blocked_journal={journal_while_blocked}, blocked_org={selected_org_while_blocked:?}, replay={replay_result:?}, journal={journal_present_after}, selected_org={selected_org_after:?}, marker={marker_present_after}"
+            );
+        }
+        "credential-crash-replay-restore-interrupt" => {
+            assert!(
+                result.as_ref().is_err_and(|error| {
+                    error.contains("interrupted history credential publication")
+                })
+                    && interrupted_restore_result
+                        .as_ref()
+                        .is_some_and(|replay| replay.as_ref().is_err_and(|error| {
+                            error.contains("interrupted history authority restore")
+                        }))
+                    && matches!(
+                        journal_after_interrupted_restore,
+                        Some(config::RuntimeTransactionRecord::V2(
+                            config::RuntimeTransactionV2 {
+                                operation: config::RuntimeTransactionOperation::HistoryRecovery,
+                                phase: config::RuntimeTransactionPhase::HistoryAuthorityRestorePending,
+                                ..
+                            }
+                        ))
+                    )
+                    && selected_org_after_interrupted_restore.as_deref()
+                        == Some(history_orgs[0])
+                    && completed_restore_result
+                        .as_ref()
+                        .is_some_and(|replay| replay.as_ref().is_ok_and(|replayed| *replayed))
+                    && !journal_present_after
+                    && selected_org_after.is_none()
+                    && !marker_present_after,
+                "a crash after the first full-snapshot restore entry must preserve durable restore intent; the next sole owner must replay the idempotent full snapshot and clear only after a durable outcome: initial={result:?}, interrupted={interrupted_restore_result:?}, journal={journal_after_interrupted_restore:?}, interrupted_org={selected_org_after_interrupted_restore:?}, completed={completed_restore_result:?}, final_journal={journal_present_after}, final_org={selected_org_after:?}, marker={marker_present_after}"
             );
         }
         "credential-crash-replay-config-drift" => {

@@ -30,11 +30,13 @@ pub(crate) use history_recovery::{
 };
 #[cfg(test)]
 pub(crate) use history_recovery::{
-    test_arm_history_finalize_completion_failure, test_arm_history_replay_sibling_config_writer,
-    test_arm_history_restore_credential_interrupt,
+    test_arm_history_finalize_completion_failure,
+    test_arm_history_replay_interrupt_after_first_restore,
+    test_arm_history_replay_sibling_config_writer, test_arm_history_restore_credential_interrupt,
     test_arm_history_restore_post_snapshot_config_drift,
-    test_arm_history_restore_post_stop_config_drift, HistoryRestoreCredentialInterruptGuard,
-    HistoryRestorePostSnapshotConfigDriftGuard, HistoryRestorePostStopConfigDriftGuard,
+    test_arm_history_restore_post_stop_config_drift, HistoryReplayInterruptAfterFirstRestoreGuard,
+    HistoryRestoreCredentialInterruptGuard, HistoryRestorePostSnapshotConfigDriftGuard,
+    HistoryRestorePostStopConfigDriftGuard,
 };
 #[cfg(test)]
 pub(crate) use one_click::one_click_login;

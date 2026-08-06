@@ -74,6 +74,9 @@ static HISTORY_FINALIZE_COMPLETION_FAILURE: std::sync::atomic::AtomicBool =
 #[cfg(test)]
 static HISTORY_REPLAY_SIBLING_CONFIG_WRITER: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static HISTORY_REPLAY_INTERRUPT_AFTER_FIRST_RESTORE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
 pub(crate) struct HistoryRestorePostStopConfigDriftGuard;
@@ -102,6 +105,8 @@ pub(crate) struct HistoryRestoreCredentialInterruptGuard;
 pub(crate) struct HistoryFinalizeCompletionFailureGuard;
 #[cfg(test)]
 pub(crate) struct HistoryReplaySiblingConfigWriterGuard;
+#[cfg(test)]
+pub(crate) struct HistoryReplayInterruptAfterFirstRestoreGuard;
 
 #[cfg(test)]
 impl Drop for HistoryRestoreCredentialInterruptGuard {
@@ -122,6 +127,14 @@ impl Drop for HistoryFinalizeCompletionFailureGuard {
 impl Drop for HistoryReplaySiblingConfigWriterGuard {
     fn drop(&mut self) {
         HISTORY_REPLAY_SIBLING_CONFIG_WRITER.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+impl Drop for HistoryReplayInterruptAfterFirstRestoreGuard {
+    fn drop(&mut self) {
+        HISTORY_REPLAY_INTERRUPT_AFTER_FIRST_RESTORE
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -159,6 +172,13 @@ pub(crate) fn test_arm_history_replay_sibling_config_writer(
 ) -> HistoryReplaySiblingConfigWriterGuard {
     HISTORY_REPLAY_SIBLING_CONFIG_WRITER.store(true, std::sync::atomic::Ordering::SeqCst);
     HistoryReplaySiblingConfigWriterGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_history_replay_interrupt_after_first_restore(
+) -> HistoryReplayInterruptAfterFirstRestoreGuard {
+    HISTORY_REPLAY_INTERRUPT_AFTER_FIRST_RESTORE.store(true, std::sync::atomic::Ordering::SeqCst);
+    HistoryReplayInterruptAfterFirstRestoreGuard
 }
 
 #[cfg(test)]
@@ -507,6 +527,8 @@ fn restore_history_authority_from_manifest(
         .parent()
         .ok_or("history recovery sandbox root has no parent")?
         .join(&ticket.managed_id);
+    #[cfg(test)]
+    let mut restored_entries = 0usize;
     for entry in manifest.entries {
         reopen_history_authority_entry(
             &opened.root,
@@ -516,7 +538,77 @@ fn restore_history_authority_from_manifest(
             &auth_dir,
         )?
         .restore()?;
+        #[cfg(test)]
+        {
+            restored_entries += 1;
+            if restored_entries == 1
+                && HISTORY_REPLAY_INTERRUPT_AFTER_FIRST_RESTORE
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err("test-only interrupted history authority restore".into());
+            }
+        }
     }
+    Ok(())
+}
+
+fn begin_history_authority_restore(
+    dir: &std::path::Path,
+    expected: &config::RuntimeTransactionV2,
+) -> Result<config::RuntimeTransactionV2, String> {
+    update_history_record(dir, expected, |next| {
+        if next.phase != config::RuntimeTransactionPhase::HistoryCredentialWritePending {
+            return Err("history authority restore intent has an invalid predecessor".into());
+        }
+        next.phase = config::RuntimeTransactionPhase::HistoryAuthorityRestorePending;
+        Ok(())
+    })
+}
+
+fn finish_history_authority_restore(
+    dir: &std::path::Path,
+    expected: &config::RuntimeTransactionV2,
+) -> Result<config::RuntimeTransactionV2, String> {
+    update_history_record(dir, expected, |next| {
+        if next.phase != config::RuntimeTransactionPhase::HistoryAuthorityRestorePending {
+            return Err("history authority restore outcome has no durable intent".into());
+        }
+        next.phase = config::RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded;
+        Ok(())
+    })
+}
+
+fn replay_history_authority_restore(
+    state: &SharedAppState,
+    cfg: &config::Config,
+    record: &config::RuntimeTransactionV2,
+) -> Result<config::RuntimeTransactionV2, String> {
+    require_current_science_quiescence(state, cfg.sandbox_port)?;
+    let pending = match record.phase {
+        config::RuntimeTransactionPhase::HistoryCredentialWritePending => {
+            begin_history_authority_restore(&config::default_dir(), record)?
+        }
+        config::RuntimeTransactionPhase::HistoryAuthorityRestorePending => record.clone(),
+        _ => return Err("history authority restore replay has an invalid phase".into()),
+    };
+    restore_history_authority_from_manifest(&pending, state)?;
+    finish_history_authority_restore(&config::default_dir(), &pending)
+}
+
+fn finish_history_authority_restore_replay(
+    state: &SharedAppState,
+    record: &config::RuntimeTransactionV2,
+) -> Result<(), String> {
+    if record.phase != config::RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded {
+        return Err("history authority restore cleanup has no durable outcome".into());
+    }
+    let ticket = record
+        .snapshot_ticket
+        .as_ref()
+        .ok_or("history authority restore has no snapshot ticket")?;
+    prepare_history_snapshot_cleanup_only(state, ticket).map_err(String::from)?;
+    clear_history_record_with_authority(&config::default_dir(), record)?;
+    retry_pending_authority_cleanup(state).map_err(String::from)?;
     Ok(())
 }
 
@@ -670,6 +762,30 @@ fn compensate_history_failure<R: Runtime>(
     config_before: &config::Config,
     expected: &config::RuntimeTransactionV2,
 ) -> Result<(), String> {
+    if matches!(
+        expected.phase,
+        config::RuntimeTransactionPhase::HistoryCredentialWritePending
+            | config::RuntimeTransactionPhase::HistoryAuthorityRestorePending
+    ) {
+        let current =
+            config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
+        if !history_config_authority_matches(&current, expected)
+            || current.runtime_transaction.as_ref()
+                != Some(&config::RuntimeTransactionRecord::V2(expected.clone()))
+        {
+            authority.preserve_recovery();
+            return Err(
+                "history authority restore found drifted config authority; preserved current state"
+                    .into(),
+            );
+        }
+        let restored = replay_history_authority_restore(state, &current, expected)?;
+        finish_history_authority_restore_replay(state, &restored)?;
+        authority.commit();
+        return Ok(());
+    }
+    let _effect_lease = config::acquire_runtime_history_effect_lease(&config::default_dir())
+        .map_err(|error| format!("history compensation effect lease failed: {error}"))?;
     let mut expected_config = config_before.clone();
     expected_config.runtime_transaction =
         Some(config::RuntimeTransactionRecord::V2(expected.clone()));
@@ -740,14 +856,19 @@ pub(crate) fn interrupted_history_recovery_requires_pre_auth_replay() -> Result<
                     config::RuntimeTransactionPhase::StopOldScience
                         | config::RuntimeTransactionPhase::AuthoritySnapshotActive
                         | config::RuntimeTransactionPhase::HistoryCredentialWritePending
+                        | config::RuntimeTransactionPhase::HistoryAuthorityRestorePending
+                        | config::RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded
                 )
     ))
 }
 
 pub(crate) fn replay_interrupted_history_recovery(
     state: &SharedAppState,
-    cfg: &config::Config,
+    _cfg: &config::Config,
 ) -> Result<bool, String> {
+    let _effect_lease = config::acquire_runtime_history_effect_lease(&config::default_dir())
+        .map_err(|error| format!("history recovery effect lease failed: {error}"))?;
+    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
     let Some(config::RuntimeTransactionRecord::V2(record)) = cfg.runtime_transaction.as_ref()
     else {
         return Ok(false);
@@ -755,7 +876,7 @@ pub(crate) fn replay_interrupted_history_recovery(
     if record.operation != config::RuntimeTransactionOperation::HistoryRecovery {
         return Ok(false);
     }
-    if !history_config_authority_matches(cfg, record) {
+    if !history_config_authority_matches(&cfg, record) {
         return Err(
             "interrupted history recovery config authority drifted; preserved the exact journal"
                 .into(),
@@ -791,15 +912,17 @@ pub(crate) fn replay_interrupted_history_recovery(
             Ok(true)
         }
         config::RuntimeTransactionPhase::HistoryCredentialWritePending => {
-            require_current_science_quiescence(state, cfg.sandbox_port)?;
-            restore_history_authority_from_manifest(record, state)?;
-            let ticket = record
-                .snapshot_ticket
-                .as_ref()
-                .ok_or("interrupted history credential phase has no ticket")?;
-            prepare_history_snapshot_cleanup_only(state, ticket).map_err(String::from)?;
-            clear_history_record_with_authority(&config::default_dir(), record)?;
-            retry_pending_authority_cleanup(state).map_err(String::from)?;
+            let restored = replay_history_authority_restore(state, &cfg, record)?;
+            finish_history_authority_restore_replay(state, &restored)?;
+            Ok(true)
+        }
+        config::RuntimeTransactionPhase::HistoryAuthorityRestorePending => {
+            let restored = replay_history_authority_restore(state, &cfg, record)?;
+            finish_history_authority_restore_replay(state, &restored)?;
+            Ok(true)
+        }
+        config::RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded => {
+            finish_history_authority_restore_replay(state, record)?;
             Ok(true)
         }
         config::RuntimeTransactionPhase::HistoryCredentialPublished
@@ -1075,6 +1198,20 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
         }
     };
 
+    let history_effect_lease = config::acquire_runtime_history_effect_lease(&dir)
+        .map_err(|error| format!("history credential effect lease failed: {error}"))?;
+    let owned_cfg = config::load_from(&dir).map_err(|error| error.to_string())?;
+    if !history_config_authority_matches(&owned_cfg, &record)
+        || owned_cfg.runtime_transaction.as_ref()
+            != Some(&config::RuntimeTransactionRecord::V2(record.clone()))
+    {
+        authority.preserve_recovery();
+        return Err(
+            "history credential effect owner found a drifted transaction; preserved current state"
+                .into(),
+        );
+    }
+
     #[cfg(test)]
     if let Err(error) = apply_history_restore_post_snapshot_config_drift() {
         return match compensate_history_failure(
@@ -1211,6 +1348,7 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
         }
     };
     authority.commit();
+    drop(history_effect_lease);
     let Some(handoff) = terminal else {
         return Ok(value);
     };

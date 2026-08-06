@@ -707,6 +707,8 @@ pub enum RuntimeTransactionPhase {
     StartFormalGateway,
     RecoverInterruptedGateway,
     HistoryCredentialWritePending,
+    HistoryAuthorityRestorePending,
+    HistoryAuthorityRestoreSucceeded,
     HistoryCredentialPublished,
     ResumeAfterHistoryRestore,
 }
@@ -1346,7 +1348,9 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
         }
         (
             RuntimeTransactionOperation::HistoryRecovery,
-            RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryCredentialWritePending
+            | RuntimeTransactionPhase::HistoryAuthorityRestorePending
+            | RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded,
         ) => {
             journal.runtime_fingerprint.is_some()
                 && journal.snapshot_ticket.is_some()
@@ -1413,6 +1417,8 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
         | RuntimeTransactionPhase::AuthoritySnapshotActive
         | RuntimeTransactionPhase::StartFormalGateway
         | RuntimeTransactionPhase::HistoryCredentialWritePending
+        | RuntimeTransactionPhase::HistoryAuthorityRestorePending
+        | RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded
         | RuntimeTransactionPhase::HistoryCredentialPublished
         | RuntimeTransactionPhase::ResumeAfterHistoryRestore => {
             journal.environment_exposure == RuntimeEnvironmentExposure::NotExposed
@@ -2112,6 +2118,11 @@ pub(crate) struct RuntimeCompensationReplayLease {
     _fence: RuntimeCompensationFence,
 }
 
+pub(crate) struct RuntimeHistoryEffectLease {
+    _secure: SecureDir,
+    _fence: RuntimeCompensationFence,
+}
+
 impl Drop for ConfigWriterFence {
     fn drop(&mut self) {
         unsafe {
@@ -2547,6 +2558,17 @@ pub(crate) fn acquire_runtime_compensation_replay_lease(
     let secure = SecureDir::open(dir, false)?;
     let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_EX)?;
     Ok(RuntimeCompensationReplayLease {
+        _secure: secure,
+        _fence: fence,
+    })
+}
+
+pub(crate) fn acquire_runtime_history_effect_lease(
+    dir: &Path,
+) -> io::Result<RuntimeHistoryEffectLease> {
+    let secure = SecureDir::open(dir, false)?;
+    let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_EX)?;
+    Ok(RuntimeHistoryEffectLease {
         _secure: secure,
         _fence: fence,
     })
@@ -3894,6 +3916,8 @@ mod tests {
             phase,
             RuntimeTransactionPhase::AuthoritySnapshotActive
                 | RuntimeTransactionPhase::HistoryCredentialWritePending
+                | RuntimeTransactionPhase::HistoryAuthorityRestorePending
+                | RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded
                 | RuntimeTransactionPhase::HistoryCredentialPublished
         )
         .then(|| RuntimeSnapshotTicket {
@@ -4093,6 +4117,8 @@ mod tests {
             RuntimeTransactionPhase::StopOldScience,
             RuntimeTransactionPhase::AuthoritySnapshotActive,
             RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryAuthorityRestorePending,
+            RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded,
             RuntimeTransactionPhase::HistoryCredentialPublished,
             RuntimeTransactionPhase::ResumeAfterHistoryRestore,
         ] {
@@ -4276,6 +4302,8 @@ mod tests {
 
         for history_only_phase in [
             RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryAuthorityRestorePending,
+            RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded,
             RuntimeTransactionPhase::HistoryCredentialPublished,
             RuntimeTransactionPhase::ResumeAfterHistoryRestore,
         ] {
@@ -5088,6 +5116,35 @@ mod tests {
     }
 
     #[test]
+    fn o1_e4_history_effect_owner_joins_cross_process_replay_fence() {
+        let root = tmpdir().join("o1-e4-history-effect-owner");
+        let dir = root.join("config");
+        fs::create_dir_all(&root).unwrap();
+        save_to(&dir, &Config::default()).unwrap();
+        let owner = acquire_runtime_history_effect_lease(&dir).unwrap();
+        let contender = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("config::tests::o1_e3_replay_fence_child")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("CSSWITCH_O1_E3_REPLAY_ROLE", "b")
+            .env("CSSWITCH_O1_E3_REPLAY_ROOT", &root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!root.join("b-entered").exists());
+        assert!(!root.join("effects").exists());
+        drop(owner);
+        assert_o1_e3_replay_child_passed(
+            contender.wait_with_output().unwrap(),
+            "history effect contender",
+        );
+        assert_eq!(fs::read_to_string(root.join("effects")).unwrap(), "b\n");
+    }
+
+    #[test]
     fn config_writer_fence_rejects_symlink_without_touching_target() {
         let root = tmpdir().join("c1-a-writer-lock-symlink");
         let dir = root.join("config");
@@ -5585,6 +5642,8 @@ mod tests {
             RuntimeTransactionPhase::StopOldScience,
             RuntimeTransactionPhase::AuthoritySnapshotActive,
             RuntimeTransactionPhase::HistoryCredentialWritePending,
+            RuntimeTransactionPhase::HistoryAuthorityRestorePending,
+            RuntimeTransactionPhase::HistoryAuthorityRestoreSucceeded,
             RuntimeTransactionPhase::HistoryCredentialPublished,
             RuntimeTransactionPhase::ResumeAfterHistoryRestore,
         ] {
