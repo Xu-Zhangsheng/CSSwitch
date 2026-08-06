@@ -1,6 +1,6 @@
 # 当前已知问题与证据缺口
 
-状态：当前；O1-E4 source-only closure 已完成，后续阶段尚未重新基线
+状态：当前；A0 冻结基线 built-artifact closure 已完成，后续阶段尚未重新基线
 
 最后复核：2026-08-06（Asia/Taipei）
 
@@ -8,7 +8,7 @@
 
 本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C、O1-D、F1-R 与 O1-E1–E4 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
-## 当前 source candidate
+## 当前冻结 candidate
 
 最近已完成的 implementation closure 是 [O1-E4 history full-snapshot durable effect owner](../../docs/audits/2026-08-06-o1-e4-history-full-snapshot-effect-owner.md)。implementation candidate 为 `efe029b4924dc312feacc00905a1ca9177d212f6`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
 
@@ -22,6 +22,10 @@ O1-E4 当前源码合同：
 - 该候选不证明 artifact、installed/live、真实 provider/Science/SSH、签名、公证或 release。
 
 O1-E4 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
+
+用户随后冻结 `9cf75d19e7853b91b2f9a7c85afbd66747cb4fa3` 作为 A0 输入；该 clean exact-HEAD checkout 已完成[日期化 built-artifact 验收](../../docs/audits/2026-08-06-a0-frozen-baseline-artifact.md)。隔离 Acceptance `.app` 的 bundle identity、arm64 Desktop / Gateway、内容 manifest、资源 allowlist 与 Gateway 空状态均通过，A0 结论为 `ARTIFACT-GREEN`。
+
+该结论只覆盖本轮 built artifact；Desktop UI、临时安装或 `/Applications` installed runtime、真实 provider / Science / SSH、Developer ID、notarization、Gatekeeper、DMG 与公开 release 仍未建立。原始 Acceptance bundle 的严格 code-sign verification 未通过，本轮没有重签名，不能外推 signing PASS。
 
 ## 仍开放的源码与架构问题
 
@@ -42,6 +46,6 @@ Post-Q0 表格只保留 F1-0 前的日期化规划事实。F1-0 已改变其首�
 ## 分发与证据边界
 
 - v0.8.4 公开附件是经过完整性验证的 ad-hoc seal；没有 Developer ID、notarization、stapled ticket 或 Gatekeeper acceptance。逐层事实只从 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md) 进入。
-- trusted `GATE-SOURCE` PASS 只证明 exact source / unit；文档治理测试也不能外推 artifact、installed/live、provider、signing 或 public release。
+- trusted `GATE-SOURCE` PASS 只证明 exact source / unit；A0 的 built-artifact PASS 也不能外推 installed/live、provider、signing 或 public release。
 - 真机矩阵是应执行场景，不表示最终 DMG 已逐项执行。每次验收必须绑定 exact artifact / environment，并把 PASS、失败、阻断和未执行分开；执行合同见[真机验收](../../docs/operations/real-machine-acceptance.md)。
 - Git / source、artifact、installed runtime、真实 provider、Science、SSH、签名、公证和公开 release 是相互独立的证据层；缺少的层继续记为 `NOT-RUN`、`INCONCLUSIVE` 或未验证，不以其他层补绿。

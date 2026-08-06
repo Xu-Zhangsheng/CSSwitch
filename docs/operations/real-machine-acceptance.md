@@ -42,7 +42,7 @@ DEV_HOME="$HOME"
 
 目标为 `desktop/src-tauri/target/release/bundle/macos/CSSwitch Test.app`。`acceptance-build` 是编译期 Test data-root feature：Desktop 与 Gateway 分别固定 `$HOME/.csswitch-acceptance`，build script 用同一 feature 重建并打包 Gateway sidecar。
 
-任何构建只要存在 `CSSWITCH_SKIP_GATEWAY_STAGE` 都会直接失败；普通构建也不得复用 Acceptance 残留，Desktop 与 Gateway 必须由同一次同 feature 构建产生。artifact 验收要核对包内 Gateway 存在、可执行、与 Desktop 同次构建，并验证 `status` 在空 data root 返回 `state_missing`，不能只证明文件存在。正常构建不启用 Acceptance feature，固定 `$HOME/.csswitch`；Acceptance 固定 `$HOME/.csswitch-acceptance`，两种构建都没有运行时改写入口。必须在导出隔离 `HOME` **之前**构建；否则 `$HOME/.rustup` 会指向空的测试 HOME。
+任何构建只要存在 `CSSWITCH_SKIP_GATEWAY_STAGE` 都会直接失败；普通构建也不得复用 Acceptance 残留，Desktop 与 Gateway 必须由同一次同 feature 构建产生。artifact 验收要核对包内 Gateway 存在、可执行、与 Desktop 同次构建，并在全新隔离 `HOME` 执行包内 `csswitch-gateway codex-auth status`，确认退出码为 `0`、返回 `reason=state_missing` 且不生成状态文件，不能只证明文件存在。正常构建不启用 Acceptance feature，固定 `$HOME/.csswitch`；Acceptance 固定 `$HOME/.csswitch-acceptance`，两种构建都没有运行时改写入口。必须在导出隔离 `HOME` **之前**构建；否则 `$HOME/.rustup` 会指向空的测试 HOME。
 
 ### 3.1 历史共享根候选
 
