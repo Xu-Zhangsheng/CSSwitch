@@ -1,30 +1,30 @@
 # 当前已知问题与证据缺口
 
-状态：当前；O1-E1 source-only closure 已完成，后续阶段尚未重新基线
+状态：当前；O1-E3 source-only closure 已完成，后续阶段尚未重新基线
 
-最后复核：2026-08-05（Asia/Taipei）
+最后复核：2026-08-06（Asia/Taipei）
 
 失效条件：quality lineage、Doctor / one-click / history / config / boot read model、Science runtime provenance、release source、artifact、installed/live 或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C、O1-D、F1-R 与 O1-E1 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
+本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C、O1-D、F1-R 与 O1-E1–E3 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
 ## 当前 source candidate
 
-最近已完成的 implementation closure 是 [O1-E1 durable compensation journal foundation](../../docs/audits/2026-08-05-o1-e1-durable-compensation-journal.md)。implementation candidate 为 `7d4ffb51359bbd6ceb8dd67a58bef4fe63c5c594`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
+最近已完成的 implementation closure 是 [O1-E3 fresh-process durable compensation replay owner](../../docs/audits/2026-08-06-o1-e3-fresh-compensation-replay.md)。implementation candidate 为 `8b9de3bc64aae7700707b718fec6c6874864db19`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
 
-O1-E1 当前源码合同：
+O1-E3 当前源码合同：
 
-- 独立、path-free 的 `RuntimeCompensationJournal` V1 在首个 one-click compensation effect 前以完整 business record CAS 发布 aggregate intent；`PreJournalAbort` 与 `Journaled` 走同一 fail-closed 边界；
-- authority restore 精确恢复 compensation 前的 `runtime_transaction` 并只叠加 marker；完整成功才清 marker，失败则持久化 canonical typed failed steps；
-- one-click 与 normal mode/settings/profile/Codex auth/settings/downgrade mutation 在任一 journal 打开时 fail closed；只减小运行态暴露且不写 config/credential/journal 的 terminal cleanup 保持可用；
-- 最终 fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM = 0/0/0` 封口；run `ffa14f373a988c26687a1dff52fab7e0` 的 exact-SHA 15-suite gate 为 PASS；
+- 私有 authority / compensation replay manifest 先于 path-free V2 public intent 持久化并精确绑定；live 与 fresh replay 在首个 step intent / effect 前取得同一 crash-releasing cross-process exclusive lease；
+- Science cleanup、SSH transaction、authority restore、prior Science restart 与 snapshot cleanup 五步只按完整记录 CAS 推进；authority restore 不恢复旧进程 AppState，Gateway 与 Science 只依据 durable exact identity；
+- provider auth 使用 shared absence lease，publication / replay 使用 exclusive lease；V1、typed incomplete V2、retarget、unsafe snapshot / manifest 与 config drift 保持 fail closed / manual recovery；
+- 最终 fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0` 封口；run `ef170ed310d706039f497e1be72678da` 的 exact-SHA 15-suite gate 为 PASS；
 - 该候选不证明 artifact、installed/live、真实 provider/Science/SSH、签名、公证或 release。
 
-O1-E1 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
+O1-E3 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
 
 ## 仍开放的源码与架构问题
 
-- **Runtime MEDIUM**：O1-E1 已把 path-free aggregate compensation begin/final outcome 与原 business transaction 分离并持久化，normal mutations 对开放 marker fail closed；每个 compensation effect 前后的 stepwise intent/outcome、fresh-process replay、自动收敛，以及其他 sibling full-snapshot restore / multi-file crash boundary 仍未统一。
+- **Runtime MEDIUM**：O1-E3 已为 one-click V2 compensation 建立 stepwise durable intent/outcome、fresh-process exact replay 与唯一跨进程 effect owner；V1、typed incomplete V2 仍按设计要求人工恢复，其他 sibling full-snapshot restore / multi-file crash boundary 仍未统一。
 - **Science update MEDIUM**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
 Post-Q0 表格只保留 F1-0 前的日期化规划事实。F1-0 已改变其首阶段状态，后续范围、非目标与顺序必须重新比较；旧 R3–R11、S7、Post-D0/Post-Q0 表格或 ignored plan 都不能自动授权后续实现。
