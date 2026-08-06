@@ -689,6 +689,38 @@ class SkillRuntimeBoundary(unittest.TestCase):
             set_mode_flow.index("publish_process_local_science_stop"),
             set_mode_flow.index("st.stop_proxy()"),
         )
+        set_settings_flow = lifecycle_command.split(
+            "pub(super) fn set_settings_inner_with", 1
+        )[1].split("pub(super) async fn stop_all_command", 1)[0]
+        self.assertNotIn("stop_sandbox_state(&app, &mut st)", set_settings_flow)
+        self.assertLess(
+            set_settings_flow.index("claim_process_local_science_stop"),
+            set_settings_flow.index("execute_science(&app, request)"),
+        )
+        self.assertLess(
+            set_settings_flow.index("execute_science(&app, request)"),
+            set_settings_flow.index("let mut st = lock(&state)"),
+        )
+        self.assertLess(
+            set_settings_flow.index("let mut st = lock(&state)"),
+            set_settings_flow.index("publish_process_local_science_stop"),
+        )
+        self.assertLess(
+            set_settings_flow.index("publish_process_local_science_stop"),
+            set_settings_flow.index("lifecycle.bump_generation()"),
+        )
+        self.assertLess(
+            set_settings_flow.index("lifecycle.bump_generation()"),
+            set_settings_flow.index("st.stop_proxy()"),
+        )
+        self.assertLess(
+            set_settings_flow.index("st.stop_proxy()"),
+            set_settings_flow.index("revoke_science_ssh_bridge"),
+        )
+        self.assertLess(
+            set_settings_flow.index("revoke_science_ssh_bridge"),
+            set_settings_flow.index("config::update_result"),
+        )
         self.assertIn("pub(crate) fn claim_science_stop_request", science_lifecycle)
         self.assertIn("pub(crate) fn execute_science_stop", science_lifecycle)
         self.assertIn("ScienceStopRequest::exact", science_lifecycle)

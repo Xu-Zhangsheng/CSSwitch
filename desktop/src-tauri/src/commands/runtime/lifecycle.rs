@@ -121,6 +121,11 @@ pub(crate) struct UiSettings {
     pub(super) reuse_system_ssh: bool,
 }
 
+pub(super) struct SetSettingsPaths {
+    pub(super) config_dir: std::path::PathBuf,
+    pub(super) sandbox_home: std::path::PathBuf,
+}
+
 /// 运行设置（端口 + 系统 SSH 配置授权；provider/连接改走 profile CRUD + set_active_profile）。
 /// 经串行器（修 P1-c）：端口或 SSH 授权一旦变化，正在跑的沙箱都必须拆掉，
 /// 与新端口不一致；此处把这条陈旧链路拆掉（只停我们的沙箱、绝不碰 8765），逼下次「一键开始」按新端口重建，
@@ -147,9 +152,44 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
         system_ssh_config_path()?;
         system_ssh_hosts()?;
     }
+    set_settings_inner_with(
+        app,
+        state,
+        lifecycle,
+        cfg,
+        SetSettingsPaths {
+            config_dir: config::default_dir(),
+            sandbox_home: crate::runtime::science::sandbox_home(),
+        },
+        ScienceHostAdapter::claim_stop,
+        |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+    )
+}
+
+pub(super) fn set_settings_inner_with<R, Claim, Execute>(
+    app: tauri::AppHandle<R>,
+    state: SharedAppState,
+    lifecycle: SharedLifecycle,
+    cfg: UiSettings,
+    paths: SetSettingsPaths,
+    claim_science: Claim,
+    execute_science: Execute,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+    Execute: FnOnce(
+        &tauri::AppHandle<R>,
+        crate::runtime::science::ScienceStopRequest,
+    ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+{
     lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
-        let dir = config::default_dir();
-        let old = config::load_from(&dir).map_err(|e| e.to_string())?;
+        let old = config::load_from(&paths.config_dir).map_err(|e| e.to_string())?;
         config::require_no_runtime_transaction(&old)?;
         let teardown = settings_change_needs_teardown(
             old.proxy_port,
@@ -161,8 +201,21 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
         // 否则会留下「config 已是新端口、旧沙箱仍在旧端口指向旧代理」的不一致态，下次一键还会复用这条死链路。
         // 保持端口不变则一切仍自洽（旧沙箱指旧代理端口、下次一键在旧端口重建代理，链路照通）。
         if teardown {
+            let generation = lifecycle.current_generation();
+            let (owner, request) =
+                claim_process_local_science_stop(&state, generation, claim_science);
+            // Preserve the current stop-before-generation ordering, but do the
+            // stop script and bounded TERM/KILL waits without AppState so the
+            // read model remains available during a settings teardown.
+            let execution = request.map(|request| execute_science(&app, request));
             let mut st = lock(&state);
-            stop_sandbox_state(&app, &mut st).map_err(|e| {
+            publish_process_local_science_stop(
+                &mut st,
+                lifecycle.current_generation(),
+                owner,
+                execution,
+            )
+            .map_err(|e| {
                 format!(
                     "设置未更改：无法停止仍使用旧端口或旧 SSH 授权的沙箱（{e}）。请手动停止沙箱或重启 app 后重试。（真实实例 8765 未受影响）"
                 )
@@ -171,11 +224,11 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
             st.stop_proxy();
         }
         if !cfg.reuse_system_ssh {
-            revoke_science_ssh_bridge(&crate::runtime::science::sandbox_home())?;
-            remove_managed_sandbox_ssh_stub(&crate::runtime::science::sandbox_home())?;
+            revoke_science_ssh_bridge(&paths.sandbox_home)?;
+            remove_managed_sandbox_ssh_stub(&paths.sandbox_home)?;
         }
         // 拆链路成功（或无需拆）→ 才落盘新端口，保证 config 与运行态一致。
-        config::update_result(&dir, move |c| {
+        config::update_result(&paths.config_dir, move |c| {
             config::require_no_runtime_transaction(c)?;
             c.proxy_port = cfg.proxy_port;
             c.sandbox_port = cfg.sandbox_port;
