@@ -648,16 +648,46 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("owner.still_owns", stop_all)
         self.assertIn("lifecycle.current_generation()", stop_all)
         self.assertNotIn("stop_sandbox_state(&app, &mut st)", stop_all)
+        claim_flow = lifecycle_command.split(
+            "fn claim_process_local_science_stop", 1
+        )[1].split("fn publish_process_local_science_stop", 1)[0]
+        self.assertLess(
+            claim_flow.index("let st = lock(state)"),
+            claim_flow.index("claim_science(owner.runtime.as_ref())"),
+        )
         stop_all_flow = lifecycle_command.split(
             "pub(super) fn stop_all_inner_with", 1
         )[1].split("pub(super) async fn quit_app_command", 1)[0]
         self.assertLess(
-            stop_all_flow.index("let st = lock(&state)"),
+            stop_all_flow.index("claim_process_local_science_stop"),
             stop_all_flow.index("execute_science(&app, request)"),
         )
         self.assertLess(
             stop_all_flow.index("execute_science(&app, request)"),
             stop_all_flow.rindex("lock(&state)"),
+        )
+        self.assertLess(
+            stop_all_flow.rindex("lock(&state)"),
+            stop_all_flow.index("publish_process_local_science_stop"),
+        )
+        set_mode_flow = lifecycle_command.split(
+            "pub(super) fn set_mode_inner_with", 1
+        )[1].split("pub(crate) struct UiSettings", 1)[0]
+        self.assertLess(
+            set_mode_flow.index("claim_process_local_science_stop"),
+            set_mode_flow.index("execute_science(&app, request)"),
+        )
+        self.assertLess(
+            set_mode_flow.index("execute_science(&app, request)"),
+            set_mode_flow.index("let mut st = lock(&state)"),
+        )
+        self.assertLess(
+            set_mode_flow.index("let mut st = lock(&state)"),
+            set_mode_flow.index("publish_process_local_science_stop"),
+        )
+        self.assertLess(
+            set_mode_flow.index("publish_process_local_science_stop"),
+            set_mode_flow.index("st.stop_proxy()"),
         )
         self.assertIn("pub(crate) fn claim_science_stop_request", science_lifecycle)
         self.assertIn("pub(crate) fn execute_science_stop", science_lifecycle)

@@ -20,7 +20,8 @@
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
       "test/quality/test_run_evidence_attempt0_runner.py",
-      "test/quality/test_source_gate_runtime.py"
+      "test/quality/test_source_gate_runtime.py",
+      "test/test_skill_runtime_boundary.py"
     ],
     "requirement_ids": [
       "REQ-083-PATHS",
@@ -67,6 +68,7 @@
         "set_mode and stop_all share one process-local owner claim and publication implementation while retaining their distinct Gateway and error semantics",
         "the R1 regression separately exercises generation-only and identity-only drift, proves AppState remains readable during the stop wait, and rejects stale publication without changing config or stopping the tracked Gateway",
         "the existing R0 set_mode characterization continues to freeze journal preflight, stop failure, and config-commit failure ordering",
+        "the static Science runtime boundary binds lock-before-claim inside the shared helper and claim-execute-relock-publish ordering in both set_mode and stop_all",
         "set_settings and every other Science stop owner remain outside this bounded slice"
       ]
     },
