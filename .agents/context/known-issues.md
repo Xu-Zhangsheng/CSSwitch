@@ -1,26 +1,26 @@
 # 当前已知问题与证据缺口
 
-状态：当前；R1 set_mode stop owner source closure 已完成；A0 仍是最近一次独立 built-artifact closure
+状态：当前；R2 set_settings stop owner source closure 已完成；A0 仍是最近一次独立 built-artifact closure
 
 最后复核：2026-08-06（Asia/Taipei）
 
 失效条件：quality lineage、Doctor / one-click / history / config / boot read model、Science runtime provenance、release source、artifact、installed/live 或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C、O1-D、F1-R、O1-E1–E4 与 R1 set_mode stop owner 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
+本页只保留当前仍有效的问题、决策边界和证据链接。已完成 R0–R2、S1–S6、H1–H4、D0、Q0-A、F1-0、O1-A、C1-A、F1-A、O1-B、O1-C、O1-D、F1-R、O1-E1–E4、R1 set_mode stop owner 与 R2 set_settings stop owner 的原始结论保留在[日期化审计索引](../../docs/audits/README.md)，不在当前工作集重复。
 
 ## 当前冻结 candidate
 
-最近已完成的 implementation closure 是 [R1 set_mode stop owner](../../docs/audits/2026-08-06-r1-set-mode-stop-owner.md)。final source candidate 为 `8fbbf2b76eb6d3e655d7942f312628c2eb8bd6d6`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
+最近已完成的 implementation closure 是 [R2 set_settings stop owner](../../docs/audits/2026-08-06-r2-set-settings-stop-owner.md)。final source candidate 为 `be47ea6026e5720ab147e1b03cfc0ffd2440eb38`；它已通过 fresh clean-context independent review 与 exact-SHA 15-suite `GATE-SOURCE`，但本节和该审计都不能外推 artifact、installed/live 或 release 结论。
 
-R1 当前源码合同：
+R2 当前源码合同：
 
-- official `set_mode` 在 `AppState` 锁内 claim generation 与完整 process-local Science owner / exact stop request，锁外执行既有 stop policy，回锁后按 generation、runtime、confirmed-stopped、child PID、port 与 URL 做 CAS；
-- 只有 current stop success 才清 Science tracking、停止 tracked Gateway 并继续 config commit；stale、claim 或 stop failure 保留 replacement Science、Gateway 与旧 mode；config commit failure 仍保持 stop-before-commit；
-- `stop_all` 复用同一 claim/publication helper，但仍保持“无论 Science 结果都停止 Gateway”的既有语义；`set_settings` 与其他 sibling stop owner 不在 R1 范围；
-- 最终 fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0` 封口；run `8efe1c128c0bec496bc39e67404a6718` 的 exact-SHA 15-suite gate 为 PASS；
+- `set_settings` 只有在端口或 SSH 授权变化需要 teardown 时，才在 `AppState` 锁内 claim 当前 generation、完整 process-local Science owner 与 exact stop request，锁外执行既有 stop policy，回锁后按 generation、runtime、confirmed-stopped、child PID、port 与 URL 做 CAS；
+- 只有 current stop success 才按既有顺序 bump generation、停止 tracked Gateway、撤销 SSH bridge/stub 并提交 settings；stale、claim 或 stop failure 保留 replacement Science、Gateway 与旧 settings，且不继续后续 teardown；
+- `set_mode` 与 `stop_all` 继续复用同一 claim/publication helper并保留各自既有 Gateway、generation 与错误语义；downgrade cleanup、native-exit 与其他 sibling stop owner 不在 R2 范围；
+- 最终 fresh clean-context reviewer 以 `PASS`、`BLOCK/HIGH/MEDIUM/LOW = 0/0/0/0` 封口；run `6a307e628ca04b4f478b13509b75928e` 的 exact-SHA 15-suite gate 为 PASS；
 - 该候选不证明 artifact、installed/live、真实 provider/Science/SSH、签名、公证或 release。
 
-R1 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
+R2 已完成，但没有自动继承的新 implementation sole NEXT。选择或实施后续阶段前，必须按实时源码重新比较仍开放问题、依赖与非目标。
 
 用户随后冻结 `9cf75d19e7853b91b2f9a7c85afbd66747cb4fa3` 作为 A0 输入；该 clean exact-HEAD checkout 已完成[日期化 built-artifact 验收](../../docs/audits/2026-08-06-a0-frozen-baseline-artifact.md)。隔离 Acceptance `.app` 的 bundle identity、arm64 Desktop / Gateway、内容 manifest、资源 allowlist 与 Gateway 空状态均通过，A0 结论为 `ARTIFACT-GREEN`。
 

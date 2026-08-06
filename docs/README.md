@@ -15,6 +15,7 @@ Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agent
 
 ## 最新基线
 
+- [2026-08-06 R2 set_settings stop owner source closure](audits/2026-08-06-r2-set-settings-stop-owner.md)：`set_settings` teardown 的 process-local owner / lock-free wait / CAS、独立审查与 exact-SHA source gate closure；不外推 artifact 或 live 层。
 - [2026-08-06 R1 set_mode stop owner source closure](audits/2026-08-06-r1-set-mode-stop-owner.md)：`set_mode` 的 process-local owner / lock-free wait / CAS、独立审查与 exact-SHA source gate closure；不外推 artifact 或 live 层。
 - [2026-08-06 A0 冻结基线 Artifact 验收](audits/2026-08-06-a0-frozen-baseline-artifact.md)：`9cf75d1` 的 built-artifact closure；不外推 installed/live、签名或 release。
 - [2026-08-06 O1-E4 history full-snapshot durable effect owner source closure](audits/2026-08-06-o1-e4-history-full-snapshot-effect-owner.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入其他候选。
