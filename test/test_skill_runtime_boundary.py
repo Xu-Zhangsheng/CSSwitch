@@ -624,7 +624,20 @@ class SkillRuntimeBoundary(unittest.TestCase):
             session,
         )
         codex = (ROOT / "desktop/src-tauri/src/commands/codex.rs").read_text()
-        self.assertIn("st.science_confirmed_stopped = confirmed_runtime", codex)
+        for owner_field in (
+            "runtime: st.science_runtime.clone()",
+            "confirmed_stopped: st.science_confirmed_stopped.clone()",
+            "sandbox_child_pid: st.sandbox.as_ref().map(std::process::Child::id)",
+            "sandbox_port: st.sandbox_port",
+            "sandbox_url: st.sandbox_url.clone()",
+        ):
+            self.assertIn(owner_field, codex)
+        self.assertRegex(
+            codex,
+            r"(?s)CodexScienceOwnerSnapshot::claim.*ScienceHostAdapter::probe_known",
+        )
+        self.assertIn("if !owner.still_owns(st, current_generation)", codex)
+        self.assertIn("st.science_confirmed_stopped = owner.confirmed_stopped", codex)
         for typed_publisher in (
             runtime_command_module("lifecycle"),
             runtime_command_module("one_click"),

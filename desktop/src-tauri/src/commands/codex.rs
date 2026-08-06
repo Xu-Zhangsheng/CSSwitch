@@ -524,6 +524,125 @@ fn tracked_proxy_state(st: &mut AppState) -> TrackedProxyState {
     }
 }
 
+#[derive(Clone)]
+struct CodexScienceOwnerSnapshot {
+    generation: u64,
+    runtime: Option<crate::runtime::science::ScienceRuntimeIdentity>,
+    confirmed_stopped: Option<crate::runtime::science::ScienceRuntimeIdentity>,
+    sandbox_child_pid: Option<u32>,
+    sandbox_port: u16,
+    sandbox_url: Option<String>,
+}
+
+impl CodexScienceOwnerSnapshot {
+    fn claim(st: &AppState, generation: u64) -> Self {
+        Self {
+            generation,
+            runtime: st.science_runtime.clone(),
+            confirmed_stopped: st.science_confirmed_stopped.clone(),
+            sandbox_child_pid: st.sandbox.as_ref().map(std::process::Child::id),
+            sandbox_port: st.sandbox_port,
+            sandbox_url: st.sandbox_url.clone(),
+        }
+    }
+
+    fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
+        self.generation == current_generation
+            && self.runtime == st.science_runtime
+            && self.confirmed_stopped == st.science_confirmed_stopped
+            && self.sandbox_child_pid == st.sandbox.as_ref().map(std::process::Child::id)
+            && self.sandbox_port == st.sandbox_port
+            && self.sandbox_url == st.sandbox_url
+    }
+}
+
+struct CodexScienceObservation {
+    state: SandboxScienceState,
+    detected_runtime: Option<crate::runtime::science::ScienceRuntimeIdentity>,
+    owner: CodexScienceOwnerSnapshot,
+}
+
+fn codex_science_owner_changed() -> crate::runtime::science::ScienceStopFailure {
+    crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
+        "Science stop claim 时 process-local owner 已变化；已保留 replacement runtime。",
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn stop_managed_codex_runtime_with<R, Claim, Execute>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    observation: CodexScienceObservation,
+    claim_science: Claim,
+    execute_science: Execute,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+    Execute: FnOnce(
+        &tauri::AppHandle<R>,
+        crate::runtime::science::ScienceStopRequest,
+    ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+{
+    let CodexScienceObservation {
+        state: science_state,
+        detected_runtime,
+        owner,
+    } = observation;
+    match science_state {
+        SandboxScienceState::RunningHealthy => {
+            super::runtime::execute_process_local_science_stop_with(
+                app,
+                state,
+                lifecycle,
+                move |st, current_generation| {
+                    if !owner.still_owns(st, current_generation) {
+                        return Err(codex_science_owner_changed());
+                    }
+                    st.science_runtime = detected_runtime;
+                    Ok(())
+                },
+                claim_science,
+                execute_science,
+                |st| {
+                    lifecycle.bump_generation();
+                    st.stop_proxy();
+                },
+            )
+            .map_err(|error| {
+                format!("停止受管 Codex Science 链路失败；认证未变更，实验开关也未关闭：{error}")
+            })?;
+            Ok(())
+        }
+        SandboxScienceState::Stopped => {
+            let mut st = lock(state);
+            if !owner.still_owns(&st, lifecycle.current_generation()) {
+                return Err(format!(
+                    "停止受管 Codex Science 链路失败；认证未变更，实验开关也未关闭：{}",
+                    codex_science_owner_changed()
+                ));
+            }
+            kill_child(&mut st.sandbox);
+            st.sandbox_url = None;
+            st.science_confirmed_stopped = owner.confirmed_stopped;
+            st.science_runtime = None;
+            lifecycle.bump_generation();
+            st.stop_proxy();
+            Ok(())
+        }
+        SandboxScienceState::Unknown => Err(
+            "无法确认沙箱端口上的 Science binary/data-dir 身份；Codex 认证与实验开关均未变更。"
+                .into(),
+        ),
+    }
+}
+
 /// Prepare for a CSSwitch-owned Codex credential mutation. Only a runtime whose
 /// in-memory launch identity is exactly `codex` is stopped. Other known providers
 /// remain untouched; an alive but unidentified managed child fails closed.
@@ -539,21 +658,17 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
     let active_profile_is_codex = cfg
         .active_profile()
         .is_some_and(|profile| profile.template_id == "codex");
-    let (provider, tracked, running_runtime, confirmed_runtime, version_cache) = {
+    let (provider, tracked, owner, version_cache) = {
         let mut st = lock(state);
         let provider = st.provider.clone();
         let tracked = tracked_proxy_state(&mut st);
-        (
-            provider,
-            tracked,
-            st.science_runtime.clone(),
-            st.science_confirmed_stopped.clone(),
-            st.science_version_cache.clone(),
-        )
+        let owner = CodexScienceOwnerSnapshot::claim(&st, lifecycle.current_generation());
+        (provider, tracked, owner, st.science_version_cache.clone())
     };
-    let remembered_runtime = running_runtime
+    let remembered_runtime = owner
+        .runtime
         .clone()
-        .or_else(|| confirmed_runtime.clone());
+        .or_else(|| owner.confirmed_stopped.clone());
     let untracked_proxy_port_occupied = matches!(
         tracked,
         TrackedProxyState::Absent | TrackedProxyState::Exited
@@ -578,20 +693,18 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
     let action =
         resolve_science_runtime_action(proxy_action, active_profile_is_codex, science_state)?;
     if action == AuthRuntimeAction::StopManagedCodex {
-        let mut st = lock(state);
-        if science_state == SandboxScienceState::RunningHealthy {
-            st.science_runtime = detected_runtime;
-            super::runtime::stop_sandbox_state(app, &mut st).map_err(|error| {
-                format!("停止受管 Codex Science 链路失败；认证未变更，实验开关也未关闭：{error}")
-            })?;
-        } else {
-            kill_child(&mut st.sandbox);
-            st.sandbox_url = None;
-            st.science_confirmed_stopped = confirmed_runtime;
-            st.science_runtime = None;
-        }
-        lifecycle.bump_generation();
-        st.stop_proxy();
+        stop_managed_codex_runtime_with(
+            app,
+            state,
+            lifecycle,
+            CodexScienceObservation {
+                state: science_state,
+                detected_runtime,
+                owner,
+            },
+            ScienceHostAdapter::claim_stop,
+            |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        )?;
     }
     Ok(action)
 }
@@ -2467,6 +2580,240 @@ mod tests {
         })
         .unwrap();
         assert_eq!(enabled["experimental_codex_enabled"], true);
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn r3_codex_mutation_wait_releases_read_model_and_stale_result_preserves_replacement() {
+        let temp = TempDir::new("r3-codex-mutation-owner-cas");
+        fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior_binary = temp.0.join("prior-science");
+        let replacement_binary = temp.0.join("replacement-science");
+        fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+        fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior =
+            crate::runtime::science::test_runtime_identity(prior_binary.canonicalize().unwrap());
+        let replacement = crate::runtime::science::test_runtime_identity(
+            replacement_binary.canonicalize().unwrap(),
+        );
+
+        for (case, replace_identity, bump_generation) in [
+            ("generation-only", false, true),
+            ("identity-only", true, false),
+        ] {
+            let config_dir = temp.0.join(format!("config-{case}"));
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            config::save_to(
+                &config_dir,
+                &config::Config {
+                    experimental_codex_enabled: true,
+                    sandbox_port: 18765,
+                    proxy_port: 18000,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let config_before = fs::read(config_dir.join("config.json")).unwrap();
+
+            let (state, proxy_pid) = r0_proxy_state("codex");
+            {
+                let mut authority = lock(&state);
+                authority.science_runtime = Some(prior.clone());
+                authority.sandbox_port = 18765;
+                authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+            }
+            let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let generation_before = lifecycle.current_generation();
+            let observed_owner = CodexScienceOwnerSnapshot::claim(&lock(&state), generation_before);
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            let handle = app.handle().clone();
+
+            let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+            let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+            let worker_state = state.clone();
+            let worker_lifecycle = lifecycle.clone();
+            let worker_prior = prior.clone();
+            let worker_config_dir = config_dir.clone();
+            let worker = std::thread::spawn(move || {
+                let claim_prior = worker_prior.clone();
+                set_experimental_codex_enabled_at(&worker_config_dir, false, || {
+                    stop_managed_codex_runtime_with(
+                        &handle,
+                        &worker_state,
+                        worker_lifecycle.as_ref(),
+                        CodexScienceObservation {
+                            state: SandboxScienceState::RunningHealthy,
+                            detected_runtime: Some(worker_prior.clone()),
+                            owner: observed_owner,
+                        },
+                        |runtime| {
+                            assert_eq!(runtime, Some(&claim_prior));
+                            Ok(crate::runtime::science::ScienceStopRequest::recover(
+                                runtime,
+                            ))
+                        },
+                        move |_, _| {
+                            stop_started_tx.send(()).unwrap();
+                            release_stop_rx.recv().unwrap();
+                            (
+                                Ok(crate::runtime::science::VerifiedScienceStop {
+                                    runtime: Some(worker_prior),
+                                    ownership_was_proven: true,
+                                }),
+                                true,
+                            )
+                        },
+                    )
+                })
+            });
+
+            stop_started_rx.recv().unwrap();
+            {
+                let mut read_model = state
+                    .try_lock()
+                    .expect("Codex mutation Science stop wait must not retain AppState");
+                assert_eq!(read_model.science_runtime.as_ref(), Some(&prior), "{case}");
+                if replace_identity {
+                    read_model.science_runtime = Some(replacement.clone());
+                    read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+                }
+            }
+            if bump_generation {
+                lifecycle.bump_generation();
+            }
+            release_stop_tx.send(()).unwrap();
+
+            let changed = worker.join().unwrap();
+            assert!(
+                changed
+                    .as_ref()
+                    .is_err_and(|error| error.contains("process-local owner 已变化")),
+                "{case}: {changed:?}"
+            );
+            assert_eq!(
+                fs::read(config_dir.join("config.json")).unwrap(),
+                config_before,
+                "{case}"
+            );
+            assert_eq!(
+                lifecycle.current_generation(),
+                generation_before + u64::from(bump_generation),
+                "{case}"
+            );
+            let current = lock(&state);
+            let expected_runtime = if replace_identity {
+                &replacement
+            } else {
+                &prior
+            };
+            let expected_url = if replace_identity {
+                "http://127.0.0.1:18765/replacement"
+            } else {
+                "http://127.0.0.1:18765/prior"
+            };
+            assert_eq!(
+                current.science_runtime.as_ref(),
+                Some(expected_runtime),
+                "{case}"
+            );
+            assert!(current.science_confirmed_stopped.is_none(), "{case}");
+            assert_eq!(current.sandbox_url.as_deref(), Some(expected_url), "{case}");
+            assert!(current.proxy.is_some(), "{case}");
+            assert!(r0_process_is_running(proxy_pid), "{case}");
+            drop(current);
+            lock(&state).stop_proxy();
+        }
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn r3_codex_mutation_rejects_preclaim_identity_drift_without_overwriting_replacement() {
+        let temp = TempDir::new("r3-codex-mutation-preclaim-cas");
+        fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior_binary = temp.0.join("prior-science");
+        let replacement_binary = temp.0.join("replacement-science");
+        fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+        fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior =
+            crate::runtime::science::test_runtime_identity(prior_binary.canonicalize().unwrap());
+        let replacement = crate::runtime::science::test_runtime_identity(
+            replacement_binary.canonicalize().unwrap(),
+        );
+        let config_dir = temp.0.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        config::save_to(
+            &config_dir,
+            &config::Config {
+                experimental_codex_enabled: true,
+                sandbox_port: 18765,
+                proxy_port: 18000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let config_before = fs::read(config_dir.join("config.json")).unwrap();
+
+        let (state, proxy_pid) = r0_proxy_state("codex");
+        {
+            let mut authority = lock(&state);
+            authority.science_runtime = Some(prior.clone());
+            authority.sandbox_port = 18765;
+            authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+        }
+        let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let observed_owner =
+            CodexScienceOwnerSnapshot::claim(&lock(&state), lifecycle.current_generation());
+        {
+            let mut authority = lock(&state);
+            authority.science_runtime = Some(replacement.clone());
+            authority.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+        }
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let changed = set_experimental_codex_enabled_at(&config_dir, false, || {
+            stop_managed_codex_runtime_with(
+                app.handle(),
+                &state,
+                lifecycle.as_ref(),
+                CodexScienceObservation {
+                    state: SandboxScienceState::RunningHealthy,
+                    detected_runtime: Some(prior.clone()),
+                    owner: observed_owner,
+                },
+                |_| panic!("pre-claim owner drift must reject before typed stop claim"),
+                |_, _| panic!("pre-claim owner drift must reject before stop execution"),
+            )
+        });
+        assert!(
+            changed
+                .as_ref()
+                .is_err_and(|error| error.contains("stop claim 时 process-local owner 已变化")),
+            "{changed:?}"
+        );
+        assert_eq!(
+            fs::read(config_dir.join("config.json")).unwrap(),
+            config_before
+        );
+        let current = lock(&state);
+        assert_eq!(current.science_runtime.as_ref(), Some(&replacement));
+        assert_eq!(
+            current.sandbox_url.as_deref(),
+            Some("http://127.0.0.1:18765/replacement")
+        );
+        assert!(current.proxy.is_some());
+        assert!(r0_process_is_running(proxy_pid));
+        drop(current);
+        lock(&state).stop_proxy();
     }
 
     #[test]

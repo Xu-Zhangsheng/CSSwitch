@@ -358,6 +358,53 @@ fn publish_process_local_science_stop(
     }
 }
 
+#[allow(clippy::result_large_err)]
+pub(crate) fn execute_process_local_science_stop_with<R, Prepare, Claim, Execute, AfterSuccess>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    prepare_claim: Prepare,
+    claim_science: Claim,
+    execute_science: Execute,
+    after_success: AfterSuccess,
+) -> crate::runtime::science::ScienceStopOutcome
+where
+    R: tauri::Runtime,
+    Prepare: FnOnce(&mut AppState, u64) -> Result<(), crate::runtime::science::ScienceStopFailure>,
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+    Execute: FnOnce(
+        &tauri::AppHandle<R>,
+        crate::runtime::science::ScienceStopRequest,
+    ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+    AfterSuccess: FnOnce(&mut AppState),
+{
+    let (owner, request) = {
+        let mut st = lock(state);
+        let generation = lifecycle.current_generation();
+        prepare_claim(&mut st, generation)?;
+        let owner = ScienceProcessLocalOwner::claim(&st, generation);
+        let request = claim_science(owner.runtime.as_ref());
+        (owner, request)
+    };
+    let execution = request.map(|request| execute_science(app, request));
+    let mut st = lock(state);
+    let outcome = publish_process_local_science_stop(
+        &mut st,
+        lifecycle.current_generation(),
+        owner,
+        execution,
+    );
+    if outcome.is_ok() {
+        after_success(&mut st);
+    }
+    outcome
+}
+
 pub(super) fn stop_all_inner_with<R, Claim, Execute>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
