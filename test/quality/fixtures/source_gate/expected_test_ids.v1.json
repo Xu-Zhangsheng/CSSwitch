@@ -706,6 +706,8 @@
       },
       "approved_skipped_test_ids": [],
       "discovered_test_ids": [
+        "commands::codex::tests::r3_codex_mutation_rejects_preclaim_identity_drift_without_overwriting_replacement",
+        "commands::codex::tests::r3_codex_mutation_wait_releases_read_model_and_stale_result_preserves_replacement",
         "config::tests::c1_a_config_writer_child",
         "config::tests::c1_a_cross_process_writer_fence_prevents_lost_update",
         "config::tests::config_writer_fence_rejects_hardlink_without_touching_target",
