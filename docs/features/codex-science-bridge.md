@@ -251,4 +251,4 @@ login/logout 前 Tauri 不能停止其他 provider 的 Science 或 gateway。若
 
 已发布功能不在当前 Feature Contract 保留开发期分阶段 Plan；历史阶段与 Gate 从 Git 历史和日期化 evidence 追溯。
 
-当前隔离步骤、证据层与 RM-35～RM-45 矩阵只在[真机验收](../operations/real-machine-acceptance.md#5-当前验收矩阵)维护。本文不复制该运维正文，也不把矩阵条目写成已执行或 PASS。
+当前隔离步骤、证据层与 Codex / provider / Science RM 场景只在[生产链路验收](../operations/real-machine-acceptance.md#7-rm-场景目录非路线)维护。本文不复制该运维正文，也不把矩阵条目写成已执行或 PASS。

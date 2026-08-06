@@ -1,47 +1,29 @@
 # CSSwitch 文档总入口
 
-公开产品概览从根目录 [README 中文版](../README.md) / [English](../README.en.md) 进入。本页只路由当前权威正文、当前状态和最新日期化基线，不展开历史审计结论。
+公开产品概览从根目录 [README 中文版](../README.md) / [English](../README.en.md) 进入。本页只路由当前权威正文、当前状态和日期化证据，不展开历史审计结论。
 
 ## 当前权威入口
 
 - [当前已知问题与证据缺口](../.agents/context/known-issues.md)：当前决策门、仍有效的问题和证据边界；使用前先复核实时 Git / artifact / runtime。
 - [架构索引](architecture/README.md)：稳定边界、所有权、状态、数据流和失败链路。
 - [功能合同索引](features/README.md)：用户可见行为、能力边界、信任边界和非目标。
-- [运维索引](operations/README.md)：开发、测试、质量、真机验收、发布、升级回滚和文档治理。
+- [运维索引](operations/README.md)：开发、测试、质量、生产链路验收、发布、升级回滚和文档治理。
 - [证据索引](evidence/README.md)：按 release 或日期化调查查找明确受限的证据。
 - [外部参考索引](references/README.md)：固定 reviewed commit 的外部项目参考，不作为 CSSwitch 当前事实或代码来源。
 
 Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agents/rules/) 进入；索引和兼容指针不复制正文。
 
-## 最新基线
+## 当前验收入口
 
-- [2026-08-06 R3 Codex mutation stop owner source closure](audits/2026-08-06-r3-codex-mutation-stop-owner.md)：Codex 共享 mutation 的 process-local owner、双窗口 CAS、独立复审与 exact-SHA source gate closure；不外推 artifact 或 live 层。
-- [2026-08-06 R2 set_settings stop owner source closure](audits/2026-08-06-r2-set-settings-stop-owner.md)：`set_settings` teardown 的 process-local owner / lock-free wait / CAS、独立审查与 exact-SHA source gate closure；不外推 artifact 或 live 层。
-- [2026-08-06 R1 set_mode stop owner source closure](audits/2026-08-06-r1-set-mode-stop-owner.md)：`set_mode` 的 process-local owner / lock-free wait / CAS、独立审查与 exact-SHA source gate closure；不外推 artifact 或 live 层。
-- [2026-08-06 A0 冻结基线 Artifact 验收](audits/2026-08-06-a0-frozen-baseline-artifact.md)：`9cf75d1` 的 built-artifact closure；不外推 installed/live、签名或 release。
-- [2026-08-06 O1-E4 history full-snapshot durable effect owner source closure](audits/2026-08-06-o1-e4-history-full-snapshot-effect-owner.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入其他候选。
-- [2026-08-06 O1-E3 fresh-process durable compensation replay owner source closure](audits/2026-08-06-o1-e3-fresh-compensation-replay.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入其他候选。
-- [2026-08-06 O1-E2 durable compensation step-state foundation source closure](audits/2026-08-06-o1-e2-compensation-step-state.md)：最近 source-only implementation closure；下一步必须先做新的只读再基线，不自动进入其他候选。
-- [2026-08-05 O1-E1 durable compensation journal foundation source closure](audits/2026-08-05-o1-e1-durable-compensation-journal.md)：O1-E2 前一阶段的 aggregate compensation journal closure。
-- [2026-08-05 F1-R unified read model source closure](audits/2026-08-05-f1-r-read-model.md)：O1-E1 前一阶段的 unified read model closure。
-- [2026-08-05 O1-D aggregate compensation phase closure](audits/2026-08-05-o1-d-compensation-phase.md)：F1-R 前一阶段的 aggregate compensation phase closure。
-- [2026-08-05 O1-C managed Science launch phase closure](audits/2026-08-05-o1-c-science-launch-phase.md)：O1-D 前一阶段的 managed Science launch phase closure。
-- [2026-08-05 O1-B cold one-click coordinator closure](audits/2026-08-05-o1-b-cold-coordinator.md)：O1-C 前一阶段的 cold one-click coordinator closure。
-- [2026-08-05 F1-A durable history recovery closure](audits/2026-08-05-f1-a-history-recovery.md)：O1-B 前一阶段的 durable history recovery closure。
-- [2026-08-05 C1-A cross-process config writer fence closure](audits/2026-08-05-c1-a-config-writer-fence.md)：F1-A 前一阶段的 canonical config writer fence closure。
-- [2026-08-04 O1-A typed runtime entry owner closure](audits/2026-08-04-o1-a-runtime-entry-owner.md)：C1-A 前一阶段的 production runtime entry owner closure。
-- [2026-08-04 F1-0 history boundary guard closure](audits/2026-08-04-f1-0-history-boundary-guard.md)：O1-A 前一阶段的 stopped history boundary closure。
-- [2026-08-04 Post-Q0 Runtime 后续路线再基线](audits/2026-08-04-post-q0-runtime-roadmap-rebaseline.md)：F1-0 前的 source-only 优先级与依赖输入；首阶段已完成，后续顺序不再自动有效。
-- [2026-08-04 Q0-A source-candidate lineage closure](audits/2026-08-04-q0-a-source-candidate-lineage.md)：较早的 source-candidate lineage closure；其后的实施优先级曾由 Post-Q0 再基线重新判断。
-- [2026-08-04 Post-D0 只读重新基线](audits/2026-08-04-post-d0-rebaseline.md)：Q0-A 前的 source-only 架构与治理输入；后续决策以实时复核后的 [known issues](../.agents/context/known-issues.md) 为准。
-- [2026-08-04 D0 Doctor intent split source closure](audits/2026-08-04-d0-doctor-intent-split.md)：较早 Doctor intent split 的 focused、独立审查与 exact-SHA source gate 证据。
-- [v0.8.4 发布证据](evidence/releases/v0.8.4.md)：分开记录 source、artifact、installed identity、signing 与 public 层；未列层不得补写为 PASS。
+- [生产链路验收](operations/real-machine-acceptance.md)：唯一维护“重要重构决策 → production source → exact artifact → isolated-live → authorized live”的映射、进入条件、授权和故障 fixture 边界。
+- [Science 探针合同](operations/science-probe-spec.md)：在生产链路映射下维护 Science 的 source、exact artifact、isolated-live 与逐项 authorized-live probe card，不记录 actual result。
+- [v0.8.4 发布证据](evidence/releases/v0.8.4.md)：只记录该 release 绑定的 source、artifact、installed identity、signing 与 public 层；未列层不得补写为 PASS。
 
-这些文档不能互相升级证据层，也不替代目标 artifact、installed runtime 或公开 Release 的实时核验。
+旧 R3–R11、R4/R5、S7、Post-D0/Post-Q0 及其他阶段编号路线已全部退役，只能从历史审计查证当时的决定和证据；它们不再是当前 NEXT、实施授权或验收顺序。
 
 ## 历史审计
 
-- [审计索引](audits/README.md)：日期化基线、source closure、文档治理和旧版本 change audit。原文保留其绑定日期、SHA、环境和证据边界，不作为当前真相。
+- [审计索引](audits/README.md)：日期化基线、source closure、旧阶段路线、文档治理和旧版本 change audit。原文保留其绑定日期、SHA、环境和证据边界，不作为当前真相或后续授权。
 
 ## 维护约定
 

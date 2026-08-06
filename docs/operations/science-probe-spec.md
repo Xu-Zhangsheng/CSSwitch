@@ -1,18 +1,18 @@
-# Claude Science 0.1.25 探针规格
+# Claude Science 生产链路探针合同
 
 状态：当前
 
-适用范围：CSSwitch v0.8.4、Claude Science 0.1.25，以及由本规格明确绑定的后续 exact artifact / installed runtime。
+适用范围：当前 CSSwitch production source、由同一 exact source 生成的 artifact、manifest 中固定身份的 Claude Science executable/package，以及由本合同逐项授权的 isolated-live / authorized-live。
 
-最后复核：2026-07-30
+最后复核：2026-08-07
 
-失效条件：Claude Science 版本、CSSwitch 能力边界、证据词表、安全隔离合同或探针目标发生变化时立即失效并复核；目标版本组合被替代或探针计划取消后，结果留在 dated evidence，本规格删除或由新规格替换。
+失效条件：CSSwitch production owner / registered IPC / caller、artifact composition、Claude Science identity、能力边界、证据词表、安全隔离合同或 probe 目标发生变化时，受影响 card 立即失效并复核；actual result 继续留在 dated evidence，不用旧结果重写本合同。
 
-本文是 Claude Science 0.1.25 A/B/C 探针唯一执行规格，只定义 fixture、授权、
-gate、判定和证据输出，不记录运行结果。能力含义与 owner 见
+本文是 Claude Science production-chain probe 的唯一执行合同，只定义 fixture、授权、
+gate、判定和证据输出，不记录运行结果，也不提供构建或 live 授权。统一的重构决策映射与层级定义见
+[生产链路验收](real-machine-acceptance.md)；能力含义与 owner 见
 [Claude Science 能力依赖](../architecture/science-capability-dependencies.md)，用户可见
-状态见[产品能力地图](../features/product-science-capability-map.md)，队列来源与九层
-证据词表的历史冻结见[2026-07-30 架构调研](../audits/2026-07-30-v084-architecture-reconnaissance.md)；当前 source/result 用语和更高证据层边界分别以[自动测试](testing.md)与[发布流程](release.md)为准。
+状态见[产品能力地图](../features/product-science-capability-map.md)；当前 source/result 用语和更高证据层边界分别以[自动测试](testing.md)与[发布流程](release.md)为准。
 本文不复制能力或证据正文。
 
 ## 1. 规格与结果分界
@@ -29,14 +29,17 @@ gate、判定和证据输出，不记录运行结果。能力含义与 owner 见
 
 ## 2. Gate 顺序
 
-| Gate | 允许进入的队列 | 进入条件 | 不能外推 |
+| Gate | 允许进入的队列 | 准入条件与 PASS 完成条件 | 不能外推 |
 |---|---|---|---|
-| G0 静态前置 | A | exact source HEAD / package identity 已固定；只读仓库或指定 package | compiled、package surface 不等于 live |
-| G1 本地隔离 | B（macOS 或专用可丢弃 Linux/WSL） | 相关 A 已有逐项结果；fixture 可完全隔离；无真实账号、凭证或外部 egress | mock/local PASS 不等于账号、组织或真实服务 |
-| G2 测试账号 / 组织 | `C-ACCOUNT-01`、`C-ORG-01` | 相关 B 已闭合；专用账号/组织/设备与逐项书面授权齐备 | entitlement 不等于第三方 provider、其他组织或公开 release |
-| G3 真实外部服务 | 其余 C | 相关 B 已闭合；destination、预算、凭证范围、数据与取消方式逐项授权 | 一个 service、region、server 或 provider 不代表其他对象 |
+| G0 production source | A 中的 source card | 准入：冻结 clean exact source HEAD 并获得静态审查授权。完成：必需 A cards、fresh review 与完整 source gate 共同 PASS | source PASS 不等于可构建或运行 |
+| G1 exact artifact | package/static card 与 artifact identity gate | 准入：G0 PASS 并另获构建授权。完成：CSSwitch artifact、Gateway、resource、Science executable/package identity 与同一 source manifest 精确绑定 | package/static PASS 不等于 executable 已运行 |
+| G2 isolated-live | B（macOS 或专用可丢弃 Linux/WSL） | 准入：G1 PASS，并另获真实 Science 隔离测试授权，且 fixture 可完全隔离。完成：目标 B card 的 identity、normal wiring、判定与 cleanup 全部 PASS | isolated/local PASS 不等于账号、组织或真实服务 |
+| G3 authorized account / org | `C-ACCOUNT-01`、`C-ORG-01` | 准入：相关 B 已闭合，专用账号/组织/设备与逐项书面授权齐备。完成：授权 capability/control 的全部 sub-gate 与 cleanup PASS | entitlement 不等于第三方 provider、其他组织或公开 release |
+| G4 authorized external | 其余 C | 准入：相关 B 已闭合，destination、预算、凭证范围、数据与取消方式逐项授权。完成：该 exact subcase 的全部 sub-gate 与 cleanup PASS | 一个 service、region、server 或 provider 不代表其他对象 |
 
-低 gate 的 `FAIL` 或 `INCONCLUSIVE` 不能靠进入更高 gate 绕过。存在依赖的 probe
+card 中的 `G0` 等前置表示已满足该 gate 的**准入**，不是要求该 card 执行前 gate 已经 PASS；
+该 gate 的必需 cards 与 review/gate 结果共同建立 PASS。低 gate 的 `FAIL`、`INCONCLUSIVE`
+或 `NOT-RUN` 不能靠进入更高 gate 绕过。存在依赖的 probe
 必须按 card 中列出的前置顺序执行；并行只允许用于无共享 runtime、端口、账号、
 fixture 或证据目录的独立 case。
 
@@ -52,8 +55,8 @@ fixture 或证据目录的独立 case。
 - Science binary 的绝对路径、SHA-256、版本和来源；
 - OS、架构、fixture 版本，以及所有目标证据层和 scope。
 
-B 类 macOS runtime 必须使用 `/private/tmp/csswitch-science-probe-runtime/<run-id>/`
-作为外层 HOME、data-dir、CSSwitch state、mock state 和日志根，使用 OS 分配的动态
+B 类 macOS runtime 必须使用 `/private/tmp/csswitch-science-probe-runtime/<run-id>/home/`
+作为外层 HOME，并把 Science data-dir、CSSwitch state 与 mock state 都放在这个 HOME 下；日志放在同一 `<run-id>` 根，使用 OS 分配的动态
 端口。不得借用真实 `HOME`、`~/.claude-science`、`~/.csswitch`、端口 `8765` 或
 现有进程。Linux/WSL 使用同等语义的专用可丢弃实例和全新用户；不得挂载用户目录。
 
@@ -96,7 +99,16 @@ B 类 macOS runtime 必须使用 `/private/tmp/csswitch-science-probe-runtime/<r
 或 guard 正确拦截，都不能单独构成 PASS。预期拒绝只有在 card 明确把 fail-closed
 行为列为目标时才算 PASS。
 
-### 3.4 证据与清理输出
+### 3.4 故障分支证明边界
+
+crash、race、replacement、compensation、replay、CAS drift、partial write 与取消/超时
+必须继续使用 production entry 对应的 deterministic fixture / fault injection。source gate
+必须证明 fixture 进入同一 owner、journal、receipt 或 CAS boundary，不能使用平行 mock
+实现重新定义产品行为。isolated-live / authorized-live 只证明 normal production wiring 和
+明确授权的 happy path；不得故意破坏真实 Science、账号、Skill、SSH 或 provider 状态来取代
+故障 fixture，也不得由一次 happy path 推出上述 failure branch PASS。
+
+### 3.5 证据与清理输出
 
 每个 case 写入
 `/private/tmp/csswitch-science-probe-evidence/<run-id>/<probe-id>/`：
@@ -109,7 +121,7 @@ B 类 macOS runtime 必须使用 `/private/tmp/csswitch-science-probe-runtime/<r
 - `hashes.sha256`：证据文件 hash；原始截图/响应仅在脱敏后进入 `artifacts/`。
 
 运行完成后新增一份日期化 investigation，文件名为
-`docs/evidence/investigations/YYYY-MM-DD-claude-science-0.1.25-<probe-id>.md`，
+`docs/evidence/investigations/YYYY-MM-DD-claude-science-<science-version>-<probe-id>.md`，
 并更新其最近一级索引。正文必须逐 sub-gate 记录 `PASS` / `FAIL` /
 `INCONCLUSIVE`、target layer/scope、artifact/binary hash、授权范围、清理结果和
 证据目录 hash；未运行项继续写 `NOT-RUN`。不得提交含秘密的原始日志。
@@ -125,19 +137,21 @@ case 判为 `INCONCLUSIVE(reason=cleanup-ownership)`。
 [日期化调查索引](../evidence/investigations/README.md)进入；A 类不能启动
 executable、打开 App、连接网络或读取用户状态。
 
-### A-IPC-01｜registered IPC 可达性清单
+### A-IPC-01｜production entry 可达性清单
 
-- **目标能力**：为 Tauri command 固定 `compiled → registered → production
-  caller/auto-boot` 静态链，并对 5 个 dormant IPC 给出去留输入。
+- **目标能力**：为 current Tauri command 固定 `defined → compiled → registered →
+  production caller/auto-boot → owner` 静态链；已从注册面删除的 command 必须列为
+  absent，并证明当前生产链不再依赖它。
 - **前置与 fixture**：G0；exact source HEAD；Rust module/invoke 注册和生产
   frontend caller 文件；生成物写入证据根。
 - **允许 / 禁止访问**：允许只读目标 worktree 和本地文本分析；禁止 build、
   启动 UI/runtime、读取 preview/mock 结果后冒充生产 caller。
 - **所需授权**：无需账号、网络或凭证；只需该 exact HEAD 的静态审查任务授权。
-- **目标证据层**：`SOURCE-CONTRACT`。
-- **PASS**：每个 registered command 都有定义、编译入口、注册点、生产 caller /
-  条件 caller / 无 caller 三态之一及路径行号；5 个 dormant IPC 各有 keep/remove/
-  expose 的明确决策输入，且 preview/mock 单列。
+- **目标证据层**：`PRODUCTION-SOURCE`。
+- **PASS**：每个 registered command 都有定义、编译入口、注册点、production caller /
+  conditional auto-boot / no production caller 三态之一及路径行号；preview/mock 单列；
+  `start_proxy` 等已删除注册面不再被清单当作 live command，且一键链只经 registered
+  `one_click_login` / boot coordinator 进入当前 Gateway / Science owner。
 - **FAIL**：清单漏项、重复归属、把 test/preview 当生产 caller，或注册集合与
   exact HEAD 不一致。
 - **INCONCLUSIVE**：生成器无法解析宏/条件编译且人工复核也不能唯一归类。
@@ -148,13 +162,13 @@ executable、打开 App、连接网络或读取用户状态。
 
 - **目标能力**：固定 Science package 的 Plugin schema/UI/import 表面，与
   CSSwitch root-Skill、Plugin candidate、hooks/MCP/agents 处理路径的组合矩阵。
-- **前置与 fixture**：G0；固定 0.1.25 package 副本及 SHA-256；exact source
+- **前置与 fixture**：G1；固定目标 Science package 副本、version、build 与 SHA-256；exact source
   HEAD；只使用合成 archive 结构做静态路径枚举，不执行 archive 内容。
 - **允许 / 禁止访问**：允许 package-static metadata/string/schema 和 importer
   source；禁止启动 package、导入真实 Plugin、读取用户 marketplace 或 Skill 数据。
 - **所需授权**：无需账号/凭证；package 路径和 hash 必须在 manifest 中固定。
 - **目标证据层**：Science 表面为 `PACKAGE-STATIC`，CSSwitch 路径为
-  `SOURCE-CONTRACT`；两层分别判定。
+  `PRODUCTION-SOURCE`；两层分别判定，只有 manifest 绑定后才进入 `EXACT-ARTIFACT`。
 - **PASS**：矩阵覆盖 root `SKILL.md` 短路、Plugin candidate、manifest、UI、
   hooks、MCP、agents、permission、enable/disable、update；每格标出已解析、拒绝、
   未进入或未知，且不声称 Plugin runtime 支持。
@@ -173,7 +187,7 @@ executable、打开 App、连接网络或读取用户状态。
 - **允许 / 禁止访问**：允许读取仓内 SSH bridge 文件与 source tests；禁止读取
   `~/.ssh`、key/agent、known_hosts，禁止执行 ssh 或连接 host。
 - **所需授权**：无需账号、server 或 SSH 凭证。
-- **目标证据层**：`SOURCE-CONTRACT`；已存在但未运行的测试只记
+- **目标证据层**：`PRODUCTION-SOURCE`；已存在但未运行的测试只记
   `SOURCE-TEST(status=not-run)`。
 - **PASS**：期望、安装写入、validator 检查、runtime invocation 四列逐字段对应；
   content/hash/owner/mode/nlink 的未校验项显式标出，不从测试存在推出 PASS。
@@ -183,15 +197,16 @@ executable、打开 App、连接网络或读取用户状态。
 - **停止与清理 / 输出**：发现访问用户 SSH 状态的需求立即停止；输出
   `ssh-wrapper-contract.json` 和 source pointer。
 
-### A-EVIDENCE-01｜九层证据用语门禁
+### A-EVIDENCE-01｜证据层用语门禁
 
-- **目标能力**：保证未来 probe evidence 只在实际取得的九层与 live scope 内陈述。
-- **前置与 fixture**：G0；九层词表、本文 schema，以及一组覆盖 source/package/
+- **目标能力**：保证未来 probe evidence 只在实际取得的 production source、exact artifact、
+  isolated-live、authorized-live 及额外 installed/signing/public-release scope 内陈述。
+- **前置与 fixture**：G0；统一证据链、本文 schema，以及一组覆盖 source/package/
   installed/live/release 混层的合成正反例。
 - **允许 / 禁止访问**：允许只读文档与合成 evidence；禁止读取 runtime/账号，
   禁止借历史 PASS 自动填充当前字段。
 - **所需授权**：无需外部授权。
-- **目标证据层**：`SOURCE-CONTRACT`（证据文档合同本身），不产生产品能力证据。
+- **目标证据层**：`PRODUCTION-SOURCE`（证据文档合同本身），不产生产品能力证据。
 - **PASS**：每个正例保留层、scope、artifact identity 和 `NOT-RUN`；每个越层反例
   被拒绝，`RELEASE-METADATA` 不升级为 `PUBLIC-RELEASE`。
 - **FAIL**：任一 source/package/mock/installed/release 越层样例被接受，或
@@ -202,23 +217,26 @@ executable、打开 App、连接网络或读取用户状态。
 
 ## 5. B｜隔离 HOME + fixture/mock
 
-本节只冻结 B 类执行与判定合同，不保存运行状态；实际结果从
+本节只冻结 B 类 isolated-live 执行与判定合同，不保存运行状态；实际结果从
 [日期化调查索引](../evidence/investigations/README.md)进入。`B-RUNTIME-01` 和
 `B-PLATFORM-01` 只依赖各自 card 列出的 A 类前置；其余 B probe 都依赖
-`A-EVIDENCE-01=PASS` 和 `B-RUNTIME-01=PASS`；不得读取真实账号或发生外部
+`A-EVIDENCE-01=PASS`、`EXACT-ARTIFACT=PASS` 和 `B-RUNTIME-01=PASS`；不得读取真实账号或发生外部
 egress。
 
-### B-RUNTIME-01｜isolated runtime identity 与生命周期
+### B-RUNTIME-01｜CSSwitch → Gateway → Science production chain
 
-- **目标能力**：闭合 exact final artifact + Science 0.1.25 的 start、open/reopen、
-  status、stop、restart 与 executable/data-dir identity。
-- **前置与 fixture**：G1；A-EVIDENCE PASS；固定 final artifact 和 Science hash；
-  临时 HOME/data-dir/state；动态端口；loopback deterministic inference mock。
+- **目标能力**：从 exact CSSwitch artifact 的 production executable，经 registered
+  Tauri IPC / auto-boot、真实 Gateway sidecar 与真实 Science executable 闭合 start、
+  open/reopen、status、stop、restart 及 executable/data-dir identity。
+- **前置与 fixture**：G2；A-IPC、A-EVIDENCE 与 EXACT-ARTIFACT PASS；固定 CSSwitch
+  artifact / Gateway / Science hash；临时外层 HOME 及其下 data-dir/state；动态端口；
+  loopback deterministic provider fixture。不得以直接调用内部 Rust function、test-only
+  handler、mock CSSwitch executable 或 mock Science lifecycle 替代 production entry。
 - **允许 / 禁止访问**：允许 probe 根、loopback、目标 bundle 内 executable；
   禁止 `/Applications` 用户实例、真实 HOME、8765、外网和现有 daemon。
 - **所需授权**：仅 B 阶段隔离动态执行授权；无账号或凭证。
-- **目标证据层**：`FINAL-ARTIFACT` identity +
-  `CURRENT-INSTALLED-LIVE(scope=isolated-local-mock)`；分别记录。
+- **目标证据层**：`EXACT-ARTIFACT` identity +
+  `ISOLATED-LIVE(scope=csswitch-gateway-science,loopback-provider-fixture)`；分别记录。
 - **PASS**：每个生命周期动作返回与 inventory 一致的 identity；reopen 不产生
   第二 daemon；stop 释放归属端口；restart 保持指定 data-dir 且仍执行同一 binary。
 - **FAIL**：有效 fixture 下身份漂移、复用错误进程、状态与 inventory 矛盾、停止后
@@ -232,18 +250,18 @@ egress。
 
 - **目标能力**：按 read、write、request、grant、revoke、越界拒绝、artifact
   lineage 分 gate 验证本地核心对象。
-- **前置与 fixture**：G1；B-RUNTIME PASS；仅含合成文本/PDF/PNG/HTML 的 project
+- **前置与 fixture**：G2；B-RUNTIME PASS；仅含合成文本/PDF/PNG/HTML 的 project
   fixture；fixture 内允许目录与相邻禁止目录；deterministic model mock。
 - **允许 / 禁止访问**：只允许 fixture project 和显式 grant path；禁止真实文件、
   上级目录、网络、standing grant 复用到其他 run。
 - **所需授权**：B 阶段授权；grant 只针对合成 fixture，由执行者在测试 UI 明示。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-local-mock)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-local-mock)`。
 - **PASS**：每个 sub-gate 单独满足：未授权访问先请求；grant 后仅目标 scope 可读写；
   revoke 后拒绝；越界始终拒绝；artifact version/diff/preview/execution provenance
   可回读；annotation 定位和下一消息传递可观察。
 - **FAIL**：有效 fixture 下越界成功、revoke 后仍可访问、写错路径、lineage 指向
   错对象，或 UI/状态宣称成功但文件/record 不一致。
-- **INCONCLUSIVE**：mock 无法触发所需 Agent 行为、格式不被 0.1.25 支持、或只能
+- **INCONCLUSIVE**：mock 无法触发所需 Agent 行为、格式不被目标 Science 支持、或只能
   观察 UI 而不能核对持久状态。
 - **停止与清理 / 输出**：首次非 fixture 路径请求即停止；输出 permission events、
   fixture tree before/after、artifact/annotation assertion，不保存正文。
@@ -252,41 +270,45 @@ egress。
 
 - **目标能力**：只验证本地 UI/surface、状态变更和 outbound request 形态，不验证
   Anthropic entitlement 或 Reviewer 质量。
-- **前置与 fixture**：G1；B-RUNTIME 与 B-CORE PASS；deterministic model mock
+- **前置与 fixture**：G2；B-RUNTIME 与 B-CORE PASS；deterministic model mock
   记录脱敏 request envelope；两 project、两个 session 的合成标记。
 - **允许 / 禁止访问**：允许 fixture session/state 和 loopback recorder；禁止真实
   Claude endpoint、账号、Web Search 或把 mock response 当 Reviewer success。
 - **所需授权**：B 阶段授权；无账号/凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-request-shape)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-request-shape)`。
 - **PASS**：plan approve/reject、delegation、fork/restore、memory save/search/
   compaction 和 Reviewer/Specialist surface 各有独立可观察状态或 request shape；
   project/session 标记不串域；服务端结果保持未验证。
 - **FAIL**：有效 local fixture 下操作落错 session/project、fork 覆盖源状态、
   memory 串域，或 request shape 与选定动作矛盾。
-- **INCONCLUSIVE**：0.1.25 只在 entitlement 后暴露入口，或 recorder 不能区分
+- **INCONCLUSIVE**：目标 Science 只在 entitlement 后暴露入口，或 recorder 不能区分
   动作；对应 sub-gate 不作推断。
 - **停止与清理 / 输出**：任何真实服务 destination 立即停止；输出 surface matrix、
   state transitions 和脱敏 request schema。
 
 ### B-SKILL-01｜外部 Skill 六阶段闭环
 
-- **目标能力**：GitHub install → attach → Agent load → tool/poll → uninstall →
-  restart persistence 逐阶段验证。
-- **前置与 fixture**：G1；B-RUNTIME PASS；本地 loopback Git server 或精确打包的
+- **目标能力**：从 exact artifact 的 Science Agent 加载受管 route/connector，调用
+  `csswitch-skill-installer` MCP 的 `install_external_skill`，再按 GitHub install → attach →
+  Agent load → tool/poll → uninstall → restart persistence 逐阶段验证。
+- **前置与 fixture**：G2；B-RUNTIME PASS；artifact 中的 `skill-install-mcp`、受管
+  route 与 connector identity 已核对；本地 loopback Git server 或精确打包的
   无网络 GitHub-response fixture；CSSwitch-owned Skill package；deterministic
   echo tool/poll。
 - **允许 / 禁止访问**：只允许 fixture repository、probe Skill roots 和 loopback；
   禁止公网 GitHub、真实 `~/.csswitch/skills`、用户 Science Skill 与任意 package code
-  越出 fixture。
+  越出 fixture；禁止直接调用 installer core/helper、直接执行 `skill-install-mcp` 或
+  使用 test-only host 注入绕过 Science Agent → managed MCP production route。
 - **所需授权**：B 阶段授权；无 GitHub/账号凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-skill-fixture)`。
-- **PASS**：六阶段各自有 identity/receipt；load 发生在目标 session；tool/poll
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-skill-fixture)`。
+- **PASS**：Science Agent request、managed connector、packaged Gateway MCP 与
+  `install_external_skill` tool identity 可串联；六阶段各自有 identity/receipt；load 发生在目标 session；tool/poll
   返回 fixture nonce；uninstall 只移除 owned package/binding；restart 后预期的
   attached/detached 与 load 状态可回读。
 - **FAIL**：attach 被当 load、tool 未执行却宣称成功、poll 串 run、卸载越界，或
   restart 状态与 receipt 冲突。
-- **INCONCLUSIVE**：fixture transport 不能代表 installer 输入、Agent mock 不触发
-  load/tool，或只能证明前若干阶段。
+- **INCONCLUSIVE**：fixture transport 不能经 production MCP route 表达 installer 输入、
+  Science Agent 未调用 managed tool / 未触发 load，或只能证明前若干阶段。
 - **停止与清理 / 输出**：任何公网请求或真实 Skill root 访问即停止；输出六阶段
   ledger、route revision、receipt 和 owned-path cleanup。
 
@@ -294,12 +316,12 @@ egress。
 
 - **目标能力**：验证 generic local stdio MCP 的注册、工具发现、permission、
   调用和 restart；不把外部 Skill 内部 MCP 自动外推为通用管理支持。
-- **前置与 fixture**：G1；B-RUNTIME PASS；固定 hash 的无网络 stdio echo server，
+- **前置与 fixture**：G2；B-RUNTIME PASS；固定 hash 的无网络 stdio echo server，
   最小 command/args/env，合成 nonce。
 - **允许 / 禁止访问**：允许启动该 fixture executable 和 pipe；禁止 shell 扩展、
   用户 env、文件/网络访问及任何其他 command。
 - **所需授权**：B 阶段授权；无账号/凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-local-stdio)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-local-stdio)`。
 - **PASS**：注册 identity 准确；只发现预期 tool；permission scope 正确；调用返回
   nonce；restart 后按配置语义恢复；fixture 进程被精确清理。
 - **FAIL**：命令/env 被篡改、额外 tool 暴露、未授权调用成功、restart 丢/串配置，
@@ -313,12 +335,12 @@ egress。
 
 - **目标能力**：分别验证 legacy SSE 与 Streamable HTTP 的连接、tool discovery、
   permission、调用、断线恢复，以及 network preference 是否影响该流量。
-- **前置与 fixture**：G1；B-RUNTIME PASS；两个仅 loopback、固定协议行为的 MCP
+- **前置与 fixture**：G2；B-RUNTIME PASS；两个仅 loopback、固定协议行为的 MCP
   server；A/B run 除 network preference 外完全相同。
 - **允许 / 禁止访问**：只允许 manifest 中的 loopback URL；禁止 DNS、OAuth、
   任意 header secret、外部 CONNECT 和 hosted endpoint。
 - **所需授权**：B 阶段授权；使用假 header，不用真实 OAuth。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-loopback-remote-mcp)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-loopback-remote-mcp)`。
 - **PASS**：两 transport 各自完成 discovery/permission/call/reconnect；A/B 的
   request path 与结果可归因于 preference，未受控差异为零。
 - **FAIL**：有效 fixture 下协议路由错误、tool/auth scope 混淆、permission 绕过，
@@ -332,12 +354,12 @@ egress。
 
 - **目标能力**：区分 starter/task env、Python/R kernel、shell、Node、persistent
   env package、inline package 和 compute monitor。
-- **前置与 fixture**：G1；B-RUNTIME PASS；合成 project；离线 wheel/R package/
+- **前置与 fixture**：G2；B-RUNTIME PASS；合成 project；离线 wheel/R package/
   npm fixture；小型 CPU/time/memory workload；每个 runtime 唯一 nonce。
 - **允许 / 禁止访问**：只允许 probe env/cache 和离线 package；禁止 root、sudo、
   apt、外网 registry、GPU、用户 Conda/R/Node 环境。
 - **所需授权**：B 阶段授权；无账号/凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-local-environment)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-local-environment)`。
 - **PASS**：Python/R/shell/Node 各自标出 owner/scope；named env 跨 project 的实际
   行为、kernel 隔离、persistent/inline package 在 restart 前后按预期分离；
   compute monitor 对 fixture workload 可归属。
@@ -352,12 +374,12 @@ egress。
 
 - **目标能力**：验证 whole-app 双端口、preview origin、data-dir、CLI import 和
   rollback 边界；不与本机 SSH remote compute 合并。
-- **前置与 fixture**：G1；A-EVIDENCE PASS；固定 0.1.25 Linux/WSL package；
+- **前置与 fixture**：G2；A-EVIDENCE 与 EXACT-ARTIFACT PASS；固定目标 Science Linux/WSL package；
   专用可丢弃 VM/WSL 实例、全新用户、合成 import archive、动态端口。
 - **允许 / 禁止访问**：只允许实例内部 fixture 与由宿主明确映射的 loopback；
   禁止挂载用户 HOME、SSH key、真实项目、外网和共享 credential store。
 - **所需授权**：B 阶段专用实例授权；无账号/凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=disposable-linux-or-wsl-local-mock)`；
+- **目标证据层**：`ISOLATED-LIVE(scope=disposable-linux-or-wsl-local-mock)`；
   Linux 与 WSL 分 case。
 - **PASS**：web/preview 两端口身份不混；origin 限制符合 fixture；data-dir 重启可
   回读；import 只影响目标实例；rollback 恢复指定 snapshot 且不越界。
@@ -372,12 +394,12 @@ egress。
 
 - **目标能力**：验证 loopback fake S3-compatible 的 registration/import 请求，
   以及无凭证 Featured connector 的本地 registration surface；不声称真实服务调用。
-- **前置与 fixture**：G1；B-RUNTIME PASS；loopback fake object store、合成 bucket/
+- **前置与 fixture**：G2；B-RUNTIME PASS；loopback fake object store、合成 bucket/
   object、假 credentials；无网络 Featured registration fixture。
 - **允许 / 禁止访问**：只允许 fixture endpoint/bucket；禁止真实 cloud host、
   metadata service、Featured destination、用户凭证和非预期上传。
 - **所需授权**：B 阶段授权；只用假凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-registration-and-fake-data)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-registration-and-fake-data)`。
 - **PASS**：S3-compatible registration、list/read/import 的 endpoint、bucket、
   auth shape 和对象 hash 匹配；Featured 只判 registration surface；两者分开。
 - **FAIL**：有效 fixture 下发往错误 endpoint、上传未授权对象、凭证出现在日志，
@@ -390,12 +412,12 @@ egress。
 ### B-SSH-01｜Science parser acceptance
 
 - **目标能力**：只验证 Science 对合成 SSH config/Host alias 的 parser acceptance。
-- **前置与 fixture**：G1；A-SSH 与 B-RUNTIME PASS；probe HOME 下合成 `.ssh/config`
+- **前置与 fixture**：G2；A-SSH 与 B-RUNTIME PASS；probe HOME 下合成 `.ssh/config`
   和不存在的 recorder destination；覆盖 Include、Host、ProxyJump 与拒绝样例。
 - **允许 / 禁止访问**：只允许读取 fixture config；禁止执行 ssh、读取用户
   `~/.ssh`、key/agent/known_hosts 或建立 socket。
 - **所需授权**：B 阶段授权；无 server/SSH 凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-parser-only)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-parser-only)`。
 - **PASS**：接受/拒绝矩阵与 fixture 逐例一致；只证明 parser，不记录 connectivity。
 - **FAIL**：有效 fixture 下接受危险/越界 path、拒绝合同内安全 alias，或读取用户
   config。
@@ -408,12 +430,12 @@ egress。
 
 - **目标能力**：无网络证明 wrapper identity、`/usr/bin/ssh -F`、Include 与 env
   传递；不连 server。
-- **前置与 fixture**：G1；A-SSH、B-RUNTIME、B-SSH-01 PASS；固定 wrapper；
+- **前置与 fixture**：G2；A-SSH、B-RUNTIME、B-SSH-01 PASS；固定 wrapper；
   只记录 argv/env/path 的无网络 recorder 与合成 config。
 - **允许 / 禁止访问**：允许执行 fixture wrapper/recorder 和只读验证
   `/usr/bin/ssh` identity；禁止真实 connect、用户 config/key/agent、DNS 和 socket。
 - **所需授权**：B 阶段授权；无 server/SSH 凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-invocation-only)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-invocation-only)`。
 - **PASS**：wrapper hash/owner/mode/nlink 符合 A 期望；argv 精确包含预期
   `/usr/bin/ssh -F <fixture>` 语义；Include/env 只来自 fixture；recorder 证明没有
   network syscall。
@@ -427,12 +449,12 @@ egress。
 
 - **目标能力**：验证 Science 原生 Plugin 最小 lifecycle surface；不测试 CSSwitch
   通用 Plugin 管理（该管理面是非目标）。
-- **前置与 fixture**：G1；A-PLUGIN PASS 且找到明确可执行的 Science 原生入口；
+- **前置与 fixture**：G2；A-PLUGIN PASS 且找到明确可执行的 Science 原生入口；
   B-RUNTIME PASS；无 hooks/MCP/agents/网络/文件权限的最小合成 Plugin。
 - **允许 / 禁止访问**：只允许 fixture Plugin 与 probe state；禁止 hooks、MCP、
   agents、用户 marketplace、真实 Plugin 和外部下载。
 - **所需授权**：B 阶段授权；无账号/凭证。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=isolated-native-plugin-fixture)`。
+- **目标证据层**：`ISOLATED-LIVE(scope=isolated-native-plugin-fixture)`。
 - **PASS**：A 已确认的最小 install/enable/disable/remove/restart sub-gate 按实际
   入口闭合，identity 和 state 可回读；未在 A 确认的生命周期仍保持 NOT-RUN。
 - **FAIL**：有效入口/fixture 下状态与 UI/record 冲突、remove 越界、restart 恢复
@@ -442,7 +464,7 @@ egress。
 - **停止与清理 / 输出**：出现下载、hook/MCP/agent 执行或用户 marketplace 访问
   立即停止；输出 lifecycle matrix、state diff、identity 和 cleanup。
 
-## 6. C｜另行明确授权
+## 6. C｜Authorized live：逐项明确授权
 
 每个 C case 必须有独立授权记录，至少写明 probe ID/subcase、账号/组织/
 destination、允许的数据、凭证注入方式、请求/费用上限、取消方式、时间窗和证据
@@ -452,12 +474,12 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 
 - **目标能力**：对一个明确开放、无需账号的文献 source 或 Featured connector
   做最小只读网络请求。
-- **前置与 fixture**：G3；相关 B-DATA PASS；固定公开 URL、许可/robots/请求方法、
+- **前置与 fixture**：G4；相关 B-DATA PASS；固定公开 URL、许可/robots/请求方法、
   响应大小和一次请求上限；合成查询词。
 - **允许 / 禁止访问**：只允许授权 URL 和必要重定向 allowlist；禁止登录、paywall
   绕过、cookie、上传、本地文件及第二 destination。
 - **所需授权**：逐 URL 的公开网络访问授权；任何凭证/付费提示使授权失效。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=authorized-public-source)`。
+- **目标证据层**：`AUTHORIZED-LIVE(scope=authorized-public-source)`。
 - **PASS**：目标 runtime 发出不超过上限的只读请求，返回公开内容/metadata，
   destination、license boundary 和无上传可核对。
 - **FAIL**：有效公开 fixture 下请求路径错误、发生非预期上传/额外 destination，
@@ -470,12 +492,12 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 
 - **目标能力**：逐项验证 Web Search、catalog、Directory、hosted MCP、Plugin 和
   Reviewer entitlement；不得聚合成一个账号 PASS。
-- **前置与 fixture**：G2；相关 B-CONTEXT/B-MCP/B-PLUGIN 已有结果；专用测试账号、
+- **前置与 fixture**：G3；相关 B-CONTEXT/B-MCP/B-PLUGIN 已有结果；专用测试账号、
   空白 profile/project、明确订阅与 region；每项单独 case。
 - **允许 / 禁止访问**：只允许测试账号和该项官方 endpoint；禁止个人账号、真实
   历史、联系人、私人 connector、跨项浏览或修改订阅。
 - **所需授权**：逐 capability 的测试账号授权；token 只注入隔离进程且不记录。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=test-account,<capability>,<plan>,<region>)`。
+- **目标证据层**：`AUTHORIZED-LIVE(scope=test-account,<capability>,<plan>,<region>)`。
 - **PASS**：目标入口、entitlement 决定、最小调用和结果 identity 对该 capability
   一致；各项单独判定，Reviewer 只证明实际输入/输出边界，不声称方法质量。
 - **FAIL**：账号 entitlement 明确有效且 fixture 合法，但目标调用可复现地违背
@@ -489,14 +511,14 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 
 - **目标能力**：在测试组织和专用设备上分别验证 analytics/Admin API、telemetry、
   organization policy、offboarding 与设备本地残留。
-- **前置与 fixture**：G2；`B-RUNTIME-01`、`B-CORE-01` 和 `B-CONTEXT-01` PASS；
+- **前置与 fixture**：G3；`B-RUNTIME-01`、`B-CORE-01` 和 `B-CONTEXT-01` PASS；
   专用组织、管理员/成员测试身份、可擦除设备或 VM、合成 project；server-side
   与 device-local inventory 基线。
 - **允许 / 禁止访问**：只允许测试组织/设备和合成数据；禁止生产组织、个人设备、
   真实成员、真实项目和跨 tenant 查询。
 - **所需授权**：组织 owner 对角色、endpoint、telemetry capture、offboarding 和
   设备检查逐项授权。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=test-org,test-device,<control>)`。
+- **目标证据层**：`AUTHORIZED-LIVE(scope=test-org,test-device,<control>)`。
 - **PASS**：每个 control 单独闭合；offboarding 同时记录 server access 变化与本地
   artifact/state 残留，二者不互相外推。
 - **FAIL**：有效测试组织下策略未生效、API 越权、telemetry 超出声明，或把服务端
@@ -514,13 +536,13 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 
 - **目标能力**：Modal、BioNeMo/inference endpoint、真实 cloud、付费文献和 GPU
   五类各自独立验证；本 probe ID 不是共享授权。
-- **前置与 fixture**：G3；对应 B-ENV 或 B-DATA PASS；每类固定 service/region、
+- **前置与 fixture**：G4；对应 B-ENV 或 B-DATA PASS；每类固定 service/region、
   最小合成输入、请求/费用/运行时上限、取消命令和资源标签。
 - **允许 / 禁止访问**：只允许该 subcase 的 service/resource；禁止跨 service、
   生产 bucket、真实科研数据、无限重试、后台常驻和未授权模型/region。
 - **所需授权**：每类单独授权最小权限凭证、最高费用、最大时长、数据与删除/
   取消方式；GPU 只用专用无秘密主机。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=<service>,<region>,<resource>,<budget>)`。
+- **目标证据层**：`AUTHORIZED-LIVE(scope=<service>,<region>,<resource>,<budget>)`。
 - **PASS**：该 subcase 的 submit/read-or-result/cancel-or-complete/cleanup 全闭合，
   费用和资源不超过上限；cloud read/write/delete、付费文献许可、GPU sandbox 风险
   分别记录。
@@ -536,13 +558,13 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 
 - **目标能力**：在一个专用 server 上分别验证 parser、host key、auth、network 和
   最小远端命令；不把任一阶段合并。
-- **前置与 fixture**：G3；A-SSH、B-SSH-01/02 PASS；专用测试 host/user、固定 host
+- **前置与 fixture**：G4；A-SSH、B-SSH-01/02 PASS；专用测试 host/user、固定 host
   key fingerprint、最小目录和无秘密命令；连接/命令次数上限。
 - **允许 / 禁止访问**：只允许授权 host/port/user 和测试目录；禁止用户真实
   key/agent、ProxyJump 到其他 host、sudo、scheduler/生产目录和任意转发。
 - **所需授权**：逐 host 的 server owner 授权；专用短期 credential 由用户注入
   隔离进程，不读取内容。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=authorized-test-ssh-server)`。
+- **目标证据层**：`AUTHORIZED-LIVE(scope=authorized-test-ssh-server)`。
 - **PASS**：parser、host-key verification、auth、network 和 allowlisted remote
   command 各自 PASS；命令只创建/读取/删除 nonce 文件，server 无残留。
 - **FAIL**：有效 server/credential 下 host key 未校验、连接错误 host/user、
@@ -556,13 +578,13 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 
 - **目标能力**：验证一个明确 provider/model/region 的认证、模型身份、最小非流式/
   流式请求、配额错误和停止后的路由恢复。
-- **前置与 fixture**：G3；B-RUNTIME PASS；专用 provider project/key、固定 model
+- **前置与 fixture**：G4；B-RUNTIME PASS；专用 provider project/key、固定 model
   ID、合成 prompt、请求/token/费用上限和无自动重试。
 - **允许 / 禁止访问**：只允许授权 provider origin/model；禁止模型自动替换、
   其他 provider、用户真实 prompt/file、训练/存储 opt-in 和未授权遥测。
 - **所需授权**：逐 provider/model 的最小权限 credential、预算、region 和数据
   retention 授权；credential 仅注入隔离进程。
-- **目标证据层**：`CURRENT-INSTALLED-LIVE(scope=<provider>,<model>,<region>,<quota>)`。
+- **目标证据层**：`AUTHORIZED-LIVE(scope=<provider>,<model>,<region>,<quota>)`。
 - **PASS**：upstream identity、selector、实际响应 model、stream/non-stream 和
   usage receipt 一致；故意超出一个受控软限额时错误分类正确且不 fallback；stop 后
   不遗留该 route。
@@ -579,11 +601,12 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 新执行任务按未闭合项及其依赖选择下列批次，不能因为较早批次已有部分 evidence
 就整批重跑，也不能跳过未满足前置：
 
-1. A 静态批次：只运行缺失、失效或因目标版本变化需要重验的项目；
-2. B 基础批次：`B-RUNTIME-01` 未取得有效 PASS 时按其 evidence 限制处理；
-3. B 能力批次：按已满足依赖选择独立 probe，一次只共享一个受管 runtime；
-4. C 账号/组织批次：每个 capability/control 单独授权；
-5. C 外部批次：每个 destination/service/server/provider 单独授权。
+1. A source 批次：只运行 current owner / caller / fixture 发生变化或尚未闭合的项目；
+2. exact artifact 批次：只有另获构建授权后，才从同一 exact source 生成并核对 artifact / Science identity；
+3. B isolated-live 基础批次：`B-RUNTIME-01` 未取得有效 PASS 时按其 evidence 限制处理；
+4. B isolated-live 能力批次：按已满足依赖选择独立 probe，一次只共享一个受管 runtime；
+5. C authorized-live 账号/组织批次：每个 capability/control 单独授权；
+6. C authorized-live 外部批次：每个 destination/service/server/provider 单独授权。
 
 每批完成后使用不继承上下文的 reviewer，只读取本规格、该批 evidence、必要索引与
 最多两份目标正文。reviewer 必须按 BLOCK/HIGH/MEDIUM/LOW 报告证据越层、安全边界、
@@ -592,5 +615,5 @@ MEDIUM/LOW 进入 evidence 限制，不得静默升级。
 
 只有 actual evidence 写入并通过相应审查后，才能更新日期化 audit/evidence。产品
 能力或稳定 owner/边界真的变化时，才同步 feature/architecture；规格 PASS 本身
-不自动改变产品状态。未取得的 current live 项始终保留
-`NOT-RUN(target=CURRENT-INSTALLED-LIVE)`。
+不自动改变产品状态。未取得的项按目标层保留
+`NOT-RUN(target=EXACT-ARTIFACT|ISOLATED-LIVE|AUTHORIZED-LIVE)`。

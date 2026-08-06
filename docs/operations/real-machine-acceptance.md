@@ -1,8 +1,8 @@
-# CSSwitch 真机验收
+# CSSwitch 生产链路验收
 
 状态：当前运维合同
 
-适用范围：跨版本累积的 RM 编号与当前候选验收流程。每次执行前必须针对目标版本复核命令和 gate，并记录 exact commit / artifact、环境和结果；矩阵存在不表示任一项已经通过。发布附件的既有结果见对应 [release evidence](../evidence/releases/README.md)。
+适用范围：重要重构决策的 production source、exact artifact、isolated-live、authorized live 验收，以及跨版本累积的 RM 场景目录。每次执行前必须针对目标候选复核 production owner / caller、命令和 gate，并记录 exact commit / artifact、环境、授权与结果；映射或场景存在不表示任一项已经通过。发布附件的既有结果见对应 [release evidence](../evidence/releases/README.md)。
 
 ## 1. 安全护栏
 
@@ -13,9 +13,40 @@
 - 已安装 CSSwitch 正在运行时，不强退用户实例；构建独立 bundle ID 的 Acceptance app。
 - Gateway / Science 端口由 guard 动态分配并避开 `8765`、`1455`、`1457`；Codex 上游 OAuth callback 兼容端口仍固定尝试 `1455` / `1457`，guard 只检查至少一个空闲，不停止占位进程。
 - 真实 provider、真实 Claude 登录和真实 SSH server 测试必须单独获得授权。
+- 构建 artifact、运行真实 Science 的 isolated-live，以及每个真实 provider / Skill / SSH / 账号 subcase 都是相互独立的授权；source seal、文档修改或相邻 live PASS 不包含这些授权。
 - 截图与日志只保留端口、PID、状态码、profile 名称和脱敏摘要，不含 key、path secret 或 nonce。
 
-## 2. 自动化基线
+## 2. 唯一证据链
+
+所有重要重构决策只沿以下顺序晋升，旧 R3–R11、R4/R5、S7、Post-D0/Post-Q0 或其他阶段编号不再提供 NEXT、授权或验收顺序：
+
+| 层 | 必须回答 | 进入条件与授权 | 不能外推 |
+|---|---|---|---|
+| `production source` | current owner、production caller / auto-boot、failure boundary 与确定性 fixture 是否在同一 exact source 上闭合 | 实时冻结 clean exact HEAD；完成 fresh source review 与完整 source gate | 不能外推可构建、包内身份或 runtime 行为 |
+| `exact artifact` | 是否由同一 exact source 生成；Desktop、Gateway、resource、manifest、版本与 hash 是否同源且可核对 | `production source=PASS`；必须另获构建授权 | 不能外推 executable 已运行、Science 可启动、provider 可用或已安装 App |
+| `isolated-live` | exact artifact 的 CSSwitch production executable 是否经注册 Tauri IPC / auto-boot 走到真实 Gateway 与真实 Science production entry，并在隔离状态下完成目标 normal wiring | `exact artifact=PASS`；另获真实 Science 隔离测试授权；全新外层 HOME、其下 data-dir/state、假凭证、loopback fixture、动态端口和可归属进程 | 不能外推真实账号、provider、Skill 领域执行、SSH server、installed App、签名或 release |
+| `authorized live` | 一个明确 Science/provider/model/Skill/SSH/account capability 是否在授权 scope 内取得真实结果 | 依赖的 `isolated-live=PASS`；每个对象、capability、凭证范围、预算、数据和停止方式单独授权 | 一个 happy path 不代表其他 provider/model/capability，也不证明 crash/race/replay |
+
+每层结果只使用 `PASS`、`FAIL`、`INCONCLUSIVE` 或 `NOT-RUN`，并绑定 exact identity、scope 和证据位置。`PASS` 不能跨层继承；修复导致 identity 或 source 改变时，受影响层及其下游全部失效。installed runtime、signing/notarization 与 public release 仍是额外独立层，不能混入上述四层。
+
+crash window、race、replacement、compensation、replay、CAS drift、partial write 和超时清理属于确定性故障合同。它们必须以 production entry 对应的 fixture / fault injection 证明，并在 source seal 中确认 fixture 没有绕开 owner；不要求用 live 破坏真实状态，也不能用一次 isolated/authorized happy path 冒充。
+
+## 3. 重要重构决策映射
+
+本节是当前唯一的 decision / production owner / caller / failure proof 映射。架构正文拥有稳定机制；本表只把它们接到统一证据链，不复制实现细节。每次 source seal 必须实时复核路径和符号，不能把本表或历史 audit 当作源码事实。
+
+| 重要重构决策 | Production owner 与 caller | Failure boundary 与确定性证明 | Exact artifact / isolated-live / authorized-live 的最低闭合点 |
+|---|---|---|---|
+| 一键入口、Gateway / Science 启动与 finalize | frontend `desktop/src/runtime-controller.js` → registered `commands::runtime::one_click_login` → `commands/runtime/one_click.rs` → `runtime/sandbox_session/one_click.rs` / `one_click/cold.rs`；Gateway 由 `runtime/proxy_lifecycle.rs` façade，Science 由 `runtime/science/host_adapter.rs`，consumer readback 由 `runtime/finalize_consumer.rs` 拥有 | typed entry/phase/failure、cold/healthy/recovery 分支、启动失败与 finalize replay 使用 `commands/runtime/tests.rs`、`runtime/sandbox_session/transaction_tests/` 和对应 exact ignored fixtures | artifact 必须含同源 Desktop/Gateway/Science scripts；isolated-live 必须由 CSSwitch executable 的 production IPC/auto-boot 贯通真实 Gateway + Science，而非直接调用内部函数；真实 provider/Science capability 逐项授权 |
+| runtime mutation 与 stop ownership | `lifecycle.rs::RuntimeMutationLease` 声明 mutation domain；registered `set_mode` / `set_settings` / `stop_all` / `quit_app` 由 `commands/runtime/lifecycle.rs` 编排；registered `clear_profile_key` / `delete_profile` 的 destructive mutation 由 `commands/profiles.rs` 拥有；Codex mutation / downgrade caller 在 `commands/codex.rs`，native-exit caller 在 `lib.rs` | owner claim、锁外 wait、generation + full identity CAS、replacement preservation 由 `commands/runtime/tests.rs` 的 race/replacement fixture 证明；downgrade/native-exit sibling gap 保持开放，不因其他 caller PASS 补绿 | artifact 核对注册面；isolated-live 只跑 normal lifecycle，replacement/race 破坏分支保留 fixture；真实 normal stop 需单独 Science 授权 |
+| authority finalize、compensation 与 replay | `runtime/sandbox_session/authority_transaction.rs` 拥有 protected capture/restore/cleanup façade；`one_click/cold.rs`、`one_click/cold/compensation.rs`、`pending_cleanup.rs` 与 finalize/replay entry 组合生产路径 | crash-before/after intent、step outcome 丢失、CAS drift、fresh replay 与 cleanup ownership 使用 `runtime/sandbox_session/transaction_tests/` 及 fault injection；diagnostic text 不参与控制流 | artifact 要含同源 production executable/scripts；isolated-live 只证明 normal production entry；真实 happy path 可授权，crash / compensation / replay window 不进入 live |
+| history full-snapshot recovery | frontend history choice → registered `restore_history_choice` → `commands/runtime/one_click.rs` → `runtime/sandbox_session/history_recovery.rs`；resume 只消费 exact terminal handoff 后重入既有 one-click owner | sibling config writer、credential interrupt、restore interrupt、fresh replay 与 exact record CAS 使用 transaction tests / synthetic history fixture；真实用户 history 不是 fixture | isolated-live 使用合成 history + production IPC 完成 restore-only / restore-and-resume；默认不读取真实用户历史，真实账号/history 若确需测试必须另行授权 |
+| Science host adapter 与 Skill host bridge | `runtime/science/host_adapter.rs` 拥有 typed launch/stop host projection；本地 picker 经 registered `install_local_skill_package` → `commands/skill_install.rs`；显式 route repair 经 registered `repair_skill_route` → `commands/diagnostics.rs` → `force_third_party_reconcile`，两者都使用短 `HostBridge` lease。外部 GitHub Skill 的 production caller 是 Science Agent → managed `csswitch-skill-installer` MCP；`runtime/skill_install_bridge.rs` 注册 connector，打包 Gateway 的 `skill-install-mcp` / `install_external_skill` 实现在 `desktop/gateway/src/skill_install.rs` | host receipt/context drift、attach partial success、route-state marker persistence 与 cleanup 用假 Skill package、loopback tool/poll 和 fixture Science data-dir；source fixture 不声明 Science Agent 重启后的 Skill load persistence，不得访问真实 Skill root，也不得直接调用 installer helper 绕过 Agent/MCP route | artifact 核对 host scripts、managed route/connector 与 installer resources；isolated-live 分别从 local picker、repair IPC 和 Agent/MCP production caller 记录 install、attach、load、trigger、restart、uninstall、detach，并证明 Agent load 的重启持久性；真实 Skill / domain execution 每项授权 |
+| provider protocol capabilities | profile selection/connection 由 `commands/profiles.rs`；one-click 将 effective profile 交给 `runtime/proxy_lifecycle.rs` façade；`runtime/provider.rs` 通过 `provider_contracts.rs` 生成并绑定 typed launch plan，Desktop 与打包 Gateway 共同编译、校验 `catalog/provider-contracts.v1.json` 的 exact contract id/digest；`runtime/capability_catalog.rs` 加载的 `catalog/capabilities.v1.json` 仅拥有 diagnostics/evidence rules，不是启动合同 source of truth；provider adapter 在打包 Gateway | malformed stream、tool loop、reasoning/signature、error classification、cancel/retry 等以 deterministic upstream fixture 证明，不能让 live provider 承担故障注入 | artifact 核对 Gateway identity 与 `provider-contracts.v1.json` exact digest，并把 diagnostics catalog 分开记录；isolated-live 用 loopback provider fixture 经真实 CSSwitch → Gateway → Science；authorized-live 按 provider + model + stream/tools/reasoning/error 分项，不以 text PASS 汇总 |
+
+本表未给任何行写入 PASS。当前 actual 缺口只在[known issues](../../.agents/context/known-issues.md)登记；执行结果进入绑定日期、SHA、artifact 和环境的 audit/evidence。
+
+## 4. Source 自动化基线
 
 ```bash
 GATE_ROOT="$(mktemp -d /private/tmp/csg.XXXXXX)"
@@ -29,7 +60,9 @@ bash test/run_all.sh --output-root "$GATE_ROOT"
 按本矩阵分别取证。Python 仅供测试驱动与 mock 使用；产品 runtime proxy 是 Rust
 sidecar。
 
-## 3. 先在开发 HOME 构建
+## 5. Exact artifact 构建
+
+以下构建步骤只有在用户对该 exact candidate 明确授权后才允许执行；Authority migration、source seal 或文档门禁都不包含构建授权。
 
 ```bash
 DEV_HOME="$HOME"
@@ -44,11 +77,11 @@ DEV_HOME="$HOME"
 
 任何构建只要存在 `CSSWITCH_SKIP_GATEWAY_STAGE` 都会直接失败；普通构建也不得复用 Acceptance 残留，Desktop 与 Gateway 必须由同一次同 feature 构建产生。artifact 验收要核对包内 Gateway 存在、可执行、与 Desktop 同次构建，并在全新隔离 `HOME` 执行包内 `csswitch-gateway codex-auth status`，确认退出码为 `0`、返回 `reason=state_missing` 且不生成状态文件，不能只证明文件存在。正常构建不启用 Acceptance feature，固定 `$HOME/.csswitch`；Acceptance 固定 `$HOME/.csswitch-acceptance`，两种构建都没有运行时改写入口。必须在导出隔离 `HOME` **之前**构建；否则 `$HOME/.rustup` 会指向空的测试 HOME。
 
-### 3.1 历史共享根候选
+### 5.1 历史共享根候选
 
 2026-07-17 早期 Acceptance 候选曾错误共享正式 `$HOME/.csswitch`；该候选已经被编译期隔离根方案取代，不属于当前构建、安装或恢复步骤。历史影响与当时停线边界只在[日期化 Acceptance 证据](../evidence/investigations/2026-07-17-codex-browser-only-acceptance.md)中保留。当前流程不得寻找、复用或操作旧共享根候选，也不得据此读取或修改真实配置。
 
-## 4. 隔离准备与启动
+## 6. Isolated-live 准备与启动
 
 每轮使用新的 root，避免覆写上一轮验收证据：
 
@@ -93,7 +126,7 @@ HOME="$HOME" CSSWITCH_REPO="$CSSWITCH_REPO" \
   "$CSSWITCH_REPO/desktop/src-tauri/target/release/bundle/macos/CSSwitch Test.app/Contents/MacOS/desktop"
 ```
 
-### 4.1 Codex 的停线点
+### 6.1 Codex 的停线点
 
 首次启动后先完成 RM-42 的 bundle ID、隔离目录、端口和 `8765` 检查。打开“高级”确认 Codex 实验开关默认关闭；此时诊断必须报告 `auth=not_checked`，且不能因查看页面而读取 OAuth 文件或启动 OAuth。
 
@@ -109,9 +142,9 @@ bash test/real_machine_guard.sh guard
 
 若 8765 PID 变化，或真实用户目录被碰触，立即停止并把该次验收记为失败 / 证据污染。
 
-## 5. 当前验收矩阵
+## 7. RM 场景目录（非路线）
 
-RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 provider / Codex / 会话恢复回归沿用后续编号，避免源码注释和旧证据错指。矩阵是执行清单，不表示最终公开 DMG 已逐项全部通过。
+RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 provider / Codex / 会话恢复回归沿用后续编号，避免源码注释和旧证据错指。RM 编号只是跨版本场景引用，不是阶段路线、NEXT 或授权；实际执行必须先落到第 3 节的某项重要决策和证据层。矩阵存在不表示最终公开 DMG 已逐项通过。
 
 | ID | 场景 | 操作 | 必须满足 |
 |---|---|---|---|
@@ -137,7 +170,7 @@ RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 p
 | RM-20 | explicit / updater / cache preflight | 合法 / 非法 `SCIENCE_BIN`，身份/权限/路径合法与非法的 updater，App 缺失与 cache 组合 | override 无效 fail closed；检测到非法 updater 时显式报错，不静默回退旧 App；cache 仅版本可读时提供 one-shot；选择不持久化 |
 | RM-21 | Science 升级与强身份 | stopped-to-started 前加入新 updater runtime；再恢复 / stop；运行中替换 source candidate；模拟 stop CLI 返回 0 但 listener 未退出 | 新 snapshot + 原隔离 data-dir；启动 / 恢复 / stop 核对 PID、含 SHA-256 的 binary fingerprint、data-dir、port；运行中替换 source 不影响当前 snapshot，停止后下次启动选择新 snapshot；CLI 假成功时只终止前后均精确匹配的 PID并确认端口关闭；UI status 仍只代表 HTTP health |
 | RM-22 | Skill Agent 控制面 | 首次配置、重复启动、注入中途失败 | 管理固定 route / connector / `customize` / prompt；成功 marker 后跳过重复；失败 warning 且如实报告可能的部分配置 |
-| RM-23 | 外部 Skill 安装 | 精确公开 GitHub URL | connector -> host approval -> commit -> native attach -> `skill()` load，各阶段分开记录 |
+| RM-23 | 外部 Skill 安装 | exact artifact 的 Science Agent 经 managed `csswitch-skill-installer` MCP 调用 `install_external_skill`；fixture 使用精确公开 GitHub 形态的 URL | Agent request → packaged `skill-install-mcp` → host approval → commit → native attach → `skill()` load，各阶段分开记录；不得直接调用 installer helper |
 | RM-24 | Skill 重启 / 卸载 | 同 data-dir 重启，再卸载 | 重启仍 load；只 quarantine 有 marker 的导入；native detach；不走 catalog / shell |
 | RM-25 | 运行中 Skill 配置漂移 | Science 运行时改变 MCP / route 预期 | 只读检查并返回 `RESTART_REQUIRED`；不并发改写；普通 Science 继续 |
 | RM-26 | 系统 SSH 默认 / opt-in | 无 fixture、创建 fixture、再移除 fixture | 默认关闭不阻断；启用时 wrapper 使用 `/usr/bin/ssh -F`；启用后 config / wrapper 缺失必须 fail closed |
@@ -168,17 +201,17 @@ RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 p
 | RM-51 | v0.8.0 隔离 fixture 升级到 Acceptance artifact | 历史记录恢复 | 完整登录自动补私有 marker 且不改 Science 凭证；退出后恢复同一 org；无 marker 且多 org 时只显示不透明 A/B 选择，选择前后均不删除、猜测或重写其他历史，旧 ref 重放失败 |
 | RM-52 | Acceptance artifact + 当前 installed Science + 用户授权的真实 SSH config | SSH 前置校验 | 开启复用后 Science 能识别真实 config 中的 Host；关闭后只移除 CSSwitch 精确管理的 sandbox stub；不连接真实 server 也能完成前置校验，真实连通性另行授权 |
 
-## 6. Skill 证据词汇
+## 8. Skill 证据词汇
 
 外部 Skill 至少分为：content fetched、目录 committed、Science discovered、Agent attached、`skill()` loaded / triggered、领域功能完成、重启持久化、quarantine、detached。不能用一个“安装成功”覆盖所有层。
 
 bundled route 必须使用 `mcp-csswitch-skill-installer` 的 `install_external_skill` / `uninstall_external_skill`，不得回退到 `customize`、`host.skills.*`、shell 或手工文件删除。
 
-## 7. Artifact 检查
+## 9. Artifact 检查
 
 对最终候选分别记录：版本、大小、SHA-256、包内 executable / resources、Gateway 可执行性、空 data root 的脱敏 status，以及是否发生 Keychain 访问。若分发者另外执行签名、公证或 Gatekeeper 验证，应作为独立分发证据记录；这些项目不是 Codex 功能验收前置。
 
-## 8. 收尾
+## 10. 收尾
 
 在 UI 停止链路并退出验收 app 后运行：
 
