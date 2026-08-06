@@ -33,6 +33,39 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
     lifecycle: SharedLifecycle,
     mode: String,
 ) -> Result<(), String> {
+    set_mode_inner_with(
+        app,
+        state,
+        lifecycle,
+        mode,
+        config::default_dir(),
+        ScienceHostAdapter::claim_stop,
+        |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+    )
+}
+
+pub(super) fn set_mode_inner_with<R, Claim, Execute>(
+    app: tauri::AppHandle<R>,
+    state: SharedAppState,
+    lifecycle: SharedLifecycle,
+    mode: String,
+    dir: std::path::PathBuf,
+    claim_science: Claim,
+    execute_science: Execute,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+    Execute: FnOnce(
+        &tauri::AppHandle<R>,
+        crate::runtime::science::ScienceStopRequest,
+    ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+{
     if mode != "proxy" && mode != "official" {
         return Err(format!("未知模式：{mode}（只支持 proxy / official）。"));
     }
@@ -40,13 +73,24 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
     // 切官方会先停链路、一键随后又把沙箱/OAuth 起起来 → 显示官方却有第三方沙箱在跑。bump_generation
     // 作废任何在途启动，防被停后又拿旧配置写回运行态。
     lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
-        let dir = config::default_dir();
         let preflight = config::load_from(&dir).map_err(|error| error.to_string())?;
         config::require_no_runtime_transaction(&preflight)?;
         if mode == "official" {
-            lifecycle.bump_generation();
+            let generation = lifecycle.bump_generation();
+            let (owner, request) =
+                claim_process_local_science_stop(&state, generation, claim_science);
+            // The stop script and bounded TERM/KILL waits intentionally run
+            // without AppState so status can continue reading the current
+            // process-local owner while set_mode holds the mutation lease.
+            let execution = request.map(|request| execute_science(&app, request));
             let mut st = lock(&state);
-            stop_sandbox_state(&app, &mut st).map_err(|e| {
+            publish_process_local_science_stop(
+                &mut st,
+                lifecycle.current_generation(),
+                owner,
+                execution,
+            )
+            .map_err(|e| {
                 format!("停止沙箱失败，未切换到官方模式：{e}（真实实例 8765 未受影响）")
             })?;
             st.stop_proxy();
@@ -205,6 +249,62 @@ impl ScienceProcessLocalOwner {
     }
 }
 
+fn claim_process_local_science_stop<Claim>(
+    state: &SharedAppState,
+    generation: u64,
+    claim_science: Claim,
+) -> (
+    ScienceProcessLocalOwner,
+    Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+)
+where
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+{
+    let st = lock(state);
+    let owner = ScienceProcessLocalOwner::claim(&st, generation);
+    let request = claim_science(owner.runtime.as_ref());
+    (owner, request)
+}
+
+#[allow(clippy::result_large_err)]
+fn publish_process_local_science_stop(
+    st: &mut AppState,
+    current_generation: u64,
+    owner: ScienceProcessLocalOwner,
+    execution: Result<
+        (crate::runtime::science::ScienceStopOutcome, bool),
+        crate::runtime::science::ScienceStopFailure,
+    >,
+) -> crate::runtime::science::ScienceStopOutcome {
+    match execution {
+        Err(error) => Err(error),
+        Ok((_outcome, _clear_tracking)) if !owner.still_owns(st, current_generation) => Err(
+            crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
+                "Science stop 完成时 process-local owner 已变化；已保留 replacement runtime。",
+            ),
+        ),
+        Ok((outcome, clear_tracking)) => {
+            if clear_tracking {
+                crate::runtime::system::kill_child(&mut st.sandbox);
+                st.sandbox_url = None;
+            }
+            if let Ok(verified) = outcome.as_ref() {
+                st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
+                st.science_runtime = None;
+            }
+            outcome
+        }
+    }
+}
+
 pub(super) fn stop_all_inner_with<R, Claim, Execute>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
@@ -228,36 +328,17 @@ where
 {
     lifecycle.with_mutation(domain, |_| {
         let generation = lifecycle.bump_generation(); // 作废任何在途启动（防被停后又拿旧 key 复活）
-        let (owner, request) = {
-            let st = lock(&state);
-            let owner = ScienceProcessLocalOwner::claim(&st, generation);
-            let request = claim_science(owner.runtime.as_ref());
-            (owner, request)
-        };
+        let (owner, request) = claim_process_local_science_stop(&state, generation, claim_science);
         // The stop script and bounded TERM/KILL waits intentionally run without
         // the AppState mutex so high-frequency status can copy its read model.
         let execution = request.map(|request| execute_science(&app, request));
         let mut st = lock(&state);
-        let owner_is_current = owner.still_owns(&st, lifecycle.current_generation());
-        let sandbox_res = match execution {
-            Err(error) => Err(error),
-            Ok((_outcome, _clear_tracking)) if !owner_is_current => Err(
-                crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
-                    "Science stop 完成时 process-local owner 已变化；已保留 replacement runtime。",
-                ),
-            ),
-            Ok((outcome, clear_tracking)) => {
-                if clear_tracking {
-                    crate::runtime::system::kill_child(&mut st.sandbox);
-                    st.sandbox_url = None;
-                }
-                if let Ok(verified) = outcome.as_ref() {
-                    st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-                    st.science_runtime = None;
-                }
-                outcome
-            }
-        };
+        let sandbox_res = publish_process_local_science_stop(
+            &mut st,
+            lifecycle.current_generation(),
+            owner,
+            execution,
+        );
         st.stop_proxy();
         sandbox_res
             .map(|_| ())

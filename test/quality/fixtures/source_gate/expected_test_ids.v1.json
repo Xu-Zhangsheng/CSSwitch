@@ -844,6 +844,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_rechecks_non_codex_credential_after_serializer_wait",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_start_gateway_only_success_matrix_freezes_role_science_and_action",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r2_b_one_click_pre_journal_abort_uses_registered_ticket_compensation",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::s2_stop_all_wait_releases_read_model_and_stale_result_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::s6_gateway_receipt_preserves_remembered_science_context_on_cold_restore",

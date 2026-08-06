@@ -9392,6 +9392,136 @@ fn r0_set_mode_config_failure_leaves_runtime_stopped() {
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
+fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement() {
+    let root = tmpdir("r1-set-mode-owner-cas");
+    let prior_binary = root.join("prior-science");
+    let replacement_binary = root.join("replacement-science");
+    fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+    fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let prior = science::test_runtime_identity(prior_binary);
+    let replacement = science::test_runtime_identity(replacement_binary);
+
+    for (case, replace_identity, bump_generation) in [
+        ("generation-only", false, true),
+        ("identity-only", true, false),
+    ] {
+        let config_dir = root.join(format!("config-{case}"));
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        config::save_to(
+            &config_dir,
+            &Config {
+                mode: "proxy".into(),
+                sandbox_port: 18765,
+                proxy_port: 18000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let config_before = fs::read(config_dir.join("config.json")).unwrap();
+
+        let (state, proxy_pid) = r0_d_proxy_state();
+        {
+            let mut authority = lock(&state);
+            authority.science_runtime = Some(prior.clone());
+            authority.sandbox_port = 18765;
+            authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+        }
+        let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle().clone();
+
+        let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+        let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+        let worker_state = state.clone();
+        let worker_lifecycle = lifecycle.clone();
+        let worker_prior = prior.clone();
+        let worker = thread::spawn(move || {
+            let claim_prior = worker_prior.clone();
+            super::lifecycle::set_mode_inner_with(
+                handle,
+                worker_state,
+                worker_lifecycle,
+                "official".into(),
+                config_dir,
+                |runtime| {
+                    assert_eq!(runtime, Some(&claim_prior));
+                    Ok(science::ScienceStopRequest::recover(runtime))
+                },
+                move |_, _| {
+                    stop_started_tx.send(()).unwrap();
+                    release_stop_rx.recv().unwrap();
+                    (
+                        Ok(science::VerifiedScienceStop {
+                            runtime: Some(worker_prior),
+                            ownership_was_proven: true,
+                        }),
+                        true,
+                    )
+                },
+            )
+        });
+
+        stop_started_rx.recv().unwrap();
+        {
+            let mut read_model = state
+                .try_lock()
+                .expect("set_mode Science stop wait must not retain the AppState mutex");
+            assert_eq!(read_model.science_runtime.as_ref(), Some(&prior), "{case}");
+            if replace_identity {
+                read_model.science_runtime = Some(replacement.clone());
+                read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+            }
+        }
+        if bump_generation {
+            lifecycle.bump_generation();
+        }
+        release_stop_tx.send(()).unwrap();
+
+        let switched = worker.join().unwrap();
+        assert!(
+            switched
+                .as_ref()
+                .is_err_and(|error| error.contains("process-local owner 已变化")),
+            "{case}: {switched:?}"
+        );
+        assert_eq!(
+            fs::read(root.join(format!("config-{case}/config.json"))).unwrap(),
+            config_before,
+            "{case}"
+        );
+        let current = lock(&state);
+        let expected_runtime = if replace_identity {
+            &replacement
+        } else {
+            &prior
+        };
+        let expected_url = if replace_identity {
+            "http://127.0.0.1:18765/replacement"
+        } else {
+            "http://127.0.0.1:18765/prior"
+        };
+        assert_eq!(
+            current.science_runtime.as_ref(),
+            Some(expected_runtime),
+            "{case}"
+        );
+        assert!(current.science_confirmed_stopped.is_none(), "{case}");
+        assert_eq!(current.sandbox_url.as_deref(), Some(expected_url), "{case}");
+        assert!(current.proxy.is_some(), "{case}");
+        assert!(r0_d_process_is_running(proxy_pid), "{case}");
+        drop(current);
+        lock(&state).stop_proxy();
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn r0_set_settings_failure_points_preserve_stop_before_commit() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
