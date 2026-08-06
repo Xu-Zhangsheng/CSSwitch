@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [R1 set_mode stop owner（2026-08-06）](2026-08-06-r1-set-mode-stop-owner.md)：`set_mode` 的 process-local owner / lock-free wait / CAS、双漂移回归、独立复审与 exact-SHA source gate closure。
 - [A0 冻结基线 Artifact 验收（2026-08-06）](2026-08-06-a0-frozen-baseline-artifact.md)：exact `9cf75d1` 的隔离 Acceptance `.app` 构建身份、内容 manifest、sidecar 空状态与 built-artifact 证据边界。
 - [O1-E4 history full-snapshot durable effect owner（2026-08-06）](2026-08-06-o1-e4-history-full-snapshot-effect-owner.md)：history live/fresh 唯一跨进程 effect owner、durable full-manifest restore outcome、独立复审与 exact-SHA source gate closure。
 - [O1-E3 fresh-process durable compensation replay owner（2026-08-06）](2026-08-06-o1-e3-fresh-compensation-replay.md)：唯一跨进程 replay effect owner、durable exact compensation replay、独立复审与 exact-SHA source gate closure。

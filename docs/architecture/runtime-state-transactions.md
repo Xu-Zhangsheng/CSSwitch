@@ -61,7 +61,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
   intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
-- `stop_all` 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果；这条“锁外等待”结论只覆盖 `stop_all`。cold prior stop、history、DB recovery、compensation、mode/settings/native-exit 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
+- `stop_all` 与切换到 official 的 `set_mode` 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` 结果不会停止 replacement Gateway 或提交 mode；cold prior stop、history、DB recovery、compensation、settings/native-exit 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 的进程内 mutex 只覆盖 load-modify-save；所有可能发布 canonical
   config、迁移、降级或滚动备份的公开入口还会在 pinned config 目录内取得同一
@@ -364,6 +364,10 @@ history、cold start 与 recovery 合并成万能事务。
 5. 无论 Science 结果如何都停止 Gateway；
 6. 若 Science 未验证停止，返回“Gateway 已停、Science 失败”的部分结果。
 
+`set_mode(official)` 复用同一 Science owner claim / lock-free wait / CAS 边界，但保持不同的后续语义：
+只有 current Science stop 成功才停止 tracked Gateway 并进入 mode config commit；claim、stop 或 owner CAS
+失败都保留 Gateway 与旧 mode。config commit 失败仍保持既有 stop-before-commit 合同，不重启已停止的 runtime。
+
 Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener PID、canonical executable、data-dir、launch token 与端口真实关闭；身份漂移时不发送信号。
 
 ## 诊断与失败链
@@ -386,5 +390,5 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   restore。其他直接 full-snapshot restore 与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；
 - history restore durable commit 之后的 one-click 失败不会回滚用户已选择的历史；默认 restore-only
   与以后单独点击的一键开始仍是两个 operation，只有显式 restore-and-resume 使用同一 backend handoff；
-- `stop_all` 已锁外等待，但 mode/settings/native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
+- `stop_all` 与 `set_mode` 已锁外等待，但 settings、downgrade cleanup、native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
 - MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。
