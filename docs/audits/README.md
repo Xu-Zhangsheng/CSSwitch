@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [O1-E4 history full-snapshot durable effect owner（2026-08-06）](2026-08-06-o1-e4-history-full-snapshot-effect-owner.md)：history live/fresh 唯一跨进程 effect owner、durable full-manifest restore outcome、独立复审与 exact-SHA source gate closure。
 - [O1-E3 fresh-process durable compensation replay owner（2026-08-06）](2026-08-06-o1-e3-fresh-compensation-replay.md)：唯一跨进程 replay effect owner、durable exact compensation replay、独立复审与 exact-SHA source gate closure。
 - [O1-E2 durable compensation step-state foundation（2026-08-06）](2026-08-06-o1-e2-compensation-step-state.md)：五步 typed intent / outcome、完整记录 CAS、authority boundary 与 exact-SHA source gate closure。
 - [O1-E1 durable compensation journal foundation（2026-08-05）](2026-08-05-o1-e1-durable-compensation-journal.md)：path-free aggregate compensation journal、normal mutation guard、独立复审与 exact-SHA source gate closure。

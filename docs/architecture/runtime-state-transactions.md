@@ -128,8 +128,17 @@ child ownership 当作可恢复事实；完整 restored config 是“effect 已�
 SSH cleanup 重放原 transaction 而不是按 marker 广泛删除；prior Science 使用 durable stop recipe、精确 absent
 的旧 receipt 路径、
 预分配 launch id 与 fresh runtime identity 重新建立，只有 receipt 的 launch id 精确相等才允许 fresh owner 认领。
+
 任何 retarget、unsafe
 identity、V1 或 typed `incomplete` 都保留 journal/snapshot 并转人工处理。
+
+O1-E4 把同一 effect-owner 合同扩到 history full-snapshot restore。history live failure 与 fresh replay 在
+`HistoryCredentialWritePending` 后取得共享的 crash-releasing cross-process exclusive fence，并在锁内重读 canonical
+Config、精确复核完整 history record 与冻结 authority。owner 先 CAS 到 `HistoryAuthorityRestorePending`，幂等恢复
+encryption key、OAuth tokens、active org 与 virtual-org marker 四项 manifest，再 CAS 到
+`HistoryAuthorityRestoreSucceeded`；entry 中途崩溃仍重放整个 manifest。cleanup-only、精确 journal clear 与 cleanup
+retry 只接受 durable succeeded，Config / record、Science quiescence、snapshot ticket 或 manifest drift 都保留证据并
+fail closed。
 
 normal mode/settings/profile/Codex auth/settings/downgrade mutation、selection/read-model 仍把任一 journal 打开
 视为 blocked/manual；显式 `stop_all` / `quit` 与 native-exit
@@ -373,8 +382,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private
   manifest 与 registered snapshot 自动重放/收敛；V1 与 typed incomplete V2 仍明确保留为人工边界；
 - canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
-  protected snapshot 与 cleanup/finalize 收敛 credential publication。其他直接 full-snapshot restore
-  与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；
+  protected snapshot、唯一跨进程 effect owner 与 durable restore outcome 收敛 credential publication 和 full-snapshot
+  restore。其他直接 full-snapshot restore 与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；
 - history restore durable commit 之后的 one-click 失败不会回滚用户已选择的历史；默认 restore-only
   与以后单独点击的一键开始仍是两个 operation，只有显式 restore-and-resume 使用同一 backend handoff；
 - `stop_all` 已锁外等待，但 mode/settings/native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
