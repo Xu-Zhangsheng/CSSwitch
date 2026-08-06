@@ -2,23 +2,28 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 const SSH_STUB_MARKER: &str = "# CSSwitch managed system SSH config bridge v1";
 const SSH_STUB_MARKER_V2: &str = "# CSSwitch managed system SSH config bridge v2";
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ManagedSshStubSnapshot {
     bytes: Vec<u8>,
     device: u64,
     inode: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 enum ManagedSshStubBefore {
     Absent,
     Present(ManagedSshStubSnapshot),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ManagedSshStubTransaction {
     before: ManagedSshStubBefore,
     candidate: Option<ManagedSshStubSnapshot>,
@@ -197,6 +202,19 @@ impl ManagedSshStubTransaction {
                 }
             },
         }
+    }
+
+    pub(crate) fn compensate_durable(&self, sandbox_home: &Path) -> Result<(), String> {
+        if self.expected_system_config != system_ssh_config_path()?
+            || self.expected_hosts.is_empty()
+            || !self
+                .expected_hosts
+                .iter()
+                .all(|host| crate::runtime::ssh_bridge::is_concrete_alias(host))
+        {
+            return Err("durable SSH stub transaction authority drifted or retargeted".into());
+        }
+        self.compensate(sandbox_home)
     }
 }
 

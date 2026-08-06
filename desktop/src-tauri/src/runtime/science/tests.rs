@@ -9,21 +9,60 @@ use std::time::Duration;
 
 use super::{
     classify_known_runtime_state, classify_sandbox_state, fingerprint_sha256_hex, first_http_url,
-    managed_launch_path, official_updated_embedded_identity_metadata_matches,
+    managed_launch_id, managed_launch_path, official_updated_embedded_identity_metadata_matches,
     official_updated_science_bin_for_home, official_updated_snapshot_for_home,
     official_updated_snapshot_from_process_paths, parse_unique_listener_pid,
-    probe_sandbox_runtime_cached, read_managed_launch_record,
+    prior_restart_receipt_is_absent_at, probe_sandbox_runtime_cached, read_managed_launch_record,
     restore_unmatched_managed_launch_tombstone, runtime_identity_is_current, runtime_status_value,
     safe_science_version_with_timeout, sandbox_home, sandbox_running_ours, sandbox_url,
     science_executable_fingerprint, science_post_term_action, science_runtime_preflight_for_paths,
     science_runtime_preflight_for_paths_cached, science_runtime_preflight_for_paths_with_updated,
     science_status_running, secure_runtime_snapshot_root, select_science_runtime_for_paths,
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
-    settings_change_needs_teardown, stop_runtime_from_probe, trusted_science_status,
-    SandboxScienceState, SciencePostTermAction, ScienceRuntimeIdentity, ScienceRuntimeSource,
-    ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache, VerifiedScienceStop,
-    CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
+    settings_change_needs_teardown, stop_runtime_from_probe, test_runtime_identity,
+    trusted_science_status, SandboxScienceState, SciencePostTermAction, ScienceRuntimeIdentity,
+    ScienceRuntimeSource, ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache,
+    VerifiedScienceStop, CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES,
+    MAX_MANAGED_LAUNCH_BYTES,
 };
+
+#[test]
+fn o1_e3_prior_restart_receipt_uses_the_durable_launch_id() -> Result<(), Box<dyn std::error::Error>>
+{
+    let durable_launch_id = "o1-e3-durable-restart-identity";
+    assert_eq!(
+        managed_launch_id(Some(durable_launch_id)),
+        durable_launch_id
+    );
+    assert_ne!(managed_launch_id(None), durable_launch_id);
+    Ok(())
+}
+
+#[test]
+fn o1_e3_prior_restart_requires_the_stopped_receipt_to_be_absent() {
+    let root = unique_temp_dir("o1-e3-prior-receipt-absence").unwrap();
+    let runtime_path = root.join("science");
+    fs::write(&runtime_path, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o700)).unwrap();
+    let runtime = test_runtime_identity(runtime_path.clone());
+    let recipe = crate::config::RuntimePriorScienceRecipe {
+        port: 18992,
+        runtime_path,
+        runtime_source: runtime.source.code().to_string(),
+        runtime_version: runtime.version.clone(),
+        runtime_fingerprint: runtime.environment_transaction_id(),
+        launch_receipt_digest: "a".repeat(64),
+    };
+    let receipt = root.join("science-managed-launch.v1.json");
+    assert!(prior_restart_receipt_is_absent_at(
+        &recipe, &runtime, &receipt
+    ));
+    fs::write(&receipt, b"replacement").unwrap();
+    assert!(!prior_restart_receipt_is_absent_at(
+        &recipe, &runtime, &receipt
+    ));
+    fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn official_updater_identity_parser_accepts_only_known_exact_variants() {

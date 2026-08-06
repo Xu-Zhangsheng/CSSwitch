@@ -476,15 +476,36 @@ impl ScienceHostAdapter {
     pub(crate) fn commit_launch(
         verified: ScienceVerifiedLaunch,
     ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
-        let ownership =
-            record_managed_science_launch(verified.port, &verified.runtime).map_err(|error| {
-                ScienceLaunchFailure::new(
-                    ScienceLaunchFailureKind::ReceiptCommitFailed,
-                    error.message().to_string(),
-                    ScienceEnvironmentExposure::Exposed,
-                )
-                .with_ownership(error.token().cloned())
-            })?;
+        Self::commit_launch_with_id(verified, None)
+    }
+
+    pub(crate) fn commit_launch_with_launch_id(
+        verified: ScienceVerifiedLaunch,
+        launch_id: &str,
+    ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
+        Self::commit_launch_with_id(verified, Some(launch_id))
+    }
+
+    fn commit_launch_with_id(
+        verified: ScienceVerifiedLaunch,
+        launch_id: Option<&str>,
+    ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
+        let ownership = match launch_id {
+            Some(launch_id) => record_managed_science_launch_with_launch_id(
+                verified.port,
+                &verified.runtime,
+                launch_id,
+            ),
+            None => record_managed_science_launch(verified.port, &verified.runtime),
+        }
+        .map_err(|error| {
+            ScienceLaunchFailure::new(
+                ScienceLaunchFailureKind::ReceiptCommitFailed,
+                error.message().to_string(),
+                ScienceEnvironmentExposure::Exposed,
+            )
+            .with_ownership(error.token().cloned())
+        })?;
         if verified.recheck_committed_receipt
             && !managed_launch_token_is_current_for_runtime(&ownership, &verified.runtime)
         {

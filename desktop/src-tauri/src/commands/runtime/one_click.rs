@@ -11,6 +11,47 @@ fn project_history_replay_failure(error: String) -> serde_json::Value {
     )
 }
 
+fn project_compensation_replay_failure(error: String) -> serde_json::Value {
+    project_one_click_failure(
+        TypedOneClickFailure::new(
+            OneClickFailureKind::AuthoritySnapshot,
+            format!("检测到未完成的 durable compensation，安全重放失败并已保留事务：{error}"),
+        )
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED),
+    )
+}
+
+fn replay_compensation_before_auth<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &SharedLifecycle,
+) -> Result<bool, String> {
+    if !crate::runtime::sandbox_session::interrupted_compensation_requires_pre_auth_replay()? {
+        return Ok(false);
+    }
+    lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+        crate::runtime::sandbox_session::replay_interrupted_compensation_before_auth(
+            app,
+            state,
+            lifecycle.as_ref(),
+        )
+    })
+}
+
+fn replay_compensation_to_convergence<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &SharedLifecycle,
+) -> Result<bool, String> {
+    let mut replayed = false;
+    loop {
+        match replay_compensation_before_auth(app, state, lifecycle)? {
+            true => replayed = true,
+            false => return Ok(replayed),
+        }
+    }
+}
+
 fn replay_history_before_auth_if_required(
     state: &SharedAppState,
     lifecycle: &SharedLifecycle,
@@ -54,7 +95,12 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
     // History credential replay is local authority recovery. It must converge
     // before provider-auth preflight so unavailable Codex auth cannot strand a
     // recoverable credential before-image behind an open journal.
-    let entry = loop {
+    let (entry, prepared) = loop {
+        match replay_compensation_to_convergence(&app, &state, &lifecycle) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => return Ok(project_compensation_replay_failure(error)),
+        }
         match replay_history_before_auth_if_required(&state, &lifecycle) {
             Ok(true) => continue,
             Ok(false) => {}
@@ -66,32 +112,81 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
         };
         #[cfg(test)]
         apply_pre_auth_history_race_record()?;
+        match replay_compensation_to_convergence(&app, &state, &lifecycle) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => return Ok(project_compensation_replay_failure(error)),
+        }
         match replay_history_before_auth_if_required(&state, &lifecycle) {
             Ok(true) => continue,
-            Ok(false) => break entry,
+            Ok(false) => {}
             Err(error) => return Ok(project_history_replay_failure(error)),
         }
-    };
-    let prepared = match crate::commands::codex::prepare_provider_auth(
-        &app,
-        entry.auth_adapter(),
-        crate::commands::codex::CodexPreflightTarget::ActiveProfile,
-    ) {
-        Ok(prepared) => prepared,
-        Err(crate::commands::codex::RuntimeCommandError::Message(message)) => {
-            if let Err(error) = replay_history_before_auth_error_return(&state, &lifecycle) {
-                return Ok(project_history_replay_failure(error));
-            }
-            return Ok(project_one_click_failure(TypedOneClickFailure::new(
-                OneClickFailureKind::AuthPreflight,
-                message,
-            )));
+        let auth_lease =
+            match config::acquire_runtime_compensation_auth_lease(&config::default_dir()) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                        OneClickFailureKind::Prepare,
+                        format!("provider auth 前无法取得 compensation absence fence：{error}"),
+                    )))
+                }
+            };
+        let compensation_raced =
+            match crate::runtime::sandbox_session::interrupted_compensation_requires_pre_auth_replay(
+            ) {
+                Ok(required) => required,
+                Err(error) => return Ok(project_compensation_replay_failure(error)),
+            };
+        let history_raced = match crate::runtime::sandbox_session::
+            interrupted_history_recovery_requires_pre_auth_replay()
+        {
+            Ok(required) => required,
+            Err(error) => return Ok(project_history_replay_failure(error)),
+        };
+        if compensation_raced || history_raced {
+            drop(auth_lease);
+            continue;
         }
-        Err(auth @ crate::commands::codex::RuntimeCommandError::Auth(_)) => {
-            if let Err(error) = replay_history_before_auth_error_return(&state, &lifecycle) {
-                return Ok(project_history_replay_failure(error));
+        let auth_result = crate::commands::codex::prepare_provider_auth(
+            &app,
+            entry.auth_adapter(),
+            crate::commands::codex::CodexPreflightTarget::ActiveProfile,
+        );
+        drop(auth_lease);
+        let prepared = match auth_result {
+            Ok(prepared) => prepared,
+            Err(crate::commands::codex::RuntimeCommandError::Message(message)) => {
+                if let Err(error) = replay_compensation_to_convergence(&app, &state, &lifecycle) {
+                    return Ok(project_compensation_replay_failure(error));
+                }
+                if let Err(error) = replay_history_before_auth_error_return(&state, &lifecycle) {
+                    return Ok(project_history_replay_failure(error));
+                }
+                return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                    OneClickFailureKind::AuthPreflight,
+                    message,
+                )));
             }
-            return Err(auth);
+            Err(auth @ crate::commands::codex::RuntimeCommandError::Auth(_)) => {
+                if let Err(error) = replay_compensation_to_convergence(&app, &state, &lifecycle) {
+                    return Ok(project_compensation_replay_failure(error));
+                }
+                if let Err(error) = replay_history_before_auth_error_return(&state, &lifecycle) {
+                    return Ok(project_history_replay_failure(error));
+                }
+                return Err(auth);
+            }
+        };
+        match replay_compensation_to_convergence(&app, &state, &lifecycle) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => return Ok(project_compensation_replay_failure(error)),
+        }
+        match replay_history_before_auth_if_required(&state, &lifecycle) {
+            Ok(true) => continue,
+            Ok(false) => break (entry, prepared),
+            Err(error) => return Ok(project_history_replay_failure(error)),
         }
     };
     match lifecycle.with_mutation(

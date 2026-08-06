@@ -1,10 +1,12 @@
 //! Recovery projection orchestration: app/config snapshots and one-click authority capture/restore.
 //! Coordinates `authority_snapshot` primitives with `pending_cleanup` registration.
 
+use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::Runtime;
 
@@ -26,10 +28,85 @@ use super::authority_snapshot::{
 };
 use super::pending_cleanup::{
     finalize_failed_authority_snapshot, finalize_registered_authority_cleanup,
-    prepare_registered_authority_cleanup, register_authority_cleanup, AuthorityCleanupContext,
-    AuthorityCleanupFailure, AuthorityCleanupOutcome, AuthorityCleanupPhase,
+    prepare_registered_authority_cleanup, register_authority_cleanup,
+    registered_authority_snapshot_for_ticket, AuthorityCleanupContext, AuthorityCleanupFailure,
+    AuthorityCleanupOutcome, AuthorityCleanupPhase, PendingCleanupDisposition,
     RegisteredAuthorityCleanup,
 };
+
+pub(super) const DURABLE_AUTHORITY_REPLAY_MANIFEST: &str = "authority-replay.v1.json";
+const MAX_DURABLE_PRIVATE_MANIFEST_BYTES: u64 = config::MAX_CONFIG_FILE_BYTES + 1024 * 1024;
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableAuthorityTree {
+    scope: AuthoritySnapshotScope,
+    source: PathBuf,
+    backup_relative: PathBuf,
+    existed: bool,
+    source_parent_identity: Option<(u64, u64)>,
+    backup_identity: Option<(u64, u64, libc::mode_t)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableAuthorityReplayManifest {
+    schema_version: u32,
+    managed_id: String,
+    config: config::Config,
+    trees: Vec<DurableAuthorityTree>,
+    science_root_path: PathBuf,
+    science_root_identity: Option<(u64, u64)>,
+    science_opaque_bindings: [Option<(u64, u64)>; SCIENCE_OWNED_OPAQUE_ROOTS.len()],
+}
+
+pub(super) fn read_registered_private_manifest(
+    state: &SharedAppState,
+    ticket: &config::RuntimeSnapshotTicket,
+    name: &str,
+) -> Result<Vec<u8>, String> {
+    let (pending, _, _, root) =
+        registered_authority_snapshot_for_ticket(state, ticket).map_err(String::from)?;
+    if !matches!(
+        pending.disposition,
+        Some(PendingCleanupDisposition::ActiveRecovery | PendingCleanupDisposition::CleanupOnly)
+    ) {
+        return Err("private replay manifest requires a registered snapshot".into());
+    }
+    let name =
+        std::ffi::CString::new(name).map_err(|_| "private replay manifest name is invalid")?;
+    let mut file =
+        AuthorityTreeSnapshot::open_destination_at(root.as_raw_fd(), &name, libc::O_RDONLY, 0)
+            .map_err(|error| format!("private replay manifest open failed: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("private replay manifest metadata failed: {error}"))?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
+        || metadata.len() == 0
+        || metadata.len() > MAX_DURABLE_PRIVATE_MANIFEST_BYTES
+    {
+        return Err("private replay manifest identity is unsafe".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    (&mut file)
+        .take(MAX_DURABLE_PRIVATE_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("private replay manifest read failed: {error}"))?;
+    let after = file
+        .metadata()
+        .map_err(|error| format!("private replay manifest recheck failed: {error}"))?;
+    if after.dev() != metadata.dev()
+        || after.ino() != metadata.ino()
+        || after.len() != metadata.len()
+        || bytes.len() as u64 != metadata.len()
+    {
+        return Err("private replay manifest changed while reading".into());
+    }
+    Ok(bytes)
+}
 
 #[allow(clippy::large_enum_variant)]
 pub(super) enum RuntimeTransactionRestoreExpectation {
@@ -188,6 +265,271 @@ pub(super) struct OneClickAuthoritySnapshot {
 }
 
 impl OneClickAuthoritySnapshot {
+    pub(super) fn load_durable(
+        state: &SharedAppState,
+        ticket: &config::RuntimeSnapshotTicket,
+    ) -> Result<Self, String> {
+        let (pending, cleanup_context, cleanup_ticket, root) =
+            registered_authority_snapshot_for_ticket(state, ticket).map_err(String::from)?;
+        if pending.disposition != Some(PendingCleanupDisposition::ActiveRecovery) {
+            return Err("durable authority replay requires an ActiveRecovery snapshot".into());
+        }
+        let name = std::ffi::CString::new(DURABLE_AUTHORITY_REPLAY_MANIFEST).unwrap();
+        let mut file =
+            AuthorityTreeSnapshot::open_destination_at(root.as_raw_fd(), &name, libc::O_RDONLY, 0)
+                .map_err(|error| {
+                    format!("durable authority replay manifest open failed: {error}")
+                })?;
+        let metadata = file.metadata().map_err(|error| {
+            format!("durable authority replay manifest metadata failed: {error}")
+        })?;
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o600
+            || metadata.nlink() != 1
+            || metadata.len() == 0
+            || metadata.len() > MAX_DURABLE_PRIVATE_MANIFEST_BYTES
+        {
+            return Err("durable authority replay manifest identity is unsafe".into());
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        (&mut file)
+            .take(MAX_DURABLE_PRIVATE_MANIFEST_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("durable authority replay manifest read failed: {error}"))?;
+        let after = file.metadata().map_err(|error| {
+            format!("durable authority replay manifest recheck failed: {error}")
+        })?;
+        if after.dev() != metadata.dev()
+            || after.ino() != metadata.ino()
+            || after.len() != metadata.len()
+            || bytes.len() as u64 != metadata.len()
+        {
+            return Err("durable authority replay manifest changed while reading".into());
+        }
+        let manifest: DurableAuthorityReplayManifest = serde_json::from_slice(&bytes)
+            .map_err(|_| "durable authority replay manifest format is invalid")?;
+        if manifest.schema_version != 1
+            || manifest.managed_id != ticket.managed_id
+            || manifest.managed_id != cleanup_context.managed_id
+        {
+            return Err("durable authority replay manifest identity mismatch".into());
+        }
+        let config_dir = config::default_dir();
+        let sandbox_home = crate::runtime::science::sandbox_home();
+        let expected_science_root = sandbox_home.join(".claude-science");
+        if manifest.science_root_path != expected_science_root {
+            return Err("durable authority replay Science root retargeted".into());
+        }
+        let mut expected_trees = SCIENCE_PROTECTED_AUTHORITY_ENTRIES
+            .into_iter()
+            .map(|entry| {
+                (
+                    AuthoritySnapshotScope::ScienceData,
+                    expected_science_root.join(entry),
+                    PathBuf::from("0").join(entry),
+                )
+            })
+            .collect::<Vec<_>>();
+        expected_trees.extend([
+            (
+                AuthoritySnapshotScope::SandboxState,
+                sandbox_home
+                    .parent()
+                    .ok_or("sandbox HOME has no parent")?
+                    .join("state"),
+                PathBuf::from("1"),
+            ),
+            (
+                AuthoritySnapshotScope::CsswitchRuntime,
+                config_dir.join("runtime"),
+                PathBuf::from("2"),
+            ),
+            (
+                AuthoritySnapshotScope::ManagedReceipt,
+                config_dir.join("science-managed-launch.v1.json"),
+                PathBuf::from("3"),
+            ),
+        ]);
+        if manifest.trees.len() != expected_trees.len() {
+            return Err("durable authority replay tree plan length mismatch".into());
+        }
+        let mut trees = Vec::with_capacity(manifest.trees.len());
+        for (tree, (scope, source, backup_relative)) in
+            manifest.trees.into_iter().zip(expected_trees)
+        {
+            if tree.scope != scope
+                || tree.source != source
+                || tree.backup_relative != backup_relative
+                || tree.backup_relative.is_absolute()
+                || tree
+                    .backup_relative
+                    .components()
+                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                || tree.existed != tree.backup_identity.is_some()
+            {
+                return Err("durable authority replay tree plan retargeted".into());
+            }
+            let source_parent = match tree.source_parent_identity {
+                Some(expected) => {
+                    let parent_path = tree
+                        .source
+                        .parent()
+                        .ok_or("durable authority replay source parent missing")?;
+                    let parent = AuthorityTreeSnapshot::open_absolute_directory(parent_path)
+                        .map_err(|error| {
+                            format!("durable authority replay source parent open failed: {error}")
+                        })?;
+                    let metadata = parent.metadata().map_err(|error| {
+                        format!("durable authority replay source parent metadata failed: {error}")
+                    })?;
+                    if (metadata.dev(), metadata.ino()) != expected {
+                        return Err(
+                            "durable authority replay source parent identity changed".into()
+                        );
+                    }
+                    Some(parent)
+                }
+                None => None,
+            };
+            let source_name = source_parent
+                .as_ref()
+                .map(|_| AuthorityTreeSnapshot::destination_name(&tree.source))
+                .transpose()?;
+            let backup = cleanup_context.root.join(&tree.backup_relative);
+            let (backup_parent, backup_name) = if tree.existed {
+                let parent_path = backup
+                    .parent()
+                    .ok_or("durable authority replay backup parent missing")?;
+                let parent = AuthorityTreeSnapshot::open_absolute_directory(parent_path).map_err(
+                    |error| format!("durable authority replay backup parent open failed: {error}"),
+                )?;
+                let name = AuthorityTreeSnapshot::destination_name(&backup)?;
+                (Some(parent), Some(name))
+            } else {
+                (None, None)
+            };
+            trees.push(AuthorityTreeSnapshot {
+                scope: tree.scope,
+                source: tree.source,
+                backup,
+                existed: tree.existed,
+                source_parent,
+                source_name,
+                backup_identity: tree.backup_identity,
+                backup_parent,
+                backup_name,
+            });
+        }
+        let science_root = match manifest.science_root_identity {
+            Some(expected) => {
+                let root = AuthorityTreeSnapshot::open_absolute_directory(&expected_science_root)
+                    .map_err(|error| {
+                    format!("durable authority replay Science root open failed: {error}")
+                })?;
+                let metadata = root.metadata().map_err(|error| {
+                    format!("durable authority replay Science root metadata failed: {error}")
+                })?;
+                if (metadata.dev(), metadata.ino()) != expected {
+                    return Err("durable authority replay Science root identity changed".into());
+                }
+                Some(root)
+            }
+            None => match AuthorityTreeSnapshot::open_absolute_directory(&expected_science_root) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Ok(_) => return Err("durable authority replay Science root appeared".into()),
+                Err(error) => {
+                    return Err(format!(
+                        "durable authority replay Science root check failed: {error}"
+                    ))
+                }
+            },
+        };
+        if Self::science_opaque_root_bindings(science_root.as_ref())?
+            != manifest.science_opaque_bindings
+        {
+            return Err("durable authority replay Science opaque binding changed".into());
+        }
+        Ok(Self {
+            backup_root: cleanup_context.root.clone(),
+            cleanup_context,
+            cleanup_ticket: Some(cleanup_ticket),
+            trees,
+            science_root_path: expected_science_root,
+            science_root,
+            science_opaque_bindings: manifest.science_opaque_bindings,
+            config: manifest.config,
+            app: AppAuthoritySnapshot::capture(state),
+            preserve_recovery: true,
+            cleanup_prepared: false,
+        })
+    }
+
+    fn durable_replay_manifest_bytes(&self) -> Result<Vec<u8>, String> {
+        let trees = self
+            .trees
+            .iter()
+            .map(|tree| {
+                let backup_relative = tree
+                    .backup
+                    .strip_prefix(&self.backup_root)
+                    .map_err(|_| "durable authority backup escaped the registered snapshot")?
+                    .to_path_buf();
+                if backup_relative.as_os_str().is_empty()
+                    || backup_relative.is_absolute()
+                    || backup_relative
+                        .components()
+                        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                {
+                    return Err("durable authority backup relative path is invalid".into());
+                }
+                let source_parent_identity = tree
+                    .source_parent
+                    .as_ref()
+                    .map(|parent| {
+                        let metadata = parent.metadata().map_err(|error| {
+                            format!("durable authority source parent metadata failed: {error}")
+                        })?;
+                        Ok::<_, String>((metadata.dev(), metadata.ino()))
+                    })
+                    .transpose()?;
+                Ok(DurableAuthorityTree {
+                    scope: tree.scope,
+                    source: tree.source.clone(),
+                    backup_relative,
+                    existed: tree.existed,
+                    source_parent_identity,
+                    backup_identity: tree.backup_identity,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let science_root_identity = self
+            .science_root
+            .as_ref()
+            .map(|root| {
+                let metadata = root
+                    .metadata()
+                    .map_err(|error| format!("durable Science root metadata failed: {error}"))?;
+                Ok::<_, String>((metadata.dev(), metadata.ino()))
+            })
+            .transpose()?;
+        let manifest = DurableAuthorityReplayManifest {
+            schema_version: 1,
+            managed_id: self.cleanup_context.managed_id.clone(),
+            config: self.config.clone(),
+            trees,
+            science_root_path: self.science_root_path.clone(),
+            science_root_identity,
+            science_opaque_bindings: self.science_opaque_bindings,
+        };
+        let bytes = serde_json::to_vec(&manifest)
+            .map_err(|error| format!("durable authority replay manifest encode failed: {error}"))?;
+        if bytes.is_empty() || bytes.len() as u64 > MAX_DURABLE_PRIVATE_MANIFEST_BYTES {
+            return Err("durable authority replay manifest size is invalid".into());
+        }
+        Ok(bytes)
+    }
+
     pub(super) fn registered_snapshot_ticket(
         &self,
     ) -> Result<config::RuntimeSnapshotTicket, String> {
@@ -205,7 +547,7 @@ impl OneClickAuthoritySnapshot {
     }
 
     pub(super) fn persist_private_manifest(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        if bytes.is_empty() || bytes.len() > 64 * 1024 {
+        if bytes.is_empty() || bytes.len() as u64 > MAX_DURABLE_PRIVATE_MANIFEST_BYTES {
             return Err("private recovery manifest size is invalid".into());
         }
         let parent = AuthorityTreeSnapshot::open_absolute_directory(
@@ -759,17 +1101,7 @@ impl OneClickAuthoritySnapshot {
                     ),
                 )
             })?;
-        #[cfg(test)]
-        if SANDBOX_SESSION_TEST_SEAMS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .one_click_exit_after_capture
-            .as_ref()
-            == Some(&config_dir.to_path_buf())
-        {
-            std::process::exit(86);
-        }
-        Ok(Self {
+        let snapshot = Self {
             backup_root,
             cleanup_context,
             cleanup_ticket: Some(cleanup_ticket),
@@ -781,7 +1113,26 @@ impl OneClickAuthoritySnapshot {
             app: AppAuthoritySnapshot::capture(state),
             preserve_recovery: false,
             cleanup_prepared: false,
-        })
+        };
+        let replay_manifest = snapshot.durable_replay_manifest_bytes().map_err(|error| {
+            finalize_failed_authority_snapshot(&snapshot.cleanup_context, error)
+        })?;
+        snapshot
+            .persist_private_manifest(DURABLE_AUTHORITY_REPLAY_MANIFEST, &replay_manifest)
+            .map_err(|error| {
+                finalize_failed_authority_snapshot(&snapshot.cleanup_context, error)
+            })?;
+        #[cfg(test)]
+        if SANDBOX_SESSION_TEST_SEAMS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .one_click_exit_after_capture
+            .as_ref()
+            == Some(&config_dir.to_path_buf())
+        {
+            std::process::exit(86);
+        }
+        Ok(snapshot)
     }
 
     #[cfg(test)]
@@ -923,6 +1274,79 @@ impl OneClickAuthoritySnapshot {
             if let Some(canary) = seams.rollback_diagnostic_canary.clone() {
                 seams.rollback_diagnostic_snapshot = Some(self.backup_root.clone());
                 errors.push(format!("test-only rollback diagnostic {canary}"));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            self.preserve_recovery = true;
+            Err(errors.join("; "))
+        }
+    }
+
+    pub(super) fn restore_durable_authority(
+        &mut self,
+        config_dir: &Path,
+        state: &SharedAppState,
+        expected_runtime_transaction: &Option<config::RuntimeTransactionRecord>,
+        expected_compensation: &config::RuntimeCompensationJournal,
+    ) -> Result<(), String> {
+        let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
+        let mut restored_config = self.config.clone();
+        restored_config.runtime_compensation = Some(expected_compensation.clone());
+        let already_restored = current == restored_config;
+        if current.runtime_compensation.as_ref() != Some(expected_compensation)
+            || (!already_restored && current.runtime_transaction != *expected_runtime_transaction)
+        {
+            return Err(
+                "durable compensation replay found drifted config authority; preserved current state"
+                    .into(),
+            );
+        }
+        {
+            let app = lock(state);
+            if app.proxy.is_some() || app.sandbox.is_some() {
+                return Err(
+                    "durable compensation replay found process-local runtime owners; refused stale authority restore"
+                        .into(),
+                );
+            }
+        }
+        if already_restored {
+            return Ok(());
+        }
+        let mut errors = Vec::new();
+        let science_restore_allowed = match self.validate_science_restore_root() {
+            Ok(()) => true,
+            Err(error) => {
+                errors.push(error);
+                false
+            }
+        };
+        for tree in &mut self.trees {
+            if tree.scope == AuthoritySnapshotScope::ScienceData && !science_restore_allowed {
+                continue;
+            }
+            if let Err(error) = tree.restore() {
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            let before = self.config.clone();
+            if let Err(error) = config::update_result(config_dir, |current| {
+                if current.runtime_transaction != *expected_runtime_transaction
+                    || current.runtime_compensation.as_ref() != Some(expected_compensation)
+                {
+                    return Err(
+                        "durable compensation replay authority changed during restore; preserved current config"
+                            .into(),
+                    );
+                }
+                *current = before.clone();
+                current.runtime_compensation = Some(expected_compensation.clone());
+                Ok(((), true))
+            }) {
+                errors.push(error);
             }
         }
         if errors.is_empty() {

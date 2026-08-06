@@ -38,6 +38,7 @@ static CONFIG_ACCESS: std::sync::Mutex<ConfigAccessState> =
     });
 
 const CONFIG_WRITER_LOCK_FILE: &str = ".config.writer.lock";
+const RUNTIME_COMPENSATION_AUTH_LOCK_FILE: &str = ".runtime-compensation.auth.lock";
 
 #[cfg(test)]
 pub(crate) const PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE: &str =
@@ -2056,7 +2057,7 @@ fn config_path(dir: &Path) -> PathBuf {
     dir.join("config.json")
 }
 
-const MAX_CONFIG_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_CONFIG_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 若 path 存在且是符号链接则报错（不跟随）。path 不存在返回 Ok。
 pub(crate) fn assert_not_symlink(path: &Path) -> io::Result<()> {
@@ -2092,7 +2093,34 @@ struct ConfigWriterFence {
     file: fs::File,
 }
 
+struct RuntimeCompensationFence {
+    file: fs::File,
+}
+
+pub(crate) struct RuntimeCompensationAuthLease {
+    _secure: SecureDir,
+    _fence: RuntimeCompensationFence,
+}
+
+pub(crate) struct RuntimeCompensationPublicationLease {
+    _secure: SecureDir,
+    _fence: RuntimeCompensationFence,
+}
+
+pub(crate) struct RuntimeCompensationReplayLease {
+    _secure: SecureDir,
+    _fence: RuntimeCompensationFence,
+}
+
 impl Drop for ConfigWriterFence {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+impl Drop for RuntimeCompensationFence {
     fn drop(&mut self) {
         unsafe {
             libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
@@ -2359,6 +2387,70 @@ impl SecureDir {
         Ok(ConfigWriterFence { file })
     }
 
+    fn acquire_runtime_compensation_fence(
+        &self,
+        operation: libc::c_int,
+    ) -> io::Result<RuntimeCompensationFence> {
+        let name = Self::name(RUNTIME_COMPENSATION_AUTH_LOCK_FILE)?;
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_CREAT
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC
+                    | libc::O_NONBLOCK,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "runtime compensation auth fence 必须是当前用户的单链接普通文件",
+            ));
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+        let verify_fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if verify_fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let verified = unsafe { fs::File::from_raw_fd(verify_fd) }.metadata()?;
+        if !verified.is_file()
+            || verified.nlink() != 1
+            || verified.dev() != metadata.dev()
+            || verified.ino() != metadata.ino()
+        {
+            return Err(io::Error::other(
+                "runtime compensation auth fence 在获取期间被替换",
+            ));
+        }
+        Ok(RuntimeCompensationFence { file })
+    }
+
     fn rename(&self, from: &str, to: &str) -> io::Result<()> {
         let from = Self::name(from)?;
         let to = Self::name(to)?;
@@ -2425,6 +2517,39 @@ fn open_config_writer(dir: &Path, create: bool) -> io::Result<(SecureDir, Config
     let secure = SecureDir::open(dir, create)?;
     let fence = secure.acquire_config_writer_fence()?;
     Ok((secure, fence))
+}
+
+pub(crate) fn acquire_runtime_compensation_auth_lease(
+    dir: &Path,
+) -> io::Result<RuntimeCompensationAuthLease> {
+    let secure = SecureDir::open(dir, false)?;
+    let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_SH)?;
+    Ok(RuntimeCompensationAuthLease {
+        _secure: secure,
+        _fence: fence,
+    })
+}
+
+pub(crate) fn acquire_runtime_compensation_publication_lease(
+    dir: &Path,
+) -> io::Result<RuntimeCompensationPublicationLease> {
+    let secure = SecureDir::open(dir, false)?;
+    let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_EX)?;
+    Ok(RuntimeCompensationPublicationLease {
+        _secure: secure,
+        _fence: fence,
+    })
+}
+
+pub(crate) fn acquire_runtime_compensation_replay_lease(
+    dir: &Path,
+) -> io::Result<RuntimeCompensationReplayLease> {
+    let secure = SecureDir::open(dir, false)?;
+    let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_EX)?;
+    Ok(RuntimeCompensationReplayLease {
+        _secure: secure,
+        _fence: fence,
+    })
 }
 
 // ---------- 备份 ----------
@@ -3673,6 +3798,18 @@ mod tests {
         );
     }
 
+    fn assert_o1_e3_replay_child_passed(output: std::process::Output, label: &str) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success()
+                && stdout.lines().any(|line| line == "running 1 test")
+                && stdout.contains("config::tests::o1_e3_replay_fence_child ... ok")
+                && stdout.contains("1 passed"),
+            "{label} did not execute the exact replay-fence child:\nstdout={stdout}\nstderr={stderr}"
+        );
+    }
+
     fn saved_profile(id: &str, template_id: &str, api_format: &str, upstream: &str) -> Profile {
         let (model_catalog, default_model_route_id, role_bindings) =
             crate::model_catalog::new_profile_catalog(template_id, api_format, Some(upstream))
@@ -4870,6 +5007,84 @@ mod tests {
             final_config.reuse_system_ssh,
             "the second writer must load writer A's commit instead of overwriting it from a stale snapshot"
         );
+    }
+
+    #[test]
+    fn o1_e3_auth_fence_blocks_only_compensation_publication() {
+        let dir = tmpdir().join("o1-e3-compensation-auth-fence");
+        save_to(&dir, &Config::default()).unwrap();
+        let auth = acquire_runtime_compensation_auth_lease(&dir).unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let publication_dir = dir.clone();
+        let publication = std::thread::spawn(move || {
+            let _lease = acquire_runtime_compensation_publication_lease(&publication_dir).unwrap();
+            sent.send(()).unwrap();
+        });
+        assert!(
+            received
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "compensation publication must wait while provider auth owns the absence proof"
+        );
+        update(&dir, |current| current.secret = "unrelated-writer".into()).unwrap();
+        assert_eq!(load_from(&dir).unwrap().secret, "unrelated-writer");
+        drop(auth);
+        received
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        publication.join().unwrap();
+    }
+
+    #[test]
+    fn o1_e3_replay_fence_child() {
+        let Some(role) = std::env::var_os("CSSWITCH_O1_E3_REPLAY_ROLE") else {
+            return;
+        };
+        let root = PathBuf::from(std::env::var_os("CSSWITCH_O1_E3_REPLAY_ROOT").unwrap());
+        let _lease = acquire_runtime_compensation_replay_lease(&root.join("config")).unwrap();
+        let role = role.to_string_lossy().to_string();
+        let mut effects = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join("effects"))
+            .unwrap();
+        writeln!(effects, "{role}").unwrap();
+        effects.sync_all().unwrap();
+        fs::write(root.join(format!("{role}-entered")), b"entered").unwrap();
+        if role == "a" {
+            wait_for_test_path(&root.join("release-a"));
+        }
+    }
+
+    #[test]
+    fn o1_e3_replay_fence_serializes_two_process_effect_owners() {
+        let root = tmpdir().join("o1-e3-cross-process-replay");
+        let dir = root.join("config");
+        fs::create_dir_all(&root).unwrap();
+        save_to(&dir, &Config::default()).unwrap();
+        let spawn = |role: &str| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("config::tests::o1_e3_replay_fence_child")
+                .arg("--nocapture")
+                .arg("--test-threads=1")
+                .env("CSSWITCH_O1_E3_REPLAY_ROLE", role)
+                .env("CSSWITCH_O1_E3_REPLAY_ROOT", &root)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let owner_a = spawn("a");
+        wait_for_test_path(&root.join("a-entered"));
+        let owner_b = spawn("b");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert_eq!(fs::read_to_string(root.join("effects")).unwrap(), "a\n");
+        assert!(!root.join("b-entered").exists());
+        fs::write(root.join("release-a"), b"release").unwrap();
+        assert_o1_e3_replay_child_passed(owner_a.wait_with_output().unwrap(), "replay owner A");
+        assert_o1_e3_replay_child_passed(owner_b.wait_with_output().unwrap(), "replay owner B");
+        assert_eq!(fs::read_to_string(root.join("effects")).unwrap(), "a\nb\n");
     }
 
     #[test]

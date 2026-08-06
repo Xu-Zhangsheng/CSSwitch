@@ -1279,3 +1279,217 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
     drop(authority_transaction);
     let _ = std::fs::remove_dir_all(compensation_tmp);
 }
+
+#[test]
+fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut env = ScopedEnv::new();
+    let tmp = isolated_tmpdir("o1-e3-fresh-compensation-replay");
+    let home = tmp.join("home");
+    env.set("HOME", &home);
+    let dir = config::default_dir();
+    let sandbox_home = dir.join("sandbox/home");
+    let auth_dir = sandbox_home.join(".claude-science");
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let system_ssh_config = home.join(".ssh/config");
+    std::fs::write(&system_ssh_config, b"Host alpha\n").unwrap();
+    let sandbox_ssh_dir = sandbox_home.join(".ssh");
+    std::fs::create_dir_all(&sandbox_ssh_dir).unwrap();
+    std::fs::set_permissions(&sandbox_ssh_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let sandbox_ssh_config = sandbox_ssh_dir.join("config");
+    let preexisting_stub = format!(
+        "# CSSwitch managed system SSH config bridge v2\nHost alpha\nInclude \"{}\"\n",
+        system_ssh_config.display()
+    );
+    std::fs::write(&sandbox_ssh_config, preexisting_stub.as_bytes()).unwrap();
+    std::fs::set_permissions(&sandbox_ssh_config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let ssh_stub_transaction = crate::runtime::settings::ManagedSshStubTransaction::capture(
+        &sandbox_home,
+        &["alpha".to_string()],
+    )
+    .unwrap();
+    let authority_file = auth_dir.join("active-org.json");
+    std::fs::write(&authority_file, b"before\n").unwrap();
+    std::fs::set_permissions(&authority_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let initial = runtime_journal_test_config(None, None);
+    config::save_to(&dir, &initial).unwrap();
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let authority =
+        AuthorityTransaction::capture(&dir, &sandbox_home, &auth_dir, &initial, &state).unwrap();
+    let ticket = authority.registered_snapshot_ticket().unwrap();
+    let mut identity = OneClickTransactionIdentity {
+        target_profile_id: "target".into(),
+        runtime_fingerprint: "d".repeat(64),
+        snapshot_ticket: ticket.clone(),
+        previous_binding: None,
+        profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: config::RuntimePriorStopState::NotRequired,
+    };
+    let mut progress = OneClickJournalProgress::PreJournalAbort {
+        registered_ticket: ticket,
+        runtime_transaction: Box::new(None),
+    };
+    let science_bin = tmp.join("fake-science");
+    std::fs::write(&science_bin, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&science_bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let launch_runtime = crate::runtime::science::test_runtime_identity(science_bin);
+    identity.runtime_fingerprint = launch_runtime.environment_transaction_id();
+    test_begin_replayable_compensation(
+        &dir,
+        &authority,
+        &state,
+        &identity,
+        &mut progress,
+        launch_runtime,
+        Some(ssh_stub_transaction),
+    )
+    .unwrap();
+    std::fs::write(&authority_file, b"candidate\n").unwrap();
+    let exact_compensation = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    config::update(&dir, |current| {
+        current
+            .runtime_compensation
+            .as_mut()
+            .unwrap()
+            .compensation_id = "retargeted-compensation".into();
+    })
+    .unwrap();
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let lifecycle = crate::lifecycle::Lifecycle::default();
+    let retargeted = config::load_from(&dir).unwrap();
+    assert!(replay_interrupted_one_click_compensation(
+        app.handle(),
+        &state,
+        &lifecycle,
+        None,
+        &retargeted,
+    )
+    .unwrap_err()
+    .contains("identity drifted or retargeted"));
+    assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
+    config::update(&dir, |current| {
+        current.runtime_compensation = Some(exact_compensation.clone());
+    })
+    .unwrap();
+    begin_one_click_compensation_step(
+        &dir,
+        &mut progress,
+        config::RuntimeCompensationStep::ScienceCleanup,
+    )
+    .unwrap();
+    for expected_step in [
+        config::RuntimeCompensationStep::ScienceCleanup,
+        config::RuntimeCompensationStep::SshCleanup,
+    ] {
+        let current = config::load_from(&dir).unwrap();
+        assert_eq!(
+            current
+                .runtime_compensation
+                .as_ref()
+                .unwrap()
+                .steps
+                .iter()
+                .find(|step| !step.outcome.is_terminal())
+                .map(|step| step.step),
+            Some(expected_step)
+        );
+        assert!(replay_interrupted_one_click_compensation(
+            app.handle(),
+            &state,
+            &lifecycle,
+            None,
+            &current,
+        )
+        .unwrap());
+    }
+    assert_eq!(
+        std::fs::read(&sandbox_ssh_config).unwrap(),
+        preexisting_stub.as_bytes(),
+        "durable SSH compensation must preserve the exact pre-one-click stub"
+    );
+    config::update_result(&dir, |current| {
+        let journal = current
+            .runtime_compensation
+            .as_mut()
+            .ok_or("test compensation disappeared before authority intent")?;
+        let authority_step = journal
+            .steps
+            .iter_mut()
+            .find(|step| step.step == config::RuntimeCompensationStep::AuthorityRestore)
+            .ok_or("test authority step missing")?;
+        if authority_step.outcome != config::RuntimeCompensationStepState::Pending {
+            return Err("test authority step was not pending".into());
+        }
+        authority_step.outcome = config::RuntimeCompensationStepState::InProgress;
+        Ok(((), true))
+    })
+    .unwrap();
+    let recovery_root = authority.recovery_path().to_path_buf();
+    drop(authority);
+
+    let authority_crash_journal = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    let mut durable_authority =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    durable_authority
+        .restore_durable_authority(&dir, &state, &None, &authority_crash_journal)
+        .unwrap();
+    drop(durable_authority);
+    let after_effect_crash = config::load_from(&dir).unwrap();
+    assert_eq!(
+        after_effect_crash.runtime_transaction,
+        initial.runtime_transaction
+    );
+    assert_eq!(
+        after_effect_crash
+            .runtime_compensation
+            .as_ref()
+            .unwrap()
+            .steps
+            .iter()
+            .find(|step| step.step == config::RuntimeCompensationStep::AuthorityRestore)
+            .map(|step| step.outcome),
+        Some(config::RuntimeCompensationStepState::InProgress),
+        "fixture must crash after authority effect but before durable outcome"
+    );
+
+    for _ in 0..8 {
+        let current = config::load_from(&dir).unwrap();
+        if current.runtime_compensation.is_none() {
+            break;
+        }
+        assert!(
+            replay_interrupted_one_click_compensation(
+                app.handle(),
+                &state,
+                &lifecycle,
+                None,
+                &current,
+            )
+            .unwrap(),
+            "each replay turn must either advance one durable step or finish"
+        );
+    }
+    let converged = config::load_from(&dir).unwrap();
+    assert!(converged.runtime_compensation.is_none());
+    assert_eq!(converged.runtime_transaction, initial.runtime_transaction);
+    assert_eq!(std::fs::read(&authority_file).unwrap(), b"before\n");
+    assert_eq!(
+        std::fs::read(&sandbox_ssh_config).unwrap(),
+        preexisting_stub.as_bytes(),
+        "fresh replay must preserve the exact SSH stub that predated one-click"
+    );
+    assert!(!recovery_root.exists());
+    let _ = std::fs::remove_dir_all(tmp);
+}

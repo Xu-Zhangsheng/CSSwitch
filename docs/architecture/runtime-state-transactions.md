@@ -109,11 +109,32 @@ authority restore 前只能是 active record；该 restore 的 outcome 写入点
 record，随后所有步骤与 aggregate completion 都只接受切换后的单值，不能在两侧任选。任一步 intent 不能发布时不执行该步及后续 effect；
 任一步 outcome 不能发布时停止后续 effect 并保留恢复快照。authority restore 精确恢复补偿前
 `runtime_transaction` 时保留最新 step state；全部步骤完成后才清除，失败则从 typed step outcome 推导
-`incomplete + failed_steps`。因此原业务 journal 与补偿 crash marker
-可以同时存在。fresh entry 与 normal mode/settings/profile/Codex auth/settings/downgrade mutation、
-selection/read-model 均把任一 journal 打开视为 blocked/manual；显式 `stop_all` / `quit` 与 native-exit
+`incomplete + failed_steps`。因此原业务 journal 与补偿 crash marker 可以同时存在。O1-E3 在 authority
+capture 完成时把固定 tree plan、before-config 与 root/backup identity 写入同一 registered snapshot 内的
+0600 私有 manifest；补偿开始前再把 candidate runtime、exposure、prior Science recipe、active business
+record、精确 SSH stub before/candidate transaction、prior restart launch id 与 compensation id 写入第二份私有
+manifest，随后才发布公开 path-free V2 intent。compensation publication 与 provider auth 通过独立的
+shared/exclusive absence fence 关闭跨进程 marker race，不长期占用普通 config writer fence。fresh production
+entry 的每个单步 replay 也持有该 fence 的 crash-releasing exclusive lease，并在锁内重新读取 canonical
+config、决策、执行 effect、发布 outcome；因此两个 Desktop 进程不能同时执行同一 `InProgress` effect。唯一
+live compensation funnel 在公开 intent 成功后、首个 step intent/effect 前取得同一 exclusive lease 并持有到
+本轮 funnel 返回，因此 live owner 与 fresh owner 也不能交错执行同一步。
+replay owner 在 provider auth 前循环重采 config，校验 public record、private manifest、
+snapshot ticket 与完整 business record，然后重放或观察一个 `pending|in_progress` step。若同进程补偿替换过
+Gateway，私有 manifest 只保存其受管 health identity、path secret 与端口；fresh authority step 必须再以当前
+打包 binary、uid、唯一 listener 和二次 health 复核精确停止该 candidate，不序列化或伪造 process-local
+`GatewayReceipt`。authority restore 只恢复 durable filesystem/config authority，不把上个进程的 AppState/Gateway
+child ownership 当作可恢复事实；完整 restored config 是“effect 已成功、outcome 未落盘”的幂等 commit marker。
+SSH cleanup 重放原 transaction 而不是按 marker 广泛删除；prior Science 使用 durable stop recipe、精确 absent
+的旧 receipt 路径、
+预分配 launch id 与 fresh runtime identity 重新建立，只有 receipt 的 launch id 精确相等才允许 fresh owner 认领。
+任何 retarget、unsafe
+identity、V1 或 typed `incomplete` 都保留 journal/snapshot 并转人工处理。
+
+normal mode/settings/profile/Codex auth/settings/downgrade mutation、selection/read-model 仍把任一 journal 打开
+视为 blocked/manual；显式 `stop_all` / `quit` 与 native-exit
 cleanup 仍是只减小运行态暴露的 terminal cleanup，不写 config/credential，允许在 marker 打开时停机。
-V1 marker 仍可严格读取并阻断，但不会被生产路径升级、推进或清除；本阶段没有 fresh-process 自动重放或收敛。
+V1 marker 仍可严格读取并阻断，但不会被生产路径升级、推进或清除。
 
 `GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
 health、catalog fingerprint、generation/write-back 与 child ownership 核心，但只在全部接受
@@ -349,8 +370,8 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
-  finalize。O1-E2 已把五个 top-level compensation effect 的 durable intent/outcome 与原 transaction 分离，
-  但 fresh-process replay 与自动收敛仍未实现；
+  finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private
+  manifest 与 registered snapshot 自动重放/收敛；V1 与 typed incomplete V2 仍明确保留为人工边界；
 - canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
   protected snapshot 与 cleanup/finalize 收敛 credential publication。其他直接 full-snapshot restore
   与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；

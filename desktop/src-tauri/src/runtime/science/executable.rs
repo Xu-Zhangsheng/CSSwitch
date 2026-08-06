@@ -631,6 +631,50 @@ pub(crate) fn runtime_identity_is_current(runtime: &ScienceRuntimeIdentity) -> b
     runtime.is_current()
 }
 
+pub(crate) fn runtime_identity_from_prior_recipe(
+    recipe: &config::RuntimePriorScienceRecipe,
+) -> Result<ScienceRuntimeIdentity, String> {
+    runtime_identity_from_durable_parts(
+        &recipe.runtime_path,
+        &recipe.runtime_source,
+        recipe.runtime_version.clone(),
+        &recipe.runtime_fingerprint,
+    )
+}
+
+pub(crate) fn runtime_identity_from_durable_parts(
+    runtime_path: &Path,
+    runtime_source: &str,
+    runtime_version: Option<String>,
+    runtime_fingerprint: &str,
+) -> Result<ScienceRuntimeIdentity, String> {
+    let source = match runtime_source {
+        "explicit" => ScienceRuntimeSource::Explicit,
+        "official_updated" => ScienceRuntimeSource::OfficialUpdated,
+        "installed_app" => ScienceRuntimeSource::InstalledApp,
+        "cached_once" => ScienceRuntimeSource::CachedOnce,
+        _ => return Err("durable prior Science recipe has an unknown runtime source".into()),
+    };
+    let canonical = runtime_path
+        .canonicalize()
+        .map_err(|_| "durable prior Science runtime is unavailable")?;
+    if canonical != runtime_path {
+        return Err("durable prior Science runtime path is not canonical".into());
+    }
+    let fingerprint = science_executable_fingerprint(&canonical)
+        .ok_or("durable prior Science runtime identity is unavailable")?;
+    let runtime = ScienceRuntimeIdentity {
+        path: canonical,
+        source,
+        version: runtime_version,
+        fingerprint,
+    };
+    if runtime.environment_transaction_id() != runtime_fingerprint {
+        return Err("durable prior Science runtime fingerprint changed".into());
+    }
+    Ok(runtime)
+}
+
 fn explicit_science_bin() -> Result<Option<PathBuf>, String> {
     let Some(path) = std::env::var_os("SCIENCE_BIN").map(PathBuf::from) else {
         return Ok(None);

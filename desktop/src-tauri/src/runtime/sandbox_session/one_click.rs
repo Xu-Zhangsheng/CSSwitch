@@ -36,15 +36,23 @@ use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
 use super::authority_transaction::AuthorityTransaction;
 use super::catalog_verify::*;
 use super::pending_cleanup::{
-    cleanup_required_error, replay_finalize_authority_cleanup, retry_pending_authority_cleanup,
-    AuthorityCleanupFailure, AuthorityCleanupPhase, PendingCleanupRetryOutcome,
+    cleanup_required_error, replay_compensation_snapshot_cleanup,
+    replay_finalize_authority_cleanup, retry_pending_authority_cleanup, AuthorityCleanupFailure,
+    AuthorityCleanupPhase, PendingCleanupRetryOutcome,
 };
-use super::recovery::{AppAuthoritySnapshot, RuntimeTransactionRestoreExpectation};
+use super::recovery::{
+    read_registered_private_manifest, AppAuthoritySnapshot, OneClickAuthoritySnapshot,
+    RuntimeTransactionRestoreExpectation,
+};
 use super::route_reconcile::configure_third_party_best_effort;
 use super::ssh_preflight::*;
 
 mod cold;
+mod compensation_replay;
 mod healthy_reopen;
+
+use compensation_replay::persist_compensation_replay_manifest;
+pub(super) use compensation_replay::replay_interrupted_one_click_compensation;
 
 #[cfg(test)]
 pub(super) use cold::{
@@ -154,13 +162,6 @@ impl OneClickEntryPreflight {
         let cfg = config::load_from(&config::default_dir()).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
-        if cfg.runtime_compensation.is_some() {
-            return Err(TypedOneClickFailure::new(
-                OneClickFailureKind::Prepare,
-                "检测到未完成的 durable compensation journal；本阶段不自动重放，已保留原事务与恢复快照并要求人工恢复。",
-            )
-            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
-        }
         let active = cfg.active_profile().ok_or_else(|| {
             typed_one_click_err(
                 OneClickFailureKind::NoActiveProfile,
@@ -466,6 +467,56 @@ pub(super) fn one_click_login_after_history_handoff<R: Runtime>(
     one_click_login_entry(app, state, lifecycle, runtime_choice, auth_proof)
 }
 
+pub(crate) fn replay_interrupted_compensation_before_auth<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+) -> Result<bool, String> {
+    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
+    replay_interrupted_one_click_compensation(app, state, lifecycle, None, &cfg)
+}
+
+pub(crate) fn interrupted_compensation_requires_pre_auth_replay() -> Result<bool, String> {
+    config::load_from(&config::default_dir())
+        .map(|cfg| cfg.runtime_compensation.is_some())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(super) fn test_begin_replayable_compensation(
+    dir: &Path,
+    authority: &AuthorityTransaction,
+    state: &SharedAppState,
+    identity: &OneClickTransactionIdentity,
+    progress: &mut OneClickJournalProgress,
+    launch_runtime: ScienceRuntimeIdentity,
+    ssh_stub_transaction: Option<crate::runtime::settings::ManagedSshStubTransaction>,
+) -> Result<(), String> {
+    let rollback = OneClickRollbackContext {
+        proxy_action: ProxyAction::Reused,
+        sandbox_port: config::load_from(dir)
+            .map_err(|error| error.to_string())?
+            .sandbox_port,
+        launch_runtime,
+        launch_token: None,
+        launch_environment: ScienceEnvironmentExposure::NotExposed,
+        launch_confirmed_stopped: false,
+        candidate_stop_proof: ManagedScienceCandidateStopProof::NotRequired,
+        ssh_stub_transaction,
+        current_kind: OneClickFailureKind::Prepare,
+    };
+    let compensation_id = persist_compensation_replay_manifest(
+        authority, state, identity, &rollback, None, progress,
+    )?;
+    begin_one_click_compensation_with_id(
+        dir,
+        identity,
+        progress,
+        authority.captured_runtime_transaction(),
+        compensation_id,
+    )
+}
+
 /// Sole production one-click runtime entry owner. Recovery is an explicit
 /// recapture/decide/effect loop; the affine Gateway handoff is consumed only
 /// after the post-effect facts have been recaptured.
@@ -483,6 +534,19 @@ pub(crate) fn one_click_login_entry<R: Runtime>(
         let facts = config::load_from(&config::default_dir()).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
+        if replay_interrupted_one_click_compensation(&app, &state, lifecycle, auth_proof, &facts)
+            .map_err(|error| {
+                TypedOneClickFailure::new(
+                    OneClickFailureKind::AuthoritySnapshot,
+                    format!(
+                        "检测到未完成的 durable compensation，安全重放失败并已保留事务：{error}"
+                    ),
+                )
+                .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
+            })?
+        {
+            continue;
+        }
         if super::history_recovery::replay_interrupted_history_recovery(&state, &facts).map_err(
             |error| {
                 TypedOneClickFailure::new(
@@ -1407,11 +1471,28 @@ pub(super) fn write_one_click_checkpoint(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn begin_one_click_compensation(
     dir: &Path,
     identity: &OneClickTransactionIdentity,
     progress: &mut OneClickJournalProgress,
     restored_runtime_transaction: Option<config::RuntimeTransactionRecord>,
+) -> Result<(), String> {
+    begin_one_click_compensation_with_id(
+        dir,
+        identity,
+        progress,
+        restored_runtime_transaction,
+        config::new_id(),
+    )
+}
+
+fn begin_one_click_compensation_with_id(
+    dir: &Path,
+    identity: &OneClickTransactionIdentity,
+    progress: &mut OneClickJournalProgress,
+    restored_runtime_transaction: Option<config::RuntimeTransactionRecord>,
+    compensation_id: String,
 ) -> Result<(), String> {
     let registered_ticket = progress.registered_ticket().clone();
     let active_runtime_transaction = match progress {
@@ -1451,6 +1532,8 @@ pub(super) fn begin_one_click_compensation(
     if identity.snapshot_ticket != registered_ticket {
         return Err("one-click compensation intent rejected a replaced snapshot ticket".into());
     }
+    let _publication_lease = config::acquire_runtime_compensation_publication_lease(dir)
+        .map_err(|error| format!("one-click compensation publication fence failed: {error}"))?;
     let compensation = config::update_result(dir, |current| {
         if !config_authority_matches(
             current,
@@ -1466,7 +1549,7 @@ pub(super) fn begin_one_click_compensation(
         }
         let next = config::RuntimeCompensationJournal {
             schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2,
-            compensation_id: config::new_id(),
+            compensation_id: compensation_id.clone(),
             target_profile_id: identity.target_profile_id.clone(),
             runtime_fingerprint: identity.runtime_fingerprint.clone(),
             snapshot_ticket: identity.snapshot_ticket.clone(),
@@ -2144,15 +2227,38 @@ fn restart_managed_science_with_budget<R: Runtime>(
     prior: &PriorScienceContext,
     health_budget_ms: u64,
 ) -> Result<(), ManagedScienceRestartError> {
+    restart_science_identity_with_budget(
+        app,
+        state,
+        _lifecycle,
+        _auth_proof,
+        &prior.runtime,
+        prior.port,
+        health_budget_ms,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restart_science_identity_with_budget<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    _lifecycle: &lifecycle::Lifecycle,
+    _auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+    runtime: &ScienceRuntimeIdentity,
+    port: u16,
+    health_budget_ms: u64,
+    durable_launch_id: Option<&str>,
+) -> Result<(), ManagedScienceRestartError> {
     let dir = config::default_dir();
     let cfg = config::load_from(&dir).map_err(|error| error.to_string())?;
-    if cfg.sandbox_port != prior.port {
+    if cfg.sandbox_port != port {
         return Err("恢复 prior Science 时沙箱端口已变化".into());
     }
-    if ScienceHostAdapter::validate_launch_runtime(&prior.runtime).is_err() {
+    if ScienceHostAdapter::validate_launch_runtime(runtime).is_err() {
         return Err("恢复 prior Science 时 runtime 身份已变化".into());
     }
-    if proc::loopback_port_in_use(prior.port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
+    if proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
         return Err("恢复 prior Science 前端口仍被占用；拒绝接管未知 listener".into());
     }
     let (proxy_port, secret) = {
@@ -2180,8 +2286,8 @@ fn restart_managed_science_with_budget<R: Runtime>(
     let attempt = ScienceHostAdapter::spawn_launch(
         ScienceLaunchSpec::recovery(
             &launch,
-            &prior.runtime,
-            prior.port,
+            runtime,
+            port,
             &proxy_url,
             cfg.reuse_system_ssh,
             &ssh_hosts,
@@ -2235,8 +2341,8 @@ fn restart_managed_science_with_budget<R: Runtime>(
         let mut seams = SANDBOX_SESSION_TEST_SEAMS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if seams.prior_restart_post_spawn_failure_port == Some(prior.port) {
-            let listener_pid = crate::runtime::science::test_unique_listener_pid(prior.port)
+        if seams.prior_restart_post_spawn_failure_port == Some(port) {
+            let listener_pid = crate::runtime::science::test_unique_listener_pid(port)
                 .ok_or("test-only prior Science listener identity missing after verification")?;
             let process_start =
                 crate::runtime::science::test_process_start_identity_for_pid(listener_pid)
@@ -2250,17 +2356,20 @@ fn restart_managed_science_with_budget<R: Runtime>(
                 &mut sandbox,
                 &mut url,
                 ScienceStopRequest::exact(
-                    &prior.runtime,
+                    runtime,
                     ScienceStopOwnershipReceipt::from_managed_launch(&_candidate_token),
                 ),
             );
             return Err(ManagedScienceRestartError::test_post_spawn_validation(
-                &prior.runtime,
-                cleanup,
+                runtime, cleanup,
             ));
         }
     }
-    let _token = match ScienceHostAdapter::commit_launch(verified) {
+    let committed_launch = match durable_launch_id {
+        Some(launch_id) => ScienceHostAdapter::commit_launch_with_launch_id(verified, launch_id),
+        None => ScienceHostAdapter::commit_launch(verified),
+    };
+    let _token = match committed_launch {
         Ok(receipt) => receipt.ownership().clone(),
         Err(error) => {
             let mut sandbox = None;
@@ -2270,11 +2379,11 @@ fn restart_managed_science_with_budget<R: Runtime>(
                 .ownership()
                 .map(|token| {
                     ScienceStopRequest::exact(
-                        &prior.runtime,
+                        runtime,
                         ScienceStopOwnershipReceipt::from_managed_launch(token),
                     )
                 })
-                .unwrap_or_else(|| ScienceStopRequest::recover(Some(&prior.runtime)));
+                .unwrap_or_else(|| ScienceStopRequest::recover(Some(runtime)));
             let cleanup = ScienceHostAdapter::stop(app, &mut sandbox, &mut url, request);
             let message = match error.kind() {
                 ScienceLaunchFailureKind::ReceiptIdentityDrift => {
@@ -2286,17 +2395,17 @@ fn restart_managed_science_with_budget<R: Runtime>(
                 ),
             };
             return Err(if token_present {
-                ManagedScienceRestartError::after_exact_cleanup(message, &prior.runtime, cleanup)
+                ManagedScienceRestartError::after_exact_cleanup(message, runtime, cleanup)
             } else {
                 ManagedScienceRestartError::after_spawn_unproven(message)
             });
         }
     };
-    let url = ScienceHostAdapter::url(prior.port, &prior.runtime);
+    let url = ScienceHostAdapter::url(port, runtime);
     let mut current = lock(state);
-    current.sandbox_port = prior.port;
+    current.sandbox_port = port;
     current.sandbox_url = Some(url);
-    current.science_runtime = Some(prior.runtime.clone());
+    current.science_runtime = Some(runtime.clone());
     current.science_confirmed_stopped = None;
     Ok(())
 }
@@ -2917,7 +3026,7 @@ fn one_click_login_with_options<R: Runtime>(
     if cfg.runtime_compensation.is_some() {
         return Err(TypedOneClickFailure::new(
             OneClickFailureKind::Prepare,
-            "检测到未完成的 durable compensation journal；本阶段不自动重放，已保留原事务与恢复快照并要求人工恢复。",
+            "durable compensation 尚未由 production entry owner 收敛；已保留 exact journal 与恢复快照。",
         )
         .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
     }

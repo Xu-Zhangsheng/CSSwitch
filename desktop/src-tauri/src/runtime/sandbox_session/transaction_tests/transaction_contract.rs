@@ -702,6 +702,8 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         .expect("managed Science launch phase must remain module-level");
     let recovery_restart = top_level(&file, "restart_managed_science_with_budget")
         .expect("DB recovery restart must remain a module-level bounded helper");
+    let durable_recovery_restart = top_level(&file, "restart_science_identity_with_budget")
+        .expect("fresh-process compensation must share the bounded Science restart owner");
     assert!(
         top_level(&compensation_file, "compensate_one_click_failure").is_some()
             && top_level(&file, "compensate_one_click_failure").is_none(),
@@ -862,6 +864,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     );
     let mut recovery_restart_flow = FlowFacts::default();
     recovery_restart_flow.visit_item_fn(recovery_restart);
+    recovery_restart_flow.visit_item_fn(durable_recovery_restart);
     for required in [
         "spawn_launch",
         "accept_launch_script",
@@ -1063,5 +1066,81 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             .count(),
         1,
         "all post-snapshot AST must contain exactly one compensation call, solely in Err"
+    );
+}
+
+#[test]
+fn o1_e3_compensation_replay_has_one_durable_pre_auth_owner() {
+    let command_source = include_str!("../../../commands/runtime/one_click.rs");
+    let compensation_source = include_str!("../one_click/cold/compensation.rs");
+    let replay_source = include_str!("../one_click/compensation_replay.rs");
+    let owner_source = include_str!("../one_click.rs");
+    let recovery_source = include_str!("../recovery.rs");
+    let settings_source = include_str!("../../settings.rs");
+    let config_source = include_str!("../../../config.rs");
+
+    let persist_private = compensation_source
+        .find("persist_compensation_replay_manifest(")
+        .expect("compensation must persist its private replay manifest");
+    let publish_intent = compensation_source
+        .find("begin_one_click_compensation_with_id(")
+        .expect("compensation must publish its public exact-step intent");
+    assert!(
+        persist_private < publish_intent,
+        "private replay authority must be durable before public compensation intent"
+    );
+    assert!(
+        compensation_source
+            .find("acquire_runtime_compensation_replay_lease")
+            .unwrap()
+            < compensation_source
+                .find("\n    persist_compensation_step_intent")
+                .unwrap(),
+        "live compensation must join the cross-process effect lease before its first step intent"
+    );
+
+    let replay_before_auth = command_source
+        .find("match replay_compensation_before_auth")
+        .expect("command entry must own interrupted compensation replay");
+    let provider_auth = command_source
+        .find("prepare_provider_auth(")
+        .expect("provider auth preflight must remain discoverable");
+    assert!(
+        replay_before_auth < provider_auth,
+        "durable compensation must converge before provider auth"
+    );
+    assert!(
+        command_source.contains("interrupted_compensation_requires_pre_auth_replay()")
+            && command_source.contains("RuntimeMutationDomain::Destructive")
+            && command_source.contains("acquire_runtime_compensation_auth_lease")
+            && owner_source.contains("acquire_runtime_compensation_publication_lease"),
+        "normal login must avoid the destructive lease while replay must serialize effects"
+    );
+
+    assert!(
+        replay_source.contains("read_registered_private_manifest")
+            && replay_source.contains("OneClickAuthoritySnapshot::load_durable")
+            && replay_source.contains("decide_compensation_replay")
+            && replay_source
+                .find("acquire_runtime_compensation_replay_lease")
+                .unwrap()
+                < replay_source.find("let cfg = config::load_from").unwrap()
+            && recovery_source.contains("restore_durable_authority"),
+        "fresh replay must reconstruct exact authority and typed step progress from durable state"
+    );
+    assert!(
+        replay_source.contains("ssh_stub_transaction")
+            && replay_source.contains("transaction.compensate_durable")
+            && settings_source.contains("fn compensate_durable")
+            && replay_source.contains("prior_restart_launch_id")
+            && replay_source.contains("managed_receipt_matches_launch_id")
+            && replay_source.contains("prior_restart_receipt_is_absent")
+            && recovery_source.contains("let already_restored = current == restored_config")
+            && config_source.contains("RUNTIME_COMPENSATION_AUTH_LOCK_FILE"),
+        "SSH, authority, prior Science and auth races must retain exact durable identities"
+    );
+    assert!(
+        !replay_source.contains("message.contains") && !replay_source.contains("restore_app_state"),
+        "diagnostics and stale process-local AppState must not control fresh replay"
     );
 }

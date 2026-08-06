@@ -314,11 +314,33 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
     }
-    if let Err(error) = begin_one_click_compensation(
+    let compensation_id = match persist_compensation_replay_manifest(
+        authority_transaction,
+        state,
+        transaction_identity,
+        &failure.rollback,
+        prior_science,
+        journal_progress,
+    ) {
+        Ok(compensation_id) => compensation_id,
+        Err(error) => {
+            authority_transaction.preserve_recovery();
+            trace.finish("error=compensation_replay_manifest_not_persisted");
+            return Err(TypedOneClickFailure::new(
+                original_kind,
+                format!(
+                    "补偿开始前无法持久化 private replay manifest；未执行补偿 effect，已保留恢复快照并要求人工恢复：{error}"
+                ),
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
+    };
+    if let Err(error) = begin_one_click_compensation_with_id(
         dir,
         transaction_identity,
         journal_progress,
         authority_transaction.captured_runtime_transaction(),
+        compensation_id,
     ) {
         authority_transaction.preserve_recovery();
         trace.finish("error=compensation_intent_not_persisted");
@@ -330,6 +352,20 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         )
         .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
     }
+    let _live_replay_lease = match config::acquire_runtime_compensation_replay_lease(dir) {
+        Ok(lease) => lease,
+        Err(error) => {
+            authority_transaction.preserve_recovery();
+            trace.finish("error=compensation_replay_lease_unavailable");
+            return Err(TypedOneClickFailure::new(
+                original_kind,
+                format!(
+                    "补偿 intent 已持久化，但无法取得跨进程 effect owner；未执行补偿 effect，已保留事务并要求人工恢复：{error}"
+                ),
+            )
+            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+        }
+    };
     let cross_runtime_environment = failure.rollback.launch_environment.may_be_exposed()
         && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
     let environment = CompensationEnvironment::from_launch(

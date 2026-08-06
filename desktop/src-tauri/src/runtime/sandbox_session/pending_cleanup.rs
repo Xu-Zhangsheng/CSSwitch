@@ -1028,7 +1028,7 @@ pub(super) fn replay_finalize_authority_cleanup(
     }
 }
 
-fn registered_authority_snapshot_for_ticket(
+pub(super) fn registered_authority_snapshot_for_ticket(
     state: &SharedAppState,
     snapshot_ticket: &config::RuntimeSnapshotTicket,
 ) -> Result<
@@ -1148,6 +1148,50 @@ pub(super) fn prepare_history_snapshot_cleanup_only(
         ));
     }
     Ok(())
+}
+
+pub(super) fn replay_compensation_snapshot_cleanup(
+    state: &SharedAppState,
+    snapshot_ticket: &config::RuntimeSnapshotTicket,
+) -> Result<(), AuthorityCleanupFailure> {
+    let config_dir = config::default_dir();
+    let manifest_raw =
+        config::read_pending_authority_cleanup_manifest(&config_dir).map_err(|_| {
+            retry_failure("cleanup_manifest_read_failed：无法读取 compensation authority 清单。")
+        })?;
+    if let Some(raw) = manifest_raw.as_deref() {
+        let manifest = parse_pending_cleanup_manifest(raw).map_err(retry_failure)?;
+        if manifest.entries.is_empty() {
+            if !pending_cleanup_name_is_valid(&snapshot_ticket.managed_id) {
+                return Err(retry_failure(
+                    "cleanup_manifest_causal_mismatch：compensation snapshot ticket 非法。",
+                ));
+            }
+            let sandbox_home_path = sandbox_home();
+            let expected_parent = sandbox_home_path
+                .parent()
+                .ok_or_else(|| retry_failure("cleanup_manifest_invalid：沙箱 HOME 无父目录。"))?;
+            let path = expected_parent.join(&snapshot_ticket.managed_id);
+            let tombstone =
+                expected_parent.join(format!("{}.deleting", snapshot_ticket.managed_id));
+            if !path.exists() && !tombstone.exists() {
+                return Ok(());
+            }
+            return Err(retry_failure(
+                "cleanup_identity_changed：compensation 清单已空但 snapshot 仍存在。",
+            ));
+        }
+    }
+    let (manifest, context, registered, _) =
+        registered_authority_snapshot_for_ticket(state, snapshot_ticket)?;
+    if pending_cleanup_requires_recovery(&manifest) {
+        prepare_registered_authority_cleanup(&context, &registered)?;
+    } else if manifest.disposition != Some(PendingCleanupDisposition::CleanupOnly) {
+        return Err(retry_failure(
+            "cleanup_manifest_invalid：compensation snapshot disposition 非法。",
+        ));
+    }
+    retry_pending_authority_cleanup(state).map(|_| ())
 }
 
 // Snapshot root removal (uses authority FS primitives; owned by cleanup lifecycle).
