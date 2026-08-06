@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Runtime;
 
 use super::*;
+use crate::runtime::sandbox_session::recovery::OneClickAuthoritySnapshot;
 
 const COMPENSATION_REPLAY_MANIFEST: &str = "compensation-replay.v1.json";
 

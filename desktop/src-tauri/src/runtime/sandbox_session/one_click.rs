@@ -41,8 +41,7 @@ use super::pending_cleanup::{
     AuthorityCleanupPhase, PendingCleanupRetryOutcome,
 };
 use super::recovery::{
-    read_registered_private_manifest, AppAuthoritySnapshot, OneClickAuthoritySnapshot,
-    RuntimeTransactionRestoreExpectation,
+    read_registered_private_manifest, AppAuthoritySnapshot, RuntimeTransactionRestoreExpectation,
 };
 use super::route_reconcile::configure_third_party_best_effort;
 use super::ssh_preflight::*;
