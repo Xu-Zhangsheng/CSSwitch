@@ -2295,6 +2295,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    static R0_CODEX_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     struct TempDir(PathBuf);
 
     impl TempDir {
@@ -3519,6 +3521,9 @@ mod tests {
     }
 
     fn run_exact_ignored_codex_characterization(case: &str) {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let child_name = "commands::codex::tests::isolated_r0_codex_mutation_command_contract";
         let output = Command::new(env::current_exe().unwrap())
             .arg("--exact")
@@ -3631,6 +3636,9 @@ mod tests {
 
     #[test]
     fn r0_cancel_writes_exact_ndjson_and_write_failure_is_safely_terminalized() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp = TempDir::new("r0-f-cancel-wire");
         let supervisor = Arc::new(CodexAuthSupervisor::default());
         let reservation = supervisor.begin_login().unwrap();
