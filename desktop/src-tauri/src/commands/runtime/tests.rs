@@ -5136,8 +5136,8 @@ fn r0_start_gateway_only_failure_matrix_preserves_current_partial_effects() {
 fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
     let app_source = include_str!("../../lib.rs");
     let registration = app_source
-        .splitn(2, ".invoke_handler(tauri::generate_handler![")
-        .nth(1)
+        .split_once(".invoke_handler(tauri::generate_handler![")
+        .map(|(_, suffix)| suffix)
         .expect("invoke handler must exist")
         .split("])\n")
         .next()
@@ -5149,10 +5149,10 @@ fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
 fn single_instance_plugin_is_registered_first() {
     let app_source = include_str!("../../lib.rs");
     let builder = app_source
-        .splitn(2, "let app = tauri::Builder::default()")
-        .nth(1)
+        .split_once("let app = tauri::Builder::default()")
+        .map(|(_, suffix)| suffix)
         .expect("production Builder chain must exist")
-        .splitn(2, ".manage(")
+        .split(".manage(")
         .next()
         .unwrap();
     let single_instance = builder

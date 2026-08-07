@@ -114,8 +114,8 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
 fn acceptance_override_is_wired_after_env_clear_and_before_formal_spawn() {
     let lifecycle = include_str!("lifecycle.rs");
     let formal_start = lifecycle
-        .splitn(2, "fn start_proxy_for_inner")
-        .nth(1)
+        .split_once("fn start_proxy_for_inner")
+        .map(|(_, suffix)| suffix)
         .expect("production formal start owner must exist");
     let configure = formal_start
         .find("configure_managed_proxy_command(")
