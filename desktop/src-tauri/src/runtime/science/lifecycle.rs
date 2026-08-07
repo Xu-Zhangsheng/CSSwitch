@@ -192,19 +192,33 @@ pub(crate) fn sandbox_listener_matches_runtime(
 
 /// Stop the sandbox Science process and clear the in-memory sandbox URL.
 ///
-/// Returns `Err` when the stop script is missing or exits non-zero, so callers
-/// can report that Science may not have stopped cleanly.
+/// Returns `Err` when the stop script is unavailable or the exact managed
+/// process cannot be proven stopped. A non-zero Science CLI result may fall
+/// back to the already-frozen exact PID only while its full launch token is
+/// still current.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SciencePostTermAction {
     Complete,
     KillExact,
     IdentityDrift,
+    PreserveCommandFailure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScienceStopCommandOutcome {
+    Success,
+    NonZero,
+    Unavailable,
 }
 
 fn science_post_term_action(
+    command_outcome: ScienceStopCommandOutcome,
     port_accepts_tcp: bool,
     ownership_is_current: bool,
 ) -> SciencePostTermAction {
+    if command_outcome == ScienceStopCommandOutcome::Unavailable {
+        return SciencePostTermAction::PreserveCommandFailure;
+    }
     match (port_accepts_tcp, ownership_is_current) {
         (false, _) => SciencePostTermAction::Complete,
         (true, true) => SciencePostTermAction::KillExact,
@@ -365,6 +379,7 @@ pub(crate) fn execute_science_stop<R: Runtime>(
             ));
         }
         let mut failure = None;
+        let mut command_outcome = ScienceStopCommandOutcome::Unavailable;
         match asset_root(app) {
             Some(root) => {
                 let stop = root.join("scripts/stop-science-sandbox.sh");
@@ -381,8 +396,11 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                         .stderr(Stdio::null())
                         .status()
                     {
-                        Ok(s) if s.success() => {}
+                        Ok(s) if s.success() => {
+                            command_outcome = ScienceStopCommandOutcome::Success;
+                        }
                         Ok(s) => {
+                            command_outcome = ScienceStopCommandOutcome::NonZero;
                             failure = Some(ScienceStopFailure::stop_command_failed(format!(
                                 "停止沙箱脚本非零退出（{:?}）。",
                                 s.code()
@@ -407,19 +425,26 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                 ));
             }
         }
-        if failure.is_none() && loopback_port_accepts_tcp(sandbox_port) {
-            let pid = stop_token.record.listener_pid;
-            if managed_launch_token_is_current(&stop_token, runtime) {
+        let port_accepts_tcp = loopback_port_accepts_tcp(sandbox_port);
+        let ownership_is_current = managed_launch_token_is_current(&stop_token, runtime);
+        match science_post_term_action(command_outcome, port_accepts_tcp, ownership_is_current) {
+            SciencePostTermAction::Complete => {
+                failure = None;
+            }
+            SciencePostTermAction::KillExact => {
+                let pid = stop_token.record.listener_pid;
+                failure = None;
                 // Some upstream Science builds return success and remove their
-                // lockfile without terminating the daemon. The user requested
-                // stop, so signal only the exact launch token whose listener,
-                // process start, receipt, and canonical executable were proved
-                // both before and after CLI.
+                // lockfile without terminating the daemon; others return
+                // non-zero after rejecting their own still-live PID. The user
+                // requested stop, so signal only the exact launch token whose
+                // listener, process start, receipt, and canonical executable
+                // were proved both before and after CLI.
                 // SAFETY: kill does not dereference pointers. PID > 1 and exact
                 // listener identity were checked immediately above.
                 if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
                     failure = Some(ScienceStopFailure::signal_failure(
-                        "Science stop 返回成功但精确 daemon 无法接收 TERM。",
+                        "Science CLI 后精确 daemon 无法接收 TERM。",
                     ));
                 } else {
                     for _ in 0..50 {
@@ -429,6 +454,7 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                         std::thread::sleep(Duration::from_millis(100));
                     }
                     match science_post_term_action(
+                        command_outcome,
                         loopback_port_accepts_tcp(sandbox_port),
                         managed_launch_token_is_current(&stop_token, runtime),
                     ) {
@@ -445,9 +471,9 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                             }
                             if loopback_port_accepts_tcp(sandbox_port) {
                                 failure = Some(ScienceStopFailure::exit_unconfirmed(
-                                "Science stop 返回成功，但端口仍被占用；已拒绝把未知监听者当作停止成功。"
-                                    .to_string(),
-                            ));
+                                    "Science CLI 后端口仍被占用；已拒绝把未知监听者当作停止成功。"
+                                        .to_string(),
+                                ));
                             }
                         }
                         SciencePostTermAction::IdentityDrift => {
@@ -455,16 +481,21 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                             // to signal a replacement listener, but retain the
                             // ownership reason in the typed outcome.
                             failure = Some(ScienceStopFailure::identity_drift(
-                            "Science stop 返回成功，但端口仍被占用；已拒绝把未知监听者当作停止成功。",
-                        ));
+                                "Science CLI 后端口仍被占用；已拒绝把未知监听者当作停止成功。",
+                            ));
                         }
+                        SciencePostTermAction::PreserveCommandFailure => unreachable!(
+                            "a completed exact TERM always permits post-TERM classification"
+                        ),
                     }
                 }
-            } else {
+            }
+            SciencePostTermAction::IdentityDrift => {
                 failure = Some(ScienceStopFailure::identity_drift(
-                    "Science stop 返回成功，但停止后的监听身份与启动记录不一致；未发送信号。",
+                    "Science stop 后监听身份与启动记录不一致；未发送信号。",
                 ));
             }
+            SciencePostTermAction::PreserveCommandFailure => {}
         }
         clear_process_tracking = true;
         if failure.is_none() {

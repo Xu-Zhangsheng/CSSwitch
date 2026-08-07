@@ -21,9 +21,9 @@ use super::{
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
     settings_change_needs_teardown, stop_runtime_from_probe, test_process_start_identity_for_pid,
     test_runtime_identity, trusted_science_status, SandboxScienceState, SciencePostTermAction,
-    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopFailure, ScienceStopFailureKind,
-    ScienceVersionCache, VerifiedScienceStop, CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES,
-    MAX_MANAGED_LAUNCH_BYTES,
+    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopCommandOutcome, ScienceStopFailure,
+    ScienceStopFailureKind, ScienceVersionCache, VerifiedScienceStop, CACHED_ONCE_CHOICE,
+    MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
 };
 
 #[test]
@@ -656,19 +656,44 @@ fn stop_probe_is_idempotent_only_for_confirmed_stopped_state() {
     assert!(stop_runtime_from_probe(SandboxScienceState::Unknown, None).is_err());
     assert!(stop_runtime_from_probe(SandboxScienceState::RunningHealthy, None).is_err());
     assert_eq!(
-        science_post_term_action(false, false),
+        science_post_term_action(ScienceStopCommandOutcome::Success, false, false),
         SciencePostTermAction::Complete,
         "a closed port completes without requiring a still-live ownership token"
     );
     assert_eq!(
-        science_post_term_action(true, true),
+        science_post_term_action(ScienceStopCommandOutcome::Success, true, true),
         SciencePostTermAction::KillExact,
         "a surviving exact listener retains the historical KILL fallback"
     );
     assert_eq!(
-        science_post_term_action(true, false),
+        science_post_term_action(ScienceStopCommandOutcome::Success, true, false),
         SciencePostTermAction::IdentityDrift,
         "a surviving replacement listener must never be collapsed into exit-unconfirmed"
+    );
+    assert_eq!(
+        science_post_term_action(ScienceStopCommandOutcome::NonZero, true, true),
+        SciencePostTermAction::KillExact,
+        "a non-zero CLI may fall back only to the still-current exact launch token"
+    );
+    assert_eq!(
+        science_post_term_action(ScienceStopCommandOutcome::NonZero, false, false),
+        SciencePostTermAction::Complete,
+        "a non-zero CLI that already closed the port may proceed to receipt cleanup"
+    );
+    assert_eq!(
+        science_post_term_action(ScienceStopCommandOutcome::NonZero, true, false),
+        SciencePostTermAction::IdentityDrift,
+        "a non-zero CLI must not signal a replacement listener"
+    );
+    assert_eq!(
+        science_post_term_action(ScienceStopCommandOutcome::Unavailable, true, true),
+        SciencePostTermAction::PreserveCommandFailure,
+        "a missing or unspawnable stop command must retain its typed failure"
+    );
+    assert_eq!(
+        science_post_term_action(ScienceStopCommandOutcome::Unavailable, false, false),
+        SciencePostTermAction::PreserveCommandFailure,
+        "an unavailable stop command is not greened by an unrelated closed-port observation"
     );
 
     let typed_failures = [

@@ -69,30 +69,10 @@ if path_contains_symlink "$DATA_DIR"; then
   echo "拒绝：Science data-dir 路径在停止前发生符号链接变化" >&2
   exit 1
 fi
-stop_rc=1
-for attempt in 1 2; do
-  if ! is_safe_science_bin "$BIN"; then
-    echo "拒绝：Science binary 在停止重试前发生变化" >&2
-    exit 1
-  fi
-  if path_contains_symlink "$DATA_DIR"; then
-    echo "拒绝：Science data-dir 路径在停止重试前发生符号链接变化" >&2
-    exit 1
-  fi
-  _dd="${DATA_DIR:A}"; _rd="${REAL_DATA_DIR:A}"
-  if [[ "$_dd" == "$_rd" ]]; then
-    echo "拒绝：data-dir 在停止重试前指向真实目录" >&2
-    exit 1
-  fi
-  if HOME="$SANDBOX_HOME" "$BIN" stop --data-dir "$DATA_DIR" 2>&1 | tail -2; then
-    echo "沙箱已停。真实实例 8765 未受影响。"
-    exit 0
-  else
-    stop_rc=${pipestatus[1]:-$?}
-  fi
-  if (( attempt == 1 )); then
-    sleep 0.2
-  fi
-done
-echo "停止失败（退出码 $stop_rc）。真实实例 8765 未受影响。" >&2
-exit "$stop_rc"
+if HOME="$SANDBOX_HOME" "$BIN" stop --data-dir "$DATA_DIR" 2>&1 | tail -2; then
+  echo "沙箱已停。真实实例 8765 未受影响。"
+else
+  rc=${pipestatus[1]:-$?}
+  echo "停止失败（退出码 $rc）。真实实例 8765 未受影响。" >&2
+  exit "$rc"
+fi
