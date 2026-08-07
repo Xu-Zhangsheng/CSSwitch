@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import plistlib
@@ -20,16 +21,22 @@ from test.installed_provider_matrix import (
     EXPECTED_EXECUTABLE,
     FAKE_API_KEY,
     FIXED_PATH_SECRET,
+    NETWORK_PROBE_SOURCE,
+    NETWORK_SANDBOX_PROFILE,
     ControllerError,
     InProcessScenarioControl,
     InstalledProviderSession,
+    NetworkIsolationGuard,
     ProcessInspector,
     ProcessRecord,
     SubprocessScenarioControl,
     UnixScenarioControlClient,
     _dispatch,
+    _canonical_regular_file_list_digest,
     _safe_json_write,
+    _safe_write,
     _scrub_error,
+    _tree_manifest,
     build_case_scenario,
 )
 from test.model_catalog_coverage_acceptance import (
@@ -46,6 +53,9 @@ class FakeInspector:
         self.listeners = set()
         self.alive = set()
         self.accept_all_listeners = False
+        self.root_pids = []
+        self.process_groups = {}
+        self.start_markers = {}
 
     def process_table(self):
         return list(self.records)
@@ -53,14 +63,46 @@ class FakeInspector:
     def executable_for_pid(self, pid):
         return self.executables.get(pid)
 
+    def executable_identity_for_pid(self, pid):
+        path = self.executables.get(pid)
+        if path is None:
+            return None
+        info = path.stat()
+        return {"path": str(path.resolve()), "device": info.st_dev, "inode": info.st_ino}
+
     def listener_owned(self, pid, port):
         return self.accept_all_listeners or (pid, port) in self.listeners
 
     def pid_alive(self, pid):
         return pid in self.alive
 
+    def process_group(self, pid):
+        return self.process_groups.get(pid)
+
+    def pids_in_process_group(self, pgid):
+        return sorted(pid for pid, value in self.process_groups.items() if value == pgid)
+
+    def process_start_marker(self, pid):
+        return self.start_markers.get(pid, f"fake-start-{pid}")
+
     def children(self, parent_pid):
         return [record for record in self.records if record.ppid == parent_pid]
+
+    def descendants(self, parent_pid):
+        pending = [parent_pid]
+        found = []
+        seen = {parent_pid}
+        while pending:
+            current = pending.pop()
+            for record in self.records:
+                if record.ppid == current and record.pid not in seen:
+                    seen.add(record.pid)
+                    found.append(record)
+                    pending.append(record.pid)
+        return found
+
+    def pids_using_path(self, _root):
+        return list(self.root_pids)
 
 
 class FakePortReservation:
@@ -126,6 +168,143 @@ class InstalledProviderMatrixTests(unittest.TestCase):
                 build_case_scenario(CASE_DEFINITIONS[case])
             ),
         )
+
+    def _bind_test_g1_receipt(self, session):
+        receipt_path = session.root / "test-g1-binding-receipt.json"
+        identity_path = session.root / "identity-hashes.json"
+        hashes_path = session.root / "hashes.sha256"
+        artifact_record_path = session.root / "test-artifact-observation.md"
+        source_gate_path = session.root / "completion-seal.json"
+        repo_root = Path(controller_module.__file__).resolve(strict=True).parents[1]
+        commit = subprocess.run(
+            ["/usr/bin/git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        branch = subprocess.run(
+            ["/usr/bin/git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        desktop_sha256 = hashlib.sha256(session.app_bin.read_bytes()).hexdigest()
+        gateway_sha256 = hashlib.sha256(session.gateway_bin.read_bytes()).hexdigest()
+        science_sha256 = hashlib.sha256(session.science_bin.read_bytes()).hexdigest()
+        bundle_digest = _canonical_regular_file_list_digest(session.app_bundle)
+        science_package_digest = _canonical_regular_file_list_digest(session.bin_dir)
+        _safe_write(source_gate_path, b'{"unit_test_only":true}\n', 0o600)
+        source_authority = {
+            "path": str(source_gate_path),
+            "sha256": hashlib.sha256(source_gate_path.read_bytes()).hexdigest(),
+            "run_id": "unit-test-authority",
+            "head_sha": commit,
+            "suite_count": 15,
+            "aggregate_decision": "PASS",
+            "runner_exit": 0,
+        }
+        artifact_record = "\n".join(
+            (
+                f"source_commit: {commit}",
+                f"canonical_bundle_digest: {bundle_digest}",
+                f"desktop_sha256: {desktop_sha256}",
+                f"gateway_sha256: {gateway_sha256}",
+                "Source gate: `15/15 PASS`, aggregate `PASS`, runner exit `0`",
+                "CSSwitch exact-artifact scope: `PASS`",
+                "",
+            )
+        )
+        _safe_write(artifact_record_path, artifact_record.encode("utf-8"), 0o600)
+        artifact_record_sha256 = hashlib.sha256(
+            artifact_record_path.read_bytes()
+        ).hexdigest()
+        receipt = {
+            "schema": "csswitch-g1-binding-receipt.v1",
+            "current_g1_result": "PASS",
+            "source": {
+                "branch": branch,
+                "commit": commit,
+                "completion_seal_path": str(source_gate_path),
+                "completion_seal_sha256": source_authority["sha256"],
+            },
+            "csswitch": {
+                "artifact_path": str(session.app_bundle),
+                "artifact_record_sha256": artifact_record_sha256,
+                "canonical_bundle_digest": bundle_digest,
+                "desktop_sha256": desktop_sha256,
+                "gateway_sha256": gateway_sha256,
+                "bundle_id": session.expected_bundle_id,
+            },
+            "science": {
+                "executable_path": str(session.science_bin),
+                "executable_sha256": science_sha256,
+                "package_path": str(session.bin_dir),
+                "package_canonical_digest": science_package_digest,
+            },
+        }
+        _safe_json_write(receipt_path, receipt)
+        identity = {
+            "schema": "csswitch-g1-binding-observation.v1",
+            "source_commit": commit,
+            "source_gate": source_authority,
+            "current_recomputable_receipt": receipt_path.name,
+            "artifact_record": {
+                "path": str(artifact_record_path),
+                "sha256": artifact_record_sha256,
+            },
+            "csswitch_bundle": {"canonical_digest": bundle_digest},
+            "desktop_sha256": desktop_sha256,
+            "gateway_sha256": gateway_sha256,
+            "science": {
+                "executable_sha256": science_sha256,
+                "package_canonical_digest": science_package_digest,
+            },
+        }
+        _safe_json_write(identity_path, identity)
+        closure = "\n".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
+            for path in (receipt_path, identity_path)
+        ) + "\n"
+        _safe_write(hashes_path, closure.encode("utf-8"), 0o600)
+        session.g1_binding_receipt_path = receipt_path
+        session._test_source_authority = source_authority
+        return receipt_path
+
+    @staticmethod
+    def _fake_network_receipt(session):
+        denied = {
+            field: 1
+            for field in (
+                "ipv4_tcp_errno",
+                "ipv4_udp_errno",
+                "ipv4_dns_tcp_errno",
+                "ipv4_dns_udp_errno",
+                "ipv6_tcp_errno",
+                "ipv6_udp_errno",
+                "ipv6_dns_tcp_errno",
+                "ipv6_dns_udp_errno",
+                "system_resolver_ipc_stream_errno",
+                "system_resolver_ipc_datagram_errno",
+            )
+        }
+        return {
+            "schema": "csswitch.network-isolation-receipt.v1",
+            "profile_path": str(session.network_profile),
+            "profile_sha256": hashlib.sha256(
+                session.network_profile.read_bytes()
+            ).hexdigest(),
+            "sandbox_exec": {"path": "/usr/bin/sandbox-exec"},
+            "probe": {
+                **denied,
+                "ipv4_loopback_allowed": True,
+                "ipv6_loopback_allowed": True,
+                "dns_transport_blocked": True,
+                "unique_system_resolver_lookup_failed_observation": True,
+                "exit_code": 0,
+            },
+            "policy": "deny-all-outbound-except-loopback",
+            "ok": True,
+        }
 
     def test_coverage_fixture_is_legal_v3_and_bundle_id_is_run_scoped(self):
         fixture = v3_fixture(SimpleNamespace(proxy_port=43191, sandbox_port=43192))
@@ -287,16 +466,55 @@ class InstalledProviderMatrixTests(unittest.TestCase):
         with self._session("relay-force") as session:
             plan = session.prepare_dry_run()
             argv = plan["launch_argv"]
-            self.assertEqual(argv[:4], ["/usr/bin/open", "-n", "-F", "-g"])
-            self.assertEqual(argv[-1], str(self.app_bundle))
-            self.assertIn("--env", argv)
+            self.assertEqual(
+                argv[:4],
+                [
+                    "/usr/bin/sandbox-exec",
+                    "-p",
+                    NETWORK_SANDBOX_PROFILE,
+                    "/usr/bin/env",
+                ],
+            )
+            self.assertEqual(argv[4], "-i")
+            self.assertEqual(argv[-1], str(self.app_bundle / "Contents/MacOS/desktop"))
+            self.assertNotIn("--env", argv)
             self.assertNotIn("--args", argv)
+            self.assertEqual(
+                session.network_profile.read_text(encoding="utf-8"),
+                NETWORK_SANDBOX_PROFILE,
+            )
+            self.assertIn("(deny network-outbound)", NETWORK_SANDBOX_PROFILE)
+            self.assertIn(
+                '(allow network-outbound (remote ip "localhost:*"))',
+                NETWORK_SANDBOX_PROFILE,
+            )
+            for field in (
+                "ipv4_dns_tcp_errno",
+                "ipv4_dns_udp_errno",
+                "ipv6_tcp_errno",
+                "ipv6_udp_errno",
+                "ipv6_dns_tcp_errno",
+                "ipv6_dns_udp_errno",
+                "system_resolver_ipc_stream_errno",
+                "system_resolver_ipc_datagram_errno",
+            ):
+                self.assertIn(field, NETWORK_PROBE_SOURCE)
             self.assertFalse(plan["controller_launches_app"])
             self.assertFalse(plan["launch_allowed"])
             self.assertTrue(plan["preflight_would_allow_launch"])
+            self.assertIsNone(plan["pre_run_manifest"])
+            self.assertEqual(
+                plan["network_policy"], "deny-all-outbound-except-loopback"
+            )
             self.assertEqual(
                 session._launch_environment(plan["mock_base_url"])["CSSWITCH_UPSTREAM_URL"],
                 plan["mock_base_url"],
+            )
+            self.assertEqual(
+                session._launch_environment(plan["mock_base_url"])[
+                    "CFFIXED_USER_HOME"
+                ],
+                str(session.home),
             )
             encoded = json.dumps(argv)
             self.assertNotIn(FIXED_PATH_SECRET, encoded)
@@ -354,10 +572,90 @@ class InstalledProviderMatrixTests(unittest.TestCase):
         inspector = FakeInspector()
         inspector.accept_all_listeners = True
         inspector.executables[os.getpid()] = Path(sys.executable)
+        inspector.alive.add(os.getpid())
         with self._session("deepseek-off", inspector) as session:
+            session.preselect_profile = True
             ready = session.start_mock()
             self.assertNotIn(ready["port"], {8765, session.proxy_port, session.sandbox_port})
             self.assertTrue(ready["listener_verified"])
+            provider_receipt = json.loads(
+                (session.evidence / "provider-launch-receipt.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            fixture_receipt = json.loads(
+                (session.evidence / "fixture-receipt.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(provider_receipt["issued_before_app_launch"])
+            self.assertEqual(provider_receipt["listener"]["host"], "127.0.0.1")
+            self.assertEqual(provider_receipt["request_count"], 0)
+            self.assertEqual(fixture_receipt["credential_class"], "fixed-fake-only")
+            self.assertFalse(fixture_receipt["real_provider_credentials_present"])
+            self.assertTrue(fixture_receipt["preselected_active_profile"])
+            self.assertEqual(len(set(fixture_receipt["dynamic_ports"].values())), 4)
+            with self.assertRaisesRegex(ControllerError, "G1 binding receipt"):
+                session.safe_plan(auto_boot=True)
+            self._bind_test_g1_receipt(session)
+            source_authority_patch = mocklib.patch.object(
+                controller_module,
+                "_validated_source_gate_seal",
+                return_value=session._test_source_authority,
+            )
+            source_authority_patch.start()
+            self.addCleanup(source_authority_patch.stop)
+            with mocklib.patch.object(
+                NetworkIsolationGuard,
+                "verify",
+                return_value=self._fake_network_receipt(session),
+            ):
+                plan = session.safe_plan(auto_boot=True)
+            self.assertIsNotNone(plan["pre_run_manifest"])
+            self.assertIsNone(plan["launch_argv"])
+            self.assertEqual(plan["launch_operation"], "launch_guarded")
+            self.assertTrue(plan["controller_launches_app"])
+            frozen = session.validate_pre_run()
+            self.assertTrue(frozen["ok"])
+            pre_run = json.loads(
+                (session.evidence / "pre-run-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(all(pre_run["preconditions"].values()))
+            self.assertEqual(
+                pre_run["network_policy"], "deny-all-outbound-except-loopback"
+            )
+            self.assertTrue(
+                pre_run["network_isolation_receipt"]["sha256"]
+            )
+            encoded = json.dumps(pre_run, sort_keys=True)
+            self.assertNotIn(FIXED_PATH_SECRET, encoded)
+            self.assertNotIn(FAKE_API_KEY, encoded)
+            with mocklib.patch.object(
+                session._mock,
+                "status",
+                return_value={
+                    "active_phase": None,
+                    "requests": [{"unexpected": True}],
+                    "failures": [],
+                },
+            ):
+                with self.assertRaisesRegex(ControllerError, "provider live identity drift"):
+                    session.launch_guarded()
+            config = json.loads(session.config_path.read_text(encoding="utf-8"))
+            original_config = dict(config)
+            config["mode"] = "official"
+            _safe_json_write(session.config_path, config)
+            with self.assertRaisesRegex(ControllerError, "fixture config drift"):
+                session.launch_guarded()
+            _safe_json_write(session.config_path, original_config)
+            with mocklib.patch.object(
+                session,
+                "_validate_provider_live",
+                side_effect=[None, None],
+            ), mocklib.patch.object(session, "_port_closed", return_value=False):
+                with self.assertRaisesRegex(ControllerError, "acquired before launch"):
+                    session.launch_guarded()
+            self.assertTrue(session._launch_consumed)
+            with self.assertRaisesRegex(ControllerError, "one-shot"):
+                session.launch_guarded()
             started = session.enter_phase("discovery")
             self.assertFalse(started["mock_request_expected"])
             finished = session.finish_phase("discovery")
@@ -365,6 +663,43 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             result = session.stop_mock()
             self.assertTrue(result["stopped"])
             self.assertFalse(result["server_thread_alive"])
+            original_hash_tree_at = controller_module._hash_tree_at
+            rebound_once = {"done": False}
+
+            def rebind_after_hash(directory_fd, prefix=""):
+                value = original_hash_tree_at(directory_fd, prefix)
+                if prefix == "" and not rebound_once["done"]:
+                    rebound_once["done"] = True
+                    moved = session.evidence.with_name(session.evidence.name + "-held")
+                    session.evidence.rename(moved)
+                    session.evidence.mkdir(mode=0o700)
+                return value
+
+            with mocklib.patch.object(
+                controller_module, "_hash_tree_at", side_effect=rebind_after_hash
+            ):
+                with self.assertRaisesRegex(ControllerError, "binding changed"):
+                    session.finalize_evidence()
+            replacement = session.evidence
+            moved = session.evidence.with_name(session.evidence.name + "-held")
+            replacement.rmdir()
+            moved.rename(session.evidence)
+            finalized = session.finalize_evidence()
+            self.assertTrue(finalized["finalized"])
+            self.assertEqual(
+                finalized["decision"],
+                "INCONCLUSIVE(reason=controller-does-not-aggregate-runtime-observations)",
+            )
+            for name in (
+                "manifest.json",
+                "events.ndjson",
+                "observations.json",
+                "inventory-before.json",
+                "inventory-after.json",
+                "cleanup.json",
+                "hashes.sha256",
+            ):
+                self.assertTrue((session.evidence / name).is_file())
 
     def test_config_diff_reports_paths_only_and_enforces_allowlist(self):
         with self._session("responses") as session:
@@ -467,6 +802,33 @@ class InstalledProviderMatrixTests(unittest.TestCase):
         inspector = FakeInspector()
         with self._session("custom-chat", inspector) as session:
             session.prepare_dry_run()
+            session._launcher_process = SimpleNamespace(pid=808)
+            session._launcher_pgid = 808
+            inspector.records = [ProcessRecord(909, 1, "reparented-early-sidecar")]
+            inspector.process_groups[909] = 808
+            inspector.alive.add(909)
+            inspector.executables[909] = Path(sys.executable)
+            result = session.verify_cleanup()
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                next(item for item in result["owned_pids"] if item["pid"] == 909)[
+                    "source"
+                ],
+                "guarded-process-group",
+            )
+            session._launcher_process = None
+            session._launcher_pgid = None
+            inspector.records = []
+            inspector.process_groups = {}
+            inspector.alive.clear()
+            inspector.root_pids = [909]
+            inspector.alive.add(909)
+            inspector.executables[909] = Path(sys.executable)
+            result = session.verify_cleanup()
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["runtime_root_open_pids"], [909])
+            inspector.root_pids = []
+            inspector.alive.clear()
             result = session.verify_cleanup()
             self.assertTrue(result["ok"])
             self.assertEqual(
@@ -502,14 +864,47 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             session.destroy_workspace()
         self.assertTrue(root.exists())
         inspector.alive.clear()
-        link = root / "refuse-link"
-        link.symlink_to("/private/tmp")
-        with self.assertRaisesRegex(ControllerError, "symlink"):
-            session.destroy_workspace()
-        link.unlink()
+        outside = self.base / "outside-root"
+        outside.mkdir()
+        marker = outside / "preserved.txt"
+        marker.write_text("keep", encoding="utf-8")
+        (root / "external-link").symlink_to(outside, target_is_directory=True)
         self.assertEqual(session.destroy_workspace(), {"root_removed": True})
         self.assertFalse(root.exists())
+        self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
         session.close()
+
+        external_evidence = self.base / "preserved-evidence"
+        external = InstalledProviderSession(
+            "custom-chat",
+            root=self.base / "external-evidence-root",
+            evidence_dir=external_evidence,
+            app_bundle=self.app_bundle,
+            allow_test_bundle=True,
+            inspector=FakeInspector(),
+            scenario_control=InProcessScenarioControl(
+                build_case_scenario(CASE_DEFINITIONS["custom-chat"])
+            ),
+        )
+        external.prepare_dry_run()
+        self.assertTrue(external.destroy_workspace()["root_removed"])
+        self.assertTrue(external_evidence.is_dir())
+        self.assertEqual(stat.S_IMODE(external_evidence.stat().st_mode), 0o700)
+        external.close()
+
+        symlink_parent = self.base / "evidence-parent-link"
+        symlink_parent.symlink_to(self.base, target_is_directory=True)
+        refused_evidence = symlink_parent / "must-not-be-created"
+        with self.assertRaisesRegex(ControllerError, "symlink"):
+            InstalledProviderSession(
+                "custom-chat",
+                root=self.base / "refused-evidence-root",
+                evidence_dir=refused_evidence,
+                app_bundle=self.app_bundle,
+                allow_test_bundle=True,
+                inspector=FakeInspector(),
+            )
+        self.assertFalse(refused_evidence.exists())
 
     def test_destroy_workspace_refuses_a_live_owned_port(self):
         session = self._session("deepseek-off")
@@ -617,6 +1012,22 @@ class InstalledProviderMatrixTests(unittest.TestCase):
                 allow_test_bundle=True,
                 inspector=FakeInspector(),
             )
+
+        manifest_root = self.base / "manifest-root"
+        manifest_root.mkdir()
+        target = manifest_root / "target.txt"
+        target.write_text("bound", encoding="utf-8")
+        (manifest_root / "internal-link").symlink_to(target)
+        manifest = _tree_manifest(manifest_root)
+        link_entry = next(
+            entry for entry in manifest["entries"] if entry["path"] == "internal-link"
+        )
+        self.assertEqual(link_entry["target_identity"]["sha256"], hashlib.sha256(b"bound").hexdigest())
+        outside_target = self.base / "outside-target.txt"
+        outside_target.write_text("escape", encoding="utf-8")
+        (manifest_root / "external-link").symlink_to(outside_target)
+        with self.assertRaisesRegex(ControllerError, "escapes the bundle"):
+            _tree_manifest(manifest_root)
 
     def test_default_session_mock_is_external_and_identity_checked(self):
         external_temp = tempfile.TemporaryDirectory(prefix="csim-session.", dir="/private/tmp")

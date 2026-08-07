@@ -2,10 +2,9 @@
 """Safety-first controller for installed/local-mock provider acceptance.
 
 The controller prepares an isolated per-case HOME, starts the strict provider
-scenario API in-process, and emits *plans* and redacted observations for the
-human/GUI driver.  It deliberately does not launch, quit, or broadly signal the
-installed application.  The root driver owns GUI actions and executes the
-returned LaunchServices plan after reviewing it.
+scenario API, freezes exact pre-run receipts, and owns the one-shot guarded
+launch so validation and exec cannot be split across callers.  It never broadly
+signals an installed application; later GUI actions remain with the root driver.
 
 No command in this module reads process argv.  Process inspection is limited to
 PID/PPID/comm, executable identity, and explicitly selected loopback listeners.
@@ -17,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import errno
 import hashlib
 import http.client
 import json
@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -69,8 +70,84 @@ GATEWAY_EXECUTABLE = "csswitch-gateway"
 FIXED_PATH_SECRET = "6f2b0bbd37f98f6f9f8d9e3c8f7a2b10"
 FAKE_API_KEY = "csswitch-installed-fake-key-never-use"
 CONTROLLER_SCHEMA = "csswitch.installed-provider-controller.v1"
+PRE_RUN_MANIFEST_SCHEMA = "csswitch.isolated-live-pre-run-manifest.v1"
+FIXTURE_RECEIPT_SCHEMA = "csswitch.isolated-live-fixture-receipt.v1"
+PROVIDER_RECEIPT_SCHEMA = "csswitch.loopback-provider-launch-receipt.v1"
+NETWORK_RECEIPT_SCHEMA = "csswitch.network-isolation-receipt.v1"
 SAFE_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 MAX_CONTROL_LINE = 65_536
+SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+NETWORK_SANDBOX_PROFILE = """(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+"""
+NETWORK_PROBE_SOURCE = r"""
+import json
+import socket
+import sys
+
+ipv4_port = int(sys.argv[1])
+ipv6_port = int(sys.argv[2])
+probe_host = sys.argv[3]
+result = {}
+
+for field, family, address, payload in (
+    ("ipv4_loopback_allowed", socket.AF_INET, ("127.0.0.1", ipv4_port), b"4"),
+    ("ipv6_loopback_allowed", socket.AF_INET6, ("::1", ipv6_port), b"6"),
+):
+    client = socket.socket(family, socket.SOCK_STREAM)
+    client.settimeout(2.0)
+    client.connect(address)
+    client.sendall(payload)
+    client.close()
+    result[field] = True
+
+for field, family, kind, address in (
+    ("ipv4_tcp_errno", socket.AF_INET, socket.SOCK_STREAM, ("198.18.0.54", 443)),
+    ("ipv4_udp_errno", socket.AF_INET, socket.SOCK_DGRAM, ("198.18.0.54", 443)),
+    ("ipv4_dns_tcp_errno", socket.AF_INET, socket.SOCK_STREAM, ("198.18.0.53", 53)),
+    ("ipv4_dns_udp_errno", socket.AF_INET, socket.SOCK_DGRAM, ("198.18.0.53", 53)),
+    ("ipv6_tcp_errno", socket.AF_INET6, socket.SOCK_STREAM, ("2001:db8::54", 443)),
+    ("ipv6_udp_errno", socket.AF_INET6, socket.SOCK_DGRAM, ("2001:db8::54", 443)),
+    ("ipv6_dns_tcp_errno", socket.AF_INET6, socket.SOCK_STREAM, ("2001:db8::53", 53)),
+    ("ipv6_dns_udp_errno", socket.AF_INET6, socket.SOCK_DGRAM, ("2001:db8::53", 53)),
+):
+    candidate = socket.socket(family, kind)
+    candidate.settimeout(1.0)
+    try:
+        candidate.connect(address)
+    except OSError as error:
+        result[field] = error.errno
+    else:
+        result[field] = None
+    finally:
+        candidate.close()
+
+for field, kind in (
+    ("system_resolver_ipc_stream_errno", socket.SOCK_STREAM),
+    ("system_resolver_ipc_datagram_errno", socket.SOCK_DGRAM),
+):
+    candidate = socket.socket(socket.AF_UNIX, kind)
+    candidate.settimeout(1.0)
+    try:
+        candidate.connect("/private/var/run/mDNSResponder")
+    except OSError as error:
+        result[field] = error.errno
+    else:
+        result[field] = None
+    finally:
+        candidate.close()
+
+try:
+    socket.getaddrinfo(probe_host, 443)
+except socket.gaierror:
+    result["unique_system_resolver_lookup_failed"] = True
+else:
+    result["unique_system_resolver_lookup_failed"] = False
+
+print(json.dumps(result, sort_keys=True))
+"""
 
 
 class ControllerError(RuntimeError):
@@ -237,13 +314,409 @@ def _safe_write(path: Path, data: bytes, mode: int = 0o600) -> None:
     path.chmod(mode)
 
 
+def _safe_write_at(directory_fd: int, name: str, data: bytes, mode: int = 0o600) -> None:
+    """Atomically write one leaf through a held directory identity."""
+
+    if not name or name in {".", ".."} or "/" in name or "\x00" in name:
+        raise ControllerError("unsafe evidence leaf")
+    tmp = f".{name}.tmp-{os.getpid()}-{time.monotonic_ns()}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, mode, dir_fd=directory_fd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+
+
+def _read_at(directory_fd: int, name: str) -> bytes:
+    if not name or name in {".", ".."} or "/" in name or "\x00" in name:
+        raise ControllerError("unsafe evidence leaf")
+    fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
+def _hash_tree_at(directory_fd: int, prefix: str = "") -> List[Tuple[str, str]]:
+    """Hash a directory tree entirely through held no-follow directory FDs."""
+
+    entries: List[Tuple[str, str]] = []
+    for name in sorted(os.listdir(directory_fd)):
+        if not name or name in {".", ".."} or "/" in name:
+            raise ControllerError("evidence tree contains an unsafe leaf")
+        relative = f"{prefix}/{name}" if prefix else name
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISLNK(info.st_mode):
+            raise ControllerError("evidence closure contains a symlink")
+        if stat.S_ISDIR(info.st_mode):
+            child_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directory_fd,
+            )
+            try:
+                entries.extend(_hash_tree_at(child_fd, relative))
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(info.st_mode):
+            if relative != "hashes.sha256":
+                entries.append((relative, _sha256(_read_at(directory_fd, name))))
+        else:
+            raise ControllerError("evidence closure contains an unsupported entry")
+    return entries
+
+
 def _safe_json_write(path: Path, value: Mapping[str, Any]) -> None:
     encoded = (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
     _safe_write(path, encoded, 0o600)
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
+
+
+def _safe_json_write_once(path: Path, value: Mapping[str, Any]) -> str:
+    encoded = (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    try:
+        current = path.read_bytes()
+    except FileNotFoundError:
+        _safe_write(path, encoded, 0o600)
+        return _sha256(encoded)
+    if current != encoded:
+        raise ControllerError(f"immutable evidence drift: {path.name}")
+    return _sha256(current)
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _file_identity(path: Path) -> Dict[str, Any]:
+    path = Path(path)
+    _reject_existing_symlink_components(path)
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ControllerError(f"identity target is not a regular file: {path.name}")
+    return {
+        "path": str(path),
+        "sha256": _sha256(path.read_bytes()),
+        "size": info.st_size,
+        "mode": stat.S_IMODE(info.st_mode),
+        "device": info.st_dev,
+        "inode": info.st_ino,
+    }
+
+
+def _tree_manifest(root: Path) -> Dict[str, Any]:
+    """Return a complete, canonical no-follow identity manifest for ``root``."""
+
+    root = Path(root)
+    _reject_existing_symlink_components(root)
+    if not root.is_dir():
+        raise ControllerError("artifact root is not a directory")
+    entries: List[Dict[str, Any]] = []
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        for name in sorted([*directories, *filenames]):
+            candidate = current_path / name
+            relative = candidate.relative_to(root).as_posix()
+            info = candidate.lstat()
+            base = {
+                "path": relative,
+                "mode": stat.S_IMODE(info.st_mode),
+            }
+            if stat.S_ISLNK(info.st_mode):
+                resolved = candidate.resolve(strict=True)
+                if not _is_relative_to(resolved, root):
+                    raise ControllerError(
+                        f"artifact symlink escapes the bundle: {relative}"
+                    )
+                target_info = resolved.stat()
+                target_identity: Dict[str, Any] = {
+                    "path": resolved.relative_to(root).as_posix(),
+                    "mode": stat.S_IMODE(target_info.st_mode),
+                }
+                if stat.S_ISREG(target_info.st_mode):
+                    target_identity.update(
+                        {
+                            "kind": "file",
+                            "size": target_info.st_size,
+                            "sha256": _sha256(resolved.read_bytes()),
+                        }
+                    )
+                elif stat.S_ISDIR(target_info.st_mode):
+                    target_identity["kind"] = "directory"
+                else:
+                    raise ControllerError(
+                        f"artifact symlink has unsupported target: {relative}"
+                    )
+                base.update(
+                    {
+                        "kind": "symlink",
+                        "target": os.readlink(candidate),
+                        "target_identity": target_identity,
+                    }
+                )
+            elif stat.S_ISDIR(info.st_mode):
+                base.update({"kind": "directory"})
+            elif stat.S_ISREG(info.st_mode):
+                base.update(
+                    {
+                        "kind": "file",
+                        "size": info.st_size,
+                        "sha256": _sha256(candidate.read_bytes()),
+                    }
+                )
+            else:
+                raise ControllerError(f"unsupported artifact entry type: {relative}")
+            entries.append(base)
+    entries.sort(key=lambda item: item["path"])
+    return {
+        "schema": "csswitch.canonical-tree-manifest.v1",
+        "root": str(root),
+        "entries": entries,
+        "entries_sha256": _sha256(_canonical_json_bytes(entries)),
+    }
+
+
+def _canonical_regular_file_list_digest(root: Path) -> str:
+    """Recompute the G1 canonical ``sha256  ./relative`` file-list digest."""
+
+    root = Path(root)
+    _reject_existing_symlink_components(root)
+    if not root.is_dir():
+        raise ControllerError("canonical package root is not a directory")
+    lines = []
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        for name in [*directories, *filenames]:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                raise ControllerError("canonical package digest rejects symlinks")
+        for name in filenames:
+            candidate = current_path / name
+            info = candidate.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise ControllerError("canonical package contains a non-regular file")
+            relative = candidate.relative_to(root).as_posix()
+            lines.append((relative, _sha256(candidate.read_bytes())))
+    payload = "".join(
+        f"{digest}  ./{relative}\n" for relative, digest in sorted(lines)
+    ).encode("utf-8")
+    return _sha256(payload)
+
+
+def _validated_source_gate_seal(path: Path, expected_commit: str) -> Dict[str, Any]:
+    """Recursively validate an authoritative 15-suite PASS completion seal."""
+
+    path = Path(path).resolve(strict=True)
+    _reject_existing_symlink_components(path)
+    if path.name != "completion-seal.json":
+        raise ControllerError("G1 source authority is not a completion seal")
+    run_root = path.parent
+    artifacts: Dict[str, bytes] = {}
+    for current, directories, filenames in os.walk(run_root, followlinks=False):
+        current_path = Path(current)
+        for name in [*directories, *filenames]:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                raise ControllerError("source-gate evidence contains a symlink")
+        for name in filenames:
+            candidate = current_path / name
+            artifacts[candidate.relative_to(run_root).as_posix()] = candidate.read_bytes()
+    try:
+        from test.quality.run_evidence.manifest_contracts import (
+            load_canonical_json,
+            validate_completion_seal,
+        )
+        from test.quality.source_gate.contracts import (
+            SOURCE_SUITE_ORDER,
+            aggregate_results,
+        )
+
+        seal = load_canonical_json(artifacts["completion-seal.json"])
+        output_root = run_root.parents[2]
+        snapshot_relative = seal["source_snapshot_manifest"]["path"]
+        snapshot_disk = (
+            output_root / "state" / "runs" / seal["run_id"] / snapshot_relative
+        )
+        _reject_existing_symlink_components(snapshot_disk)
+        artifacts[snapshot_relative] = snapshot_disk.read_bytes()
+        run = load_canonical_json(artifacts[seal["run_manifest"]["path"]])
+        snapshot = load_canonical_json(
+            artifacts[seal["source_snapshot_manifest"]["path"]]
+        )
+        evidence = load_canonical_json(
+            artifacts[seal["evidence_manifest"]["path"]]
+        )
+        validate_completion_seal(seal, run, snapshot, evidence, artifacts)
+        results = [
+            load_canonical_json(artifacts[item["path"]])
+            for item in evidence["test_results"]
+        ]
+        decision, runner_exit = aggregate_results(results)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ControllerError("G1 source-gate completion seal is invalid") from error
+    if (
+        run.get("profile") != "source"
+        or run.get("head_sha") != expected_commit
+        or tuple(item.get("suite_id") for item in results) != SOURCE_SUITE_ORDER
+        or (decision, runner_exit) != ("PASS", 0)
+        or (seal.get("aggregate_decision"), seal.get("runner_exit")) != ("PASS", 0)
+    ):
+        raise ControllerError("G1 source-gate authority is not exact 15-suite PASS")
+    return {
+        "path": str(path),
+        "sha256": _sha256(path.read_bytes()),
+        "run_id": seal["run_id"],
+        "head_sha": run["head_sha"],
+        "suite_count": len(results),
+        "aggregate_decision": decision,
+        "runner_exit": runner_exit,
+    }
+
+
+class NetworkIsolationGuard:
+    """Seatbelt policy and executable probe for loopback-only descendants."""
+
+    def __init__(self, profile_path: Path, sandbox_exec: Path = SANDBOX_EXEC):
+        self.profile_path = Path(profile_path)
+        self.sandbox_exec = Path(sandbox_exec)
+        self._profile_bytes = NETWORK_SANDBOX_PROFILE.encode("utf-8")
+        try:
+            current = self.profile_path.read_bytes()
+        except FileNotFoundError:
+            _safe_write(self.profile_path, self._profile_bytes, 0o600)
+        else:
+            if current != self._profile_bytes:
+                raise ControllerError("network sandbox profile drift")
+
+    @property
+    def profile_sha256(self) -> str:
+        current = self.profile_path.read_bytes()
+        if current != self._profile_bytes:
+            raise ControllerError("network sandbox profile drift")
+        return _sha256(current)
+
+    def launch_prefix(self) -> List[str]:
+        executable = _file_identity(self.sandbox_exec)
+        if executable["mode"] & 0o111 == 0:
+            raise ControllerError("sandbox-exec is not executable")
+        self.profile_sha256
+        return [str(self.sandbox_exec), "-p", NETWORK_SANDBOX_PROFILE]
+
+    def verify(self) -> Dict[str, Any]:
+        listeners = []
+        for family, address in (
+            (socket.AF_INET, ("127.0.0.1", 0)),
+            (socket.AF_INET6, ("::1", 0)),
+        ):
+            listener = socket.socket(family, socket.SOCK_STREAM)
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(address)
+            listener.listen(1)
+            listener.settimeout(2.0)
+            listeners.append(listener)
+        ports = [int(listener.getsockname()[1]) for listener in listeners]
+        if FORBIDDEN_PORTS.intersection(ports):
+            for listener in listeners:
+                listener.close()
+            raise ControllerError("network probe selected a forbidden port")
+        probe_host = f"csswitch-{secrets_module.token_hex(12)}.example.com"
+        command = [
+            *self.launch_prefix(),
+            str(Path(sys.executable).resolve(strict=True)),
+            "-I",
+            "-c",
+            NETWORK_PROBE_SOURCE,
+            str(ports[0]),
+            str(ports[1]),
+            probe_host,
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=8.0,
+            )
+            loopback_payloads = []
+            for listener in listeners:
+                try:
+                    connection, _ = listener.accept()
+                except (OSError, socket.timeout):
+                    loopback_payloads.append(b"")
+                else:
+                    with connection:
+                        loopback_payloads.append(connection.recv(2))
+        finally:
+            for listener in listeners:
+                listener.close()
+        try:
+            observation = json.loads(result.stdout)
+        except (UnboundLocalError, json.JSONDecodeError) as error:
+            raise ControllerError("network isolation probe did not return JSON") from error
+        if not isinstance(observation, dict):
+            raise ControllerError("network isolation probe returned an invalid value")
+        denied_fields = (
+            "ipv4_tcp_errno",
+            "ipv4_udp_errno",
+            "ipv4_dns_tcp_errno",
+            "ipv4_dns_udp_errno",
+            "ipv6_tcp_errno",
+            "ipv6_udp_errno",
+            "ipv6_dns_tcp_errno",
+            "ipv6_dns_udp_errno",
+            "system_resolver_ipc_stream_errno",
+            "system_resolver_ipc_datagram_errno",
+        )
+        transport_blocked = all(
+            observation.get(field) == errno.EPERM for field in denied_fields
+        )
+        ok = (
+            result.returncode == 0
+            and result.stderr == ""
+            and loopback_payloads == [b"4", b"6"]
+            and observation.get("ipv4_loopback_allowed") is True
+            and observation.get("ipv6_loopback_allowed") is True
+            and transport_blocked
+            and observation.get("unique_system_resolver_lookup_failed") is True
+        )
+        receipt = {
+            "schema": NETWORK_RECEIPT_SCHEMA,
+            "profile_path": str(self.profile_path),
+            "profile_sha256": self.profile_sha256,
+            "sandbox_exec": _file_identity(self.sandbox_exec),
+            "probe": {
+                **{field: observation.get(field) for field in denied_fields},
+                "ipv4_loopback_allowed": observation.get("ipv4_loopback_allowed"),
+                "ipv6_loopback_allowed": observation.get("ipv6_loopback_allowed"),
+                "dns_transport_blocked": transport_blocked,
+                "unique_system_resolver_lookup_failed_observation": observation.get(
+                    "unique_system_resolver_lookup_failed"
+                ),
+                "exit_code": result.returncode,
+            },
+            "policy": "deny-all-outbound-except-loopback",
+            "ok": ok,
+        }
+        if not ok:
+            raise ControllerError("network isolation self-test failed")
+        return receipt
 
 
 def _json_pointer_escape(part: str) -> str:
@@ -560,7 +1033,7 @@ class SubprocessScenarioControl:
             raise ControllerError("mock evidence parent must be owned 0700")
         if self.evidence_dir.exists() or self.evidence_dir.is_symlink():
             raise ControllerError("mock evidence directory must not pre-exist")
-        _safe_json_write(self.manifest_path, _scenario_manifest_value(self._scenario))
+        _safe_json_write_once(self.manifest_path, _scenario_manifest_value(self._scenario))
 
         token_read, token_write = os.pipe()
         secrets_read, secrets_write = os.pipe()
@@ -867,6 +1340,41 @@ class ProcessInspector:
                 return Path(line[1:])
         return None
 
+    def executable_identity_for_pid(self, pid: int) -> Optional[Dict[str, Any]]:
+        if pid <= 1:
+            return None
+        result = subprocess.run(
+            [
+                "/usr/sbin/lsof", "-nP", "-a", "-p", str(pid),
+                "-d", "txt", "-FnDi",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        current: Optional[Dict[str, Any]] = None
+        for line in result.stdout.splitlines():
+            if line == "ftxt":
+                if current and {"path", "device", "inode"}.issubset(current):
+                    return current
+                current = {}
+            elif current is not None and line.startswith("D"):
+                try:
+                    current["device"] = int(line[1:], 0)
+                except ValueError:
+                    return None
+            elif current is not None and line.startswith("i"):
+                try:
+                    current["inode"] = int(line[1:])
+                except ValueError:
+                    return None
+            elif current is not None and line.startswith("n"):
+                current["path"] = str(Path(line[1:]).resolve(strict=False))
+        if current and {"path", "device", "inode"}.issubset(current):
+            return current
+        return None
+
     def listener_owned(self, pid: int, port: int) -> bool:
         if pid <= 1 or port in FORBIDDEN_PORTS:
             return False
@@ -892,8 +1400,72 @@ class ProcessInspector:
         except PermissionError:
             return True
 
+    def process_group(self, pid: int) -> Optional[int]:
+        if pid <= 1:
+            return None
+        try:
+            return os.getpgid(pid)
+        except ProcessLookupError:
+            return None
+
+    def pids_in_process_group(self, pgid: int) -> List[int]:
+        if pgid <= 1:
+            return []
+        return sorted(
+            record.pid
+            for record in self.process_table()
+            if self.process_group(record.pid) == pgid
+        )
+
+    def process_start_marker(self, pid: int) -> Optional[str]:
+        if pid <= 1:
+            return None
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        value = result.stdout.strip()
+        return value or None
+
     def children(self, parent_pid: int) -> List[ProcessRecord]:
         return [record for record in self.process_table() if record.ppid == parent_pid]
+
+    def descendants(self, parent_pid: int) -> List[ProcessRecord]:
+        table = self.process_table()
+        pending = [parent_pid]
+        descendants: List[ProcessRecord] = []
+        seen = {parent_pid}
+        while pending:
+            current = pending.pop()
+            for record in table:
+                if record.ppid != current or record.pid in seen:
+                    continue
+                seen.add(record.pid)
+                descendants.append(record)
+                pending.append(record.pid)
+        return descendants
+
+    def pids_using_path(self, root: Path) -> List[int]:
+        root = Path(root)
+        _reject_existing_symlink_components(root)
+        result = subprocess.run(
+            ["/usr/sbin/lsof", "-t", "+D", str(root)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if result.returncode not in {0, 1}:
+            raise ControllerError("runtime-root process inventory failed")
+        pids = []
+        for line in result.stdout.splitlines():
+            if not line.isdigit() or int(line) <= 1:
+                raise ControllerError("runtime-root process inventory is malformed")
+            pids.append(int(line))
+        return sorted(set(pids))
 
 
 def _bundle_for_executable(executable: Path) -> Optional[Path]:
@@ -932,6 +1504,10 @@ class InstalledProviderSession:
         config_dir_name: str = ".csswitch",
         inspector: Optional[ProcessInspector] = None,
         scenario_control: Optional[Any] = None,
+        science_bin: Optional[Path] = None,
+        g1_binding_receipt: Optional[Path] = None,
+        evidence_dir: Optional[Path] = None,
+        preselect_profile: bool = False,
     ):
         if case_id not in CASE_DEFINITIONS:
             raise ControllerError("unknown installed provider case")
@@ -945,6 +1521,11 @@ class InstalledProviderSession:
             raise ControllerError("expected bundle identifier is required")
         self.expected_bundle_id = expected_bundle_id
         self.config_dir_name = config_dir_name
+        self._selected_science_bin = Path(science_bin) if science_bin is not None else None
+        self.g1_binding_receipt_path = (
+            Path(g1_binding_receipt) if g1_binding_receipt is not None else None
+        )
+        self.preselect_profile = bool(preselect_profile)
         self.inspector = inspector or ProcessInspector()
         try:
             Path(root).lstat() if root is not None else None
@@ -956,11 +1537,23 @@ class InstalledProviderSession:
         self._workspace_destroyed = False
         self.home = self.root / "home"
         self.csswitch_dir = self.home / self.config_dir_name
-        self.evidence = self.root / "evidence"
+        self.evidence = (
+            self._create_external_evidence_dir(Path(evidence_dir))
+            if evidence_dir is not None
+            else self.root / "evidence"
+        )
         self.tmp = self.root / "tmp"
         self.bin_dir = self.root / "bin"
         for path in (self.home, self.csswitch_dir, self.evidence, self.tmp, self.bin_dir):
             _ensure_private_dir(path)
+        self._evidence_fd = os.open(
+            self.evidence,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        evidence_info = os.fstat(self._evidence_fd)
+        self._evidence_identity = (evidence_info.st_dev, evidence_info.st_ino)
+        self.network_profile = self.root / "loopback-only.sb"
+        self._network_guard = NetworkIsolationGuard(self.network_profile)
         self.app_bin, self.gateway_bin = self._validate_bundle()
         self.fake_science = self.bin_dir / "claude-science"
         self._install_wrappers()
@@ -1017,7 +1610,96 @@ class InstalledProviderSession:
         self._runtime_records: Dict[str, Dict[str, Any]] = {}
         self._mock_result: Optional[Dict[str, Any]] = None
         self._last_log_scan: Optional[Dict[str, Any]] = None
+        self._provider_receipt: Optional[Dict[str, Any]] = None
+        self._fixture_receipt: Optional[Dict[str, Any]] = None
+        self._pre_run_manifest: Optional[Dict[str, Any]] = None
+        self._pre_run_manifest_sha256: Optional[str] = None
+        self._launcher_process: Optional[subprocess.Popen] = None
+        self._launcher_pgid: Optional[int] = None
+        self._launch_consumed = False
         self._closed = False
+        self._evidence_finalized = False
+        self._inventory_before: Optional[Dict[str, Any]] = None
+
+    def _assert_evidence_binding(self) -> None:
+        held = os.fstat(self._evidence_fd)
+        named = os.stat(self.evidence, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(held.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or (held.st_dev, held.st_ino) != self._evidence_identity
+            or (named.st_dev, named.st_ino) != self._evidence_identity
+            or held.st_uid != os.getuid()
+            or named.st_uid != os.getuid()
+            or stat.S_IMODE(held.st_mode) != 0o700
+            or stat.S_IMODE(named.st_mode) != 0o700
+        ):
+            raise ControllerError("external evidence directory binding changed")
+
+    def _write_evidence_json(
+        self, name: str, value: Mapping[str, Any], *, once: bool = False
+    ) -> str:
+        self._assert_evidence_binding()
+        encoded = (
+            json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        if once:
+            try:
+                current = _read_at(self._evidence_fd, name)
+            except FileNotFoundError:
+                pass
+            else:
+                if current != encoded:
+                    raise ControllerError(f"immutable evidence drift: {name}")
+                return _sha256(current)
+        _safe_write_at(self._evidence_fd, name, encoded, 0o600)
+        self._assert_evidence_binding()
+        return _sha256(encoded)
+
+    def _open_evidence_exclusive(self, name: str):
+        self._assert_evidence_binding()
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(name, flags, 0o600, dir_fd=self._evidence_fd)
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "wb")
+
+    def _create_external_evidence_dir(self, candidate: Path) -> Path:
+        if not candidate.is_absolute():
+            raise ControllerError("external evidence directory must be absolute")
+        if candidate.exists() or candidate.is_symlink():
+            raise ControllerError("external evidence directory must not pre-exist")
+        existing_parent = candidate.parent
+        if not existing_parent.is_dir():
+            raise ControllerError("external evidence parent must already exist")
+        _reject_existing_symlink_components(existing_parent)
+        canonical_parent = existing_parent.resolve(strict=True)
+        canonical = canonical_parent / candidate.name
+        repo_root = Path(__file__).resolve(strict=True).parents[1]
+        real_home = Path(os.path.expanduser("~")).resolve(strict=True)
+        if (
+            canonical == self.root
+            or _is_relative_to(canonical, self.root)
+            or canonical == repo_root
+            or _is_relative_to(canonical, repo_root)
+            or canonical == real_home
+            or _is_relative_to(canonical, real_home)
+        ):
+            raise ControllerError("external evidence directory overlaps protected state")
+        open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        parent_fd = os.open(canonical_parent, open_flags)
+        try:
+            os.mkdir(candidate.name, mode=0o700, dir_fd=parent_fd)
+            child_fd = os.open(candidate.name, open_flags, dir_fd=parent_fd)
+            try:
+                os.fchmod(child_fd, 0o700)
+            finally:
+                os.close(child_fd)
+        finally:
+            os.close(parent_fd)
+        resolved = candidate.resolve(strict=True)
+        if resolved != canonical:
+            raise ControllerError("external evidence path changed during creation")
+        return resolved
 
     @staticmethod
     def _create_root(root: Optional[Path]) -> Path:
@@ -1258,8 +1940,11 @@ esac
             _reject_symlink(path)
             path.chmod(0o700)
         native_fixture = os.environ.get("CSSWITCH_ACCEPTANCE_FAKE_SCIENCE_BIN", "")
-        if native_fixture:
-            source = Path(native_fixture)
+        selected_source = self._selected_science_bin
+        if selected_source is not None and native_fixture:
+            raise ControllerError("Science executable was selected twice")
+        if selected_source is not None or native_fixture:
+            source = selected_source or Path(native_fixture)
             _reject_existing_symlink_components(source)
             source = source.resolve(strict=True)
             source_info = source.stat()
@@ -1269,14 +1954,20 @@ esac
                 or stat.S_IMODE(source_info.st_mode) & 0o022
                 or not os.access(source, os.X_OK)
                 or source_info.st_size <= 0
-                or source_info.st_size > 2 * 1024 * 1024
+                or (selected_source is None and source_info.st_size > 2 * 1024 * 1024)
             ):
                 raise ControllerError("native fake Science fixture is unsafe")
-            _safe_write(self.fake_science, source.read_bytes(), 0o700)
+            if selected_source is None:
+                _safe_write(self.fake_science, source.read_bytes(), 0o700)
+                self.science_bin = self.fake_science
+            else:
+                self.science_bin = source
         else:
             _safe_write(self.fake_science, science_script.encode(), 0o700)
-        _reject_symlink(self.fake_science)
-        self.fake_science.chmod(0o700)
+            self.science_bin = self.fake_science
+        if self.science_bin == self.fake_science:
+            _reject_symlink(self.fake_science)
+            self.fake_science.chmod(0o700)
         self._open_log = open_log
         self._python_tripwire = tripwire
 
@@ -1321,7 +2012,7 @@ esac
                     "notes": "installed-local-mock",
                 }
             ],
-            "active_id": "",
+            "active_id": profile_id if self.preselect_profile else "",
             "proxy_port": self.proxy_port,
             "sandbox_port": self.sandbox_port,
             "secret": FIXED_PATH_SECRET,
@@ -1359,11 +2050,456 @@ esac
     def _record_config_fingerprint(self, label: str) -> str:
         raw = self.config_path.read_bytes()
         digest = _sha256(raw)
-        _safe_json_write(
-            self.evidence / f"config-{_require_safe_label(label)}.json",
+        self._write_evidence_json(
+            f"config-{_require_safe_label(label)}.json",
             {"schema": CONTROLLER_SCHEMA, "label": label, "sha256": digest},
         )
         return digest
+
+    @property
+    def _scenario_manifest_path(self) -> Path:
+        candidate = getattr(self._mock, "manifest_path", None)
+        return Path(candidate) if candidate is not None else self.evidence / "provider-mock-manifest.v1.json"
+
+    def _publish_provider_receipt(
+        self, ready: Mapping[str, Any], executable: Path
+    ) -> Dict[str, Any]:
+        expected_manifest = _scenario_manifest_value(self._scenario)
+        manifest_sha256 = self._write_evidence_json(
+            self._scenario_manifest_path.name, expected_manifest, once=True
+        )
+        live = self._mock.status()
+        receipt = {
+            "schema": PROVIDER_RECEIPT_SCHEMA,
+            "case": self.case.case_id,
+            "scenario": self._scenario.name,
+            "scenario_manifest": {
+                "path": str(self._scenario_manifest_path),
+                "sha256": manifest_sha256,
+            },
+            "process": _file_identity(Path(executable).resolve(strict=True)),
+            "owned_pid": ready["owned_pid"],
+            "listener": {
+                "host": ready["host"],
+                "port": ready["port"],
+                "base_url": ready["base_url"],
+                "identity_verified": True,
+            },
+            "phase": ready["phase"],
+            "request_count": len(live.get("requests", [])),
+            "failure_count": len(live.get("failures", [])),
+            "issued_before_app_launch": self._app_pid is None,
+        }
+        if (
+            receipt["listener"]["host"] != "127.0.0.1"
+            or receipt["phase"] is not None
+            or receipt["request_count"] != 0
+            or receipt["failure_count"] != 0
+            or receipt["issued_before_app_launch"] is not True
+        ):
+            raise ControllerError("provider launch receipt is not a clean pre-run receipt")
+        self._write_evidence_json("provider-launch-receipt.json", receipt, once=True)
+        self._provider_receipt = copy.deepcopy(receipt)
+        return receipt
+
+    def _publish_fixture_receipt(self) -> Dict[str, Any]:
+        if self._provider_receipt is None:
+            raise ControllerError("provider receipt must precede fixture freeze")
+        config_identity = _file_identity(self.config_path)
+        config_value = json.loads(self.config_path.read_text(encoding="utf-8"))
+        fixture = {
+            "schema": FIXTURE_RECEIPT_SCHEMA,
+            "case_definition": {
+                field: copy.deepcopy(getattr(self.case, field))
+                for field in self.case.__dataclass_fields__
+            },
+            "dynamic_ports": {
+                "gateway": self.proxy_port,
+                "science": self.sandbox_port,
+                "preview": self.preview_port,
+                "provider": self._provider_receipt["listener"]["port"],
+            },
+            "config": config_identity,
+            "preselected_active_profile": config_value.get("active_id")
+            == f"installed-{self.case.case_id}",
+            "provider_scenario_manifest": copy.deepcopy(
+                self._provider_receipt["scenario_manifest"]
+            ),
+            "science_executable": _file_identity(self.science_bin),
+            "controller_source": _file_identity(Path(__file__).resolve(strict=True)),
+            "provider_source": _file_identity(
+                Path(__file__).with_name("provider_mock_scenarios.py").resolve(strict=True)
+            ),
+            "network_profile": {
+                "path": str(self.network_profile),
+                "sha256": self._network_guard.profile_sha256,
+            },
+            "credential_class": "fixed-fake-only",
+            "real_provider_credentials_present": False,
+            "reserved_port_8765_used": False,
+        }
+        if len(set(fixture["dynamic_ports"].values())) != 4:
+            raise ControllerError("fixture ports are not unique")
+        self._write_evidence_json("fixture-receipt.json", fixture, once=True)
+        self._fixture_receipt = copy.deepcopy(fixture)
+        return fixture
+
+    @staticmethod
+    def _repo_state_receipt() -> Dict[str, Any]:
+        repo_root = Path(__file__).resolve(strict=True).parents[1]
+        head = subprocess.run(
+            ["/usr/bin/git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        status_result = subprocess.run(
+            ["/usr/bin/git", "-C", str(repo_root), "status", "--short", "--branch"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if head.returncode != 0 or status_result.returncode != 0:
+            raise ControllerError("repository identity could not be frozen")
+        lines = status_result.stdout.splitlines()
+        branch = lines[0][3:] if lines and lines[0].startswith("## ") else None
+        changes = lines[1:] if branch is not None else lines
+        return {
+            "root": str(repo_root),
+            "head": head.stdout.strip(),
+            "branch": branch,
+            "status_lines": changes,
+            "status_sha256": _sha256(status_result.stdout.encode("utf-8")),
+            "dirty": bool(changes),
+            "staged_count": sum(
+                1 for line in changes if len(line) >= 2 and line[0] not in {" ", "?"}
+            ),
+            "unstaged_count": sum(
+                1 for line in changes if len(line) >= 2 and line[1] not in {" ", "?"}
+            ),
+            "untracked_count": sum(1 for line in changes if line.startswith("??")),
+        }
+
+    def _validated_g1_binding(self) -> Dict[str, Any]:
+        if self.g1_binding_receipt_path is None:
+            raise ControllerError("current G1 binding receipt is required before G2 launch")
+        path = self.g1_binding_receipt_path.resolve(strict=True)
+        _reject_existing_symlink_components(path)
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ControllerError("G1 binding receipt is not JSON") from error
+        if not isinstance(value, dict):
+            raise ControllerError("G1 binding receipt is invalid")
+        csswitch = value.get("csswitch")
+        science = value.get("science")
+        source = value.get("source")
+        if (
+            value.get("schema") != "csswitch-g1-binding-receipt.v1"
+            or value.get("current_g1_result") != "PASS"
+            or not isinstance(csswitch, dict)
+            or not isinstance(science, dict)
+            or not isinstance(source, dict)
+        ):
+            raise ControllerError("G1 binding receipt is not a current PASS")
+        sha256_pattern = re.compile(r"^[0-9a-f]{64}$")
+        commit_pattern = re.compile(r"^[0-9a-f]{40}$")
+        commit = source.get("commit")
+        branch = source.get("branch")
+        digest_values = (
+            csswitch.get("artifact_record_sha256"),
+            csswitch.get("canonical_bundle_digest"),
+            csswitch.get("desktop_sha256"),
+            csswitch.get("gateway_sha256"),
+            science.get("executable_sha256"),
+            science.get("package_canonical_digest"),
+        )
+        if (
+            not isinstance(commit, str)
+            or commit_pattern.fullmatch(commit) is None
+            or not isinstance(branch, str)
+            or not branch.strip()
+            or any(
+                not isinstance(item, str) or sha256_pattern.fullmatch(item) is None
+                for item in digest_values
+            )
+        ):
+            raise ControllerError("G1 binding receipt contains malformed identity fields")
+        repo_root = Path(__file__).resolve(strict=True).parents[1]
+        commit_check = subprocess.run(
+            ["/usr/bin/git", "-C", str(repo_root), "cat-file", "-e", f"{commit}^{{commit}}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if commit_check.returncode != 0:
+            raise ControllerError("G1 source commit is not present in the repository")
+        source_gate_path_value = source.get("completion_seal_path")
+        source_gate_sha256 = source.get("completion_seal_sha256")
+        if (
+            not isinstance(source_gate_path_value, str)
+            or not isinstance(source_gate_sha256, str)
+            or sha256_pattern.fullmatch(source_gate_sha256) is None
+        ):
+            raise ControllerError("G1 source-gate authority is missing")
+        source_authority = _validated_source_gate_seal(
+            Path(source_gate_path_value), commit
+        )
+        if source_authority["sha256"] != source_gate_sha256:
+            raise ControllerError("G1 source-gate authority hash mismatch")
+        hashes_path = path.parent / "hashes.sha256"
+        identity_path = path.parent / "identity-hashes.json"
+        _reject_existing_symlink_components(hashes_path)
+        _reject_existing_symlink_components(identity_path)
+        declared_hashes: Dict[str, str] = {}
+        for line in hashes_path.read_text(encoding="utf-8").splitlines():
+            parts = line.split(None, 1)
+            if len(parts) != 2 or sha256_pattern.fullmatch(parts[0]) is None:
+                raise ControllerError("G1 evidence hash list is malformed")
+            declared_hashes[parts[1].removeprefix("./")] = parts[0]
+        for evidence_path in (path, identity_path):
+            relative = evidence_path.relative_to(path.parent).as_posix()
+            if declared_hashes.get(relative) != _sha256(evidence_path.read_bytes()):
+                raise ControllerError("G1 evidence closure hash mismatch")
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(identity, dict)
+            or identity.get("schema") != "csswitch-g1-binding-observation.v1"
+            or identity.get("source_commit") != commit
+            or identity.get("current_recomputable_receipt") != path.name
+            or identity.get("source_gate") != source_authority
+        ):
+            raise ControllerError("G1 identity closure does not bind the receipt")
+        artifact_record = identity.get("artifact_record")
+        if not isinstance(artifact_record, dict):
+            raise ControllerError("G1 artifact record binding is missing")
+        artifact_record_path = Path(str(artifact_record.get("path", ""))).resolve(
+            strict=True
+        )
+        _reject_existing_symlink_components(artifact_record_path)
+        if (
+            artifact_record.get("sha256") != csswitch["artifact_record_sha256"]
+            or _sha256(artifact_record_path.read_bytes())
+            != csswitch["artifact_record_sha256"]
+            or identity.get("desktop_sha256") != csswitch["desktop_sha256"]
+            or identity.get("gateway_sha256") != csswitch["gateway_sha256"]
+            or identity.get("csswitch_bundle", {}).get("canonical_digest")
+            != csswitch["canonical_bundle_digest"]
+            or identity.get("science", {}).get("executable_sha256")
+            != science["executable_sha256"]
+            or identity.get("science", {}).get("package_canonical_digest")
+            != science["package_canonical_digest"]
+        ):
+            raise ControllerError("G1 identity closure conflicts with the receipt")
+        artifact_record_text = artifact_record_path.read_text(encoding="utf-8")
+        for expected_text in (
+            commit,
+            csswitch["canonical_bundle_digest"],
+            csswitch["desktop_sha256"],
+            csswitch["gateway_sha256"],
+        ):
+            if expected_text not in artifact_record_text:
+                raise ControllerError("G1 artifact record does not contain exact identity")
+        for authority_text in (
+            "Source gate: `15/15 PASS`, aggregate `PASS`, runner exit `0`",
+            "CSSwitch exact-artifact scope: `PASS`",
+        ):
+            if authority_text not in artifact_record_text:
+                raise ControllerError("G1 artifact record lacks exact authority statement")
+        expected = {
+            "artifact_path": str(self.app_bundle),
+            "desktop_sha256": _file_identity(self.app_bin)["sha256"],
+            "gateway_sha256": _file_identity(self.gateway_bin)["sha256"],
+            "bundle_id": self.expected_bundle_id,
+        }
+        if any(csswitch.get(key) != expected_value for key, expected_value in expected.items()):
+            raise ControllerError("G1 CSSwitch identity does not match launch artifact")
+        if (
+            _canonical_regular_file_list_digest(self.app_bundle)
+            != csswitch["canonical_bundle_digest"]
+        ):
+            raise ControllerError("G1 CSSwitch canonical digest does not match artifact")
+        science_identity = _file_identity(self.science_bin)
+        if (
+            science.get("executable_path") != str(self.science_bin)
+            or science.get("executable_sha256") != science_identity["sha256"]
+        ):
+            raise ControllerError("G1 Science identity does not match launch executable")
+        package_path = Path(str(science.get("package_path", ""))).resolve(strict=True)
+        _reject_existing_symlink_components(package_path)
+        if not _is_relative_to(self.science_bin, package_path):
+            raise ControllerError("G1 Science executable is outside the bound package")
+        if (
+            _canonical_regular_file_list_digest(package_path)
+            != science["package_canonical_digest"]
+        ):
+            raise ControllerError("G1 Science canonical digest does not match package")
+        return {
+            "path": str(path),
+            "sha256": _sha256(path.read_bytes()),
+            "schema": value["schema"],
+            "current_g1_result": value["current_g1_result"],
+            "source": copy.deepcopy(source),
+            "source_gate_authority": source_authority,
+            "artifact_record": {
+                "path": str(artifact_record_path),
+                "sha256": csswitch["artifact_record_sha256"],
+            },
+            "artifact_record_sha256": csswitch.get("artifact_record_sha256"),
+            "canonical_bundle_digest": csswitch.get("canonical_bundle_digest"),
+            "science_package_canonical_digest": science.get(
+                "package_canonical_digest"
+            ),
+            "science_package_path": str(package_path),
+            "evidence_hashes_path": str(hashes_path),
+            "identity_closure_path": str(identity_path),
+        }
+
+    def _freeze_pre_run(self, launch_env: Mapping[str, str], launch_argv: Sequence[str]) -> Dict[str, Any]:
+        if self._provider_receipt is None or self._fixture_receipt is None:
+            raise ControllerError("complete fixture/provider receipts are required before launch")
+        if self._pre_run_manifest is not None:
+            self.validate_pre_run()
+            return copy.deepcopy(self._pre_run_manifest)
+        if (
+            launch_env.get("CSSWITCH_AUTO_BOOT_ON_LAUNCH") == "1"
+            and self._fixture_receipt.get("preselected_active_profile") is not True
+        ):
+            raise ControllerError("auto-boot requires a preselected fixture profile")
+        g1_binding = self._validated_g1_binding()
+        network_receipt = self._network_guard.verify()
+        network_sha256 = self._write_evidence_json(
+            "network-isolation-receipt.json", network_receipt, once=True
+        )
+        artifact_tree = _tree_manifest(self.app_bundle)
+        artifact_tree_sha256 = self._write_evidence_json(
+            "artifact-tree-manifest.json", artifact_tree, once=True
+        )
+        science_package_tree = _tree_manifest(
+            Path(g1_binding["science_package_path"])
+        )
+        science_package_tree_sha256 = self._write_evidence_json(
+            "science-package-tree-manifest.json", science_package_tree, once=True
+        )
+        fixture_path = self.evidence / "fixture-receipt.json"
+        provider_path = self.evidence / "provider-launch-receipt.json"
+        manifest = {
+            "schema": PRE_RUN_MANIFEST_SCHEMA,
+            "frozen_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "executor": {"uid": os.getuid(), "pid": os.getpid()},
+            "authorized_scope": "isolated-live loopback fixture; no account, credential, provider, SSH, installed, signing, or release claim",
+            "repository": self._repo_state_receipt(),
+            "g1_binding_receipt": g1_binding,
+            "artifact": {
+                "bundle_path": str(self.app_bundle),
+                "bundle_id": self.expected_bundle_id,
+                "tree_manifest_path": str(self.evidence / "artifact-tree-manifest.json"),
+                "tree_manifest_sha256": artifact_tree_sha256,
+                "entries_sha256": artifact_tree["entries_sha256"],
+                "desktop": _file_identity(self.app_bin),
+                "gateway": _file_identity(self.gateway_bin),
+            },
+            "science_package": {
+                "path": g1_binding["science_package_path"],
+                "tree_manifest_path": str(
+                    self.evidence / "science-package-tree-manifest.json"
+                ),
+                "tree_manifest_sha256": science_package_tree_sha256,
+                "entries_sha256": science_package_tree["entries_sha256"],
+                "executable": _file_identity(self.science_bin),
+            },
+            "fixture_receipt": {
+                "path": str(fixture_path),
+                "sha256": _sha256(fixture_path.read_bytes()),
+            },
+            "provider_launch_receipt": {
+                "path": str(provider_path),
+                "sha256": _sha256(provider_path.read_bytes()),
+            },
+            "network_isolation_receipt": {
+                "path": str(self.evidence / "network-isolation-receipt.json"),
+                "sha256": network_sha256,
+            },
+            "launch": {
+                "argv": list(launch_argv),
+                "environment": dict(sorted(launch_env.items())),
+                "argv_sha256": _sha256(_canonical_json_bytes(list(launch_argv))),
+                "environment_sha256": _sha256(_canonical_json_bytes(dict(launch_env))),
+                "controller_executes_launch": True,
+            },
+            "deadlines_seconds": {"observe_start": 60, "stop": 60, "overall": 300},
+            "network_policy": "deny-all-outbound-except-loopback",
+            "preconditions": {
+                "current_g1_binding_pass": True,
+                "artifact_identity_complete": True,
+                "fixture_receipt_complete": True,
+                "provider_receipt_complete": True,
+                "network_isolation_self_test": True,
+                "reserved_8765_absent_from_fixture": True,
+            },
+        }
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+        if FIXED_PATH_SECRET in encoded or FAKE_API_KEY in encoded:
+            raise AssertionError("pre-run manifest contains sensitive fixture material")
+        manifest_path = self.evidence / "pre-run-manifest.json"
+        self._pre_run_manifest_sha256 = self._write_evidence_json(
+            manifest_path.name, manifest, once=True
+        )
+        self._pre_run_manifest = copy.deepcopy(manifest)
+        return manifest
+
+    def validate_pre_run(self) -> Dict[str, Any]:
+        if self._pre_run_manifest is None or self._pre_run_manifest_sha256 is None:
+            raise ControllerError("pre-run manifest has not been frozen")
+        manifest_path = self.evidence / "pre-run-manifest.json"
+        if _sha256(manifest_path.read_bytes()) != self._pre_run_manifest_sha256:
+            raise ControllerError("pre-run manifest drift")
+        if self._repo_state_receipt() != self._pre_run_manifest["repository"]:
+            raise ControllerError("pre-run repository state drift")
+        if self._validated_g1_binding() != self._pre_run_manifest["g1_binding_receipt"]:
+            raise ControllerError("pre-run G1 binding closure drift")
+        for field in (
+            "g1_binding_receipt",
+            "fixture_receipt",
+            "provider_launch_receipt",
+            "network_isolation_receipt",
+        ):
+            binding = self._pre_run_manifest[field]
+            if _sha256(Path(binding["path"]).read_bytes()) != binding["sha256"]:
+                raise ControllerError(f"pre-run {field} drift")
+        if _file_identity(self.config_path)["sha256"] != self._fixture_receipt["config"]["sha256"]:
+            raise ControllerError("pre-run fixture config drift")
+        for field in ("controller_source", "provider_source", "science_executable"):
+            frozen = self._fixture_receipt[field]
+            if _file_identity(Path(frozen["path"]))["sha256"] != frozen["sha256"]:
+                raise ControllerError(f"pre-run {field} drift")
+        for field in ("desktop", "gateway"):
+            frozen = self._pre_run_manifest["artifact"][field]
+            if _file_identity(Path(frozen["path"]))["sha256"] != frozen["sha256"]:
+                raise ControllerError(f"pre-run artifact {field} drift")
+        current_tree = _tree_manifest(self.app_bundle)
+        if (
+            current_tree["entries_sha256"]
+            != self._pre_run_manifest["artifact"]["entries_sha256"]
+        ):
+            raise ControllerError("pre-run artifact tree drift")
+        current_science_tree = _tree_manifest(
+            Path(self._pre_run_manifest["science_package"]["path"])
+        )
+        if (
+            current_science_tree["entries_sha256"]
+            != self._pre_run_manifest["science_package"]["entries_sha256"]
+        ):
+            raise ControllerError("pre-run Science package tree drift")
+        if self._network_guard.profile_sha256 != self._fixture_receipt["network_profile"]["sha256"]:
+            raise ControllerError("pre-run network profile drift")
+        return {
+            "ok": True,
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": self._pre_run_manifest_sha256,
+        }
 
     def preflight_blockers(self) -> List[str]:
         blockers = list(self.case.blockers)
@@ -1404,6 +2540,25 @@ esac
     def start_mock(self) -> Dict[str, Any]:
         if self._mock_started:
             raise ControllerError("mock already started")
+        self._inventory_before = {
+            "schema": "csswitch.isolated-live-inventory.v1",
+            "stage": "before",
+            "owned_processes": [],
+            "reserved_ports": {
+                "gateway": self.proxy_port,
+                "science": self.sandbox_port,
+                "preview": self.preview_port,
+            },
+            "same_bundle_process_count": len(self.same_bundle_processes()),
+        }
+        self._write_evidence_json(
+            "inventory-before.json", self._inventory_before, once=True
+        )
+        self._write_evidence_json(
+            self._scenario_manifest_path.name,
+            _scenario_manifest_value(self._scenario),
+            once=True,
+        )
         ready = self._mock.start()
         if self._mock.port in {
             self.proxy_port,
@@ -1446,7 +2601,9 @@ esac
             "listener_verified": True,
             "phase": ready["phase"],
         }
-        _safe_json_write(self.evidence / "mock-ready.json", safe_ready)
+        self._write_evidence_json("mock-ready.json", safe_ready)
+        self._publish_provider_receipt(ready, executable)
+        self._publish_fixture_receipt()
         return safe_ready
 
     def prepare_dry_run(self) -> Dict[str, Any]:
@@ -1456,7 +2613,7 @@ esac
                 raise ControllerError("dry-run mock port collision")
             mock_base = f"http://127.0.0.1:{reservation.port}"
             self._write_config(mock_base)
-            plan = self.safe_plan(mock_base=mock_base)
+            plan = self.safe_plan(mock_base=mock_base, freeze_pre_run=False)
             plan["dry_run"] = True
             plan["do_not_execute"] = True
             plan["preflight_would_allow_launch"] = plan["launch_allowed"]
@@ -1468,9 +2625,10 @@ esac
     def _launch_environment(self, mock_base: str, *, auto_boot: bool = False) -> Dict[str, str]:
         env = {
             "HOME": str(self.home),
+            "CFFIXED_USER_HOME": str(self.home),
             "TMPDIR": str(self.tmp),
             "PATH": f"{self.bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin",
-            "SCIENCE_BIN": str(self.fake_science),
+            "SCIENCE_BIN": str(self.science_bin),
             "CSSWITCH_ACCEPTANCE_OPEN_BIN": str(self.bin_dir / "open"),
             "CSSWITCH_EXPECTED_SANDBOX_PORT": str(self.sandbox_port),
             "CSSWITCH_TOOLUSE_SHIM": self.case.shim,
@@ -1525,24 +2683,35 @@ esac
                 raise ControllerError("mock must be started before launch plan")
             mock_base = self._mock.base_url
         env = self._launch_environment(mock_base, auto_boot=auto_boot)
-        argv = ["/usr/bin/open", "-n", "-F", "-g"]
+        argv = [*self._network_guard.launch_prefix(), "/usr/bin/env", "-i"]
         for name in sorted(env):
-            argv.extend(["--env", f"{name}={env[name]}"])
-        argv.append(str(self.app_bundle))
+            argv.append(f"{name}={env[name]}")
+        argv.append(str(self.app_bin))
         return argv
 
-    def safe_plan(self, *, mock_base: Optional[str] = None, auto_boot: bool = False) -> Dict[str, Any]:
+    def safe_plan(
+        self,
+        *,
+        mock_base: Optional[str] = None,
+        auto_boot: bool = False,
+        freeze_pre_run: bool = True,
+    ) -> Dict[str, Any]:
         if mock_base is None:
             if not self._mock_started:
                 raise ControllerError("mock must be started before launch plan")
             mock_base = self._mock.base_url
         blockers = self.preflight_blockers()
         argv = None
+        pre_run = None
         if not blockers:
             argv = self.launch_argv(auto_boot=auto_boot, mock_base=mock_base)
             encoded = json.dumps(argv, sort_keys=True)
             if FIXED_PATH_SECRET in encoded or FAKE_API_KEY in encoded:
                 raise AssertionError("secret entered launch plan")
+            if freeze_pre_run:
+                pre_run = self._freeze_pre_run(
+                    self._launch_environment(mock_base, auto_boot=auto_boot), argv
+                )
         return {
             "schema": CONTROLLER_SCHEMA,
             "case": self.case.case_id,
@@ -1559,19 +2728,128 @@ esac
             "mock_phases": self.mock_phases(),
             "blockers": blockers,
             "launch_allowed": not blockers,
-            "launch_argv": argv,
-            "controller_launches_app": False,
+            "launch_argv": argv if not freeze_pre_run else None,
+            "launch_operation": "launch_guarded" if freeze_pre_run else None,
+            "network_policy": "deny-all-outbound-except-loopback",
+            "pre_run_manifest": (
+                {
+                    "path": str(self.evidence / "pre-run-manifest.json"),
+                    "sha256": self._pre_run_manifest_sha256,
+                }
+                if pre_run is not None
+                else None
+            ),
+            "controller_launches_app": freeze_pre_run,
         }
 
-    def release_app_ports(self) -> None:
-        """Release numeric-port reservations immediately before root runs open."""
+    def _validate_provider_live(self) -> None:
+        if self._provider_receipt is None:
+            raise ControllerError("provider receipt is missing")
+        pid = self._provider_receipt.get("owned_pid")
+        executable = self._provider_receipt.get("process", {}).get("path")
+        listener = self._provider_receipt.get("listener", {})
+        status_value = self._mock.status()
+        actual_executable = self.inspector.executable_for_pid(pid)
+        if (
+            not isinstance(pid, int)
+            or pid <= 1
+            or not self.inspector.pid_alive(pid)
+            or actual_executable is None
+            or str(actual_executable.resolve(strict=True)) != executable
+            or not self.inspector.listener_owned(pid, listener.get("port"))
+            or status_value.get("active_phase") is not None
+            or len(status_value.get("requests", [])) != 0
+            or len(status_value.get("failures", [])) != 0
+        ):
+            raise ControllerError("provider live identity drift before launch")
 
+    def launch_guarded(self) -> Dict[str, Any]:
+        """Revalidate and execute the frozen argv in one controller operation."""
+
+        if self._launch_consumed or self._launcher_process is not None:
+            raise ControllerError("guarded launch is one-shot")
         blockers = self.preflight_blockers()
         if blockers:
-            raise ControllerError("refusing port release while preflight is blocked")
+            raise ControllerError("refusing guarded launch while preflight is blocked")
+        self.validate_pre_run()
+        self._validate_provider_live()
+        self._launch_consumed = True
         self._proxy_reservation.release()
         self._sandbox_reservation.release()
         self._preview_reservation.release()
+        self._validate_provider_live()
+        if not all(
+            self._port_closed(port)
+            for port in (self.proxy_port, self.sandbox_port, self.preview_port)
+        ):
+            raise ControllerError("reserved loopback port was acquired before launch")
+        stdout_handle = self._open_evidence_exclusive("guarded-launch.stdout.log")
+        try:
+            stderr_handle = self._open_evidence_exclusive("guarded-launch.stderr.log")
+        except Exception:
+            stdout_handle.close()
+            raise
+        try:
+            process = subprocess.Popen(
+                self._pre_run_manifest["launch"]["argv"],
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                close_fds=True,
+                start_new_session=True,
+            )
+        finally:
+            stdout_handle.close()
+            stderr_handle.close()
+        self._launcher_process = process
+        self._launcher_pgid = self.inspector.process_group(process.pid)
+        if self._launcher_pgid != process.pid:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3.0)
+            raise ControllerError("guarded launcher did not acquire an owned process group")
+        deadline = time.monotonic() + 2.0
+        actual_executable = None
+        actual_executable_identity = None
+        while time.monotonic() < deadline and process.poll() is None:
+            actual_executable = self.inspector.executable_for_pid(process.pid)
+            actual_executable_identity = self.inspector.executable_identity_for_pid(
+                process.pid
+            )
+            if actual_executable is not None and actual_executable_identity is not None:
+                break
+            time.sleep(0.02)
+        frozen_app = self._pre_run_manifest["artifact"]["desktop"]
+        current_app = _file_identity(self.app_bin)
+        if (
+            process.poll() is not None
+            or actual_executable is None
+            or actual_executable_identity is None
+            or actual_executable.resolve(strict=False) != self.app_bin
+            or actual_executable_identity["path"] != str(self.app_bin)
+            or actual_executable_identity["device"] != frozen_app["device"]
+            or actual_executable_identity["inode"] != frozen_app["inode"]
+            or any(
+                current_app[field] != frozen_app[field]
+                for field in ("sha256", "size", "mode", "device", "inode")
+            )
+        ):
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3.0)
+            raise ControllerError("launched Desktop identity does not match frozen artifact")
+        receipt = {
+            "schema": "csswitch.guarded-launch-receipt.v1",
+            "pid": process.pid,
+            "pgid": self._launcher_pgid,
+            "process_start_marker": self.inspector.process_start_marker(process.pid),
+            "pre_run_manifest_sha256": self._pre_run_manifest_sha256,
+            "controller_owned": True,
+            "executable": current_app,
+            "exit_code": None,
+        }
+        self._write_evidence_json("guarded-launch-receipt.json", receipt)
+        return {"pid": process.pid, "controller_owned": True}
 
     def mock_phases(self) -> List[Dict[str, Any]]:
         counts: Dict[str, int] = {}
@@ -1637,7 +2915,7 @@ esac
             if len(matches) == 1:
                 self._app_pid = matches[0]
                 value = {"pid": matches[0], "executable": str(self.app_bin), "identity_verified": True}
-                _safe_json_write(self.evidence / "app-identity.json", value)
+                self._write_evidence_json("app-identity.json", value)
                 return value
             if len(matches) > 1:
                 raise ControllerError("multiple exact installed app processes observed")
@@ -1825,7 +3103,7 @@ esac
             "variant": self.case.formal_variant,
             "sensitive_material_absent": True,
         }
-        _safe_json_write(self.evidence / f"formal-{self.case.case_id}.json", result)
+        self._write_evidence_json(f"formal-{self.case.case_id}.json", result)
         return result
 
     def checkpoint_config(self, label: str) -> Dict[str, Any]:
@@ -1896,7 +3174,7 @@ esac
             "gateway": health["gateway"],
         }
         self._runtime_records[label] = record
-        _safe_json_write(self.evidence / f"runtime-{label}.json", record)
+        self._write_evidence_json(f"runtime-{label}.json", record)
         return record
 
     def compare_runtime(self, before: str, after: str, relation: str) -> Dict[str, Any]:
@@ -1943,7 +3221,7 @@ esac
             "identity_verified": ok,
         }
         if ok:
-            _safe_json_write(self.evidence / "fake-science-identity.json", value)
+            self._write_evidence_json("fake-science-identity.json", value)
         return value
 
     def stop_fake_science(self) -> Dict[str, Any]:
@@ -1969,7 +3247,7 @@ esac
         self._mock_stopped = True
         safe = copy.deepcopy(result)
         self._mock_result = copy.deepcopy(safe)
-        _safe_json_write(self.evidence / "mock-result.json", safe)
+        self._write_evidence_json("mock-result.json", safe)
         return safe
 
     def export_sanitized_summary(self, destination: Path) -> Dict[str, Any]:
@@ -2067,6 +3345,14 @@ esac
         for record in [
             *self._runtime_records.values(),
             ({"pid": self._app_pid, "executable": str(self.app_bin)} if self._app_pid else {}),
+            (
+                {
+                    "pid": self._launcher_process.pid,
+                    "executable": str(self.app_bin),
+                }
+                if self._launcher_process is not None
+                else {}
+            ),
         ]:
             pid = record.get("pid")
             if not isinstance(pid, int) or pid in seen:
@@ -2080,6 +3366,61 @@ esac
                     "pid": pid,
                     "alive": alive,
                     "identity_match": alive and str(actual) == expected,
+                }
+            )
+        descendant_roots = {
+            pid
+            for pid in (
+                self._app_pid,
+                self._launcher_process.pid if self._launcher_process is not None else None,
+            )
+            if isinstance(pid, int)
+        }
+        for parent_pid in descendant_roots:
+            for record in self.inspector.descendants(parent_pid):
+                if record.pid in seen:
+                    continue
+                seen.add(record.pid)
+                alive = self.inspector.pid_alive(record.pid)
+                actual = self.inspector.executable_for_pid(record.pid) if alive else None
+                pid_results.append(
+                    {
+                        "pid": record.pid,
+                        "alive": alive,
+                        "identity_match": alive and actual is not None,
+                        "source": "desktop-or-launcher-descendant",
+                    }
+                )
+        if self._launcher_pgid is not None:
+            for pid in self.inspector.pids_in_process_group(self._launcher_pgid):
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                alive = self.inspector.pid_alive(pid)
+                actual = self.inspector.executable_for_pid(pid) if alive else None
+                pid_results.append(
+                    {
+                        "pid": pid,
+                        "alive": alive,
+                        "identity_match": alive and actual is not None,
+                        "source": "guarded-process-group",
+                    }
+                )
+        root_pids = [
+            pid for pid in self.inspector.pids_using_path(self.root) if pid != os.getpid()
+        ]
+        for pid in root_pids:
+            if pid in seen:
+                continue
+            seen.add(pid)
+            alive = self.inspector.pid_alive(pid)
+            actual = self.inspector.executable_for_pid(pid) if alive else None
+            pid_results.append(
+                {
+                    "pid": pid,
+                    "alive": alive,
+                    "identity_match": alive and actual is not None,
+                    "source": "runtime-root-open-fd",
                 }
             )
         if isinstance(self._mock, SubprocessScenarioControl) and self._mock.process_pid:
@@ -2138,7 +3479,110 @@ esac
             "ports_closed": port_results,
             "owned_pids": pid_results,
             "fake_science_state_valid": fake_state_valid,
+            "runtime_root_open_pids": root_pids,
             "ok": ok,
+        }
+
+    def finalize_evidence(self) -> Dict[str, Any]:
+        """Publish cleanup, observations, manifest, then a terminal hash closure."""
+
+        if self._evidence_finalized:
+            return {
+                "finalized": True,
+                "hashes_path": str(self.evidence / "hashes.sha256"),
+                "hashes_sha256": _sha256(_read_at(self._evidence_fd, "hashes.sha256")),
+            }
+        if self._mock_started and not self._mock_stopped:
+            raise ControllerError("provider mock must stop before evidence finalization")
+        cleanup = self.verify_cleanup()
+        if not cleanup["ok"]:
+            raise ControllerError("cleanup must pass before evidence finalization")
+        after = {
+            "schema": "csswitch.isolated-live-inventory.v1",
+            "stage": "after",
+            "owned_processes": copy.deepcopy(cleanup["owned_pids"]),
+            "ports_closed": copy.deepcopy(cleanup["ports_closed"]),
+            "runtime_root_open_pids": copy.deepcopy(
+                cleanup["runtime_root_open_pids"]
+            ),
+        }
+        cleanup_receipt = {
+            "schema": "csswitch.isolated-live-cleanup-receipt.v1",
+            **copy.deepcopy(cleanup),
+            "driver_verified": True,
+        }
+        decision = (
+            "INCONCLUSIVE(reason=controller-does-not-aggregate-runtime-observations)"
+            if self._launch_consumed
+            else "INCONCLUSIVE(reason=pre-run-only)"
+        )
+        observations = {
+            "schema": "csswitch.isolated-live-observations.v1",
+            "case": self.case.case_id,
+            "decision": decision,
+            "pre_run_manifest_validated": self._pre_run_manifest is not None,
+            "network_isolation_receipt": (
+                str(self.evidence / "network-isolation-receipt.json")
+                if self._pre_run_manifest is not None
+                else None
+            ),
+            "cleanup_ok": True,
+        }
+        events = (
+            json.dumps(
+                {
+                    "event": "evidence-finalized",
+                    "case": self.case.case_id,
+                    "decision": decision,
+                    "cleanup_ok": True,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        self._write_evidence_json("inventory-after.json", after, once=True)
+        self._write_evidence_json("cleanup.json", cleanup_receipt, once=True)
+        self._write_evidence_json("observations.json", observations, once=True)
+        _safe_write_at(self._evidence_fd, "events.ndjson", events, 0o600)
+        manifest = {
+            "schema": "csswitch.isolated-live-evidence-manifest.v1",
+            "case": self.case.case_id,
+            "decision": decision,
+            "pre_run_manifest": (
+                {
+                    "path": str(self.evidence / "pre-run-manifest.json"),
+                    "sha256": self._pre_run_manifest_sha256,
+                }
+                if self._pre_run_manifest is not None
+                else None
+            ),
+            "fixture_receipt": str(self.evidence / "fixture-receipt.json"),
+            "provider_receipt": str(self.evidence / "provider-launch-receipt.json"),
+            "inventory_before": str(self.evidence / "inventory-before.json"),
+            "inventory_after": str(self.evidence / "inventory-after.json"),
+            "cleanup": str(self.evidence / "cleanup.json"),
+            "observations": str(self.evidence / "observations.json"),
+            "events": str(self.evidence / "events.ndjson"),
+        }
+        self._write_evidence_json("manifest.json", manifest, once=True)
+        self._assert_evidence_binding()
+        lines = _hash_tree_at(self._evidence_fd)
+        hash_bytes = "".join(
+            f"{digest}  ./{relative}\n" for relative, digest in sorted(lines)
+        ).encode("utf-8")
+        _safe_write_at(self._evidence_fd, "hashes.sha256", hash_bytes, 0o600)
+        if _hash_tree_at(self._evidence_fd) != lines:
+            raise ControllerError("evidence hash closure changed during finalization")
+        self._assert_evidence_binding()
+        self._evidence_finalized = True
+        return {
+            "finalized": True,
+            "decision": decision,
+            "file_count": len(lines),
+            "hashes_path": str(self.evidence / "hashes.sha256"),
+            "hashes_sha256": _sha256(hash_bytes),
         }
 
     def destroy_workspace(self) -> Dict[str, bool]:
@@ -2160,11 +3604,6 @@ esac
         real_home = Path(os.path.expanduser("~")).resolve(strict=True)
         if self.root == real_home or _is_relative_to(self.root, real_home):
             raise ControllerError("refusing workspace removal inside real HOME")
-        for current, directories, filenames in os.walk(self.root, followlinks=False):
-            for name in [*directories, *filenames]:
-                candidate = Path(current) / name
-                if stat.S_ISLNK(candidate.lstat().st_mode):
-                    raise ControllerError("refusing workspace removal containing a symlink")
         cleanup = self.verify_cleanup()
         if not cleanup["ok"]:
             raise ControllerError("refusing workspace removal before owned cleanup passes")
@@ -2178,6 +3617,105 @@ esac
         if self._closed:
             return
         self._closed = True
+        owned_descendants: Dict[int, Tuple[Path, Optional[str]]] = {}
+        descendant_roots = {
+            pid
+            for pid in (
+                self._app_pid,
+                self._launcher_process.pid if self._launcher_process is not None else None,
+            )
+            if isinstance(pid, int)
+        }
+        for parent_pid in descendant_roots:
+            for record in self.inspector.descendants(parent_pid):
+                executable = self.inspector.executable_for_pid(record.pid)
+                if executable is not None:
+                    owned_descendants[record.pid] = (
+                        executable,
+                        self.inspector.process_start_marker(record.pid),
+                    )
+        if self._launcher_pgid is not None:
+            for pid in self.inspector.pids_in_process_group(self._launcher_pgid):
+                executable = self.inspector.executable_for_pid(pid)
+                if executable is not None:
+                    owned_descendants[pid] = (
+                        executable,
+                        self.inspector.process_start_marker(pid),
+                    )
+        if not self._workspace_destroyed and self.root.exists():
+            for pid in self.inspector.pids_using_path(self.root):
+                if pid == os.getpid():
+                    continue
+                executable = self.inspector.executable_for_pid(pid)
+                if executable is not None:
+                    owned_descendants[pid] = (
+                        executable,
+                        self.inspector.process_start_marker(pid),
+                    )
+        if self._launcher_process is not None and self._launcher_process.poll() is None:
+            self._launcher_process.terminate()
+            try:
+                self._launcher_process.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                self._launcher_process.kill()
+                self._launcher_process.wait(timeout=3.0)
+        if self._launcher_pgid is not None:
+            for pid in self.inspector.pids_in_process_group(self._launcher_pgid):
+                executable = self.inspector.executable_for_pid(pid)
+                if executable is not None and pid not in owned_descendants:
+                    owned_descendants[pid] = (
+                        executable,
+                        self.inspector.process_start_marker(pid),
+                    )
+        if not self._workspace_destroyed and self.root.exists():
+            for pid in self.inspector.pids_using_path(self.root):
+                if pid == os.getpid():
+                    continue
+                executable = self.inspector.executable_for_pid(pid)
+                if executable is not None and pid not in owned_descendants:
+                    owned_descendants[pid] = (
+                        executable,
+                        self.inspector.process_start_marker(pid),
+                    )
+        for pid, (expected_executable, expected_start) in owned_descendants.items():
+            if pid == (self._launcher_process.pid if self._launcher_process else None):
+                continue
+            actual = self.inspector.executable_for_pid(pid)
+            if (
+                not self.inspector.pid_alive(pid)
+                or actual != expected_executable
+                or self.inspector.process_start_marker(pid) != expected_start
+            ):
+                continue
+            try:
+                os.kill(pid, 15)
+            except ProcessLookupError:
+                pass
+        descendant_deadline = time.monotonic() + 3.0
+        while time.monotonic() < descendant_deadline:
+            if not any(self.inspector.pid_alive(pid) for pid in owned_descendants):
+                break
+            time.sleep(0.05)
+        for pid, (expected_executable, expected_start) in owned_descendants.items():
+            actual = self.inspector.executable_for_pid(pid)
+            if (
+                self.inspector.pid_alive(pid)
+                and actual == expected_executable
+                and self.inspector.process_start_marker(pid) == expected_start
+            ):
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+        if self._launcher_process is not None:
+            try:
+                receipt_raw = _read_at(self._evidence_fd, "guarded-launch-receipt.json")
+            except FileNotFoundError:
+                receipt_raw = None
+            if receipt_raw is not None:
+                receipt = json.loads(receipt_raw)
+                receipt["exit_code"] = self._launcher_process.poll()
+                self._write_evidence_json("guarded-launch-receipt.json", receipt)
         if self._mock_started and not self._mock_stopped:
             self._mock.stop()
             self._mock_stopped = True
@@ -2202,9 +3740,10 @@ def _dispatch(session: InstalledProviderSession, command: Mapping[str, Any]) -> 
         return session.start_mock()
     if op == "plan":
         return session.safe_plan(auto_boot=bool(command.get("auto_boot", False)))
-    if op == "release_ports":
-        session.release_app_ports()
-        return {"released": True}
+    if op == "pre_run_check":
+        return session.validate_pre_run()
+    if op == "launch_guarded":
+        return session.launch_guarded()
     if op == "observe_app":
         return session.observe_app(float(command.get("timeout_seconds", 8.0)))
     if op == "enter_phase":
@@ -2248,6 +3787,8 @@ def _dispatch(session: InstalledProviderSession, command: Mapping[str, Any]) -> 
         return session.stop_mock()
     if op == "cleanup_check":
         return session.verify_cleanup()
+    if op == "finalize_evidence":
+        return session.finalize_evidence()
     if op == "export_summary":
         destination = command.get("destination")
         if not isinstance(destination, str):
@@ -2268,7 +3809,7 @@ def run_json_lines(session: InstalledProviderSession) -> int:
         "schema": CONTROLLER_SCHEMA,
         "case": session.case.case_id,
         "test_root": str(session.root),
-        "controller_launches_app": False,
+        "controller_launches_app": True,
     }
     print(json.dumps(hello, sort_keys=True), flush=True)
     for raw_line in sys.stdin:
