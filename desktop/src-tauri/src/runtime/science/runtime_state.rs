@@ -183,23 +183,44 @@ fn process_start_identity(pid: u32) -> Option<String> {
     {
         return Some("Mon Jan  1 00:00:00 2001".into());
     }
-    let output = Command::new("/bin/ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let info_size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let read = unsafe {
+        libc::proc_pidinfo(
+            i32::try_from(pid).ok()?,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            i32::try_from(info_size).ok()?,
+        )
+    };
+    if usize::try_from(read).ok()? != info_size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    if info.pbi_pid != pid || info.pbi_start_tvsec == 0 {
+        return None;
+    }
+    let seconds = libc::time_t::try_from(info.pbi_start_tvsec).ok()?;
+    let output = Command::new("/bin/date")
+        .args(["-r", &seconds.to_string(), "+%a %b %e %T %Y"])
         .env_clear()
         .output()
         .ok()?;
-    if !output.status.success() || output.stdout.len() > 256 || !output.stderr.is_empty() {
+    if !output.status.success() || output.stdout.len() > 128 || !output.stderr.is_empty() {
         return None;
     }
     let identity = String::from_utf8(output.stdout).ok()?;
     let identity = identity.trim();
     if identity.is_empty()
-        || identity.len() > 128
+        || identity.len() > 64
         || !identity.is_ascii()
         || identity.lines().count() != 1
     {
         return None;
     }
+    // Preserve the trimmed `ps -o lstart=` representation already stored in
+    // schema-v1 managed receipts, without spawning the sandbox-blocked `ps`.
     Some(identity.to_string())
 }
 

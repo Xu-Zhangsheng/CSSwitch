@@ -19,12 +19,43 @@ use super::{
     science_runtime_preflight_for_paths_cached, science_runtime_preflight_for_paths_with_updated,
     science_status_running, secure_runtime_snapshot_root, select_science_runtime_for_paths,
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
-    settings_change_needs_teardown, stop_runtime_from_probe, test_runtime_identity,
-    trusted_science_status, SandboxScienceState, SciencePostTermAction, ScienceRuntimeIdentity,
-    ScienceRuntimeSource, ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache,
-    VerifiedScienceStop, CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES,
+    settings_change_needs_teardown, stop_runtime_from_probe, test_process_start_identity_for_pid,
+    test_runtime_identity, trusted_science_status, SandboxScienceState, SciencePostTermAction,
+    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopFailure, ScienceStopFailureKind,
+    ScienceVersionCache, VerifiedScienceStop, CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES,
     MAX_MANAGED_LAUNCH_BYTES,
 };
+
+#[test]
+fn managed_process_start_identity_preserves_the_legacy_receipt_format() {
+    const CHILD_ENV: &str = "CSSWITCH_TEST_PROCESS_START_TZ_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::science::tests::managed_process_start_identity_preserves_the_legacy_receipt_format",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("TZ", "UTC")
+            .status()
+            .expect("hostile-TZ test child should start");
+        assert!(status.success());
+        return;
+    }
+    let pid = std::process::id();
+    let direct = test_process_start_identity_for_pid(pid)
+        .expect("proc_pidinfo should identify the current process");
+    let output = Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .env_clear()
+        .output()
+        .expect("ps should provide the legacy receipt representation");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(direct, String::from_utf8(output.stdout).unwrap().trim());
+    assert!(test_process_start_identity_for_pid(0).is_none());
+}
 
 #[test]
 fn o1_e3_prior_restart_receipt_uses_the_durable_launch_id() -> Result<(), Box<dyn std::error::Error>>
