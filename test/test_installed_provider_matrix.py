@@ -22,6 +22,7 @@ from test.installed_provider_matrix import (
     FAKE_API_KEY,
     FIXED_PATH_SECRET,
     NETWORK_PROBE_SOURCE,
+    NETWORK_POLICY,
     NETWORK_SANDBOX_PROFILE,
     ControllerError,
     InProcessScenarioControl,
@@ -293,6 +294,9 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             "profile_sha256": hashlib.sha256(
                 session.network_profile.read_bytes()
             ).hexdigest(),
+            "owned_unix_socket_subpath": str(
+                session._network_guard.owned_unix_socket_subpath
+            ),
             "sandbox_exec": {"path": "/usr/bin/sandbox-exec"},
             "probe": {
                 **denied,
@@ -302,7 +306,7 @@ class InstalledProviderMatrixTests(unittest.TestCase):
                 "unique_system_resolver_lookup_failed_observation": True,
                 "exit_code": 0,
             },
-            "policy": "deny-all-outbound-except-loopback",
+            "policy": NETWORK_POLICY,
             "ok": True,
         }
 
@@ -466,12 +470,13 @@ class InstalledProviderMatrixTests(unittest.TestCase):
         with self._session("relay-force") as session:
             plan = session.prepare_dry_run()
             argv = plan["launch_argv"]
+            runtime_profile = session.network_profile.read_text(encoding="utf-8")
             self.assertEqual(
                 argv[:4],
                 [
                     "/usr/bin/sandbox-exec",
                     "-p",
-                    NETWORK_SANDBOX_PROFILE,
+                    runtime_profile,
                     "/usr/bin/env",
                 ],
             )
@@ -479,14 +484,22 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             self.assertEqual(argv[-1], str(self.app_bundle / "Contents/MacOS/desktop"))
             self.assertNotIn("--env", argv)
             self.assertNotIn("--args", argv)
-            self.assertEqual(
-                session.network_profile.read_text(encoding="utf-8"),
-                NETWORK_SANDBOX_PROFILE,
-            )
-            self.assertIn("(deny network-outbound)", NETWORK_SANDBOX_PROFILE)
+            self.assertTrue(runtime_profile.startswith(NETWORK_SANDBOX_PROFILE))
+            self.assertIn("(deny network-outbound)", runtime_profile)
             self.assertIn(
                 '(allow network-outbound (remote ip "localhost:*"))',
-                NETWORK_SANDBOX_PROFILE,
+                runtime_profile,
+            )
+            owned_science_dir = (
+                session.csswitch_dir / "sandbox/home/.claude-science"
+            )
+            self.assertEqual(
+                session._network_guard.owned_unix_socket_subpath,
+                owned_science_dir,
+            )
+            self.assertIn(
+                f'(allow network-outbound (subpath "{owned_science_dir}"))',
+                runtime_profile,
             )
             for field in (
                 "ipv4_dns_tcp_errno",
@@ -504,7 +517,7 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             self.assertTrue(plan["preflight_would_allow_launch"])
             self.assertIsNone(plan["pre_run_manifest"])
             self.assertEqual(
-                plan["network_policy"], "deny-all-outbound-except-loopback"
+                plan["network_policy"], NETWORK_POLICY
             )
             self.assertEqual(
                 session._launch_environment(plan["mock_base_url"])["CSSWITCH_UPSTREAM_URL"],
@@ -516,6 +529,77 @@ class InstalledProviderMatrixTests(unittest.TestCase):
                 ],
                 str(session.home),
             )
+
+            if sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file():
+                with tempfile.TemporaryDirectory(prefix="niu.", dir="/private/tmp") as raw:
+                    probe_root = Path(raw)
+                    allowed_dir = probe_root / "allowed"
+                    denied_dir = probe_root / "denied"
+                    allowed_dir.mkdir()
+                    denied_dir.mkdir()
+                    guard = NetworkIsolationGuard(
+                        probe_root / "network.sb", allowed_dir
+                    )
+                    allowed_socket = allowed_dir / "daemon.sock"
+                    denied_socket = denied_dir / "daemon.sock"
+                    source = (
+                        "import socket,sys; "
+                        "client=socket.socket(socket.AF_UNIX); "
+                        "client.connect(sys.argv[1]); client.close()"
+                    )
+                    with socket.socket(socket.AF_UNIX) as allowed_listener, socket.socket(
+                        socket.AF_UNIX
+                    ) as denied_listener:
+                        allowed_listener.bind(str(allowed_socket))
+                        allowed_listener.listen(1)
+                        denied_listener.bind(str(denied_socket))
+                        denied_listener.listen(1)
+                        allowed_result = subprocess.run(
+                            [
+                                *guard.launch_prefix(),
+                                str(Path(sys.executable).resolve(strict=True)),
+                                "-I",
+                                "-c",
+                                source,
+                                str(allowed_socket),
+                            ],
+                            check=False,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=5,
+                        )
+                        denied_result = subprocess.run(
+                            [
+                                *guard.launch_prefix(),
+                                str(Path(sys.executable).resolve(strict=True)),
+                                "-I",
+                                "-c",
+                                source,
+                                str(denied_socket),
+                            ],
+                            check=False,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=5,
+                        )
+                    self.assertEqual(allowed_result.returncode, 0)
+                    self.assertNotEqual(denied_result.returncode, 0)
+                    with self.assertRaisesRegex(ControllerError, "must not contain"):
+                        NetworkIsolationGuard(
+                            probe_root / "dotdot.sb",
+                            probe_root / "nested/../denied",
+                        )
+                    linked_dir = probe_root / "linked"
+                    linked_dir.symlink_to(denied_dir, target_is_directory=True)
+                    with self.assertRaisesRegex(ControllerError, "must be canonical"):
+                        NetworkIsolationGuard(
+                            probe_root / "symlink.sb",
+                            linked_dir / "science",
+                        )
             self.assertEqual(
                 session._launch_environment(plan["mock_base_url"])[
                     "CSSWITCH_ACCEPTANCE_OUTER_SANDBOX"
@@ -626,7 +710,7 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             )
             self.assertTrue(all(pre_run["preconditions"].values()))
             self.assertEqual(
-                pre_run["network_policy"], "deny-all-outbound-except-loopback"
+                pre_run["network_policy"], NETWORK_POLICY
             )
             self.assertTrue(
                 pre_run["network_isolation_receipt"]["sha256"]

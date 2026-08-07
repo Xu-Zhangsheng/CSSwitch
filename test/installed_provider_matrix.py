@@ -82,6 +82,7 @@ NETWORK_SANDBOX_PROFILE = """(version 1)
 (deny network-outbound)
 (allow network-outbound (remote ip "localhost:*"))
 """
+NETWORK_POLICY = "deny-egress-except-ip-loopback-and-owned-science-unix-control"
 NETWORK_PROBE_SOURCE = r"""
 import json
 import socket
@@ -152,6 +153,20 @@ print(json.dumps(result, sort_keys=True))
 
 class ControllerError(RuntimeError):
     """A fail-closed installed acceptance error."""
+
+
+def _network_sandbox_profile(owned_unix_socket_subpath: Path) -> str:
+    path = Path(owned_unix_socket_subpath)
+    if not path.is_absolute():
+        raise ControllerError("owned Unix socket subpath must be absolute")
+    raw = str(path)
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw):
+        raise ControllerError("owned Unix socket subpath contains control characters")
+    quoted = raw.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        NETWORK_SANDBOX_PROFILE
+        + f'(allow network-outbound (subpath "{quoted}"))\n'
+    )
 
 
 @dataclass(frozen=True)
@@ -590,10 +605,28 @@ def _validated_source_gate_seal(path: Path, expected_commit: str) -> Dict[str, A
 class NetworkIsolationGuard:
     """Seatbelt policy and executable probe for loopback-only descendants."""
 
-    def __init__(self, profile_path: Path, sandbox_exec: Path = SANDBOX_EXEC):
+    def __init__(
+        self,
+        profile_path: Path,
+        owned_unix_socket_subpath: Path,
+        sandbox_exec: Path = SANDBOX_EXEC,
+    ):
         self.profile_path = Path(profile_path)
         self.sandbox_exec = Path(sandbox_exec)
-        self._profile_bytes = NETWORK_SANDBOX_PROFILE.encode("utf-8")
+        requested_subpath = Path(owned_unix_socket_subpath)
+        if ".." in requested_subpath.parts:
+            raise ControllerError("owned Unix socket subpath must not contain '..'")
+        profile_parent = self.profile_path.parent.resolve(strict=True)
+        self.owned_unix_socket_subpath = requested_subpath.resolve(strict=False)
+        if self.owned_unix_socket_subpath != requested_subpath:
+            raise ControllerError(
+                "owned Unix socket subpath must be canonical and must not traverse symlinks"
+            )
+        if not _is_relative_to(self.owned_unix_socket_subpath, profile_parent):
+            raise ControllerError("owned Unix socket subpath escapes the private run root")
+        self._profile_bytes = _network_sandbox_profile(
+            self.owned_unix_socket_subpath
+        ).encode("utf-8")
         try:
             current = self.profile_path.read_bytes()
         except FileNotFoundError:
@@ -614,7 +647,7 @@ class NetworkIsolationGuard:
         if executable["mode"] & 0o111 == 0:
             raise ControllerError("sandbox-exec is not executable")
         self.profile_sha256
-        return [str(self.sandbox_exec), "-p", NETWORK_SANDBOX_PROFILE]
+        return [str(self.sandbox_exec), "-p", self._profile_bytes.decode("utf-8")]
 
     def verify(self) -> Dict[str, Any]:
         listeners = []
@@ -700,6 +733,7 @@ class NetworkIsolationGuard:
             "schema": NETWORK_RECEIPT_SCHEMA,
             "profile_path": str(self.profile_path),
             "profile_sha256": self.profile_sha256,
+            "owned_unix_socket_subpath": str(self.owned_unix_socket_subpath),
             "sandbox_exec": _file_identity(self.sandbox_exec),
             "probe": {
                 **{field: observation.get(field) for field in denied_fields},
@@ -711,7 +745,7 @@ class NetworkIsolationGuard:
                 ),
                 "exit_code": result.returncode,
             },
-            "policy": "deny-all-outbound-except-loopback",
+            "policy": NETWORK_POLICY,
             "ok": ok,
         }
         if not ok:
@@ -1553,7 +1587,10 @@ class InstalledProviderSession:
         evidence_info = os.fstat(self._evidence_fd)
         self._evidence_identity = (evidence_info.st_dev, evidence_info.st_ino)
         self.network_profile = self.root / "loopback-only.sb"
-        self._network_guard = NetworkIsolationGuard(self.network_profile)
+        self._network_guard = NetworkIsolationGuard(
+            self.network_profile,
+            self.csswitch_dir / "sandbox/home/.claude-science",
+        )
         self.app_bin, self.gateway_bin = self._validate_bundle()
         self.fake_science = self.bin_dir / "claude-science"
         self._install_wrappers()
@@ -2433,7 +2470,7 @@ esac
                 "controller_executes_launch": True,
             },
             "deadlines_seconds": {"observe_start": 60, "stop": 60, "overall": 300},
-            "network_policy": "deny-all-outbound-except-loopback",
+            "network_policy": NETWORK_POLICY,
             "preconditions": {
                 "current_g1_binding_pass": True,
                 "artifact_identity_complete": True,
@@ -2734,7 +2771,7 @@ esac
             "launch_allowed": not blockers,
             "launch_argv": argv if not freeze_pre_run else None,
             "launch_operation": "launch_guarded" if freeze_pre_run else None,
-            "network_policy": "deny-all-outbound-except-loopback",
+            "network_policy": NETWORK_POLICY,
             "pre_run_manifest": (
                 {
                     "path": str(self.evidence / "pre-run-manifest.json"),
