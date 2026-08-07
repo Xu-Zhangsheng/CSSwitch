@@ -21,6 +21,32 @@ pub(crate) const SAFE_LANG: &str = "en_US.UTF-8";
 /// Never treated as Science HOME.
 pub(crate) const HOST_HOME_ENV: &str = "CSSWITCH_HOST_HOME";
 
+/// Explicit isolated-live marker. The launch script validates that it is
+/// already running inside an outer macOS sandbox before it may disable
+/// Science's incompatible nested sandbox.
+pub(crate) const ACCEPTANCE_OUTER_SANDBOX_ENV: &str = "CSSWITCH_ACCEPTANCE_OUTER_SANDBOX";
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn sandbox_check(pid: i32, operation: *const std::ffi::c_char, filter_type: i32, ...) -> i32;
+}
+
+/// Query the kernel sandbox policy for this exact process. A failed nested
+/// sandbox launch is not evidence that outbound networking is denied.
+pub(crate) fn current_process_denies_network_outbound() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let operation = b"network-outbound\0";
+        // SAFETY: sandbox_check reads the static NUL-terminated operation and
+        // SANDBOX_FILTER_NONE (0) has no variadic filter arguments.
+        unsafe { sandbox_check(std::process::id() as i32, operation.as_ptr().cast(), 0) > 0 }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Clear child environment, then set only the provided pairs.
 pub(crate) fn apply_allowlist<K, V, I>(cmd: &mut Command, pairs: I)
 where
@@ -85,6 +111,7 @@ pub(crate) struct ScienceLaunchScriptEnv<'a> {
     pub system_ssh_hosts: &'a str,
     pub opaque_bindings: Option<&'a str>,
     pub runtime_version_prechecked: bool,
+    pub acceptance_outer_sandbox: bool,
 }
 
 pub(crate) fn science_launch_script_env(cfg: &ScienceLaunchScriptEnv<'_>) -> Vec<(String, String)> {
@@ -113,6 +140,9 @@ pub(crate) fn science_launch_script_env(cfg: &ScienceLaunchScriptEnv<'_>) -> Vec
     ));
     if cfg.runtime_version_prechecked {
         env.push(("CSSWITCH_RUNTIME_VERSION_PRECHECKED".into(), "1".into()));
+    }
+    if cfg.acceptance_outer_sandbox {
+        env.push((ACCEPTANCE_OUTER_SANDBOX_ENV.into(), "1".into()));
     }
     if let Some(bindings) = cfg.opaque_bindings {
         if !bindings.is_empty() {
@@ -222,6 +252,49 @@ mod tests {
             .any(|(k, _)| k.contains("API_KEY") || k.contains("SECRET")));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandbox_query_distinguishes_deny_egress_from_permissive_outer() {
+        const CHILD_ENV: &str = "CSSWITCH_SANDBOX_QUERY_TEST_EXPECTED";
+        if let Ok(expected) = std::env::var(CHILD_ENV) {
+            assert_eq!(
+                current_process_denies_network_outbound(),
+                expected == "denied"
+            );
+            return;
+        }
+        let nesting_available = Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !nesting_available {
+            return;
+        }
+        let current_exe = std::env::current_exe().expect("current test executable");
+        let test_name =
+            "runtime::launch_env::tests::sandbox_query_distinguishes_deny_egress_from_permissive_outer";
+        for (profile, expected) in [
+            (
+                "(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:*\"))",
+                "denied",
+            ),
+            (
+                "(version 1)(allow default)(deny process-exec (literal \"/usr/bin/sandbox-exec\"))",
+                "allowed",
+            ),
+        ] {
+            let status = Command::new("/usr/bin/sandbox-exec")
+                .args(["-p", profile])
+                .arg(&current_exe)
+                .args(["--exact", test_name, "--nocapture"])
+                .env(CHILD_ENV, expected)
+                .status()
+                .expect("sandbox query child must run");
+            assert!(status.success(), "sandbox query child failed for {expected}");
+        }
+    }
+
     #[test]
     fn science_launch_script_env_excludes_provider_secrets() {
         let home = Path::new("/tmp/csswitch-sandbox-home");
@@ -234,6 +307,7 @@ mod tests {
             system_ssh_hosts: "",
             opaque_bindings: Some("binding=value"),
             runtime_version_prechecked: true,
+            acceptance_outer_sandbox: false,
         });
         let keys = env_map_keys(&env);
         for forbidden in [
@@ -256,6 +330,7 @@ mod tests {
         assert!(keys.contains("SCIENCE_BIN"));
         assert!(keys.contains("CSSWITCH_PROXY_URL"));
         assert!(keys.contains("CSSWITCH_SCIENCE_OPAQUE_BINDINGS"));
+        assert!(!keys.contains(ACCEPTANCE_OUTER_SANDBOX_ENV));
         assert_eq!(
             env.iter()
                 .find(|(k, _)| k == "CSSWITCH_REUSE_SYSTEM_SSH")
@@ -276,6 +351,7 @@ mod tests {
             system_ssh_hosts: "lab",
             opaque_bindings: None,
             runtime_version_prechecked: true,
+            acceptance_outer_sandbox: false,
         });
         assert_eq!(
             off.iter()
@@ -292,6 +368,7 @@ mod tests {
             system_ssh_hosts: "lab",
             opaque_bindings: None,
             runtime_version_prechecked: true,
+            acceptance_outer_sandbox: true,
         });
         assert_eq!(
             on.iter()
@@ -304,6 +381,12 @@ mod tests {
                 .find(|(k, _)| k == "CSSWITCH_SYSTEM_SSH_HOSTS")
                 .map(|(_, v)| v.as_str()),
             Some("lab")
+        );
+        assert_eq!(
+            on.iter()
+                .find(|(k, _)| k == ACCEPTANCE_OUTER_SANDBOX_ENV)
+                .map(|(_, v)| v.as_str()),
+            Some("1")
         );
     }
 

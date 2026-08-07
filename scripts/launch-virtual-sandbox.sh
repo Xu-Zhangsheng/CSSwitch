@@ -46,6 +46,7 @@ EMAIL="virtual@localhost.invalid"
 DRY_RUN=0
 SKIP_FORGE=0
 SCIENCE_OPAQUE_BINDINGS="${CSSWITCH_SCIENCE_OPAQUE_BINDINGS:-}"
+ACCEPTANCE_OUTER_SANDBOX="${CSSWITCH_ACCEPTANCE_OUTER_SANDBOX:-0}"
 
 is_safe_science_bin() {
   local probe="$1"
@@ -367,6 +368,27 @@ _SCIENCE_ENV=(
   "no_proxy=$_NO_PROXY"
   "NO_PROXY=$_NO_PROXY"
 )
+typeset -a _SCIENCE_EXTRA_ARGS
+_SCIENCE_EXTRA_ARGS=()
+if [[ "$ACCEPTANCE_OUTER_SANDBOX" == "1" ]]; then
+  _sandbox_real="${SANDBOX_HOME:A}"
+  _host_real="${REAL_HOME:A}"
+  if [[ "$_sandbox_real" != /private/tmp/* || "$_host_real" != /private/tmp/* ]]; then
+    echo "拒绝：isolated-live 外层 sandbox 只允许临时 HOME" >&2
+    exit 1
+  fi
+  # A successful nested sandbox probe means no outer sandbox is active, so the
+  # acceptance-only opt-out must fail closed instead of weakening production.
+  if /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
+    echo "拒绝：isolated-live 外层 sandbox 未生效" >&2
+    exit 1
+  fi
+  _SCIENCE_EXTRA_ARGS+=("--dangerously-no-sandbox")
+  echo "  Science sandbox = 由外层 isolated-live deny-egress sandbox 接管"
+elif [[ "$ACCEPTANCE_OUTER_SANDBOX" != "0" ]]; then
+  echo "拒绝：isolated-live 外层 sandbox 标志非法" >&2
+  exit 1
+fi
 if [[ "$REUSE_SYSTEM_SSH" == "1" ]]; then
   _SCIENCE_ENV+=(
     "CSSWITCH_SYSTEM_SSH_CONFIG=$SYSTEM_SSH_CONFIG"
@@ -377,7 +399,7 @@ if ! /usr/bin/env -i "${_SCIENCE_ENV[@]}" "$BIN" serve \
     --host 127.0.0.1 \
     --port "$PORT" \
     --sandbox-port "$PREVIEW_PORT" \
-    --no-browser --no-auto-update --detached \
+    --no-browser --no-auto-update --detached "${_SCIENCE_EXTRA_ARGS[@]}" \
     >/dev/null 2>&1; then
   echo "Science 启动命令失败（原始输出可能含临时链接或路径，未写入 CSSwitch 日志）" >&2
   # Contract with the desktop transaction: this distinct code proves that

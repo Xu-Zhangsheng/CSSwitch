@@ -69,12 +69,29 @@ pub(crate) enum ScienceLaunchFailureKind {
     ReceiptIdentityDrift,
 }
 
+impl ScienceLaunchFailureKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::RuntimeDrift => "runtime_drift",
+            Self::SpawnFailed => "spawn_failed",
+            Self::WaitFailed => "wait_failed",
+            Self::ScriptFailed => "script_failed",
+            Self::HealthTimeout => "health_timeout",
+            Self::ListenerIdentityMismatch => "listener_identity_mismatch",
+            Self::OwnershipUnavailable => "ownership_unavailable",
+            Self::ReceiptCommitFailed => "receipt_commit_failed",
+            Self::ReceiptIdentityDrift => "receipt_identity_drift",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ScienceLaunchFailure {
     kind: ScienceLaunchFailureKind,
     message: String,
     environment: ScienceEnvironmentExposure,
     ownership: Option<ScienceManagedLaunchToken>,
+    exit_code: Option<i32>,
 }
 
 impl ScienceLaunchFailure {
@@ -88,11 +105,17 @@ impl ScienceLaunchFailure {
             message: message.into(),
             environment,
             ownership: None,
+            exit_code: None,
         }
     }
 
     fn with_ownership(mut self, ownership: Option<ScienceManagedLaunchToken>) -> Self {
         self.ownership = ownership;
+        self
+    }
+
+    fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
+        self.exit_code = exit_code;
         self
     }
 
@@ -111,6 +134,10 @@ impl ScienceLaunchFailure {
     pub(crate) fn ownership(&self) -> Option<&ScienceManagedLaunchToken> {
         self.ownership.as_ref()
     }
+
+    pub(crate) fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
 }
 
 impl std::fmt::Display for ScienceLaunchFailure {
@@ -120,6 +147,18 @@ impl std::fmt::Display for ScienceLaunchFailure {
 }
 
 impl std::error::Error for ScienceLaunchFailure {}
+
+fn launch_script_failure(
+    status: &ExitStatus,
+    environment: ScienceEnvironmentExposure,
+) -> ScienceLaunchFailure {
+    ScienceLaunchFailure::new(
+        ScienceLaunchFailureKind::ScriptFailed,
+        format!("启动脚本非零退出（{:?}）", status.code()),
+        environment,
+    )
+    .with_exit_code(status.code())
+}
 
 #[derive(Clone, Copy, Debug)]
 enum ScienceLaunchWaitPolicy {
@@ -268,6 +307,19 @@ impl ScienceHostAdapter {
         stdout: File,
         stderr: File,
     ) -> Result<ScienceLaunchAttempt, ScienceLaunchFailure> {
+        let acceptance_outer_sandbox =
+            std::env::var(super::launch_env::ACCEPTANCE_OUTER_SANDBOX_ENV)
+                .ok()
+                .as_deref()
+                == Some("1");
+        if acceptance_outer_sandbox && !super::launch_env::current_process_denies_network_outbound()
+        {
+            return Err(ScienceLaunchFailure::new(
+                ScienceLaunchFailureKind::RuntimeDrift,
+                "isolated-live outer sandbox does not deny network-outbound",
+                ScienceEnvironmentExposure::NotExposed,
+            ));
+        }
         let deadline = matches!(spec.wait_policy, ScienceLaunchWaitPolicy::AbsoluteDeadline)
             .then(|| Instant::now() + spec.health_budget);
         #[cfg(test)]
@@ -294,6 +346,7 @@ impl ScienceHostAdapter {
                 system_ssh_hosts: spec.system_ssh_hosts,
                 opaque_bindings: spec.opaque_bindings,
                 runtime_version_prechecked: true,
+                acceptance_outer_sandbox,
             },
         );
         let mut child = command
@@ -376,11 +429,7 @@ impl ScienceHostAdapter {
         attempt: ScienceLaunchAttempt,
     ) -> Result<ScienceLaunchAttempt, ScienceLaunchFailure> {
         if !attempt.status.success() {
-            return Err(ScienceLaunchFailure::new(
-                ScienceLaunchFailureKind::ScriptFailed,
-                format!("启动脚本非零退出（{:?}）", attempt.status.code()),
-                attempt.environment,
-            ));
+            return Err(launch_script_failure(&attempt.status, attempt.environment));
         }
         Ok(attempt)
     }
@@ -576,5 +625,23 @@ impl ScienceHostAdapter {
         request: ScienceStopRequest,
     ) -> ScienceStopOutcome {
         stop_sandbox(app, sandbox, sandbox_url, request)
+    }
+}
+
+#[cfg(test)]
+mod launch_failure_tests {
+    use super::*;
+
+    #[test]
+    fn script_failure_preserves_stable_kind_and_exit_code() {
+        let status = Command::new("/bin/sh")
+            .args(["-c", "exit 70"])
+            .status()
+            .expect("test shell must run");
+        let failure = launch_script_failure(&status, ScienceEnvironmentExposure::Exposed);
+        assert_eq!(failure.kind().as_str(), "script_failed");
+        assert_eq!(failure.exit_code(), Some(70));
+        assert_eq!(failure.environment(), ScienceEnvironmentExposure::Exposed);
+        assert!(failure.message().contains("Some(70)"));
     }
 }

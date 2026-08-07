@@ -135,9 +135,24 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
     }
     let attempt = match ScienceHostAdapter::accept_launch_script(attempt) {
         Ok(attempt) => attempt,
-        Err(_) => {
+        Err(error) => {
             let tail = redact(&tail_file(&log_path("sandbox.log"), 600), secret);
-            return Err(rollback_context.failure(format!("起沙箱脚本失败。\n{tail}")));
+            let exit_code = error
+                .exit_code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unavailable".into());
+            trace.stage(
+                OperationStage::SandboxLaunch,
+                format!(
+                    "outcome=error kind={} exit_code={exit_code}",
+                    error.kind().as_str()
+                ),
+            );
+            return Err(rollback_context.failure(format!(
+                "起沙箱脚本失败（kind={}；exit_code={exit_code}）：{}\n{tail}",
+                error.kind().as_str(),
+                error.message()
+            )));
         }
     };
     {

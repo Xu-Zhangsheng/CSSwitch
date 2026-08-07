@@ -6,8 +6,10 @@ no() { echo "NOT ok - $1"; FAILS=$((FAILS+1)); }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # 7.6 停止脚本如实报告
-T="$(mktemp -d)"
+T="$(mktemp -d /private/tmp/csswitch-test-scripts.XXXXXX)"
 T="$(cd "$T" && pwd -P)"
+cleanup() { rm -rf "$T"; }
+trap cleanup EXIT
 OUTER_HOME="$T/outerhome"
 mkdir -p "$OUTER_HOME/.claude-science"
 mkdir -p "$T/home/.claude-science"           # DATA_DIR 存在，走到 stop 调用
@@ -97,6 +99,14 @@ printf '%s\n' '#!/bin/sh' \
 chmod +x "$FAKE_CAPTURE"
 out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$CAPTURE_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_REUSE_SYSTEM_SSH=1 CSSWITCH_SYSTEM_SSH_HOSTS="test-only second-alias" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9940 --skip-oauth-forge 2>&1)"; rc=$?
 if [ $rc -eq 0 ] && grep -qx -- '--host' "$CAPTURE_FILE" && grep -qx -- '127.0.0.1' "$CAPTURE_FILE" && grep -qx -- '--sandbox-port' "$CAPTURE_FILE" && grep -qx -- '9941' "$CAPTURE_FILE"; then ok "launch pins loopback host and explicit Science preview port"; else no "launch omitted explicit loopback/preview port (rc=$rc): $out"; fi
+ACCEPTANCE_SANDBOX="$T/vh-acceptance-outer-sandbox"
+mkdir -p "$ACCEPTANCE_SANDBOX"
+out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$ACCEPTANCE_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_ACCEPTANCE_OUTER_SANDBOX=1 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9948 --skip-oauth-forge 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && echo "$out" | grep -q "外层 sandbox"; then ok "acceptance inner-sandbox opt-out fails closed without an outer sandbox"; else no "acceptance inner-sandbox opt-out ran without an outer sandbox (rc=$rc): $out"; fi
+ACCEPTANCE_GUARDED_SANDBOX="$T/vh-acceptance-guarded"
+mkdir -p "$ACCEPTANCE_GUARDED_SANDBOX"
+out="$(/usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))' /usr/bin/env HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$ACCEPTANCE_GUARDED_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_ACCEPTANCE_OUTER_SANDBOX=1 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9948 --skip-oauth-forge 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && grep -Fxq -- '--dangerously-no-sandbox' "$ACCEPTANCE_GUARDED_SANDBOX/launch-args"; then ok "acceptance outer sandbox explicitly replaces the incompatible inner Science sandbox"; else no "acceptance outer sandbox did not inject the exact Science opt-out (rc=$rc): $out"; fi
 OPAQUE_SANDBOX="$T/vh-opaque-binding"
 mkdir -p "$OPAQUE_SANDBOX/.claude-science/conda"
 OPAQUE_CONDA_BINDING="$(stat -f '%d:%i' "$OPAQUE_SANDBOX/.claude-science/conda")"

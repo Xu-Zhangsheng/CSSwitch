@@ -1616,7 +1616,10 @@ class InstalledProviderSession:
         self._pre_run_manifest_sha256: Optional[str] = None
         self._launcher_process: Optional[subprocess.Popen] = None
         self._launcher_pgid: Optional[int] = None
+        self._reopen_helper_process: Optional[subprocess.Popen] = None
+        self._reopen_helper_members: Dict[int, Tuple[Path, Optional[str]]] = {}
         self._launch_consumed = False
+        self._reopen_consumed = False
         self._closed = False
         self._evidence_finalized = False
         self._inventory_before: Optional[Dict[str, Any]] = None
@@ -2631,6 +2634,7 @@ esac
             "SCIENCE_BIN": str(self.science_bin),
             "CSSWITCH_ACCEPTANCE_OPEN_BIN": str(self.bin_dir / "open"),
             "CSSWITCH_EXPECTED_SANDBOX_PORT": str(self.sandbox_port),
+            "CSSWITCH_ACCEPTANCE_OUTER_SANDBOX": "1",
             "CSSWITCH_TOOLUSE_SHIM": self.case.shim,
             "CSSWITCH_UPSTREAM_URL": self._native_override(mock_base),
             "CSSWITCH_FAKE_OPEN_LOG": str(self._open_log),
@@ -2902,6 +2906,31 @@ esac
             "terminal_failure": bool(result.get("failures")),
         }
 
+    def _live_guarded_launch_receipt(self) -> Dict[str, Any]:
+        if self._launcher_process is None or self._launcher_process.poll() is not None:
+            raise ControllerError("controller-owned primary app is not alive")
+        try:
+            raw = _read_at(self._evidence_fd, "guarded-launch-receipt.json")
+            receipt = json.loads(raw)
+        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ControllerError("guarded launch receipt is unavailable") from error
+        pid = receipt.get("pid")
+        start_marker = receipt.get("process_start_marker")
+        if (
+            receipt.get("schema") != "csswitch.guarded-launch-receipt.v1"
+            or receipt.get("controller_owned") is not True
+            or not isinstance(pid, int)
+            or pid <= 1
+            or pid != self._launcher_process.pid
+            or not isinstance(start_marker, str)
+            or not start_marker
+            or not self.inspector.pid_alive(pid)
+            or self.inspector.executable_for_pid(pid) != self.app_bin
+            or self.inspector.process_start_marker(pid) != start_marker
+        ):
+            raise ControllerError("controller-owned primary app identity drift")
+        return receipt
+
     def observe_app(self, timeout_seconds: float = 8.0) -> Dict[str, Any]:
         """Observe the exact installed process after root executes launch_argv."""
 
@@ -2913,6 +2942,10 @@ esac
                 if executable == self.app_bin:
                     matches.append(record.pid)
             if len(matches) == 1:
+                if self._launcher_process is not None:
+                    receipt = self._live_guarded_launch_receipt()
+                    if matches[0] != receipt["pid"]:
+                        raise ControllerError("observed app is not the guarded primary")
                 self._app_pid = matches[0]
                 value = {"pid": matches[0], "executable": str(self.app_bin), "identity_verified": True}
                 self._write_evidence_json("app-identity.json", value)
@@ -2921,6 +2954,249 @@ esac
                 raise ControllerError("multiple exact installed app processes observed")
             time.sleep(0.05)
         raise ControllerError("exact installed app process not observed")
+
+    def reopen_guarded(self, timeout_seconds: float = 8.0) -> Dict[str, Any]:
+        """Trigger the production single-instance entry without forcing a new App."""
+
+        if self._reopen_consumed:
+            raise ControllerError("guarded reopen is one-shot")
+        if self._app_pid is None or self._launcher_process is None:
+            raise ControllerError("primary app identity must be observed before reopen")
+        if not 0.5 <= timeout_seconds <= 30.0:
+            raise ControllerError("guarded reopen timeout is out of range")
+        if self._pre_run_manifest is None or self._pre_run_manifest_sha256 is None:
+            raise ControllerError("pre-run manifest has not been frozen")
+        manifest_path = self.evidence / "pre-run-manifest.json"
+        if _sha256(manifest_path.read_bytes()) != self._pre_run_manifest_sha256:
+            raise ControllerError("pre-run manifest drift before reopen")
+        if self._validated_g1_binding() != self._pre_run_manifest["g1_binding_receipt"]:
+            raise ControllerError("G1 binding closure drift before reopen")
+        for field in ("desktop", "gateway"):
+            frozen = self._pre_run_manifest["artifact"][field]
+            if _file_identity(Path(frozen["path"]))["sha256"] != frozen["sha256"]:
+                raise ControllerError(f"artifact {field} drift before reopen")
+        if (
+            _tree_manifest(self.app_bundle)["entries_sha256"]
+            != self._pre_run_manifest["artifact"]["entries_sha256"]
+        ):
+            raise ControllerError("artifact tree drift before reopen")
+        frozen_science = self._fixture_receipt["science_executable"]
+        if _file_identity(Path(frozen_science["path"]))["sha256"] != frozen_science["sha256"]:
+            raise ControllerError("Science executable drift before reopen")
+        self._validate_provider_live()
+        launch_receipt = self._live_guarded_launch_receipt()
+        primary_pid = self._app_pid
+        primary_start = launch_receipt["process_start_marker"]
+        primary_executable = self.inspector.executable_for_pid(primary_pid)
+        exact_before = sorted(
+            record.pid
+            for record in self.inspector.process_table()
+            if self.inspector.executable_for_pid(record.pid) == self.app_bin
+        )
+        if (
+            exact_before != [primary_pid]
+            or primary_pid != launch_receipt["pid"]
+            or primary_executable != self.app_bin
+            or self.inspector.process_start_marker(primary_pid) != primary_start
+        ):
+            raise ControllerError("primary app identity drift before reopen")
+
+        stdout_handle = self._open_evidence_exclusive("guarded-reopen.stdout.log")
+        try:
+            stderr_handle = self._open_evidence_exclusive("guarded-reopen.stderr.log")
+        except Exception:
+            stdout_handle.close()
+            raise
+        try:
+            helper = subprocess.Popen(
+                self._pre_run_manifest["launch"]["argv"],
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                close_fds=True,
+                start_new_session=True,
+            )
+            self._reopen_helper_process = helper
+        finally:
+            stdout_handle.close()
+            stderr_handle.close()
+        self._reopen_consumed = True
+        # start_new_session makes the child PID its PGID. Freeze group members
+        # only while the exact helper leader is still alive; after it exits the
+        # numeric PGID may be reused and is never an ownership source.
+        helper_pgid = helper.pid
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            while helper.poll() is None and time.monotonic() < deadline:
+                self._freeze_live_reopen_helper_group(helper, helper_pgid)
+                time.sleep(0.01)
+        except Exception:
+            self._stop_reopen_helper_process(helper)
+            self._cleanup_reopen_helper_group()
+            raise
+        if helper.poll() is None:
+            self._stop_reopen_helper_process(helper)
+            self._cleanup_reopen_helper_group()
+            raise ControllerError("second-instance reopen did not return to the primary app")
+        helper_exit = helper.wait(timeout=3.0)
+        if helper_exit != 0:
+            self._cleanup_reopen_helper_group()
+            raise ControllerError("second-instance reopen helper failed")
+
+        if self.inspector.pids_in_process_group(helper_pgid):
+            self._cleanup_reopen_helper_group()
+            raise ControllerError("second-instance reopen left a residual process group")
+
+        deadline = time.monotonic() + timeout_seconds
+        exact_after: List[int] = []
+        while time.monotonic() < deadline:
+            exact_after = sorted(
+                record.pid
+                for record in self.inspector.process_table()
+                if self.inspector.executable_for_pid(record.pid) == self.app_bin
+            )
+            if exact_after == [primary_pid]:
+                break
+            time.sleep(0.05)
+        primary_preserved = (
+            exact_after == [primary_pid]
+            and self.inspector.pid_alive(primary_pid)
+            and self.inspector.executable_for_pid(primary_pid) == self.app_bin
+            and self.inspector.process_start_marker(primary_pid) == primary_start
+        )
+        if not primary_preserved:
+            raise ControllerError("reopen did not preserve one exact primary app identity")
+        receipt = {
+            "schema": "csswitch.guarded-reopen-receipt.v1",
+            "primary_pid": primary_pid,
+            "primary_process_start_marker": primary_start,
+            "primary_executable": _file_identity(self.app_bin),
+            "helper_pid": helper.pid,
+            "helper_pgid": helper_pgid,
+            "helper_exit_code": helper_exit,
+            "helper_process_group_empty": True,
+            "exact_app_pids_before": exact_before,
+            "exact_app_pids_after": exact_after,
+            "primary_identity_preserved": True,
+            "second_persistent_app_absent": True,
+        }
+        self._write_evidence_json("guarded-reopen-receipt.json", receipt, once=True)
+        return receipt
+
+    @staticmethod
+    def _stop_reopen_helper_process(helper: subprocess.Popen) -> None:
+        if helper.poll() is not None:
+            return
+        helper.terminate()
+        try:
+            helper.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            helper.kill()
+            helper.wait(timeout=3.0)
+
+    def _freeze_live_reopen_helper_group(
+        self, helper: subprocess.Popen, pgid: int
+    ) -> bool:
+        if helper.poll() is not None:
+            return False
+        helper_executable = self.inspector.executable_for_pid(helper.pid)
+        helper_start = self.inspector.process_start_marker(helper.pid)
+        if (
+            not self.inspector.pid_alive(helper.pid)
+            or helper_executable is None
+            or not helper_start
+            or self.inspector.process_group(helper.pid) != pgid
+        ):
+            raise ControllerError("guarded reopen helper identity or process group drift")
+        owned: Dict[int, Tuple[Path, Optional[str]]] = {}
+        for pid in self.inspector.pids_in_process_group(pgid):
+            executable = self.inspector.executable_for_pid(pid)
+            start_marker = self.inspector.process_start_marker(pid)
+            if executable is None or not start_marker:
+                raise ControllerError("guarded reopen group member identity unavailable")
+            owned[pid] = (executable, start_marker)
+        if helper.pid not in owned:
+            raise ControllerError("guarded reopen helper missing from its process group")
+        if (
+            helper.poll() is not None
+            or not self.inspector.pid_alive(helper.pid)
+            or self.inspector.executable_for_pid(helper.pid) != helper_executable
+            or self.inspector.process_start_marker(helper.pid) != helper_start
+            or self.inspector.process_group(helper.pid) != pgid
+        ):
+            return False
+        additions: Dict[int, Tuple[Path, Optional[str]]] = {}
+        for pid, identity in owned.items():
+            if (
+                not self.inspector.pid_alive(pid)
+                or self.inspector.executable_for_pid(pid) != identity[0]
+                or self.inspector.process_start_marker(pid) != identity[1]
+                or self.inspector.process_group(pid) != pgid
+            ):
+                raise ControllerError("guarded reopen group member identity drift")
+            existing = self._reopen_helper_members.get(pid)
+            if existing is None:
+                additions[pid] = identity
+            elif existing != identity and pid != helper.pid:
+                raise ControllerError("guarded reopen frozen member identity drift")
+            elif existing != identity and existing[1] != identity[1]:
+                raise ControllerError("guarded reopen helper start identity drift")
+            # The exact controller-owned Popen leader may exec through
+            # sandbox-exec/env/Desktop without changing PID/start identity.
+            # Preserve its first frozen identity; Popen remains the only
+            # authority used to terminate that leader after an exec transition.
+        self._reopen_helper_members.update(additions)
+        return True
+
+    def _cleanup_reopen_helper_group(self) -> List[int]:
+        owned = dict(self._reopen_helper_members)
+        if not owned:
+            return []
+        for pid, (expected_executable, expected_start) in owned.items():
+            if (
+                self.inspector.pid_alive(pid)
+                and self.inspector.executable_for_pid(pid) == expected_executable
+                and self.inspector.process_start_marker(pid) == expected_start
+            ):
+                try:
+                    os.kill(pid, 15)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            remaining = [
+                pid
+                for pid, (expected_executable, expected_start) in owned.items()
+                if self.inspector.pid_alive(pid)
+                and self.inspector.executable_for_pid(pid) == expected_executable
+                and self.inspector.process_start_marker(pid) == expected_start
+            ]
+            if not remaining:
+                for pid in owned:
+                    self._reopen_helper_members.pop(pid, None)
+                return []
+            time.sleep(0.05)
+        for pid, (expected_executable, expected_start) in owned.items():
+            if (
+                self.inspector.pid_alive(pid)
+                and self.inspector.executable_for_pid(pid) == expected_executable
+                and self.inspector.process_start_marker(pid) == expected_start
+            ):
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+        remaining = [
+            pid
+            for pid, (expected_executable, expected_start) in owned.items()
+            if self.inspector.pid_alive(pid)
+            and self.inspector.executable_for_pid(pid) == expected_executable
+            and self.inspector.process_start_marker(pid) == expected_start
+        ]
+        for pid in owned:
+            if pid not in remaining:
+                self._reopen_helper_members.pop(pid, None)
+        return remaining
 
     def inspect_children(self) -> Dict[str, Any]:
         if self._app_pid is None:
@@ -3391,8 +3667,10 @@ esac
                         "source": "desktop-or-launcher-descendant",
                     }
                 )
-        if self._launcher_pgid is not None:
-            for pid in self.inspector.pids_in_process_group(self._launcher_pgid):
+        for pgid, source in ((self._launcher_pgid, "guarded-process-group"),):
+            if pgid is None:
+                continue
+            for pid in self.inspector.pids_in_process_group(pgid):
                 if pid in seen:
                     continue
                 seen.add(pid)
@@ -3403,9 +3681,28 @@ esac
                         "pid": pid,
                         "alive": alive,
                         "identity_match": alive and actual is not None,
-                        "source": "guarded-process-group",
+                        "source": source,
                     }
                 )
+        for pid, (expected_executable, expected_start) in self._reopen_helper_members.items():
+            if pid in seen:
+                continue
+            seen.add(pid)
+            alive = self.inspector.pid_alive(pid)
+            actual = self.inspector.executable_for_pid(pid) if alive else None
+            current_start = self.inspector.process_start_marker(pid) if alive else None
+            pid_results.append(
+                {
+                    "pid": pid,
+                    "alive": alive,
+                    "identity_match": (
+                        alive
+                        and actual == expected_executable
+                        and current_start == expected_start
+                    ),
+                    "source": "guarded-reopen-frozen-member",
+                }
+            )
         root_pids = [
             pid for pid in self.inspector.pids_using_path(self.root) if pid != os.getpid()
         ]
@@ -3617,7 +3914,9 @@ esac
         if self._closed:
             return
         self._closed = True
-        owned_descendants: Dict[int, Tuple[Path, Optional[str]]] = {}
+        owned_descendants: Dict[int, Tuple[Path, Optional[str]]] = dict(
+            self._reopen_helper_members
+        )
         descendant_roots = {
             pid
             for pid in (
@@ -3634,8 +3933,10 @@ esac
                         executable,
                         self.inspector.process_start_marker(record.pid),
                     )
-        if self._launcher_pgid is not None:
-            for pid in self.inspector.pids_in_process_group(self._launcher_pgid):
+        for pgid in (self._launcher_pgid,):
+            if pgid is None:
+                continue
+            for pid in self.inspector.pids_in_process_group(pgid):
                 executable = self.inspector.executable_for_pid(pid)
                 if executable is not None:
                     owned_descendants[pid] = (
@@ -3659,8 +3960,12 @@ esac
             except subprocess.TimeoutExpired:
                 self._launcher_process.kill()
                 self._launcher_process.wait(timeout=3.0)
-        if self._launcher_pgid is not None:
-            for pid in self.inspector.pids_in_process_group(self._launcher_pgid):
+        if self._reopen_helper_process is not None:
+            self._stop_reopen_helper_process(self._reopen_helper_process)
+        for pgid in (self._launcher_pgid,):
+            if pgid is None:
+                continue
+            for pid in self.inspector.pids_in_process_group(pgid):
                 executable = self.inspector.executable_for_pid(pid)
                 if executable is not None and pid not in owned_descendants:
                     owned_descendants[pid] = (
@@ -3746,6 +4051,8 @@ def _dispatch(session: InstalledProviderSession, command: Mapping[str, Any]) -> 
         return session.launch_guarded()
     if op == "observe_app":
         return session.observe_app(float(command.get("timeout_seconds", 8.0)))
+    if op == "reopen_guarded":
+        return session.reopen_guarded(float(command.get("timeout_seconds", 8.0)))
     if op == "enter_phase":
         return session.enter_phase(str(command.get("phase", "")))
     if op == "finish_phase":

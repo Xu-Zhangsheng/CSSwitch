@@ -516,6 +516,12 @@ class InstalledProviderMatrixTests(unittest.TestCase):
                 ],
                 str(session.home),
             )
+            self.assertEqual(
+                session._launch_environment(plan["mock_base_url"])[
+                    "CSSWITCH_ACCEPTANCE_OUTER_SANDBOX"
+                ],
+                "1",
+            )
             encoded = json.dumps(argv)
             self.assertNotIn(FIXED_PATH_SECRET, encoded)
             self.assertNotIn(FAKE_API_KEY, encoded)
@@ -797,6 +803,209 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             session._runtime_records["restarted"] = {"pid": 303, "launch_id": "launch-b"}
             self.assertTrue(session.compare_runtime("first", "reused", "reuse")["ok"])
             self.assertTrue(session.compare_runtime("first", "restarted", "restart")["ok"])
+
+    def test_guarded_reopen_preserves_one_exact_primary_process(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            primary_pid = 4101
+            helper_pid = 4102
+            inspector.records = [ProcessRecord(primary_pid, 1, "desktop")]
+            inspector.executables[primary_pid] = session.app_bin
+            inspector.alive.add(primary_pid)
+            inspector.start_markers[primary_pid] = "primary-start"
+            inspector.process_groups[helper_pid] = helper_pid
+            session._app_pid = primary_pid
+            primary = mocklib.Mock()
+            primary.pid = primary_pid
+            primary.poll.return_value = None
+            session._launcher_process = primary
+            session._fixture_receipt = {
+                "science_executable": controller_module._file_identity(session.science_bin)
+            }
+            g1_binding = {"schema": "test-g1-binding"}
+            artifact_tree = controller_module._tree_manifest(session.app_bundle)
+            manifest = {
+                "launch": {"argv": [str(session.app_bin)]},
+                "g1_binding_receipt": g1_binding,
+                "artifact": {
+                    "desktop": controller_module._file_identity(session.app_bin),
+                    "gateway": controller_module._file_identity(session.gateway_bin),
+                    "entries_sha256": artifact_tree["entries_sha256"],
+                },
+            }
+            encoded = (
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            session._write_evidence_json("pre-run-manifest.json", manifest, once=True)
+            session._write_evidence_json(
+                "guarded-launch-receipt.json",
+                {
+                    "schema": "csswitch.guarded-launch-receipt.v1",
+                    "pid": primary_pid,
+                    "process_start_marker": "primary-start",
+                    "controller_owned": True,
+                },
+                once=True,
+            )
+            session._pre_run_manifest = manifest
+            session._pre_run_manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+            helper = mocklib.Mock()
+            helper.pid = helper_pid
+            helper.poll.return_value = 0
+            helper.wait.side_effect = lambda timeout: (
+                inspector.process_groups.pop(helper_pid, None),
+                0,
+            )[1]
+            with mocklib.patch.object(
+                session, "_validated_g1_binding", return_value=g1_binding
+            ), mocklib.patch.object(
+                session, "_validate_provider_live", return_value=None
+            ), mocklib.patch.object(
+                controller_module.subprocess, "Popen", return_value=helper
+            ):
+                receipt = session.reopen_guarded()
+            self.assertTrue(receipt["primary_identity_preserved"])
+            self.assertTrue(receipt["second_persistent_app_absent"])
+            self.assertEqual(receipt["exact_app_pids_before"], [primary_pid])
+            self.assertEqual(receipt["exact_app_pids_after"], [primary_pid])
+            self.assertEqual(receipt["helper_exit_code"], 0)
+            self.assertTrue(receipt["helper_process_group_empty"])
+            self.assertEqual(session._reopen_helper_members, {})
+            with self.assertRaisesRegex(ControllerError, "one-shot"):
+                session.reopen_guarded()
+
+    def test_guarded_reopen_rejects_a_dead_or_replaced_primary(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            primary_pid = 4201
+            inspector.records = [ProcessRecord(primary_pid, 1, "desktop")]
+            inspector.executables[primary_pid] = session.app_bin
+            inspector.alive.add(primary_pid)
+            inspector.start_markers[primary_pid] = "primary-start"
+            session._app_pid = primary_pid
+            primary = mocklib.Mock()
+            primary.pid = primary_pid
+            primary.poll.return_value = 0
+            session._launcher_process = primary
+            session._write_evidence_json(
+                "guarded-launch-receipt.json",
+                {
+                    "schema": "csswitch.guarded-launch-receipt.v1",
+                    "pid": primary_pid,
+                    "process_start_marker": "primary-start",
+                    "controller_owned": True,
+                },
+                once=True,
+            )
+            with self.assertRaisesRegex(ControllerError, "primary app is not alive"):
+                session._live_guarded_launch_receipt()
+            primary.poll.return_value = None
+            inspector.start_markers[primary_pid] = "replacement-start"
+            with self.assertRaisesRegex(ControllerError, "identity drift"):
+                session._live_guarded_launch_receipt()
+
+    def test_reopen_helper_group_cleanup_tracks_and_stops_exact_members(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            pgid = 4301
+            child_pid = 4302
+            inspector.process_groups[child_pid] = pgid
+            inspector.executables[child_pid] = Path(sys.executable)
+            inspector.start_markers[child_pid] = "helper-child-start"
+            inspector.alive.add(child_pid)
+            session._reopen_helper_members[child_pid] = (
+                Path(sys.executable),
+                "helper-child-start",
+            )
+
+            def stop_exact_child(pid, _signal):
+                self.assertEqual(pid, child_pid)
+                inspector.alive.discard(pid)
+                inspector.process_groups.pop(pid, None)
+
+            with mocklib.patch.object(controller_module.os, "kill", side_effect=stop_exact_child):
+                self.assertEqual(session._cleanup_reopen_helper_group(), [])
+            self.assertEqual(session._reopen_helper_members, {})
+
+    def test_reopen_cleanup_never_adopts_a_reused_process_group(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            old_pid = 4351
+            unrelated_pid = 4352
+            session._reopen_helper_members[old_pid] = (
+                Path(sys.executable),
+                "old-helper-start",
+            )
+            inspector.process_groups[unrelated_pid] = old_pid
+            inspector.executables[unrelated_pid] = Path(sys.executable)
+            inspector.start_markers[unrelated_pid] = "unrelated-start"
+            inspector.alive.add(unrelated_pid)
+
+            with mocklib.patch.object(controller_module.os, "kill") as kill:
+                self.assertEqual(session._cleanup_reopen_helper_group(), [])
+
+            kill.assert_not_called()
+            self.assertEqual(session._reopen_helper_members, {})
+
+    def test_reopen_freeze_never_overwrites_a_replaced_member_identity(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            helper_pid = 4371
+            member_pid = 4372
+            helper = mocklib.Mock()
+            helper.pid = helper_pid
+            helper.poll.return_value = None
+            for pid, executable, start in (
+                (helper_pid, session.app_bin, "helper-start"),
+                (member_pid, Path(sys.executable), "old-member-start"),
+            ):
+                inspector.process_groups[pid] = helper_pid
+                inspector.executables[pid] = executable
+                inspector.start_markers[pid] = start
+                inspector.alive.add(pid)
+
+            self.assertTrue(session._freeze_live_reopen_helper_group(helper, helper_pid))
+            frozen = dict(session._reopen_helper_members)
+            inspector.executables[member_pid] = session.gateway_bin
+            inspector.start_markers[member_pid] = "replacement-start"
+
+            with self.assertRaisesRegex(ControllerError, "frozen member identity drift"):
+                session._freeze_live_reopen_helper_group(helper, helper_pid)
+
+            self.assertEqual(session._reopen_helper_members, frozen)
+
+    def test_reopen_freeze_error_stops_the_controller_owned_helper(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            helper = mocklib.Mock()
+            helper.poll.side_effect = [None, None]
+            helper.wait.return_value = 0
+
+            session._stop_reopen_helper_process(helper)
+
+            helper.terminate.assert_called_once_with()
+            helper.wait.assert_called_once_with(timeout=3.0)
+            helper.kill.assert_not_called()
+
+    def test_close_does_not_adopt_a_reused_reopen_helper_process_group(self):
+        inspector = FakeInspector()
+        with self._session("deepseek-off", inspector) as session:
+            old_pid = 4401
+            reused_pgid = 4401
+            unrelated_pid = 4402
+            session._reopen_helper_members[old_pid] = (
+                Path(sys.executable),
+                "old-helper-start",
+            )
+            inspector.process_groups[unrelated_pid] = reused_pgid
+            inspector.executables[unrelated_pid] = Path(sys.executable)
+            inspector.start_markers[unrelated_pid] = "unrelated-start"
+            inspector.alive.add(unrelated_pid)
+
+            with mocklib.patch.object(controller_module.os, "kill") as kill:
+                session.close()
+
+            kill.assert_not_called()
 
     def test_cleanup_probes_only_owned_dynamic_ports_and_does_not_signal(self):
         inspector = FakeInspector()
