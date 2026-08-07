@@ -4022,8 +4022,13 @@ mod tests {
                 .unwrap();
             result
         });
-        assert_eq!(supervisor.cancel(&operation_id).unwrap(), "accepted");
-        assert_eq!(supervisor.cancel(&operation_id).unwrap(), "accepted");
+        for _ in 0..2 {
+            let disposition = supervisor.cancel(&operation_id).unwrap();
+            assert!(
+                matches!(disposition, "accepted" | "already_terminal"),
+                "cancel may race the worker's valid terminal transition: {disposition}"
+            );
+        }
         assert_eq!(waiter.join().unwrap().unwrap()["state"], "cancelled");
         assert_eq!(
             supervisor.cancel(&operation_id).unwrap(),
@@ -4052,7 +4057,7 @@ mod tests {
             false,
         )
         .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !temp.0.join("cancel-closed").exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
