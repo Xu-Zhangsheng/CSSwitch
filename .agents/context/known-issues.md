@@ -33,7 +33,7 @@ identity 改写为 `c531006`。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`c531006` exact-SHA 15-suite source gate `PASS`；该提交无 Desktop production source 变化 | current `e7dfde1` exact tuple `PASS`；`c531006` controller 已完整冻结 pre-run manifest、fixture/provider/network receipts 与树 manifest；没有 `c531006` product artifact | 旧 start/status/stop observations `PASS`，但该 run 总判定 `INCONCLUSIVE(reason=safety-stop)`；新闭环仅为 `INCONCLUSIVE(reason=pre-run-only)`；open/reopen/restart `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`c531006` exact-SHA 15-suite source gate `PASS`；该提交无 Desktop production source 变化 | current `e7dfde1` exact tuple `PASS`；`c531006` controller 已完整冻结 pre-run manifest、fixture/provider/network receipts 与树 manifest；没有 `c531006` product artifact | 最新完整尝试为 `INCONCLUSIVE(reason=science-minimal-start-not-closed-and-reopen-process-ownership-unproven)`；Desktop/Gateway start-health 有限事实成立，Science minimal start 与 reopen 未闭合，status/产品 stop/restart `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal stop observation `PASS`；G2 总项未 PASS；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal binding/finalize observation `PASS`；G2 总项未 PASS；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
@@ -50,6 +50,16 @@ DNS transport 与 mDNSResponder IPC；唯一系统 resolver 查询失败。该�
 Science，固定判定为 `INCONCLUSIVE(reason=pre-run-only)`，不能追溯升级旧 G2，也不能代替完整
 `B-RUNTIME-01`。exact identity 与不能外推的范围见
 [日期化 pre-run 调查](../../docs/evidence/investigations/2026-08-07-isolated-live-pre-run-receipts-egress-guard.md)。
+
+随后执行的完整 `B-RUNTIME-01` 尝试复用了同一 exact artifact/Science tuple 与 hardened
+controller。pre-run/G1/network receipts 通过；production Desktop 与 packaged Rust Gateway
+建立 exact identity 且 Gateway health ready，但真实 Science launch 没有建立目标 listener，允许
+保留的日志不足以在产品、fixture、harness 或系统限制间归因。reopen driver 又产生第二个 exact
+Desktop，因此 Gateway PID/launch id 未变不能升级为 reopen PASS。产品 status、stop、restart
+保持 `NOT-RUN`；exact-PID 清理只建立 safety cleanup。独立 clean-context reviewer 接受总判定
+`INCONCLUSIVE(reason=science-minimal-start-not-closed-and-reopen-process-ownership-unproven)`；
+runtime root 与一次性 runner 已删除，raw evidence 24/24 hash closure 保留。精确边界见
+[日期化完整尝试](../../docs/evidence/investigations/2026-08-07-claude-science-0.1.25-b-runtime-01-full-attempt.md)。
 
 2026-08-07 的 run 后只读 G1 receipt 已把 `next@e7dfde13636cbf3b377d01dbba3a2aee88e62822`、
 `CSSwitch Test.app`、packaged Gateway/resources 与 Claude Science 0.1.25 package/executable
