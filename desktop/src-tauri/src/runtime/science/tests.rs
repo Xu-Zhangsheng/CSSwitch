@@ -38,6 +38,8 @@ fn managed_process_start_identity_preserves_the_legacy_receipt_format() {
             ])
             .env(CHILD_ENV, "1")
             .env("TZ", "UTC")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .expect("hostile-TZ test child should start");
         assert!(status.success());
