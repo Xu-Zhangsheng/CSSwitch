@@ -619,11 +619,11 @@ fn run_second_instance_callback(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             run_second_instance_callback(app);
         }))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(Mutex::new(AppState::default())))
         .manage(Arc::new(lifecycle::Lifecycle::new()))
         .manage(Arc::new(CodexAuthSupervisor::default()))

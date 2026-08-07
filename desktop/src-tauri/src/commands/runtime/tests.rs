@@ -5134,7 +5134,8 @@ fn r0_start_gateway_only_failure_matrix_preserves_current_partial_effects() {
 
 #[test]
 fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
-    let registration = include_str!("../../lib.rs")
+    let app_source = include_str!("../../lib.rs");
+    let registration = app_source
         .splitn(2, ".invoke_handler(tauri::generate_handler![")
         .nth(1)
         .expect("invoke handler must exist")
@@ -5142,6 +5143,26 @@ fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
         .next()
         .unwrap();
     assert!(!registration.contains("commands::runtime::start_proxy"));
+}
+
+#[test]
+fn single_instance_plugin_is_registered_first() {
+    let app_source = include_str!("../../lib.rs");
+    let builder = app_source
+        .splitn(2, "let app = tauri::Builder::default()")
+        .nth(1)
+        .expect("production Builder chain must exist")
+        .splitn(2, ".manage(")
+        .next()
+        .unwrap();
+    let single_instance = builder
+        .find(".plugin(tauri_plugin_single_instance::init(")
+        .expect("single-instance plugin must remain registered");
+    assert_eq!(
+        builder.find(".plugin("),
+        Some(single_instance),
+        "single-instance must be the first registered plugin so a second process exits before any other plugin setup"
+    );
 }
 
 #[test]
