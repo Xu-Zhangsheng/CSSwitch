@@ -3076,9 +3076,15 @@ esac
             self._cleanup_reopen_helper_group()
             raise ControllerError("second-instance reopen did not return to the primary app")
         helper_exit = helper.wait(timeout=3.0)
+        self._reopen_helper_members.pop(helper.pid, None)
         if helper_exit != 0:
             self._cleanup_reopen_helper_group()
             raise ControllerError("second-instance reopen helper failed")
+
+        frozen_residuals = self._reconcile_finished_reopen_helper_members()
+        if frozen_residuals:
+            self._cleanup_reopen_helper_group()
+            raise ControllerError("second-instance reopen left a frozen residual process")
 
         if self.inspector.pids_in_process_group(helper_pgid):
             self._cleanup_reopen_helper_group()
@@ -3120,6 +3126,28 @@ esac
         self._write_evidence_json("guarded-reopen-receipt.json", receipt, once=True)
         return receipt
 
+    def _reconcile_finished_reopen_helper_members(self) -> List[int]:
+        frozen_residuals: List[int] = []
+        for pid, (expected_executable, expected_start) in list(
+            self._reopen_helper_members.items()
+        ):
+            if not self.inspector.pid_alive(pid):
+                self._reopen_helper_members.pop(pid, None)
+                continue
+            current_start = self.inspector.process_start_marker(pid)
+            if current_start is not None and current_start != expected_start:
+                self._reopen_helper_members.pop(pid, None)
+                continue
+            current_executable = self.inspector.executable_for_pid(pid)
+            if (
+                current_start == expected_start
+                and current_executable is not None
+                and current_executable != expected_executable
+            ):
+                self._reopen_helper_members[pid] = (current_executable, current_start)
+            frozen_residuals.append(pid)
+        return frozen_residuals
+
     @staticmethod
     def _stop_reopen_helper_process(helper: subprocess.Popen) -> None:
         if helper.poll() is not None:
@@ -3135,24 +3163,60 @@ esac
         self, helper: subprocess.Popen, pgid: int
     ) -> bool:
         if helper.poll() is not None:
+            self._reopen_helper_members.pop(helper.pid, None)
             return False
         helper_executable = self.inspector.executable_for_pid(helper.pid)
         helper_start = self.inspector.process_start_marker(helper.pid)
+        helper_alive = self.inspector.pid_alive(helper.pid)
+        helper_group = self.inspector.process_group(helper.pid)
         if (
-            not self.inspector.pid_alive(helper.pid)
+            not helper_alive
             or helper_executable is None
             or not helper_start
-            or self.inspector.process_group(helper.pid) != pgid
+            or helper_group != pgid
         ):
+            if helper.poll() is not None or not helper_alive:
+                self._reopen_helper_members.pop(helper.pid, None)
+                return False
             raise ControllerError("guarded reopen helper identity or process group drift")
+        group_pids = self.inspector.pids_in_process_group(pgid)
+        for pid, existing in list(self._reopen_helper_members.items()):
+            if pid in group_pids:
+                continue
+            if not self.inspector.pid_alive(pid):
+                self._reopen_helper_members.pop(pid, None)
+                continue
+            current_identity = (
+                self.inspector.executable_for_pid(pid),
+                self.inspector.process_start_marker(pid),
+            )
+            if current_identity[1] == existing[1]:
+                if current_identity[0] is not None:
+                    self._reopen_helper_members[pid] = current_identity
+                raise ControllerError("guarded reopen frozen member left process group")
+            self._reopen_helper_members.pop(pid, None)
+
         owned: Dict[int, Tuple[Path, Optional[str]]] = {}
-        for pid in self.inspector.pids_in_process_group(pgid):
+        for pid in group_pids:
             executable = self.inspector.executable_for_pid(pid)
             start_marker = self.inspector.process_start_marker(pid)
             if executable is None or not start_marker:
+                if (
+                    not self.inspector.pid_alive(pid)
+                    or self.inspector.process_group(pid) != pgid
+                ):
+                    # A short-lived launch descendant may disappear between the
+                    # process-group snapshot and identity inspection. Never
+                    # adopt that PID, but do not turn its confirmed departure
+                    # into an ownership failure either.
+                    self._reopen_helper_members.pop(pid, None)
+                    continue
                 raise ControllerError("guarded reopen group member identity unavailable")
             owned[pid] = (executable, start_marker)
         if helper.pid not in owned:
+            if helper.poll() is not None or not self.inspector.pid_alive(helper.pid):
+                self._reopen_helper_members.pop(helper.pid, None)
+                return False
             raise ControllerError("guarded reopen helper missing from its process group")
         if (
             helper.poll() is not None
@@ -3161,15 +3225,32 @@ esac
             or self.inspector.process_start_marker(helper.pid) != helper_start
             or self.inspector.process_group(helper.pid) != pgid
         ):
+            if helper.poll() is not None or not self.inspector.pid_alive(helper.pid):
+                self._reopen_helper_members.pop(helper.pid, None)
             return False
         additions: Dict[int, Tuple[Path, Optional[str]]] = {}
         for pid, identity in owned.items():
-            if (
-                not self.inspector.pid_alive(pid)
-                or self.inspector.executable_for_pid(pid) != identity[0]
-                or self.inspector.process_start_marker(pid) != identity[1]
-                or self.inspector.process_group(pid) != pgid
-            ):
+            current_executable = self.inspector.executable_for_pid(pid)
+            current_start = self.inspector.process_start_marker(pid)
+            current_group = self.inspector.process_group(pid)
+            if not self.inspector.pid_alive(pid):
+                # The member departed after the first identity read. It was
+                # never newly frozen, and any stale frozen ownership must be
+                # revoked before this numeric PID can be recycled.
+                self._reopen_helper_members.pop(pid, None)
+                continue
+            if current_group != pgid:
+                existing = self._reopen_helper_members.get(pid)
+                if existing is not None and existing[1] == current_start:
+                    if current_executable is not None:
+                        self._reopen_helper_members[pid] = (
+                            current_executable,
+                            current_start,
+                        )
+                    raise ControllerError("guarded reopen frozen member left process group")
+                self._reopen_helper_members.pop(pid, None)
+                continue
+            if current_executable != identity[0] or current_start != identity[1]:
                 raise ControllerError("guarded reopen group member identity drift")
             existing = self._reopen_helper_members.get(pid)
             if existing is None:

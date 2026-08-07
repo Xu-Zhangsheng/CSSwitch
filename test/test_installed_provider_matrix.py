@@ -935,11 +935,33 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             session._pre_run_manifest_sha256 = hashlib.sha256(encoded).hexdigest()
             helper = mocklib.Mock()
             helper.pid = helper_pid
-            helper.poll.return_value = 0
+            helper_child_pid = 4103
+            poll_count = 0
+
+            def exit_after_one_freeze():
+                nonlocal poll_count
+                poll_count += 1
+                if poll_count <= 3:
+                    return None
+                inspector.alive.discard(helper_pid)
+                inspector.alive.discard(helper_child_pid)
+                inspector.process_groups.pop(helper_pid, None)
+                inspector.process_groups.pop(helper_child_pid, None)
+                return 0
+
+            helper.poll.side_effect = exit_after_one_freeze
+            inspector.executables[helper_pid] = session.app_bin
+            inspector.alive.add(helper_pid)
+            inspector.start_markers[helper_pid] = "helper-start"
+            inspector.process_groups[helper_child_pid] = helper_pid
+            inspector.executables[helper_child_pid] = Path(sys.executable)
+            inspector.alive.add(helper_child_pid)
+            inspector.start_markers[helper_child_pid] = "helper-child-start"
             helper.wait.side_effect = lambda timeout: (
                 inspector.process_groups.pop(helper_pid, None),
+                inspector.alive.discard(helper_pid),
                 0,
-            )[1]
+            )[2]
             with mocklib.patch.object(
                 session, "_validated_g1_binding", return_value=g1_binding
             ), mocklib.patch.object(
@@ -1011,6 +1033,50 @@ class InstalledProviderMatrixTests(unittest.TestCase):
                 self.assertEqual(session._cleanup_reopen_helper_group(), [])
             self.assertEqual(session._reopen_helper_members, {})
 
+            transient_marker_pid = 4303
+            inspector.process_groups[transient_marker_pid] = pgid
+            inspector.executables[transient_marker_pid] = Path(sys.executable)
+            inspector.start_markers[transient_marker_pid] = "transient-marker-start"
+            inspector.alive.add(transient_marker_pid)
+            session._reopen_helper_members[transient_marker_pid] = (
+                Path(sys.executable),
+                "transient-marker-start",
+            )
+            original_start_marker = inspector.process_start_marker
+            marker_reads = 0
+
+            def unavailable_once(pid):
+                nonlocal marker_reads
+                if pid == transient_marker_pid:
+                    marker_reads += 1
+                    if marker_reads == 1:
+                        return None
+                return original_start_marker(pid)
+
+            killed = []
+
+            def stop_after_marker_recovers(pid, _signal):
+                killed.append(pid)
+                inspector.alive.discard(pid)
+                inspector.process_groups.pop(pid, None)
+
+            with mocklib.patch.object(
+                inspector,
+                "process_start_marker",
+                side_effect=unavailable_once,
+            ), mocklib.patch.object(
+                controller_module.os,
+                "kill",
+                side_effect=stop_after_marker_recovers,
+            ):
+                self.assertEqual(
+                    session._reconcile_finished_reopen_helper_members(),
+                    [transient_marker_pid],
+                )
+                self.assertIn(transient_marker_pid, session._reopen_helper_members)
+                self.assertEqual(session._cleanup_reopen_helper_group(), [])
+            self.assertEqual(killed, [transient_marker_pid])
+
     def test_reopen_cleanup_never_adopts_a_reused_process_group(self):
         inspector = FakeInspector()
         with self._session("deepseek-off", inspector) as session:
@@ -1058,6 +1124,71 @@ class InstalledProviderMatrixTests(unittest.TestCase):
 
             self.assertEqual(session._reopen_helper_members, frozen)
 
+            # A short-lived member that disappears after the group snapshot is
+            # not an identity failure and, critically, is never adopted for
+            # later cleanup.
+            transient_pid = 4373
+            inspector.process_groups[transient_pid] = helper_pid
+            inspector.alive.add(transient_pid)
+            original_executable_for_pid = inspector.executable_for_pid
+
+            def disappear_during_identity_read(pid):
+                if pid == transient_pid:
+                    inspector.alive.discard(pid)
+                    inspector.process_groups.pop(pid, None)
+                    return None
+                return original_executable_for_pid(pid)
+
+            inspector.executables[member_pid] = Path(sys.executable)
+            inspector.start_markers[member_pid] = "old-member-start"
+            with mocklib.patch.object(
+                inspector,
+                "executable_for_pid",
+                side_effect=disappear_during_identity_read,
+            ):
+                self.assertTrue(
+                    session._freeze_live_reopen_helper_group(helper, helper_pid)
+                )
+            self.assertNotIn(transient_pid, session._reopen_helper_members)
+
+            inspector.alive.discard(member_pid)
+            inspector.process_groups.pop(member_pid, None)
+            self.assertTrue(
+                session._freeze_live_reopen_helper_group(helper, helper_pid)
+            )
+            self.assertNotIn(member_pid, session._reopen_helper_members)
+
+            inspector.alive.add(member_pid)
+            inspector.process_groups[member_pid] = helper_pid
+            inspector.executables[member_pid] = Path(sys.executable)
+            inspector.start_markers[member_pid] = "escaped-member-start"
+            self.assertTrue(
+                session._freeze_live_reopen_helper_group(helper, helper_pid)
+            )
+            inspector.process_groups.pop(member_pid)
+            inspector.executables[member_pid] = session.gateway_bin
+            with self.assertRaisesRegex(ControllerError, "left process group"):
+                session._freeze_live_reopen_helper_group(helper, helper_pid)
+            self.assertEqual(
+                session._reopen_helper_members[member_pid],
+                (session.gateway_bin, "escaped-member-start"),
+            )
+
+            killed = []
+
+            def stop_frozen_member(pid, _signal):
+                killed.append(pid)
+                inspector.alive.discard(pid)
+                inspector.process_groups.pop(pid, None)
+
+            with mocklib.patch.object(
+                controller_module.os,
+                "kill",
+                side_effect=stop_frozen_member,
+            ):
+                self.assertEqual(session._cleanup_reopen_helper_group(), [])
+            self.assertIn(member_pid, killed)
+
     def test_reopen_freeze_error_stops_the_controller_owned_helper(self):
         inspector = FakeInspector()
         with self._session("deepseek-off", inspector) as session:
@@ -1070,6 +1201,30 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             helper.terminate.assert_called_once_with()
             helper.wait.assert_called_once_with(timeout=3.0)
             helper.kill.assert_not_called()
+
+            exited_helper = mocklib.Mock()
+            exited_helper.pid = 4381
+            exited_helper.poll.side_effect = [None, 0]
+            session._reopen_helper_members[4381] = (
+                session.app_bin,
+                "exited-helper-start",
+            )
+            self.assertFalse(
+                session._freeze_live_reopen_helper_group(exited_helper, 4381)
+            )
+            self.assertNotIn(4381, session._reopen_helper_members)
+
+            exited_at_entry = mocklib.Mock()
+            exited_at_entry.pid = 4382
+            exited_at_entry.poll.return_value = 0
+            session._reopen_helper_members[4382] = (
+                session.app_bin,
+                "entry-exit-start",
+            )
+            self.assertFalse(
+                session._freeze_live_reopen_helper_group(exited_at_entry, 4382)
+            )
+            self.assertNotIn(4382, session._reopen_helper_members)
 
     def test_close_does_not_adopt_a_reused_reopen_helper_process_group(self):
         inspector = FakeInspector()
