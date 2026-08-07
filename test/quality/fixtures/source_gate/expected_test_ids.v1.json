@@ -1112,6 +1112,8 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::provider::tests::visible_catalog_default_role_or_binding_changes_require_science_restart",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy::tests::health_timeout_reason_flags_port_conflict_and_never_blames_key",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy::tests::should_write_back_requires_both_gen_and_secret",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::acceptance_native_upstream_override_is_loopback_only_and_native_only",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::acceptance_override_is_wired_after_env_clear_and_before_formal_spawn",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::build_rs_stages_executable_sidecar_for_tauri_external_bin",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::explicit_gateway_binary_rejects_symlink_components",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::find_gateway_in_accepts_plain_or_tauri_suffixed_binary",
