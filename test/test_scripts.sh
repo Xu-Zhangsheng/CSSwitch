@@ -15,10 +15,29 @@ mkdir -p "$OUTER_HOME/.claude-science"
 mkdir -p "$T/home/.claude-science"           # DATA_DIR 存在，走到 stop 调用
 FAKE_FAIL="$T/fake-fail"; printf '#!/bin/sh\nexit 1\n' > "$FAKE_FAIL"; chmod +x "$FAKE_FAIL"
 FAKE_OK="$T/fake-ok";     printf '#!/bin/sh\nexit 0\n' > "$FAKE_OK";   chmod +x "$FAKE_OK"
+FAKE_RETRY="$T/fake-retry"
+printf '%s\n' '#!/bin/sh' 'count="$(cat "$RETRY_COUNTER" 2>/dev/null || echo 0)"' 'count=$((count + 1))' 'printf "%s\n" "$count" > "$RETRY_COUNTER"' '[ "$count" -ge 2 ]' > "$FAKE_RETRY"
+chmod +x "$FAKE_RETRY"
 
 out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/home" SCIENCE_BIN="$FAKE_FAIL" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
 if [ $rc -ne 0 ]; then ok "stop reports failure rc!=0"; else no "stop hid failure (rc=$rc)"; fi
 if echo "$out" | grep -q "沙箱已停"; then no "stop falsely claimed success"; else ok "stop did not falsely claim success"; fi
+
+RETRY_COUNTER="$T/stop-retry-count"
+out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/home" SCIENCE_BIN="$FAKE_RETRY" RETRY_COUNTER="$RETRY_COUNTER" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
+retry_count="$(cat "$RETRY_COUNTER" 2>/dev/null || echo 0)"
+if [ $rc -eq 0 ] && [ "$retry_count" -eq 2 ] && echo "$out" | grep -q "沙箱已停"; then ok "stop retries one transient CLI failure"; else no "stop transient retry contract failed (rc=$rc count=$retry_count): $out"; fi
+
+REBIND_REAL_HOME="$T/rebind-real-home"
+REBIND_SANDBOX="$T/rebind-sandbox"
+REBIND_COUNTER="$T/rebind-count"
+mkdir -p "$REBIND_REAL_HOME/.claude-science" "$REBIND_SANDBOX/.claude-science"
+FAKE_REBIND="$T/fake-rebind"
+printf '%s\n' '#!/bin/sh' 'count="$(cat "$REBIND_COUNTER" 2>/dev/null || echo 0)"' 'count=$((count + 1))' 'printf "%s\n" "$count" > "$REBIND_COUNTER"' 'data_dir="$3"' 'rm -rf "$data_dir"' 'ln -s "$REBIND_REAL_DATA" "$data_dir"' 'exit 1' > "$FAKE_REBIND"
+chmod +x "$FAKE_REBIND"
+out="$(HOME="$REBIND_REAL_HOME" SANDBOX_HOME="$REBIND_SANDBOX" SCIENCE_BIN="$FAKE_REBIND" REBIND_COUNTER="$REBIND_COUNTER" REBIND_REAL_DATA="$REBIND_REAL_HOME/.claude-science" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
+rebind_count="$(cat "$REBIND_COUNTER" 2>/dev/null || echo 0)"
+if [ $rc -ne 0 ] && [ "$rebind_count" -eq 1 ] && echo "$out" | grep -q "符号链接"; then ok "stop retry revalidates data-dir before second call"; else no "stop retried after data-dir rebind (rc=$rc count=$rebind_count): $out"; fi
 
 out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/home" SCIENCE_BIN="$FAKE_OK" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
 if [ $rc -eq 0 ] && echo "$out" | grep -q "沙箱已停"; then ok "stop reports success on rc=0"; else no "stop mis-reported success path (rc=$rc)"; fi
