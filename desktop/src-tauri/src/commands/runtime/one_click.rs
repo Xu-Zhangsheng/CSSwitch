@@ -208,7 +208,16 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
         },
     ) {
         Ok(value) => Ok(value),
-        Err(failure) => Ok(project_one_click_failure(failure)),
+        Err(failure) => {
+            #[cfg(feature = "acceptance-build")]
+            eprintln!(
+                "csswitch-acceptance one_click_failure kind={:?} stage={} detail={}",
+                failure.kind(),
+                failure.coarse_stage(),
+                failure.safe_detail.replace(['\r', '\n'], " ")
+            );
+            Ok(project_one_click_failure(failure))
+        }
     }
 }
 
