@@ -26,6 +26,7 @@
 - [2026-07-30 Claude Science 0.1.25 `A-EVIDENCE-01` 用语门禁调查](2026-07-30-claude-science-0.1.25-a-evidence-01.md)
 - [2026-07-30 Claude Science 0.1.25 `B-RUNTIME-01` 隔离 runtime identity 与生命周期调查](2026-07-30-claude-science-0.1.25-b-runtime-01.md)
 - [2026-08-07 Claude Science 0.1.25 G2 隔离启动/状态/停止链](2026-08-07-claude-science-0.1.25-g2-start-stop.md)
+- [2026-08-07 isolated-live pre-run receipts 与 egress guard 闭环](2026-08-07-isolated-live-pre-run-receipts-egress-guard.md)
 - [2026-07-30 CSSwitch ↔ Science 关联机制与合理设计](2026-07-30-csswitch-science-association-and-design.md)
 - [2026-07-30 CSSwitch 代码重构优先级](2026-07-30-csswitch-refactor-priorities.md)
 

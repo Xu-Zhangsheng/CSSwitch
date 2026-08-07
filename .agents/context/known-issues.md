@@ -14,7 +14,11 @@
 
 新的唯一验收顺序是：**重要重构决策 → production source → exact artifact → isolated-live → authorized live**。当前映射、每层进入条件、授权边界和故障 fixture 边界只在[生产链路验收](../../docs/operations/real-machine-acceptance.md)维护；Science 运行细则见[Science 探针合同](../../docs/operations/science-probe-spec.md)。
 
-2026-08-07 只读核对的生产源码基线为 `next@7e88e0b34902ee6905f2bec659e5b014393f8a09`。这只是本次 authority migration 的核对输入，不是新的 source seal，也不自动冻结后续 candidate。
+2026-08-07 当前 source/test candidate 为
+`next@c531006595709ea1247d03932526901b056adf99`。独立 clean clone 的固定 15-suite
+source gate 为 `PASS`、runner exit `0`；该提交相对现有 `e7dfde1` exact artifact
+没有 Desktop production source 变化，只提交 isolated-live controller 与测试，不能据此把 artifact
+identity 改写为 `c531006`。
 
 ## 当前源码问题
 
@@ -29,12 +33,23 @@
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；fresh source seal 待执行 | current `e7dfde1` exact tuple `PASS`；G2 pre-run receipt 缺失；后续 HEAD 未绑定 | start/status/stop observations `PASS`，但 G2 `INCONCLUSIVE(reason=safety-stop)`；open/reopen/restart `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`c531006` exact-SHA 15-suite source gate `PASS`；该提交无 Desktop production source 变化 | current `e7dfde1` exact tuple `PASS`；`c531006` controller 已完整冻结 pre-run manifest、fixture/provider/network receipts 与树 manifest；没有 `c531006` product artifact | 旧 start/status/stop observations `PASS`，但该 run 总判定 `INCONCLUSIVE(reason=safety-stop)`；新闭环仅为 `INCONCLUSIVE(reason=pre-run-only)`；open/reopen/restart `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal stop observation `PASS`；G2 总项未 PASS；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal binding/finalize observation `PASS`；G2 总项未 PASS；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | fixture install → attach → Agent load / trigger → restart persistence `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
+
+2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
+receipt、provider launch receipt 与 network isolation receipt。pre-run manifest SHA-256 为
+`9dd77aaa73512eb9fb32542638a479cfac52d92dd877f54215575189ff449b78`；closing
+`hashes.sha256` SHA-256 为
+`9d9298e426629d7c5284a18d077bf4ec84e2cc2476631e9421772fa70cacec1f`，19/19 条目复核
+`OK`。网络 self-test 实际允许 IPv4/IPv6 loopback，并以 `EPERM` 阻断 IPv4/IPv6 TCP、UDP、
+DNS transport 与 mDNSResponder IPC；唯一系统 resolver 查询失败。该轮没有启动 Desktop / Gateway /
+Science，固定判定为 `INCONCLUSIVE(reason=pre-run-only)`，不能追溯升级旧 G2，也不能代替完整
+`B-RUNTIME-01`。exact identity 与不能外推的范围见
+[日期化 pre-run 调查](../../docs/evidence/investigations/2026-08-07-isolated-live-pre-run-receipts-egress-guard.md)。
 
 2026-08-07 的 run 后只读 G1 receipt 已把 `next@e7dfde13636cbf3b377d01dbba3a2aee88e62822`、
 `CSSwitch Test.app`、packaged Gateway/resources 与 Claude Science 0.1.25 package/executable
