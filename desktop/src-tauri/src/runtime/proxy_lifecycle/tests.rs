@@ -1,7 +1,8 @@
 use super::{
-    accepted_gateway_health, configure_managed_proxy_command, find_gateway_in,
-    finish_interrupted_gateway_recovery, formal_proxy_env, gateway_bin_path_from,
-    interrupted_health_matches, recover_interrupted_gateway_from_dir, skill_install_bridge_token,
+    accepted_gateway_health, configure_acceptance_native_upstream_override,
+    configure_managed_proxy_command, find_gateway_in, finish_interrupted_gateway_recovery,
+    formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
+    recover_interrupted_gateway_from_dir, skill_install_bridge_token,
     InterruptedGatewayRecoveryErrorKind, InterruptedGatewayRecoveryOutcome,
     InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
 };
@@ -22,6 +23,118 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static R0_RECOVERY_TERM_OBSERVED: AtomicBool = AtomicBool::new(false);
+
+#[test]
+fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
+    let upstream = |cmd: &Command| {
+        cmd.get_envs()
+            .find(|(key, _)| *key == "CSSWITCH_UPSTREAM_URL")
+            .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    };
+    let mut deepseek = Command::new("/usr/bin/true");
+    configure_managed_proxy_command(&mut deepseek, "deepseek", "off", 32120, "secret", "launch")
+        .unwrap();
+    configure_acceptance_native_upstream_override(
+        &mut deepseek,
+        "deepseek",
+        Some(std::ffi::OsStr::new(
+            "http://127.0.0.1:32123/deepseek/v1/messages",
+        )),
+    )
+    .unwrap();
+    assert_eq!(
+        upstream(&deepseek).as_deref(),
+        Some("http://127.0.0.1:32123/deepseek/v1/messages")
+    );
+
+    let mut qwen = Command::new("/usr/bin/true");
+    configure_managed_proxy_command(&mut qwen, "qwen", "off", 32121, "secret", "launch").unwrap();
+    configure_acceptance_native_upstream_override(
+        &mut qwen,
+        "qwen",
+        Some(std::ffi::OsStr::new(
+            "http://[::1]:32124/qwen/v1/chat/completions",
+        )),
+    )
+    .unwrap();
+    assert_eq!(
+        upstream(&qwen).as_deref(),
+        Some("http://[::1]:32124/qwen/v1/chat/completions")
+    );
+
+    let mut relay = Command::new("/usr/bin/true");
+    configure_managed_proxy_command(&mut relay, "relay", "off", 32122, "secret", "launch").unwrap();
+    configure_acceptance_native_upstream_override(
+        &mut relay,
+        "relay",
+        Some(std::ffi::OsStr::new("https://provider.invalid/anthropic")),
+    )
+    .unwrap();
+    assert_eq!(
+        upstream(&relay),
+        None,
+        "relay/custom must continue to use the profile endpoint"
+    );
+    for rejected in [
+        "https://provider.invalid/anthropic/v1/messages",
+        "not-a-url",
+        "http://127.0.0.1@provider.invalid/v1/messages",
+    ] {
+        let mut cmd = Command::new("/usr/bin/true");
+        assert!(
+            configure_acceptance_native_upstream_override(
+                &mut cmd,
+                "deepseek",
+                Some(std::ffi::OsStr::new(rejected)),
+            )
+            .is_err(),
+            "native acceptance override must reject {rejected}"
+        );
+        assert_eq!(upstream(&cmd), None);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut cmd = Command::new("/usr/bin/true");
+        assert!(configure_acceptance_native_upstream_override(
+            &mut cmd,
+            "deepseek",
+            Some(std::ffi::OsStr::from_bytes(
+                b"http://127.0.0.1:32123/v1/\xff/messages"
+            )),
+        )
+        .is_err());
+        assert_eq!(upstream(&cmd), None);
+    }
+}
+
+#[test]
+fn acceptance_override_is_wired_after_env_clear_and_before_formal_spawn() {
+    let lifecycle = include_str!("lifecycle.rs");
+    let formal_start = lifecycle
+        .splitn(2, "fn start_proxy_for_inner")
+        .nth(1)
+        .expect("production formal start owner must exist");
+    let configure = formal_start
+        .find("configure_managed_proxy_command(")
+        .expect("formal start must configure the env-cleared managed command");
+    let acceptance = formal_start
+        .find("#[cfg(feature = \"acceptance-build\")]\n        configure_acceptance_native_upstream_override(")
+        .expect("formal start must wire the compile-gated acceptance override");
+    let spawn = formal_start
+        .find(".spawn()")
+        .expect("formal start must spawn the configured Gateway command");
+    assert!(
+        configure < acceptance,
+        "override must follow env_clear setup"
+    );
+    assert!(
+        acceptance < spawn,
+        "override must reach the final spawn command"
+    );
+}
 
 extern "C" fn observe_r0_recovery_term(_signal: libc::c_int) {
     R0_RECOVERY_TERM_OBSERVED.store(true, Ordering::SeqCst);

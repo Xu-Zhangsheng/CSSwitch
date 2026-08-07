@@ -37,6 +37,37 @@ fn formal_proxy_env(launch: &FormalGatewayPlan) -> Result<Vec<(String, String)>,
     Ok(env)
 }
 
+#[cfg(any(test, feature = "acceptance-build"))]
+fn configure_acceptance_native_upstream_override(
+    cmd: &mut Command,
+    provider: &str,
+    raw: Option<&std::ffi::OsStr>,
+) -> Result<(), String> {
+    if !crate::runtime::provider::is_native_adapter(provider) {
+        return Ok(());
+    }
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let value = raw
+        .to_str()
+        .ok_or_else(|| "acceptance upstream override 不是 UTF-8，已拒绝启动。".to_string())?;
+    let endpoint = crate::runtime::provider::parse_endpoint(value).ok_or_else(|| {
+        "acceptance upstream override 不是有效的 http(s) URL，已拒绝启动。".to_string()
+    })?;
+    let host = endpoint.host.trim_end_matches('.');
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
+        return Err("acceptance upstream override 只允许显式 loopback 地址，已拒绝启动。".into());
+    }
+    cmd.env("CSSWITCH_UPSTREAM_URL", value);
+    Ok(())
+}
+
 pub(crate) fn configure_managed_proxy_command(
     cmd: &mut Command,
     provider: &str,

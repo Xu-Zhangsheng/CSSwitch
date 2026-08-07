@@ -215,6 +215,12 @@ fn start_proxy_for_inner<R: Runtime>(
             &secret,
             &launch_id,
         )?;
+        #[cfg(feature = "acceptance-build")]
+        configure_acceptance_native_upstream_override(
+            &mut cmd,
+            &launch.adapter,
+            std::env::var_os("CSSWITCH_UPSTREAM_URL").as_deref(),
+        )?;
         // The external-Skill bridge is optional. Unsafe or unwritable bridge
         // state disables only that bridge; it must never prevent the proxy (and
         // therefore Science) from starting.
