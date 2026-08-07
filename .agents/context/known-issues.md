@@ -29,12 +29,25 @@
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
-| runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | `NOT-RUN` | normal lifecycle `NOT-RUN` | normal stop `NOT-RUN` |
-| authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | normal production entry `NOT-RUN` | happy path `NOT-RUN`；crash window 不要求 live |
+| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；fresh source seal 待执行 | current `e7dfde1` exact tuple `PASS`；G2 pre-run receipt 缺失；后续 HEAD 未绑定 | start/status/stop observations `PASS`，但 G2 `INCONCLUSIVE(reason=safety-stop)`；open/reopen/restart `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
+| runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal stop observation `PASS`；G2 总项未 PASS；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
+| authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal binding/finalize observation `PASS`；G2 总项未 PASS；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | fixture install → attach → Agent load / trigger → restart persistence `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
+
+2026-08-07 的 run 后只读 G1 receipt 已把 `next@e7dfde13636cbf3b377d01dbba3a2aee88e62822`、
+`CSSwitch Test.app`、packaged Gateway/resources 与 Claude Science 0.1.25 package/executable
+固定为当前 exact tuple；该 receipt 不能追溯替代 G2 的 pre-run manifest。授权的 G2 run 中，
+production auto-boot 建立 exact Gateway/Science listener 与 managed receipt，UI stop-all 后
+端口、PID、receipt 和 open FD 清零，随后删除 exact runtime root，8765 基线不变。完整 `B-RUNTIME-01` 的
+open/reopen/restart 仍为 `NOT-RUN`；provider 协议、真实 provider/账号、Skill/SSH、installed、
+签名、公证和 public release 也未运行。loopback provider 与 0 inference hits 只作为 observation 保留；
+运行中观察到 Gateway 到 `198.18.0.54:443` 的禁止 non-loopback socket 后触发 safety-stop，加上
+pre-run manifest/provider receipt 不完整，G2 总判定为 `INCONCLUSIVE(reason=safety-stop)`，不能写 PASS。
+exact identity、授权与 cleanup 见
+[日期化调查](../../docs/evidence/investigations/2026-08-07-claude-science-0.1.25-g2-start-stop.md)。
+本段和表格都只陈述 `e7dfde1`；证据文档提交产生的后续 HEAD 没有同源 artifact，不能继承 current G1 PASS。
 
 2026-08-06 的 A0 artifact 绑定 `9cf75d19e7853b91b2f9a7c85afbd66747cb4fa3`，早于当前生产源码变化，只能从其[日期化 artifact 审计](../../docs/audits/2026-08-06-a0-frozen-baseline-artifact.md)读取限定结果，不能外推 current source、Desktop/Science live、provider、installed、签名或 release。2026-07-30 的 Science `B-RUNTIME-01` 同样只保留为绑定当时版本与身份门禁的[日期化调查](../../docs/evidence/investigations/2026-07-30-claude-science-0.1.25-b-runtime-01.md)，不再作为当前 probe gate。
 
