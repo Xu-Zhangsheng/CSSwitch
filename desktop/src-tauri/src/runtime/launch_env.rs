@@ -289,6 +289,8 @@ mod tests {
                 .arg(&current_exe)
                 .args(["--exact", test_name, "--nocapture"])
                 .env(CHILD_ENV, expected)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .expect("sandbox query child must run");
             assert!(status.success(), "sandbox query child failed for {expected}");
