@@ -1180,6 +1180,7 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::managed_launch_receipt_growth_read_is_hard_bounded",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::managed_launch_tombstone_restore_is_atomic_no_clobber",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::managed_launch_tombstone_restore_uses_no_clobber_primitive",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::managed_process_start_identity_preserves_the_legacy_receipt_format",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::o1_e3_prior_restart_receipt_uses_the_durable_launch_id",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::o1_e3_prior_restart_requires_the_stopped_receipt_to_be_absent",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::official_updater_identity_parser_accepts_only_known_exact_variants",
