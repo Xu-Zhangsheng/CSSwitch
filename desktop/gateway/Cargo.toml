@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = []
-acceptance-build = []
+acceptance-build = ["csswitch-skill-install-core/acceptance-build"]
 
 [[bin]]
 name = "csswitch-gateway"

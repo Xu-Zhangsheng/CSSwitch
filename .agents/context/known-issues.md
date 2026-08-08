@@ -2,7 +2,7 @@
 
 状态：当前；唯一验收路线以[生产链路验收](../../docs/operations/real-machine-acceptance.md)为准
 
-最后复核：2026-08-08（Asia/Taipei）
+最后复核：2026-08-09（Asia/Taipei）
 
 失效条件：production owner / caller、确定性 fixture、候选 source、artifact identity、Science / Gateway runtime、provider capability、installed/runtime、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
@@ -38,7 +38,7 @@ receipt 绑定的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science
 | runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
-| Science host adapter 与 Skill host bridge | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | fixture install → attach → Agent load / trigger → restart persistence `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
+| Science host adapter 与 Skill host bridge | `c4a1159` exact-SHA 13-suite source gate `PASS`；acceptance-only loopback Git seam 已封口 | `c4a1159` 的 `CSSwitch Test.app`、packaged Gateway 与 Science 0.1.25 tuple 已绑定 | `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
@@ -81,6 +81,15 @@ target root session 的 717 个脱敏 request envelope 中，四项 cross-domain
 `B-CONTEXT-01=PASS(scope=isolated-request-shape)`。global `About you` memory 的显式共享 surface
 不外推为 project-scoped memory 的全部语义；精确状态、fixture loop 噪声、网络与 cleanup 见
 [日期化验收](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-context-01.md)。
+
+2026-08-09 的 `B-SKILL-01` 绑定 `c4a1159` clean source gate 与同 SHA 新构建的 exact
+`CSSwitch Test.app` / packaged Gateway / Science 0.1.25 tuple。Science 在用户对话前的 bundled
+warmup 已尝试非预期外部 destination，立即触发该 probe 的严格停止条件；停止前只完成
+identity、隔离根、fixture 与 deny-egress 护栏核对，六阶段均为 `NOT-RUN`。停止后继续的
+host-access / managed tool 诊断属于程序偏差，已排除在正式判定之外。因此当前只能固定为
+`INCONCLUSIVE(reason=safety-stop)`，不能由 source/artifact 邻层或停止后观察补绿。
+四个专用端口和全部 attributable process 已清零；精确 identity、ledger、hash 与禁止绕过边界见
+[日期化调查](../../docs/evidence/investigations/2026-08-09-claude-science-0.1.25-b-skill-01.md)。
 
 先前 r1 的 evidence envelope 缺口、r2 的 no-opt-out outer 启动失败，以及 r3 的 exact-artifact
 不匹配、permission fixture 误布置和 non-loopback safety-stop 均继续保留为日期化历史证据；它们

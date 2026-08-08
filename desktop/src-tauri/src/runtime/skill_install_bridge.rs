@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "acceptance-build"))]
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +18,10 @@ const MANAGED_MARKER: &str = "[managed-by:csswitch]";
 const ROUTE_STATE_FILE: &str = ".csswitch-route-state.json";
 const ROUTE_STATE_SCHEMA: u64 = 1;
 const ROUTE_POLICY_REVISION: u64 = 3;
+#[cfg(feature = "acceptance-build")]
+const ACCEPTANCE_GITHUB_BASE_URL_ENV: &str = "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL";
+#[cfg(any(test, feature = "acceptance-build"))]
+const ACCEPTANCE_RESERVED_PORTS: [u16; 3] = [1455, 1457, 8765];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RegistrationStatus {
@@ -250,14 +256,66 @@ fn registration_inputs<R: Runtime>(
     let command = gateway.to_string_lossy();
     let bridge = bridge_dir.to_string_lossy();
     let bridge_key_file = bridge_key_file.to_string_lossy();
+    let connector_env = json!({"CSSWITCH_SKILL_BRIDGE_KEY_FILE": bridge_key_file});
+    #[cfg(feature = "acceptance-build")]
+    let connector_env = {
+        let mut connector_env = connector_env;
+        if let Some(base) = acceptance_github_fixture_base(
+            std::env::var_os(ACCEPTANCE_GITHUB_BASE_URL_ENV).as_deref(),
+        )? {
+            connector_env[ACCEPTANCE_GITHUB_BASE_URL_ENV] = json!(base);
+        }
+        connector_env
+    };
     let expected = vec![json!({
         "name": INSTALL_SERVER_NAME,
         "command": command,
         "args": ["skill-install-mcp", "--bridge-dir", bridge],
-        "env": {"CSSWITCH_SKILL_BRIDGE_KEY_FILE": bridge_key_file},
+        "env": connector_env,
         "description": format!("安装或卸载外部 Skill；pass the exact public GitHub Skill directory URL to install_external_skill. CSSwitch downloads, validates, commits, and attaches OPERON; the Agent must then call skill(skill_name). Do not download, use shell, host.skills.*, catalog, Skill Manager, or host.agents.attach_skill. Use uninstall_external_skill for removal. {MANAGED_MARKER}")
     })];
     Ok((config, expected))
+}
+
+#[cfg(any(test, feature = "acceptance-build"))]
+fn acceptance_github_fixture_base(raw: Option<&OsStr>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value = raw
+        .to_str()
+        .ok_or("acceptance GitHub fixture URL 不是 UTF-8，已拒绝注册 connector")?;
+    let rest = value
+        .strip_prefix("http://")
+        .ok_or("acceptance GitHub fixture 只允许 loopback HTTP URL")?;
+    let (authority, suffix) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.is_empty()
+        || authority.contains('@')
+        || !matches!(suffix, "" | "/")
+        || value.contains('?')
+        || value.contains('#')
+    {
+        return Err("acceptance GitHub fixture 必须是无认证、根路径的 loopback HTTP URL".into());
+    }
+    let explicit_test_port = authority
+        .rsplit_once(':')
+        .and_then(|(_, raw)| raw.parse::<u16>().ok())
+        .is_some_and(|port| port >= 1024 && !ACCEPTANCE_RESERVED_PORTS.contains(&port));
+    if !explicit_test_port {
+        return Err("acceptance GitHub fixture 必须使用显式非保留测试端口".into());
+    }
+    let endpoint = crate::runtime::provider::parse_endpoint(value)
+        .ok_or("acceptance GitHub fixture URL 非法")?;
+    let host = endpoint.host.trim_end_matches('.');
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
+        return Err("acceptance GitHub fixture 只允许显式 loopback 地址".into());
+    }
+    Ok(Some(format!("http://{authority}/")))
 }
 
 fn registration_matches(config: &Path, expected: &[Value]) -> Result<bool, String> {
@@ -506,6 +564,36 @@ mod tests {
             "env": {},
             "description": format!("installer {MANAGED_MARKER}")
         })
+    }
+
+    #[test]
+    fn acceptance_github_fixture_is_explicit_loopback_root_only() {
+        for accepted in [
+            "http://127.0.0.1:32123/",
+            "http://localhost:32124",
+            "http://[::1]:32125/",
+        ] {
+            let observed = acceptance_github_fixture_base(Some(OsStr::new(accepted))).unwrap();
+            assert!(observed.is_some(), "fixture should accept {accepted}");
+        }
+        for rejected in [
+            "http://127.0.0.1/",
+            "http://127.0.0.1:443/",
+            "http://127.0.0.1:1455/",
+            "http://127.0.0.1:1457/",
+            "http://127.0.0.1:8765/",
+            "https://127.0.0.1:32123/",
+            "http://provider.invalid:32123/",
+            "http://127.0.0.1:32123/api/",
+            "http://user@127.0.0.1:32123/",
+            "http://127.0.0.1:32123/?token=secret",
+        ] {
+            assert!(
+                acceptance_github_fixture_base(Some(OsStr::new(rejected))).is_err(),
+                "fixture must reject {rejected}"
+            );
+        }
+        assert_eq!(acceptance_github_fixture_base(None).unwrap(), None);
     }
 
     #[test]

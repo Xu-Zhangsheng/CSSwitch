@@ -55,6 +55,35 @@ def proxy_lifecycle_source():
 
 
 class SkillRuntimeBoundary(unittest.TestCase):
+    def test_github_fixture_override_is_acceptance_only_and_connector_scoped(self):
+        gateway_manifest = (
+            ROOT / "desktop/gateway/Cargo.toml"
+        ).read_text()
+        core_manifest = (
+            ROOT / "desktop/skill-package/Cargo.toml"
+        ).read_text()
+        bridge = (
+            ROOT / "desktop/src-tauri/src/runtime/skill_install_bridge.rs"
+        ).read_text()
+        github = (
+            ROOT / "desktop/skill-package/src/github.rs"
+        ).read_text()
+
+        self.assertIn(
+            'acceptance-build = ["csswitch-skill-install-core/acceptance-build"]',
+            gateway_manifest,
+        )
+        self.assertIn("acceptance-build = []", core_manifest)
+        self.assertIn('#[cfg(feature = "acceptance-build")]', bridge)
+        self.assertIn("acceptance_github_fixture_base", bridge)
+        self.assertIn('"env": connector_env', bridge)
+        self.assertIn('#[cfg(feature = "acceptance-build")]', github)
+        self.assertIn("GithubEndpoints::production()?", github)
+        self.assertNotIn(
+            "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL",
+            (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text(),
+        )
+
     def test_production_startup_has_no_skill_manager_dependency(self):
         session = sandbox_session_source()
         for forbidden in (

@@ -112,7 +112,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "QUALITY-METADATA"
       }
     },
@@ -196,7 +196,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "QUALITY-FOCUSED"
       }
     },
@@ -353,7 +353,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "RUN-EVIDENCE-CONTRACT"
       }
     },
@@ -560,7 +560,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "QUALITY-INVENTORY"
       }
     },
@@ -637,7 +637,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "PY-OFFLINE"
       }
     },
@@ -715,7 +715,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "PY-LOOPBACK"
       }
     },
@@ -782,7 +782,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "SHELL-SCRIPTS"
       }
     },
@@ -858,7 +858,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "RUST-DESKTOP"
       }
     },
@@ -866,12 +866,14 @@
       "id": "SUITE-RUST-GATEWAY",
       "name": "gateway Cargo manifest",
       "kind": "rust",
-      "entrypoint": "cargo test --manifest-path desktop/gateway/Cargo.toml",
+      "entrypoint": "cargo test --features acceptance-build --manifest-path desktop/gateway/Cargo.toml",
       "entrypoint_id": "ENTRY-SOURCE-RUST-GATEWAY",
       "command_argv": [
         "{CARGO}",
         "test",
         "--offline",
+        "--features",
+        "acceptance-build",
         "--manifest-path",
         "desktop/gateway/Cargo.toml"
       ],
@@ -929,7 +931,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "RUST-GATEWAY"
       }
     },
@@ -999,7 +1001,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "RUST-CODEX-NETWORK"
       }
     },
@@ -1007,12 +1009,14 @@
       "id": "SUITE-RUST-SKILL-PACKAGE",
       "name": "skill-package Cargo manifest",
       "kind": "rust",
-      "entrypoint": "cargo test --manifest-path desktop/skill-package/Cargo.toml -- --test-threads=1",
+      "entrypoint": "cargo test --features acceptance-build --manifest-path desktop/skill-package/Cargo.toml -- --test-threads=1",
       "entrypoint_id": "ENTRY-SOURCE-RUST-SKILL",
       "command_argv": [
         "{CARGO}",
         "test",
         "--offline",
+        "--features",
+        "acceptance-build",
         "--manifest-path",
         "desktop/skill-package/Cargo.toml",
         "--",
@@ -1071,7 +1075,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "RUST-SKILL-PACKAGE"
       }
     },
@@ -1147,7 +1151,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "MJS-FRONTEND"
       }
     },
@@ -1385,7 +1389,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "ORPHAN-SKILL-BRIDGE"
       }
     },
@@ -1454,7 +1458,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "ORPHAN-SKILL-BOUNDARY"
       }
     },
@@ -2072,7 +2076,7 @@
       "environment_allowlist": [],
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "df8d5067ee4002e98d7189b7859797a1473ae0c19f4d56820a5b4d3cfb318b31",
+        "sha256": "e49cedfe16ab608baf2710f398ae98cf8199e49a1cca1d33b5d5f63f1e2a31e4",
         "suite_key": "SOURCE-GATE-CONTRACT"
       },
       "status": "implemented",

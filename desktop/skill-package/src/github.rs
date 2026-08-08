@@ -1,3 +1,5 @@
+#[cfg(feature = "acceptance-build")]
+use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -31,6 +33,10 @@ const GITHUB_TREE_BYTES: usize = 16 * 1024 * 1024;
 const GITHUB_ARCHIVE_DOWNLOAD_ATTEMPTS: usize = 3;
 const DOWNLOAD_PROGRESS_BYTES: usize = 4 * 1024 * 1024;
 const GITHUB_RAW_DOWNLOAD_CONCURRENCY: usize = 4;
+#[cfg(feature = "acceptance-build")]
+const ACCEPTANCE_GITHUB_BASE_URL_ENV: &str = "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL";
+#[cfg(feature = "acceptance-build")]
+const ACCEPTANCE_RESERVED_PORTS: [u16; 3] = [1455, 1457, 8765];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GithubSource {
@@ -55,13 +61,65 @@ struct GithubEndpoints {
 }
 
 impl GithubEndpoints {
-    fn production() -> Self {
-        Self {
+    fn production() -> Result<Self, InstallError> {
+        #[cfg(feature = "acceptance-build")]
+        if let Some(raw) = std::env::var_os(ACCEPTANCE_GITHUB_BASE_URL_ENV) {
+            return Self::acceptance_loopback(raw.as_os_str());
+        }
+        Ok(Self {
             api_base: reqwest::Url::parse("https://api.github.com/")
                 .expect("static GitHub API URL"),
             raw_base: reqwest::Url::parse("https://raw.githubusercontent.com/")
                 .expect("static GitHub raw URL"),
+        })
+    }
+
+    #[cfg(feature = "acceptance-build")]
+    fn acceptance_loopback(raw: &OsStr) -> Result<Self, InstallError> {
+        let value = raw.to_str().ok_or_else(|| {
+            error(
+                "ACCEPTANCE_FIXTURE_INVALID",
+                "acceptance GitHub fixture URL 不是 UTF-8",
+                "source_resolution",
+            )
+        })?;
+        let base = reqwest::Url::parse(value).map_err(|_| {
+            error(
+                "ACCEPTANCE_FIXTURE_INVALID",
+                "acceptance GitHub fixture URL 非法",
+                "source_resolution",
+            )
+        })?;
+        let loopback = base.host_str().is_some_and(|host| {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .map(|ip| ip.is_loopback())
+                    .unwrap_or(false)
+        });
+        let explicit_test_port = base.port().is_some_and(|port| {
+            port >= 1024 && !ACCEPTANCE_RESERVED_PORTS.contains(&port)
+        });
+        if base.scheme() != "http"
+            || !loopback
+            || !explicit_test_port
+            || !base.username().is_empty()
+            || base.password().is_some()
+            || base.query().is_some()
+            || base.fragment().is_some()
+            || base.path() != "/"
+        {
+            return Err(error(
+                "ACCEPTANCE_FIXTURE_INVALID",
+                "acceptance GitHub fixture 只允许无认证、根路径、显式非保留测试端口的 loopback HTTP URL",
+                "source_resolution",
+            ));
         }
+        Ok(Self {
+            api_base: base.clone(),
+            raw_base: base,
+        })
     }
 }
 
@@ -197,7 +255,7 @@ pub fn install_github_package_with_progress(
     install_github_package_with_endpoints_and_progress(
         data_dir,
         source_url,
-        &GithubEndpoints::production(),
+        &GithubEndpoints::production()?,
         progress,
     )
 }
@@ -288,7 +346,7 @@ pub fn install_github_skill(
     data_dir: &Path,
     source_url: &str,
 ) -> Result<InstallCommit, InstallError> {
-    install_github_skill_with_endpoints(data_dir, source_url, &GithubEndpoints::production())
+    install_github_skill_with_endpoints(data_dir, source_url, &GithubEndpoints::production()?)
 }
 
 fn install_github_skill_with_endpoints(
@@ -1487,6 +1545,37 @@ mod tests {
         GithubEndpoints {
             api_base: reqwest::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(),
             raw_base: reqwest::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(),
+        }
+    }
+
+    #[cfg(feature = "acceptance-build")]
+    #[test]
+    fn acceptance_endpoint_is_loopback_http_root_only() {
+        for accepted in [
+            "http://127.0.0.1:32123/",
+            "http://localhost:32124/",
+            "http://[::1]:32125/",
+        ] {
+            let endpoints = GithubEndpoints::acceptance_loopback(OsStr::new(accepted)).unwrap();
+            assert_eq!(endpoints.api_base.as_str(), accepted);
+            assert_eq!(endpoints.raw_base.as_str(), accepted);
+        }
+        for rejected in [
+            "http://127.0.0.1/",
+            "http://127.0.0.1:443/",
+            "http://127.0.0.1:1455/",
+            "http://127.0.0.1:1457/",
+            "http://127.0.0.1:8765/",
+            "https://127.0.0.1:32123/",
+            "http://provider.invalid:32123/",
+            "http://127.0.0.1:32123/api/",
+            "http://user@127.0.0.1:32123/",
+            "http://127.0.0.1:32123/?token=secret",
+        ] {
+            assert!(
+                GithubEndpoints::acceptance_loopback(OsStr::new(rejected)).is_err(),
+                "fixture must reject {rejected}"
+            );
         }
     }
 
