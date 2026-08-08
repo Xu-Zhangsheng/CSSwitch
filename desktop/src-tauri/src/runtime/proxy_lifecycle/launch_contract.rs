@@ -65,6 +65,7 @@ fn configure_acceptance_native_upstream_override(
         return Err("acceptance upstream override 只允许显式 loopback 地址，已拒绝启动。".into());
     }
     cmd.env("CSSWITCH_UPSTREAM_URL", value);
+    cmd.env("CSSWITCH_CONNECT_LOOPBACK_ONLY", "1");
     Ok(())
 }
 

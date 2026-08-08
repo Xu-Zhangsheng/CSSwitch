@@ -1,9 +1,10 @@
 use std::io::{self, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
+const CONNECT_LOOPBACK_ONLY_ENV: &str = "CSSWITCH_CONNECT_LOOPBACK_ONLY";
 
 fn write_status(mut stream: TcpStream, code: u16, reason: &str) {
     let _ = write!(
@@ -21,6 +22,15 @@ pub fn is_blocked_host(host: &str) -> bool {
         || host.ends_with(".claude.ai")
         || host == "claude.com"
         || host.ends_with(".claude.com")
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches('.');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
 }
 
 fn parse_target(target: &str) -> Result<(String, u16), ()> {
@@ -92,19 +102,27 @@ enum ConnectTargetError {
     DialFailed,
 }
 
-fn open_target_with<T, C>(target: &str, mut connect: C) -> Result<T, ConnectTargetError>
+fn open_target_with<T, C>(
+    target: &str,
+    loopback_only: bool,
+    mut connect: C,
+) -> Result<T, ConnectTargetError>
 where
     C: FnMut(&str, u16) -> io::Result<T>,
 {
     let (host, port) = parse_target(target).map_err(|_| ConnectTargetError::BadTarget)?;
-    if is_blocked_host(&host) {
+    if is_blocked_host(&host) || (loopback_only && !is_loopback_host(&host)) {
         return Err(ConnectTargetError::Blocked);
     }
     connect(&host, port).map_err(|_| ConnectTargetError::DialFailed)
 }
 
 pub fn handle_connect(target: &str, mut client: TcpStream) {
-    let upstream = match open_target_with(target, connect_upstream) {
+    // Managed Gateway children start from an empty environment. The acceptance
+    // build explicitly sets this marker only after validating a loopback fixture
+    // upstream, so any CONNECT side-channel is rejected before DNS or dialing.
+    let loopback_only = std::env::var_os(CONNECT_LOOPBACK_ONLY_ENV).is_some();
+    let upstream = match open_target_with(target, loopback_only, connect_upstream) {
         Ok(stream) => stream,
         Err(ConnectTargetError::BadTarget) => {
             write_status(client, 400, "Bad Request");
@@ -148,8 +166,8 @@ pub fn handle_connect(target: &str, mut client: TcpStream) {
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_addrs_until, is_blocked_host, open_target_with, parse_target, ConnectTargetError,
-        CONNECT_DEADLINE,
+        connect_addrs_until, is_blocked_host, is_loopback_host, open_target_with, parse_target,
+        ConnectTargetError, CONNECT_DEADLINE,
     };
     use std::io;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -178,19 +196,47 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_only_literal_or_named_loopback_hosts() {
+        for host in ["localhost", "LOCALHOST.", "127.0.0.1", "127.23.4.5", "::1"] {
+            assert!(is_loopback_host(host), "{host} must be loopback");
+        }
+        for host in ["example.test", "0.0.0.0", "::", "198.18.0.54"] {
+            assert!(!is_loopback_host(host), "{host} must not be loopback");
+        }
+    }
+
+    #[test]
     fn blocked_and_bad_targets_never_reach_the_dialer() {
         for (target, expected) in [
             ("api.anthropic.com:443", ConnectTargetError::Blocked),
             ("example.com", ConnectTargetError::BadTarget),
         ] {
             let mut dialed = false;
-            let result: Result<(), _> = open_target_with(target, |_host, _port| {
+            let result: Result<(), _> = open_target_with(target, false, |_host, _port| {
                 dialed = true;
                 Ok(())
             });
             assert_eq!(result.unwrap_err(), expected);
             assert!(!dialed, "{target} unexpectedly reached the dialer");
         }
+    }
+
+    #[test]
+    fn loopback_only_rejects_before_dns_or_dial() {
+        let mut dialed = false;
+        let denied: Result<(), _> = open_target_with("example.test:443", true, |_host, _port| {
+            dialed = true;
+            Ok(())
+        });
+        assert_eq!(denied.unwrap_err(), ConnectTargetError::Blocked);
+        assert!(!dialed);
+
+        let allowed = open_target_with("127.0.0.1:443", true, |host, port| {
+            assert_eq!(host, "127.0.0.1");
+            assert_eq!(port, 443);
+            Ok(())
+        });
+        assert_eq!(allowed, Ok(()));
     }
 
     #[test]

@@ -31,9 +31,19 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
             .find(|(key, _)| *key == "CSSWITCH_UPSTREAM_URL")
             .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
     };
+    let loopback_only = |cmd: &Command| {
+        cmd.get_envs()
+            .find(|(key, _)| *key == "CSSWITCH_CONNECT_LOOPBACK_ONLY")
+            .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    };
     let mut deepseek = Command::new("/usr/bin/true");
     configure_managed_proxy_command(&mut deepseek, "deepseek", "off", 32120, "secret", "launch")
         .unwrap();
+    assert_eq!(
+        loopback_only(&deepseek),
+        None,
+        "normal native production launch must not restrict CONNECT"
+    );
     configure_acceptance_native_upstream_override(
         &mut deepseek,
         "deepseek",
@@ -46,9 +56,15 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
         upstream(&deepseek).as_deref(),
         Some("http://127.0.0.1:32123/deepseek/v1/messages")
     );
+    assert_eq!(loopback_only(&deepseek).as_deref(), Some("1"));
 
     let mut qwen = Command::new("/usr/bin/true");
     configure_managed_proxy_command(&mut qwen, "qwen", "off", 32121, "secret", "launch").unwrap();
+    assert_eq!(
+        loopback_only(&qwen),
+        None,
+        "normal native production launch must not restrict CONNECT"
+    );
     configure_acceptance_native_upstream_override(
         &mut qwen,
         "qwen",
@@ -61,6 +77,7 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
         upstream(&qwen).as_deref(),
         Some("http://[::1]:32124/qwen/v1/chat/completions")
     );
+    assert_eq!(loopback_only(&qwen).as_deref(), Some("1"));
 
     let mut relay = Command::new("/usr/bin/true");
     configure_managed_proxy_command(&mut relay, "relay", "off", 32122, "secret", "launch").unwrap();
@@ -75,6 +92,7 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
         None,
         "relay/custom must continue to use the profile endpoint"
     );
+    assert_eq!(loopback_only(&relay), None);
     for rejected in [
         "https://provider.invalid/anthropic/v1/messages",
         "not-a-url",
@@ -91,6 +109,7 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
             "native acceptance override must reject {rejected}"
         );
         assert_eq!(upstream(&cmd), None);
+        assert_eq!(loopback_only(&cmd), None);
     }
 
     #[cfg(unix)]
@@ -107,6 +126,7 @@ fn acceptance_native_upstream_override_is_loopback_only_and_native_only() {
         )
         .is_err());
         assert_eq!(upstream(&cmd), None);
+        assert_eq!(loopback_only(&cmd), None);
     }
 }
 

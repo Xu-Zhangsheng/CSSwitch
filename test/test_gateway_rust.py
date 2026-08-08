@@ -4121,6 +4121,32 @@ class RustGatewayLoopback(unittest.TestCase):
         finally:
             self.stop_gateway(proc)
 
+    def test_connect_loopback_only_policy_rejects_external_targets(self):
+        proc, port = self.start_gateway(
+            env_overrides={"CSSWITCH_CONNECT_LOOPBACK_ONLY": "1"}
+        )
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                sock.sendall(
+                    b"CONNECT example.test:443 HTTP/1.1\r\nhost: example.test:443\r\n\r\n"
+                )
+                head = recv_http_head(sock)
+            self.assertEqual(head.split(b"\r\n", 1)[0], b"HTTP/1.1 401 Unauthorized")
+
+            echo = EchoServer()
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                target = f"CONNECT 127.0.0.1:{echo.port} HTTP/1.1\r\nhost: 127.0.0.1:{echo.port}\r\n\r\n"
+                sock.sendall(target.encode())
+                head = recv_http_head(sock)
+                self.assertEqual(
+                    head.split(b"\r\n", 1)[0],
+                    b"HTTP/1.1 200 Connection Established",
+                )
+                sock.sendall(b"ping")
+                self.assertEqual(sock.recv(4), b"ping")
+        finally:
+            self.stop_gateway(proc)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,7 @@
       "discovered_test_ids": [
         "test.test_gateway_rust.RustGatewayLoopback.test_auth_and_models",
         "test.test_gateway_rust.RustGatewayLoopback.test_bind_failure_cannot_adopt_old_launch_identity",
+        "test.test_gateway_rust.RustGatewayLoopback.test_connect_loopback_only_policy_rejects_external_targets",
         "test.test_gateway_rust.RustGatewayLoopback.test_connect_status_contract_and_local_tunnel",
         "test.test_gateway_rust.RustGatewayLoopback.test_custom_openai_forced_model_shell_and_nonstream_translation",
         "test.test_gateway_rust.RustGatewayLoopback.test_custom_openai_models_discovery_without_forced_model",
@@ -1449,7 +1450,9 @@
         "desktop/gateway/Cargo.toml::lib::connect::tests::blocks_anthropic_claude_hosts_only",
         "desktop/gateway/Cargo.toml::lib::connect::tests::elapsed_deadline_never_attempts_a_dial",
         "desktop/gateway/Cargo.toml::lib::connect::tests::empty_resolution_is_an_address_error",
+        "desktop/gateway/Cargo.toml::lib::connect::tests::loopback_only_rejects_before_dns_or_dial",
         "desktop/gateway/Cargo.toml::lib::connect::tests::parses_ipv4_hostname_and_ipv6_targets",
+        "desktop/gateway/Cargo.toml::lib::connect::tests::recognizes_only_literal_or_named_loopback_hosts",
         "desktop/gateway/Cargo.toml::lib::dsml_shim::tests::clean_or_unknown_or_bad_json_returns_verbatim_bytes",
         "desktop/gateway/Cargo.toml::lib::dsml_shim::tests::detector_clean_response_not_flagged",
         "desktop/gateway/Cargo.toml::lib::dsml_shim::tests::detector_flags_marker_across_chunks_without_rewrite",
