@@ -2,7 +2,7 @@
 
 状态：当前；唯一验收路线以[生产链路验收](../../docs/operations/real-machine-acceptance.md)为准
 
-最后复核：2026-08-07（Asia/Taipei）
+最后复核：2026-08-08（Asia/Taipei）
 
 失效条件：production owner / caller、确定性 fixture、候选 source、artifact identity、Science / Gateway runtime、provider capability、installed/runtime、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
@@ -14,11 +14,12 @@
 
 新的唯一验收顺序是：**重要重构决策 → production source → exact artifact → isolated-live → authorized live**。当前映射、每层进入条件、授权边界和故障 fixture 边界只在[生产链路验收](../../docs/operations/real-machine-acceptance.md)维护；Science 运行细则见[Science 探针合同](../../docs/operations/science-probe-spec.md)。
 
-2026-08-07 当前 source/test candidate 为
-`next@c531006595709ea1247d03932526901b056adf99`。独立 clean clone 的固定 15-suite
-source gate 为 `PASS`、runner exit `0`；该提交相对现有 `e7dfde1` exact artifact
-没有 Desktop production source 变化，只提交 isolated-live controller 与测试，不能据此把 artifact
-identity 改写为 `c531006`。
+2026-08-08 当前已验收 source/artifact binding 为
+`next@6e09e68654e1c43b936821c8be12330af3e19cc1`。独立 clean worktree 的固定 15-suite
+source gate 为 `PASS`、runner exit `0`；随后从该 SHA 全新构建的 `CSSwitch Test.app`、
+packaged Rust Gateway 与 Claude Science 0.1.25 exact tuple 已完成 `B-RUNTIME-01`，总判定
+为 `PASS`。当前文档 HEAD `e62c59249482fa78df38d4f336093a2df38c547a` 只提交该证据，
+不能改写被构建或运行的 source/artifact identity。
 
 ## 当前源码问题
 
@@ -33,9 +34,9 @@ identity 改写为 `c531006`。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`c531006` exact-SHA 15-suite source gate `PASS`；该提交无 Desktop production source 变化 | current `e7dfde1` exact tuple `PASS`；`c531006` controller 已完整冻结 pre-run manifest、fixture/provider/network receipts 与树 manifest；没有 `c531006` product artifact | 最新完整尝试为 `INCONCLUSIVE(reason=science-minimal-start-not-closed-and-reopen-process-ownership-unproven)`；Desktop/Gateway start-health 有限事实成立，Science minimal start 与 reopen 未闭合，status/产品 stop/restart `NOT-RUN` | Science/provider 分项 `NOT-RUN` |
-| runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal stop observation `PASS`；G2 总项未 PASS；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
-| authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | current `e7dfde1` exact tuple `PASS`；后续 HEAD 未绑定 | normal binding/finalize observation `PASS`；G2 总项未 PASS；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
+| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`6e09e68` exact-SHA 15-suite source gate `PASS` | `6e09e68` 全新 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定 | `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合 | 真实 provider/账号分项 `NOT-RUN` |
+| runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | `6e09e68` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
+| authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `6e09e68` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | fixture install → attach → Agent load / trigger → restart persistence `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
@@ -51,8 +52,16 @@ Science，固定判定为 `INCONCLUSIVE(reason=pre-run-only)`，不能追溯升�
 `B-RUNTIME-01`。exact identity 与不能外推的范围见
 [日期化 pre-run 调查](../../docs/evidence/investigations/2026-08-07-isolated-live-pre-run-receipts-egress-guard.md)。
 
-随后执行的完整 `B-RUNTIME-01` 尝试复用了同一 exact artifact/Science tuple 与 hardened
-controller。pre-run/G1/network receipts 通过；production Desktop 与 packaged Rust Gateway
+2026-08-08 的完整 `B-RUNTIME-01` 使用 `6e09e68` clean source gate 与同 SHA 全新构建的
+exact artifact，在 deny-egress 隔离环境中完成 Desktop → packaged Rust Gateway → Science、
+loopback fake provider、一键开始、单实例重开复用、产品停止/重启、再次请求、最终停止和
+精确清理，总判定为 `PASS`。独立 clean-context 代码审查为 `PASS`，
+`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`。真实 provider/账号、Skill、SSH、installed、签名、公证与
+public release 仍为 `NOT-RUN`；精确身份、断言与 cleanup closure 见
+[日期化完整验收](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-runtime-01.md)。
+
+2026-08-07 的历史 `B-RUNTIME-01` 完整尝试复用了当日冻结的 exact artifact/Science tuple
+与 hardened controller。pre-run/G1/network receipts 通过；production Desktop 与 packaged Rust Gateway
 建立 exact identity 且 Gateway health ready，但真实 Science launch 没有建立目标 listener，允许
 保留的日志不足以在产品、fixture、harness 或系统限制间归因。reopen driver 又产生第二个 exact
 Desktop，因此 Gateway PID/launch id 未变不能升级为 reopen PASS。产品 status、stop、restart
@@ -72,7 +81,8 @@ open/reopen/restart 仍为 `NOT-RUN`；provider 协议、真实 provider/账号�
 pre-run manifest/provider receipt 不完整，G2 总判定为 `INCONCLUSIVE(reason=safety-stop)`，不能写 PASS。
 exact identity、授权与 cleanup 见
 [日期化调查](../../docs/evidence/investigations/2026-08-07-claude-science-0.1.25-g2-start-stop.md)。
-本段和表格都只陈述 `e7dfde1`；证据文档提交产生的后续 HEAD 没有同源 artifact，不能继承 current G1 PASS。
+本段只陈述 `e7dfde1` 的历史 G1/G2 记录；当时的后续证据文档 HEAD 没有同源 artifact，
+不能继承该轮 G1 PASS，也不覆盖上方 `6e09e68` 的当前映射。
 
 2026-08-06 的 A0 artifact 绑定 `9cf75d19e7853b91b2f9a7c85afbd66747cb4fa3`，早于当前生产源码变化，只能从其[日期化 artifact 审计](../../docs/audits/2026-08-06-a0-frozen-baseline-artifact.md)读取限定结果，不能外推 current source、Desktop/Science live、provider、installed、签名或 release。2026-07-30 的 Science `B-RUNTIME-01` 同样只保留为绑定当时版本与身份门禁的[日期化调查](../../docs/evidence/investigations/2026-07-30-claude-science-0.1.25-b-runtime-01.md)，不再作为当前 probe gate。
 
