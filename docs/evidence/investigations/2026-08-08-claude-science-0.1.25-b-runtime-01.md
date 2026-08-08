@@ -1,16 +1,41 @@
 # Claude Science 0.1.25 `B-RUNTIME-01` 完整 isolated-live 验收
 
-状态：`PASS`；源码门禁、全新构建、真实已安装 Science、loopback fake provider、
-单实例重开、停止/重启与清理均已闭合。
+状态：`PASS`；最新 exact rerun 已把 `9cc0d15` 的源码门禁、同一 artifact、真实已安装 Science、
+loopback fake provider、单实例重开、停止/重启、完整网络观察与清理重新闭合。
 
-适用范围：`next@6e09e68654e1c43b936821c8be12330af3e19cc1`、由该 SHA 全新构建的
-`CSSwitch Test.app`、`/Applications/Claude Science.app` 0.1.25 的真实 executable、
-全新隔离 HOME/data-dir、固定 fake key、动态 loopback 端口和 deny-egress sandbox。
-本文档提交只记录证据，不把后续文档 HEAD 改写为被构建或运行的源码。
+适用范围：`next@9cc0d15d457c911047585c5fb7302702e26f4e43`、由该 SHA 构建并经 G1 receipt
+绑定的 `CSSwitch Test.app`、`/Applications/Claude Science.app` 0.1.25 的真实 executable、
+全新隔离 HOME/data-dir、固定 fake key、动态 loopback 端口和完整 socket observation。本文档
+提交只记录证据，不把后续文档 HEAD 改写为被构建或运行的源码。下方 `6e09e68` 运行继续作为
+较早 exact tuple 的独立 `PASS` 历史保留。
 
 最后复核：2026-08-08（Asia/Taipei）
 
-## 总判定
+## `9cc0d15` 当前 exact rerun
+
+当前 rerun 绑定 source-gate run `704efbab61ae0cd87fb08885ddbe6f8d`：15/15 suites、
+15/15 observations，completion seal SHA-256 为
+`93d10aae3cd7cd4acce734d033fcc4bde62f7d4a04707d53eb8d938aeb605cc3`。G1 binding receipt
+SHA-256 为 `a6ba09cc74e2aa4e853517dbd2fa5643cb02a122b04b7b986aaef9f945646784`；canonical
+bundle、Desktop、packaged Gateway SHA-256 分别为
+`77d3096e8302e289048c3771d04b2a58517ae6730f08a55fac3aeab65da720aa`、
+`c02b52267272c413b666a24408076989c013a5feb176b31ca33807737618fc39`、
+`ccbc0839fb92ecdb70dca898edceb5041ed5eb66993dcb48c39d9ed851ea245f`。Science 0.1.25
+package / executable identity 与先前运行一致。
+
+同一 exact tuple 在
+`/private/tmp/csswitch-science-probe-evidence/r9cc0d15a/B-RUNTIME-01/` 完成 production Desktop →
+packaged Gateway → Science → loopback provider、一键开始、单实例重开复用、产品停止/重启、
+再次请求、最终停止和外部清理，final event elapsed `225.075563s`。50 个 evidence 文件 closure
+全部复算 `OK`；`hashes.sha256` 自身 SHA-256 为
+`1e84ed7fb67152140f711423ec14e1e2d9fd53bfc1e91b65782064d44ca849b3`，network socket
+observation SHA-256 为
+`c0a9f1db8c54e3da2949720dea37eaf1efbc0bc83d4f5b24979c6aaecd6408cd`，external cleanup
+SHA-256 为 `95c7662c49db51098ed4ad8deb7554e3c64535bb2771c434f483e5ef43f7fa67`。
+目标 PID、动态端口和 exact runtime root 最终均清零，8765 未使用；真实 provider/账号、installed、
+签名、公证、DMG、tag 与 public release 仍不由本次外推。
+
+## `6e09e68` 较早 exact PASS（历史）
 
 [B-RUNTIME-01 合同](../../operations/science-probe-spec.md)要求的本轮链路已经逐段实际执行：
 

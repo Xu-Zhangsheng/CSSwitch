@@ -1,62 +1,54 @@
 # Claude Science 0.1.25 `B-CORE-01` isolated-live 验证
 
-状态：`INCONCLUSIVE`。第一次运行中，合成 project、project workspace 文件读写和 artifact
-两版 lineage / diff / preview / execution provenance 的行为观察成功，但 pre-run manifest 与
-单调 event timeline 不满足全局证据合同，不能升级为 sub-gate `PASS`；permission grant /
-revoke / 越界 enforcement 与 annotation 定位 / 下一消息传递也未闭合。第二次窄重跑补齐了
-此前缺失的 manifest、单调 events 和逐断言 observations，但在 outer sandbox 中不设置
-acceptance opt-out 的条件下，production launch 在建立 Science PID/listener 前失败，同样不能进入
-任何 B-CORE capability sub-gate。第三次运行启用了 Science 原生 filesystem sandbox，并用合规
-envelope 再次完成 project、workspace 文件和两版 artifact 行为；但它使用的是同 source 新构建的
-另一套 Desktop/Gateway tuple，没有对应的 exact-artifact / B-RUNTIME receipt，不能继承已验收
-`CSSwitch Test.app` 的 PASS。permission fixture 路径也没有落到原生 sandbox 的 host HOME，无法
-建立 grant。正式 event 的 operator observation 与后置物化的 reduced socket receipt 还记录 packaged
-Gateway 已建立 non-loopback TCP/443 连接，触发 manifest 的 safety-stop，因此不能继续 revoke、
-越界拒绝或 annotation，也不能把第三次运行中的成功行为观察升级为合同 `PASS`。
+状态：`PASS`。新的 r12 isolated-live 使用 `next@9cc0d15d457c911047585c5fb7302702e26f4e43`
+的完整 15-suite source-gate seal、同一 exact artifact 的 G1 binding receipt 和重新完成的
+`B-RUNTIME-01=PASS` 作为前置。在同一冻结 artifact、Claude Science 0.1.25、隔离 HOME/data-dir、
+固定 synthetic credential 与 loopback provider 下，permission request → grant → read/write →
+UI revoke → revoke 后拒绝 → sibling 越界拒绝、artifact v1/v2 lineage / diff / previous-version、
+Markdown annotation 定位与下一消息传递、完整 raw socket capture 和精确 cleanup 均闭合。
 
-适用范围：production source `6e09e68654e1c43b936821c8be12330af3e19cc1`、由该 SHA 全新构建并
-ad-hoc 签名的 acceptance App、`/Applications/Claude Science.app` 0.1.25、全新隔离
-HOME/data-dir、固定 fake credential 和动态 loopback 端口。r1/r2 使用 outer deny-egress；r3 为了
-避开 r2 未能建立且根因未闭合的 no-opt-out outer 启动条件，没有使用 outer sandbox，并设置发现
-任何 non-loopback socket 立即安全停机。本文档只记录这些验证，不把文档提交改写为被构建或运行的
-源码。
+适用范围：production source `9cc0d15d457c911047585c5fb7302702e26f4e43`、由该 SHA 构建并由
+G1 receipt 绑定的 `CSSwitch Test.app`、packaged Rust Gateway、
+`/Applications/Claude Science.app` 0.1.25、全新隔离 HOME/data-dir、两个专用 synthetic Git
+permission fixture、固定 fake credential 和动态 loopback 端口。本文档只记录这些 source、artifact、
+runtime 与 synthetic fixture，不把真实 provider / 账号、installed、签名、公证、DMG、tag 或
+public release 外推为 PASS。r1/r2/r3 的 `INCONCLUSIVE` 仍作为先前失败尝试保留，但不再是
+`B-CORE-01` 的当前总判定。
 
 最后复核：2026-08-08（Asia/Taipei）
 
-## 总判定
+## r12｜当前总判定
 
 本轮严格按 [`B-CORE-01` 合同](../../operations/science-probe-spec.md)拆分 sub-gate：
 
-| sub-gate | 结果 | 实际证据 |
+| sub-gate | 结果 | r12 实际证据 |
 |---|---|---|
-| 证据 envelope | `INCONCLUSIVE` | pre-run manifest 缺强制身份字段；events 没有单调时间戳，动作顺序与 deadline 不可由账本审计 |
-| 合成 project | `INCONCLUSIVE` | UI 新建行为成功，project id `proj_b33875fa7af5`；因 evidence envelope 缺口不升 PASS |
-| project workspace write / read | `INCONCLUSIVE` | `edit_file` 写入项目相对路径并由 `read_file` 回读；因 evidence envelope 缺口不升 PASS |
-| permission request / grant | `INCONCLUSIVE` | 初始 grant 列表为空；`request_host_access` 明确返回 filesystem sandbox inactive，路径已可访问且没有记录 grant |
-| granted fixture read / write | `NOT-RUN` | 没有可 enforce 的 grant；没有把“已可访问”伪装成 grant 后读写 |
-| revoke / revoke 后拒绝 | `NOT-RUN` | 没有 grant record 或 grant id 可撤销 |
-| 越界拒绝 | `NOT-RUN` | enforcement 前提不存在；未请求 denied sibling |
-| artifact lineage | `INCONCLUSIVE` | 同一 artifact id 下观察到 v1/v2、不同 version id/checksum 和版本切换；因 evidence envelope 缺口不升 PASS |
-| artifact diff / preview / provenance | `INCONCLUSIVE` | v1/v2 preview、1 deletion / 2 insertions diff、两次 `edit_file` execution log 可回读；因 evidence envelope 缺口不升 PASS |
-| annotation | `INCONCLUSIVE` | Markdown preview 依官方流程尝试文本选区，未出现 Annotate pill 或 pending comments chip；未发送下一条消息 |
+| exact source seal | `PASS` | run `704efbab61ae0cd87fb08885ddbe6f8d`，15/15 suites、15/15 observations；seal SHA-256 `93d10aae3cd7cd4acce734d033fcc4bde62f7d4a04707d53eb8d938aeb605cc3` |
+| exact artifact / B-RUNTIME 前置 | `PASS` | G1 receipt SHA-256 `a6ba09cc74e2aa4e853517dbd2fa5643cb02a122b04b7b986aaef9f945646784`；bundle/Desktop/Gateway SHA-256 分别为 `77d3096e…` / `c02b5226…` / `ccbc0839…`；同一 tuple 的 `B-RUNTIME-01=PASS` |
+| 证据 envelope | `PASS` | pre-run manifest SHA-256 `9e62d6fcf62dee2ca525834f9f67ec2e8d38be9407ce6141c28c1ccee6b68550` 先冻结；正式 events 带严格递增 `monotonic_ns` |
+| permission request / grant / read-write | `PASS` | 初始 grant 为 0、grant 前绝对路径读取拒绝；UI 只批准 exact synthetic Git root 的 persistent `rw`，随后 seed 回读、`output.txt` 写入和 grant 回读均成功 |
+| revoke / revoke 后拒绝 | `PASS` | Settings → Permissions 只撤销 exact fixture；grant 回读为空，原 guest path 读取明确拒绝 |
+| 越界拒绝 | `PASS` | 未请求新权限，denied sibling `deny.txt` 的绝对路径读取拒绝，fixture SHA-256 未变 |
+| artifact lineage / diff / provenance | `PASS` | 同一 artifact id 下 v2 parent 精确指向 v1；两版持久 hash、producing cell、UI 的 one→two + BETA diff 与 v1 previous-view 均对齐 |
+| annotation 定位 / 下一消息 | `PASS` | Chrome 真实选中 `ALPHA-LINE-R12`，保存 `BCORE_ANNOTATION_R12`；composer 出现 1 comment，下一消息同时出现 filename、选区和 note；mock 三个 annotation 结构标志均为 true，发送后 pending 为 0 |
+| network boundary | `PASS` | 对 driver/Desktop/Gateway/Science 四个 PID 保存完整 raw `lsof`；39 rows=11 listeners+28 established，全部为 `127.0.0.1` / `::1`，non-loopback=0，8765=0 |
+| exact cleanup | `PASS` | 四个目标 PID、五个端口、两个 synthetic fixture、r12 runtime、临时 control socket/driver 全部清零；primary worktree 回到 clean exact HEAD |
 
-因此总判定只能是
-`INCONCLUSIVE(reason=r3-exact-artifact-precondition-unproven-permission-and-annotation-not-closed-and-network-safety-stop)`。
-`B-CONTEXT-01` 要求 `B-CORE-01=PASS`，其前置仍未满足，本轮没有进入 B-CONTEXT。
+r12 raw evidence 位于
+`/private/tmp/csswitch-science-probe-evidence/bcore-9cc0d15-r12/B-CORE-01/`。11 项 closure 全部复算
+`OK`，`hashes.sha256` 自身 SHA-256 为
+`39b057dc1571f3ab946c14258932b137228b7f237fcf1f43a9a6e35c9db76830`。其中
+`completion-summary.json` / `cleanup-ledger.json` SHA-256 分别为
+`6479c249388f32711ccab8f39143fbca0f1dbfe43dcc6f4e34a9eef038cdd256` /
+`4cdeec26a9a8c31385d975e3ab1a9ec99b916cfbbc24124a51b981f5f8b77a61`。
 
-第二次重跑没有改变上表第一次运行的 sub-gate 判定，只补充说明为什么不能在同一安全包络中
-直接重跑补绿：移除 acceptance-only `--dangerously-no-sandbox` opt-out 后，Science 没有建立
-managed identity/listener，全部 capability sub-gate 都是 `NOT-RUN`；现有证据不识别 exit 70 的
-唯一根因。
+Science CLI stop fallback 因本次长 data-dir control socket 路径没有实际停止 PID `95684`，因此不能
+用其 exit 0 作为 cleanup 证明。最终账本明确记录核验 executable 后对该 exact PID 发出 SIGTERM，
+并独立复核全部 PID / port / path 消失；这是 r12 cleanup 的权威观察。测试 App 的
+`codesign --verify --deep --strict` 另有 resource-signature mismatch；签名 / release 不属于
+`B-CORE-01`，本文不声称 signing PASS。
 
-第三次运行也没有改变总判定。它修复了 r1 的 evidence envelope，并观察到 Science 0.1.25 原生
-sandbox 在没有 outer `sandbox-exec` 的 r3 条件下启动；这不能反推 r2 的唯一失败根因，也没有建立
-可行且可归因的安全嵌套条件。r3 同时缺少自身 exact artifact 对应的 G1 / B-RUNTIME receipt。manifest
-把“发现任何 non-loopback socket”定义为 safety-stop；正式 event 记录的 operator observation 与
-后置 reduced receipt 显示 Gateway PID `935` 有两条 `198.18.0.1 → 198.18.0.54:443` established
-TCP 连接，因此立即停止全部 owned runtime，没有再启动计划中的 r4。该 reduced receipt 没有保存
-完整原始 `lsof` capture、采集 UTC 或 monotonic timestamp，不能识别真实域名或请求正文；但足以
-支持保守 safety-stop 与总 `INCONCLUSIVE`。
+## 先前 r1-r3 的失败尝试（历史）
 
 ## r3｜原生 sandbox、合规 envelope 与 network safety-stop
 

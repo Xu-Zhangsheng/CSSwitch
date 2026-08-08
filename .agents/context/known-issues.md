@@ -15,12 +15,11 @@
 新的唯一验收顺序是：**重要重构决策 → production source → exact artifact → isolated-live → authorized live**。当前映射、每层进入条件、授权边界和故障 fixture 边界只在[生产链路验收](../../docs/operations/real-machine-acceptance.md)维护；Science 运行细则见[Science 探针合同](../../docs/operations/science-probe-spec.md)。
 
 2026-08-08 当前已验收 source/artifact binding 为
-`next@6e09e68654e1c43b936821c8be12330af3e19cc1`。独立 clean worktree 的固定 15-suite
-source gate 为 `PASS`、runner exit `0`；随后从该 SHA 全新构建的 `CSSwitch Test.app`、
-packaged Rust Gateway 与 Claude Science 0.1.25 exact tuple 已完成 `B-RUNTIME-01`，总判定
-为 `PASS`。本次 B-CORE r3 启动时文档 HEAD 为
-`ba1a606eacd2ad555409a31c2eb143b91f7b032b`；后续文档提交只记录证据，不能改写被构建或
-运行的 source/artifact identity。
+`next@9cc0d15d457c911047585c5fb7302702e26f4e43`。独立 detached exact worktree 的固定
+15-suite source gate 为 `PASS`（15/15 suites、15/15 observations）；随后由该 SHA 构建并经 G1
+receipt 绑定的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science 0.1.25 exact tuple
+重新完成 `B-RUNTIME-01=PASS`，并在同一 tuple 下完成新的 `B-CORE-01=PASS`。后续文档提交只
+记录证据，不能改写被构建或运行的 source/artifact identity。
 
 ## 当前源码问题
 
@@ -35,9 +34,9 @@ packaged Rust Gateway 与 Claude Science 0.1.25 exact tuple 已完成 `B-RUNTIME
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`6e09e68` exact-SHA 15-suite source gate `PASS` | `6e09e68` 全新 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定 | `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合 | 真实 provider/账号分项 `NOT-RUN` |
-| runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | `6e09e68` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
-| authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `6e09e68` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
+| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`9cc0d15` exact-SHA 15-suite source gate `PASS` | `9cc0d15` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定 | `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合 | 真实 provider/账号分项 `NOT-RUN` |
+| runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
+| authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | fixture install → attach → Agent load / trigger → restart persistence `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
@@ -61,41 +60,20 @@ loopback fake provider、一键开始、单实例重开复用、产品停止/重
 public release 仍为 `NOT-RUN`；精确身份、断言与 cleanup closure 见
 [日期化完整验收](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-runtime-01.md)。
 
-2026-08-08 的 `B-CORE-01` 在同一 `6e09e68` source 前置上使用全新 acceptance App、真实
-Science 0.1.25、隔离 HOME/data-dir 和 loopback mock。合成 project、project workspace 文件
-读写、artifact 两版 lineage / diff / preview / execution provenance 的行为观察成功；但 pre-run
-manifest 缺强制身份字段，events 没有单调时间戳，不能升级为合同 PASS。permission tool 还明确
-返回 filesystem sandbox 未激活且没有记录 grant，grant 后读写、revoke、revoke 后拒绝与越界拒绝
-均不能判定；Markdown annotation 的定位和下一消息传递也未观察闭合。后续 r2/r3 没有补成
-PASS，因此当前总判定为
-`INCONCLUSIVE(reason=r3-exact-artifact-precondition-unproven-permission-and-annotation-not-closed-and-network-safety-stop)`，
-`B-CONTEXT-01` 前置仍不满足；精确 sub-gate、身份和 cleanup 见
+2026-08-08 的新 `B-CORE-01` r12 使用 `9cc0d15` 的完整 source-gate seal、同一 exact artifact 的
+G1 receipt 与重新完成的 `B-RUNTIME-01=PASS`。在全新隔离 HOME/data-dir、真实 Science 0.1.25、
+loopback mock 和两个专用 synthetic Git fixture 下，request → grant → read/write → UI revoke →
+revoke 后拒绝 → sibling 越界拒绝全部闭合；artifact v1/v2 parent、hash、diff、previous-version 和
+producing cell 对齐；Markdown 真实选区 annotation 随下一消息传递，mock 的结构键、选区和 note
+标志均为 true。完整 raw socket capture 含 39 rows，全部为 `127.0.0.1` / `::1`，non-loopback=0，
+8765=0。四个目标 PID、五个端口、fixture、runtime 和临时 driver 最终全部清零，primary worktree
+回到 clean exact HEAD。因此当前总判定为 `B-CORE-01=PASS`；`B-CONTEXT-01` 的 B-CORE 前置已满足，
+但不表示 B-CONTEXT 本身已运行。精确 sub-gate、身份、签名非目标和 cleanup 见
 [日期化验证](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-core-01.md)。
 
-同日的第二次窄重跑补齐了 pre-run manifest、单调 event timeline 与逐断言 observations，并在
-同一 outer deny-egress profile 中移除 acceptance-only filesystem sandbox opt-out。production
-one-click 在建立 Science PID/listener 前以 `script_failed / exit_code=70` fail-closed，全部
-B-CORE capability sub-gate 保持 `NOT-RUN`；现有 raw 没有保存原始 stdout/stderr，不能唯一归因
-exit 70，只能证明该 no-opt-out 启动条件没有到达目标路径。
-最终 owned PID/port/root 已清零，但完整 root 删除超过 60 秒 cleanup deadline，因此 r2 总判定仍为
-`INCONCLUSIVE(reason=science-start-script-exit-70-before-identity-under-no-opt-out-outer-sandbox)`，
-且 cleanup timeline 单独为 `INCONCLUSIVE(reason=cleanup-deadline-exceeded)`。
-
-第三次 r3 运行改用 Science 0.1.25 原生 filesystem sandbox，并补齐完整 manifest、严格单调
-events 和逐断言 observations；但它重新构建的是 `CSSwitch Model Catalog Acceptance.app`，
-Desktop/Gateway hash 与已通过 B-RUNTIME 的 `CSSwitch Test.app` exact tuple 不同，且没有匹配的
-G1 / B-RUNTIME receipt，因此 manifest 自报的 exact-artifact / B-RUNTIME PASS 无效。UI 成功创建
-合成 project，project-relative 文件的 `edit_file/read_file/save_artifacts` 行为与持久 hash 对齐；
-同一 artifact 的 v1/v2 parent、hash、preview、diff 和 execution provenance 也对齐。permission
-fixture 却误放在 outer HOME，而工具的 `~` 指向 Science 原生 host HOME，因此没有建立 grant，
-revoke 与越界拒绝仍未运行。正式 event 的 operator observation 与后置物化的 reduced socket
-receipt 记录 packaged Gateway PID `935` 有两条
-`198.18.0.1 → 198.18.0.54:443` 的 non-loopback TCP 连接，触发 manifest safety-stop；该 receipt
-没有保留完整原始 `lsof` capture，不外推域名或应用层协议。全部 owned PID/port 随即精确清零，
-fixture hash 不变。r2 只证明 no-opt-out outer 条件未建立 Science，r3 只证明无 outer 时原生 sandbox
-能启动；当前 harness 尚未建立可行且可归因的安全嵌套条件。无 outer sandbox 的 production Gateway
-CONNECT 路径又不是 default deny，当前授权不包括改代码或影响真实机其他进程的全局 firewall，
-r4 没有启动，r3 中的成功行为观察也不升级为 B-CORE PASS。
+先前 r1 的 evidence envelope 缺口、r2 的 no-opt-out outer 启动失败，以及 r3 的 exact-artifact
+不匹配、permission fixture 误布置和 non-loopback safety-stop 均继续保留为日期化历史证据；它们
+不能反推各自运行已 PASS，也不再覆盖 r12 对新 exact source/artifact 的当前判定。
 
 2026-08-07 的历史 `B-RUNTIME-01` 完整尝试复用了当日冻结的 exact artifact/Science tuple
 与 hardened controller。pre-run/G1/network receipts 通过；production Desktop 与 packaged Rust Gateway
