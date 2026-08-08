@@ -60,6 +60,16 @@ loopback fake provider、一键开始、单实例重开复用、产品停止/重
 public release 仍为 `NOT-RUN`；精确身份、断言与 cleanup closure 见
 [日期化完整验收](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-runtime-01.md)。
 
+2026-08-08 的 `B-CORE-01` 在同一 `6e09e68` source 前置上使用全新 acceptance App、真实
+Science 0.1.25、隔离 HOME/data-dir 和 loopback mock。合成 project、project workspace 文件
+读写、artifact 两版 lineage / diff / preview / execution provenance 的行为观察成功；但 pre-run
+manifest 缺强制身份字段，events 没有单调时间戳，不能升级为合同 PASS。permission tool 还明确
+返回 filesystem sandbox 未激活且没有记录 grant，grant 后读写、revoke、revoke 后拒绝与越界拒绝
+均不能判定；Markdown annotation 的定位和下一消息传递也未观察闭合。总判定为
+`INCONCLUSIVE(reason=evidence-envelope-incomplete-filesystem-sandbox-inactive-and-annotation-transfer-not-observable)`，
+`B-CONTEXT-01` 前置仍不满足；精确 sub-gate、身份和 cleanup 见
+[日期化验证](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-core-01.md)。
+
 2026-08-07 的历史 `B-RUNTIME-01` 完整尝试复用了当日冻结的 exact artifact/Science tuple
 与 hardened controller。pre-run/G1/network receipts 通过；production Desktop 与 packaged Rust Gateway
 建立 exact identity 且 Gateway health ready，但真实 Science launch 没有建立目标 listener，允许

@@ -29,6 +29,7 @@
 - [2026-08-07 isolated-live pre-run receipts 与 egress guard 闭环](2026-08-07-isolated-live-pre-run-receipts-egress-guard.md)
 - [2026-08-07 Claude Science 0.1.25 `B-RUNTIME-01` 完整 isolated-live 尝试](2026-08-07-claude-science-0.1.25-b-runtime-01-full-attempt.md)
 - [2026-08-08 Claude Science 0.1.25 `B-RUNTIME-01` 完整 isolated-live 验收](2026-08-08-claude-science-0.1.25-b-runtime-01.md)
+- [2026-08-08 Claude Science 0.1.25 `B-CORE-01` isolated-live 验证](2026-08-08-claude-science-0.1.25-b-core-01.md)
 - [2026-07-30 CSSwitch ↔ Science 关联机制与合理设计](2026-07-30-csswitch-science-association-and-design.md)
 - [2026-07-30 CSSwitch 代码重构优先级](2026-07-30-csswitch-refactor-priorities.md)
 
