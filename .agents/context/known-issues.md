@@ -71,6 +71,17 @@ producing cell 对齐；Markdown 真实选区 annotation 随下一消息传递�
 但不表示 B-CONTEXT 本身已运行。精确 sub-gate、身份、签名非目标和 cleanup 见
 [日期化验证](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-core-01.md)。
 
+2026-08-08 的 `B-CONTEXT-01` 继续绑定 `9cc0d15` exact artifact / Science 0.1.25 tuple，
+只验证 local surface、状态与 isolated request shape。plan approve/reject、delegation、fork/restore、
+memory save/search、compaction、Reviewer/Specialist surface 全部取得独立观察；两个合成 project / 两个
+target root session 的 717 个脱敏 request envelope 中，四项 cross-domain violation 均为 0。Reviewer
+保持 `Inconclusive`，Reviewer/Specialist 服务端结果仍为 `UNVERIFIED`。活动期 non-loopback socket=0、
+8765=0，hashed closing 进程/端口清零；最终修复后的 28-entry closure 已脱敏一次性 nonce，
+并含 post-cleanup receipt 确认 runtime 与本轮两个临时 worktree/build/driver 已删除。因此当前
+`B-CONTEXT-01=PASS(scope=isolated-request-shape)`。global `About you` memory 的显式共享 surface
+不外推为 project-scoped memory 的全部语义；精确状态、fixture loop 噪声、网络与 cleanup 见
+[日期化验收](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-context-01.md)。
+
 先前 r1 的 evidence envelope 缺口、r2 的 no-opt-out outer 启动失败，以及 r3 的 exact-artifact
 不匹配、permission fixture 误布置和 non-loopback safety-stop 均继续保留为日期化历史证据；它们
 不能反推各自运行已 PASS，也不再覆盖 r12 对新 exact source/artifact 的当前判定。
