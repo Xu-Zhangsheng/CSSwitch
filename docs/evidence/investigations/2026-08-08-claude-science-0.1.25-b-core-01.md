@@ -6,12 +6,20 @@
 revoke / 越界 enforcement 与 annotation 定位 / 下一消息传递也未闭合。第二次窄重跑补齐了
 此前缺失的 manifest、单调 events 和逐断言 observations，但在 outer sandbox 中不设置
 acceptance opt-out 的条件下，production launch 在建立 Science PID/listener 前失败，同样不能进入
-任何 B-CORE capability sub-gate。
+任何 B-CORE capability sub-gate。第三次运行启用了 Science 原生 filesystem sandbox，并用合规
+envelope 再次完成 project、workspace 文件和两版 artifact 行为；但它使用的是同 source 新构建的
+另一套 Desktop/Gateway tuple，没有对应的 exact-artifact / B-RUNTIME receipt，不能继承已验收
+`CSSwitch Test.app` 的 PASS。permission fixture 路径也没有落到原生 sandbox 的 host HOME，无法
+建立 grant。正式 event 的 operator observation 与后置物化的 reduced socket receipt 还记录 packaged
+Gateway 已建立 non-loopback TCP/443 连接，触发 manifest 的 safety-stop，因此不能继续 revoke、
+越界拒绝或 annotation，也不能把第三次运行中的成功行为观察升级为合同 `PASS`。
 
-适用范围：`next@6e09e68654e1c43b936821c8be12330af3e19cc1`、由该 SHA 全新构建并
+适用范围：production source `6e09e68654e1c43b936821c8be12330af3e19cc1`、由该 SHA 全新构建并
 ad-hoc 签名的 acceptance App、`/Applications/Claude Science.app` 0.1.25、全新隔离
-HOME/data-dir、固定 fake credential、动态 loopback 端口和 deny-egress sandbox。本文档只记录
-该次验证，不把文档提交改写为被构建或运行的源码。
+HOME/data-dir、固定 fake credential 和动态 loopback 端口。r1/r2 使用 outer deny-egress；r3 为了
+避开 r2 未能建立且根因未闭合的 no-opt-out outer 启动条件，没有使用 outer sandbox，并设置发现
+任何 non-loopback socket 立即安全停机。本文档只记录这些验证，不把文档提交改写为被构建或运行的
+源码。
 
 最后复核：2026-08-08（Asia/Taipei）
 
@@ -33,7 +41,7 @@ HOME/data-dir、固定 fake credential、动态 loopback 端口和 deny-egress s
 | annotation | `INCONCLUSIVE` | Markdown preview 依官方流程尝试文本选区，未出现 Annotate pill 或 pending comments chip；未发送下一条消息 |
 
 因此总判定只能是
-`INCONCLUSIVE(reason=evidence-envelope-incomplete-filesystem-sandbox-inactive-and-annotation-transfer-not-observable)`。
+`INCONCLUSIVE(reason=r3-exact-artifact-precondition-unproven-permission-and-annotation-not-closed-and-network-safety-stop)`。
 `B-CONTEXT-01` 要求 `B-CORE-01=PASS`，其前置仍未满足，本轮没有进入 B-CONTEXT。
 
 第二次重跑没有改变上表第一次运行的 sub-gate 判定，只补充说明为什么不能在同一安全包络中
@@ -41,7 +49,63 @@ HOME/data-dir、固定 fake credential、动态 loopback 端口和 deny-egress s
 managed identity/listener，全部 capability sub-gate 都是 `NOT-RUN`；现有证据不识别 exit 70 的
 唯一根因。
 
-## Exact source、artifact 与隔离边界
+第三次运行也没有改变总判定。它修复了 r1 的 evidence envelope，并观察到 Science 0.1.25 原生
+sandbox 在没有 outer `sandbox-exec` 的 r3 条件下启动；这不能反推 r2 的唯一失败根因，也没有建立
+可行且可归因的安全嵌套条件。r3 同时缺少自身 exact artifact 对应的 G1 / B-RUNTIME receipt。manifest
+把“发现任何 non-loopback socket”定义为 safety-stop；正式 event 记录的 operator observation 与
+后置 reduced receipt 显示 Gateway PID `935` 有两条 `198.18.0.1 → 198.18.0.54:443` established
+TCP 连接，因此立即停止全部 owned runtime，没有再启动计划中的 r4。该 reduced receipt 没有保存
+完整原始 `lsof` capture、采集 UTC 或 monotonic timestamp，不能识别真实域名或请求正文；但足以
+支持保守 safety-stop 与总 `INCONCLUSIVE`。
+
+## r3｜原生 sandbox、合规 envelope 与 network safety-stop
+
+r3 从 production source `6e09e68` 重新构建 acceptance App；Desktop SHA-256 为
+`3f21079b402eb8fa7c0eb3e807e27af096b139efdeadfa3ed7b63735c762a4a4`，packaged Gateway
+SHA-256 为 `a8dbade49bc2a4b31554dd7b8e56d36a8b14e454a6fb27b26cb2e7deb15ae1d1`，Science
+executable identity 与 r1/r2 相同。完整 pre-run manifest SHA-256 为
+`3927bf5196113aac7b231405aefa2cf1df40ff9d6f167db312512a8f60863709`；正式 event ledger 从
+manifest freeze 开始，每条记录均带严格递增的 `monotonic_ns`。已通过 B-RUNTIME 的 exact tuple
+是另一 `CSSwitch Test.app`，Desktop/Gateway SHA-256 分别为 `242243bd…` / `fded59d7…`；r3
+没有自身的 G1 artifact tree/resource/package receipt 或 B-RUNTIME receipt。因此 manifest 中
+`exact_artifact_precondition=PASS` / `b_runtime_01=PASS` 是未被证据支持的 runner 自报，复核后
+明确降为 `INCONCLUSIVE(reason=same-source-different-artifact-cannot-inherit-exact-tuple-pass)`。
+
+| r3 sub-gate | 结果 | 实际证据 |
+|---|---|---|
+| exact artifact / B-RUNTIME 前置 | `INCONCLUSIVE` | r3 是不同 Desktop/Gateway hash 的新 tuple；没有匹配的 G1 / B-RUNTIME receipt，manifest 自报 PASS 无效 |
+| evidence envelope | `PASS` | manifest 先冻结，正式 events 严格单调；逐断言 `observations.json` 含 expected / actual / pointer / decision |
+| synthetic project | `INCONCLUSIVE` | UI 创建 `proj_9c3a29c2f895` 成功；后续 safety-stop 使整轮隔离 envelope 失效 |
+| project workspace write / read | `INCONCLUSIVE` | `edit_file` / `read_file` / `save_artifacts` 成功且持久文件 hash 对齐；同上不升级 PASS |
+| permission request / grant | `INCONCLUSIVE` | 初始 grant 为 0；fixture 误放在 outer HOME，而工具解析 `~` 到 Science 原生 host HOME，request 返回 `granted=false` |
+| granted read/write、revoke、post-revoke denial | `NOT-RUN` | 没有建立 grant；安全停机后不再重跑 |
+| out-of-bounds denial | `NOT-RUN` | grant 前提未成立；安全停机后不再请求 sibling |
+| artifact lineage / diff / provenance | `INCONCLUSIVE` | 同一 artifact 下 v1/v2 parent、hash、preview、diff 与 execution steps 均对齐；整轮 safety-stop 降级 |
+| annotation location / next message | `NOT-RUN` | safety-stop 前没有完成 annotation 传递，停机后不继续交互 |
+| network boundary | `INCONCLUSIVE` | operator observation 与后置 reduced receipt 记录两条 Gateway non-loopback established socket，触发 manifest safety-stop；完整原始 capture 未保存 |
+| exact cleanup | `PASS` | owned Desktop/Gateway/Science/driver 与五个目标端口全部清零；fixture before/after hash 不变 |
+
+artifact v1 `9420824a-4464-4e22-8570-651a92d6cf46` 与 v2
+`bc01eba7-9e92-429b-a25a-e0bea6aa7de6` 共享 artifact id
+`94fc3ce6-fb23-4dbf-ad1b-0d2a5c70b3ac`；v2 的 parent 精确指向 v1，两版持久文件 hash 均与
+record 一致，UI 观察到 1 deletion / 2 insertions diff。它们是可信的行为观察，但不是可从失败
+隔离 envelope 中摘出的 B-CORE PASS。
+
+Gateway 的 source boundary 与 operator observation 相互印证：[CONNECT handler](../../../desktop/gateway/src/connect.rs)
+对非 Anthropic / Claude host 会直接解析并建立 TCP，上游连接不是 default deny；r3 的两条
+`198.18.0.54:443` socket 在正式 event 中记录为 packaged Gateway 所有，并由后置 reduced receipt
+物化。这里不把该地址外推成特定域名或 HTTPS，也不把源码调查代替 live 网络归因。它只说明在
+不改代码、不施加影响真实机其他进程的全局 firewall、且不禁用 Science 原生 filesystem sandbox
+的现有边界内，没有安全依据继续 r4。
+
+r3 raw evidence 位于
+`/private/tmp/csswitch-science-probe-evidence/bcore-20260808-r3/B-CORE-01/`。14 项 closure 全部复算
+`OK`，`hashes.sha256` 自身 SHA-256 为
+`fa320cd974749b3ab2a15ab9eb248ef4d4a900759d8cbb134df775a1693fd1a5`。owned PID
+`655/926/935/960` 和 `52853/52854/52855/52856/8765` 最终均不存在；exact runtime/build root
+和一次性 driver 已删除，raw evidence 保留，fixture before/after hash 不变且没有 `output.txt`。
+
+## r1｜Exact source、artifact 与隔离边界
 
 - source：`6e09e68654e1c43b936821c8be12330af3e19cc1`；其 15-suite source gate 和
   `B-RUNTIME-01` 前置均为 `PASS`；
