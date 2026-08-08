@@ -70,6 +70,15 @@ manifest 缺强制身份字段，events 没有单调时间戳，不能升级为�
 `B-CONTEXT-01` 前置仍不满足；精确 sub-gate、身份和 cleanup 见
 [日期化验证](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-core-01.md)。
 
+同日的第二次窄重跑补齐了 pre-run manifest、单调 event timeline 与逐断言 observations，并在
+同一 outer deny-egress profile 中移除 acceptance-only filesystem sandbox opt-out。production
+one-click 在建立 Science PID/listener 前以 `script_failed / exit_code=70` fail-closed，全部
+B-CORE capability sub-gate 保持 `NOT-RUN`；现有 raw 没有保存原始 stdout/stderr，不能唯一归因
+exit 70，只能证明该 no-opt-out 启动条件没有到达目标路径。
+最终 owned PID/port/root 已清零，但完整 root 删除超过 60 秒 cleanup deadline，因此 r2 总判定仍为
+`INCONCLUSIVE(reason=science-start-script-exit-70-before-identity-under-no-opt-out-outer-sandbox)`，
+且 cleanup timeline 单独为 `INCONCLUSIVE(reason=cleanup-deadline-exceeded)`。
+
 2026-08-07 的历史 `B-RUNTIME-01` 完整尝试复用了当日冻结的 exact artifact/Science tuple
 与 hardened controller。pre-run/G1/network receipts 通过；production Desktop 与 packaged Rust Gateway
 建立 exact identity 且 Gateway health ready，但真实 Science launch 没有建立目标 listener，允许
