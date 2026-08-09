@@ -28,9 +28,8 @@ impl GatewayProcessLocalOwner {
         })
     }
 
-    fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
+    fn metadata_matches(&self, st: &AppState, current_generation: u64) -> bool {
         self.generation == current_generation
-            && st.proxy.as_ref().map(std::process::Child::id) == Some(self.child_pid)
             && st.proxy_port == self.proxy_port
             && st.secret == self.secret
             && st.provider == self.provider
@@ -40,6 +39,117 @@ impl GatewayProcessLocalOwner {
             && st.key_fp == self.key_fp
             && st.gateway_launch_context == self.launch_context
     }
+
+    fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
+        st.proxy.as_ref().map(std::process::Child::id) == Some(self.child_pid)
+            && self.metadata_matches(st, current_generation)
+    }
+
+    fn owns_cleanup_marker(&self, st: &AppState, current_generation: u64) -> bool {
+        st.proxy.is_none() && self.metadata_matches(st, current_generation)
+    }
+}
+
+struct GatewayTrackedCleanupOwner {
+    identity: GatewayProcessLocalOwner,
+    child: std::process::Child,
+}
+
+fn app_state_gateway_slot_is_empty(st: &AppState) -> bool {
+    st.proxy.is_none()
+        && st.secret.is_empty()
+        && st.provider.is_empty()
+        && st.gateway_kind.is_empty()
+        && st.shim_mode.is_empty()
+        && st.launch_id.is_empty()
+        && st.key_fp == 0
+        && st.gateway_launch_context.is_none()
+}
+
+fn stop_tracked_gateway_child(child: &mut std::process::Child) -> Result<(), String> {
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(error) => return Err(format!("无法确认旧 Gateway 子进程状态：{error}")),
+    }
+    if let Err(error) = child.kill() {
+        return match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            _ => Err(format!("无法停止旧 Gateway 子进程：{error}")),
+        };
+    }
+    child
+        .wait()
+        .map(|_| ())
+        .map_err(|error| format!("等待旧 Gateway 子进程退出失败：{error}"))
+}
+
+fn cleanup_tracked_gateway_with<'a, Stop>(
+    state: &'a SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    mut state_guard: std::sync::MutexGuard<'a, AppState>,
+    generation: u64,
+    stop: Stop,
+) -> Result<std::sync::MutexGuard<'a, AppState>, String>
+where
+    Stop: FnOnce(&mut std::process::Child) -> Result<(), String>,
+{
+    let Some(identity) = GatewayProcessLocalOwner::claim(&state_guard, generation) else {
+        state_guard.clear_proxy_identity();
+        return Ok(state_guard);
+    };
+    let child = state_guard
+        .proxy
+        .take()
+        .expect("Gateway cleanup claim must own the tracked child");
+    let mut owner = GatewayTrackedCleanupOwner { identity, child };
+    drop(state_guard);
+
+    let stopped = stop(&mut owner.child);
+    let mut current = lock(state);
+    if !owner
+        .identity
+        .owns_cleanup_marker(&current, lifecycle.current_generation())
+    {
+        return Err(
+            "旧 Gateway 清理完成时 process-local owner 已变化；已拒绝覆盖 replacement，请重试。"
+                .into(),
+        );
+    }
+    match stopped {
+        Ok(()) => {
+            current.clear_proxy_identity();
+            Ok(current)
+        }
+        Err(error) => {
+            current.proxy = Some(owner.child);
+            Err(format!(
+                "旧 Gateway 清理未确认完成；已保留 process-local owner 以便安全重试：{error}"
+            ))
+        }
+    }
+}
+
+fn run_legacy_cleanup_outside_state_with<'a, Cleanup>(
+    state: &'a SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    state_guard: std::sync::MutexGuard<'a, AppState>,
+    generation: u64,
+    cleanup: Cleanup,
+) -> Result<(std::sync::MutexGuard<'a, AppState>, Option<u32>), String>
+where
+    Cleanup: FnOnce() -> Result<Option<u32>, String>,
+{
+    drop(state_guard);
+    let result = cleanup();
+    let current = lock(state);
+    if lifecycle.current_generation() != generation || !app_state_gateway_slot_is_empty(&current) {
+        return Err(
+            "旧 Gateway listener 清理完成时 runtime owner 已变化；已拒绝覆盖 replacement，请重试。"
+                .into(),
+        );
+    }
+    result.map(|stopped_pid| (current, stopped_pid))
 }
 
 fn probe_gateway_reuse_health_with<'a, Probe>(
@@ -231,39 +341,56 @@ fn start_proxy_for_inner<R: Runtime>(
             }
         }
 
-        st.stop_proxy();
-        if proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
-            let legacy_script = asset_root(app).map(|root| root.join("proxy/csswitch_proxy.py"));
-            let cleanup = legacy_script
-                .as_deref()
-                .map(|script| stop_legacy_csswitch_python_on_port(port, script))
-                .unwrap_or(LegacyProxyCleanup::NotLegacy);
-            match cleanup {
-                LegacyProxyCleanup::Stopped(pid) => {
-                    if let Some(t) = trace {
-                        t.stage(
-                            OperationStage::ProxySpawn,
-                            format!("stopped legacy CSSwitch Python proxy pid={pid} port={port}"),
-                        );
+        st = cleanup_tracked_gateway_with(state, lifecycle, st, gen, stop_tracked_gateway_child)?;
+        let legacy_script = asset_root(app).map(|root| root.join("proxy/csswitch_proxy.py"));
+        let (next_state, _) = run_legacy_cleanup_outside_state_with(
+            state,
+            lifecycle,
+            st,
+            gen,
+            || {
+                if !proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
+                    return Ok(None);
+                }
+                let cleanup = legacy_script
+                    .as_deref()
+                    .map(|script| stop_legacy_csswitch_python_on_port(port, script))
+                    .unwrap_or(LegacyProxyCleanup::NotLegacy);
+                let stopped_pid = match cleanup {
+                    LegacyProxyCleanup::Stopped(pid) => pid,
+                    LegacyProxyCleanup::IdentityChanged(pid) => {
+                        return Err(format!(
+                            "旧版 CSSwitch Python proxy（原 PID {pid}）在发信号前身份已变化；为避免结束 replacement，已拒绝清理。请改用空闲端口。"
+                        ));
                     }
-                }
-                LegacyProxyCleanup::StopFailed(pid) => {
+                    LegacyProxyCleanup::StopFailed(pid) => {
+                        return Err(format!(
+                            "已确认端口 {port} 由旧版 CSSwitch Python proxy（PID {pid}）占用，但安全停止失败。请退出旧版或重启电脑后重试；未发送鉴权信息，也未强制结束进程。"
+                        ));
+                    }
+                    LegacyProxyCleanup::NotLegacy => {
+                        return Err(format!(
+                            "端口 {port} 已被未知或旧 listener 占用；为避免发送鉴权信息或接管/结束非本轮进程，已拒绝启动。请手工确认后改用空闲端口。"
+                        ));
+                    }
+                };
+                if proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
                     return Err(format!(
-                        "已确认端口 {port} 由旧版 CSSwitch Python proxy（PID {pid}）占用，但安全停止失败。请退出旧版或重启电脑后重试；未发送鉴权信息，也未强制结束进程。"
+                        "旧版 CSSwitch proxy 已停止，但端口 {port} 随即被其它 listener 占用；未发送鉴权信息，也未结束新占用者。请改用空闲端口。"
                     ));
                 }
-                LegacyProxyCleanup::NotLegacy => {
-                    return Err(format!(
-                        "端口 {port} 已被未知或旧 listener 占用；为避免发送鉴权信息或接管/结束非本轮进程，已拒绝启动。请手工确认后改用空闲端口。"
-                    ));
+                if let Some(t) = trace {
+                    t.stage(
+                        OperationStage::ProxySpawn,
+                        format!(
+                            "stopped legacy CSSwitch Python proxy pid={stopped_pid} port={port}"
+                        ),
+                    );
                 }
-            }
-            if proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
-                return Err(format!(
-                    "旧版 CSSwitch proxy 已停止，但端口 {port} 随即被其它 listener 占用；未发送鉴权信息，也未结束新占用者。请改用空闲端口。"
-                ));
-            }
-        }
+                Ok(Some(stopped_pid))
+            },
+        )?;
+        st = next_state;
         st.secret = secret.clone();
 
         let logf = open_log("proxy.log").map_err(|e| format!("建日志失败：{e}"))?;

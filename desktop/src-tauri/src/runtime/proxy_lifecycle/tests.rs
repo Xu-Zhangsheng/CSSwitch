@@ -1,8 +1,9 @@
 use super::{
-    accepted_gateway_health, configure_acceptance_native_upstream_override,
-    configure_managed_proxy_command, find_gateway_in, finish_interrupted_gateway_recovery,
-    formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
-    probe_gateway_reuse_health_with, recover_interrupted_gateway_from_dir,
+    accepted_gateway_health, cleanup_tracked_gateway_with,
+    configure_acceptance_native_upstream_override, configure_managed_proxy_command,
+    find_gateway_in, finish_interrupted_gateway_recovery, formal_proxy_env, gateway_bin_path_from,
+    interrupted_health_matches, probe_gateway_reuse_health_with,
+    recover_interrupted_gateway_from_dir, run_legacy_cleanup_outside_state_with,
     skill_install_bridge_token, GatewayLaunchRecipe, GatewayProcessLocalOwner,
     InterruptedGatewayRecoveryErrorKind, InterruptedGatewayRecoveryOutcome,
     InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
@@ -439,6 +440,120 @@ fn gateway_reuse_health_releases_app_state_and_rejects_stale_owner_result() {
                 tracked.wait().unwrap();
                 current.proxy = None;
             }
+        }
+    }
+}
+
+#[test]
+fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replacement() {
+    let launch_id = "0123456789abcdef0123456789abcdef";
+    let route_secret = "fixture-cleanup-secret-never-log";
+
+    for case in ["success", "stop-failed", "replacement"] {
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let child_pid = child.id();
+        let launch_context = GatewayLaunchRecipe {
+            profile: crate::config::Profile {
+                id: "cleanup-owner-profile".into(),
+                ..Default::default()
+            },
+            science_runtime: None,
+        };
+        let mut authority = crate::AppState::default();
+        authority.proxy = Some(child);
+        authority.proxy_port = 32121;
+        authority.secret = route_secret.into();
+        authority.provider = "deepseek".into();
+        authority.gateway_kind = "rust".into();
+        authority.shim_mode = "off".into();
+        authority.launch_id = launch_id.into();
+        authority.key_fp = 19;
+        authority.gateway_launch_context = Some(launch_context.clone());
+        let state: crate::SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let generation = lifecycle.current_generation();
+        let guard = crate::lock(&state);
+        let cleanup_state = state.clone();
+
+        let result =
+            cleanup_tracked_gateway_with(&state, &lifecycle, guard, generation, |owned_child| {
+                let current = cleanup_state
+                    .try_lock()
+                    .expect("tracked Gateway stop/wait must run outside AppState");
+                assert!(current.proxy.is_none(), "{case}");
+                assert_eq!(current.launch_id, launch_id, "{case}");
+                drop(current);
+
+                match case {
+                    "success" => {
+                        owned_child.kill().unwrap();
+                        owned_child.wait().unwrap();
+                        Ok(())
+                    }
+                    "stop-failed" => Err("injected stop failure".into()),
+                    "replacement" => {
+                        owned_child.kill().unwrap();
+                        owned_child.wait().unwrap();
+                        lifecycle.bump_generation();
+                        let replacement = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+                        let mut current = crate::lock(&cleanup_state);
+                        current.proxy = Some(replacement);
+                        current.launch_id = "replacement-launch-id".into();
+                        Ok(())
+                    }
+                    _ => unreachable!(),
+                }
+            });
+
+        match case {
+            "success" => {
+                let current = result.expect("confirmed stop must commit empty Gateway state");
+                assert!(current.proxy.is_none());
+                assert!(current.secret.is_empty());
+                assert!(current.launch_id.is_empty());
+                let legacy_state = state.clone();
+                let (current, stopped_pid) = run_legacy_cleanup_outside_state_with(
+                    &state,
+                    &lifecycle,
+                    current,
+                    generation,
+                    || {
+                        let observed = legacy_state
+                            .try_lock()
+                            .expect("legacy listener cleanup must run outside AppState");
+                        assert!(observed.proxy.is_none());
+                        drop(observed);
+                        Ok(Some(4321))
+                    },
+                )
+                .expect("unchanged empty Gateway slot accepts legacy cleanup result");
+                assert_eq!(stopped_pid, Some(4321));
+                assert!(current.proxy.is_none());
+            }
+            "stop-failed" => {
+                let error = result.err().expect("injected stop failure must fail");
+                assert!(error.contains("已保留 process-local owner"), "{error}");
+                assert!(!error.contains(route_secret), "{error}");
+                let mut current = crate::lock(&state);
+                assert_eq!(current.launch_id, launch_id);
+                let restored = current.proxy.as_mut().expect("failed stop restores owner");
+                assert_eq!(restored.id(), child_pid);
+                restored.kill().unwrap();
+                restored.wait().unwrap();
+                current.proxy = None;
+            }
+            "replacement" => {
+                let error = result.err().expect("replacement drift must fail");
+                assert!(error.contains("拒绝覆盖 replacement"), "{error}");
+                assert!(!error.contains(route_secret), "{error}");
+                let mut current = crate::lock(&state);
+                assert_eq!(current.launch_id, "replacement-launch-id");
+                let replacement = current.proxy.as_mut().expect("replacement is preserved");
+                replacement.kill().unwrap();
+                replacement.wait().unwrap();
+                current.proxy = None;
+            }
+            _ => unreachable!(),
         }
     }
 }

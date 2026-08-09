@@ -159,8 +159,12 @@ V1 marker 仍可严格读取并阻断，但不会被生产路径升级、推进�
 
 `GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
 health、catalog fingerprint、generation/write-back 与 child ownership 核心；reuse health 使用
-process-local owner claim、锁外 HTTP 和 generation + full-owner CAS，旧进程清理与 spawn 的锁边界
-不随之扩大。controller 只在全部接受
+process-local owner claim、锁外 HTTP 和 generation + full-owner CAS。旧 tracked child 清理同样在
+`AppState` 下冻结 generation、PID 与完整 Gateway metadata，把 affine `Child` 移交给锁外 stop/wait，
+成功只按 generation + full-owner cleanup marker CAS 清空身份，失败则只在 owner 未变化时恢复 child；
+replacement 永不被覆盖。旧版 Python listener 的端口探测、`lsof` / `ps`、TERM 与退出轮询也在
+`AppState` 外执行，TERM 前以 UID、PID、process start、command、script 与唯一 listener 完整复核；
+identity drift fail closed。spawn 仍保留在 `AppState` 内，未随清理边界扩大。controller 只在全部接受
 条件通过后返回非序列化 `GatewayReceipt`。receipt 同时绑定 route、`Reused/Restarted`、health
 identity、catalog fingerprint 与完整 `GatewayLaunchRecipe`；当 host context 来自健康的
 remembered Science 时，recipe 保存该 effective runtime，而不是只复制 caller 的显式参数。

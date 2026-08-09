@@ -50,14 +50,16 @@ SHA-256 为 `23cc8300302f05d26bcfc758989ad75d961866ded00507a5307a265b49ffed8f`�
 `40a2b9a` production source，不建立新的 artifact、installed、live、签名或 release 结论；
 后续 evidence-only 文档提交也不能改写 tested source identity。
 
-当前唯一 NEXT 是先只读重审 Gateway 旧进程清理的 exact owner、外部等待与失败边界，再决定一个
-有界实现窗口；spawn 仍作为更后的独立边界，不与清理或本次 reuse-health 关闭混在一起。Skill /
-MCP 安装与运行探针后置，不驱动该重审。
+当前工作树 candidate 正在收敛 Gateway 旧进程清理：tracked child 以 affine owner 在锁外
+stop/wait，按 generation + full owner cleanup marker CAS 清空或恢复；legacy Python listener 的
+端口/进程识别、TERM 与轮询也移出 `AppState`，并在 signal 前复核 process start 与完整 listener
+身份。该未提交 candidate 在 fresh review、exact-SHA source seal 与获授权 local commit 前不替代
+`40a2b9a` 的已验收 production source。spawn 仍作为更后的独立边界；Skill / MCP 探针继续后置。
 
 ## 当前源码问题
 
 - **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings` 与 native exit 已使用 process-local owner claim、锁外 wait 与 identity CAS；downgrade cleanup 及其他 sibling stop caller 尚未全部收敛到同一边界。当前 owner 与缺口见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
-- **Gateway 锁边界**：reuse health 与 spawn 后 health poll 均已在 `AppState` 锁外，并分别由 owner CAS / generation write-back 守护；旧进程清理与 spawn 仍在锁内。后续只能按当前 owner 重新定义有界任务，不能恢复旧阶段编号或把三个边界合并外推。
+- **Gateway 锁边界**：当前工作树已把 reuse health、旧 tracked child stop/wait、legacy listener 身份复核/TERM/轮询及 spawn 后 health poll 移出 `AppState`，分别由 full-owner CAS、signal 前 exact identity recheck 与 generation write-back 守护；spawn 仍在锁内，且本工作树尚未成为 exact-SHA accepted source。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
 - **Science adoption ledger**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
