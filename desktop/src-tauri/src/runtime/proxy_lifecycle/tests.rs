@@ -693,13 +693,33 @@ fn gateway_spawn_generation_drift_clears_only_its_marker_and_never_publishes_sta
 #[test]
 fn rejected_gateway_candidate_retains_a_separate_cleanup_owner_on_stop_uncertainty() {
     let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let lifecycle = crate::lifecycle::Lifecycle::new();
+    let owner = {
+        let mut current = crate::lock(&state);
+        GatewaySpawnCandidateOwner::reserve(
+            &mut current,
+            lifecycle.current_generation(),
+            32125,
+            "same-persistent-secret".into(),
+            "deepseek".into(),
+            "rust".into(),
+            "off".into(),
+            "55555555555555555555555555555555".into(),
+            37,
+            gateway_spawn_recipe("uncertain-stop-profile"),
+        )
+        .unwrap()
+    };
     let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
     let child_pid = child.id();
-    let candidate = GatewaySpawnCandidate::new(child, &state);
+    let mut candidate = GatewaySpawnCandidate::new(child, &state, owner.clone());
     let error = candidate
         .reject_with(|_| Err("injected stop uncertainty".into()))
         .unwrap_err();
     assert!(error.contains("独立 cleanup owner"));
+    assert!(finish_failed_gateway_candidate(
+        &state, &lifecycle, &owner, None, None,
+    ));
     {
         let current = crate::lock(&state);
         assert!(current.proxy.is_none());
@@ -717,11 +737,29 @@ fn rejected_gateway_candidate_retains_a_separate_cleanup_owner_on_stop_uncertain
 #[test]
 fn rejected_gateway_candidate_panic_restores_owner_before_unwind_completes() {
     let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let lifecycle = crate::lifecycle::Lifecycle::new();
+    let owner = {
+        let mut current = crate::lock(&state);
+        GatewaySpawnCandidateOwner::reserve(
+            &mut current,
+            lifecycle.current_generation(),
+            32126,
+            "same-persistent-secret".into(),
+            "deepseek".into(),
+            "rust".into(),
+            "off".into(),
+            "66666666666666666666666666666666".into(),
+            41,
+            gateway_spawn_recipe("panic-stop-profile"),
+        )
+        .unwrap()
+    };
     let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
     let child_pid = child.id();
-    let candidate = GatewaySpawnCandidate::new(child, &state);
-
+    let unwind_state = state.clone();
+    let unwind_owner = owner.clone();
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut candidate = GatewaySpawnCandidate::new(child, &unwind_state, unwind_owner);
         let _ = candidate
             .reject_with(|_| -> Result<(), String> { panic!("injected candidate stop panic") });
     }));
@@ -729,12 +767,41 @@ fn rejected_gateway_candidate_panic_restores_owner_before_unwind_completes() {
     let rejected = crate::lock(&state).rejected_gateway_candidates.clone();
     assert_eq!(rejected.owned_pids(), vec![child_pid]);
     assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+    {
+        let current = crate::lock(&state);
+        assert!(!owner.marker_matches(&current));
+        assert!(current.secret.is_empty());
+        assert!(current.gateway_launch_context.is_none());
+    }
 
     rejected
         .retry_with(crate::runtime::system::stop_child_confirmed)
         .unwrap();
     assert!(rejected.is_idle());
     assert_ne!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+    let retry_owner = {
+        let mut current = crate::lock(&state);
+        GatewaySpawnCandidateOwner::reserve(
+            &mut current,
+            lifecycle.current_generation(),
+            32126,
+            "same-persistent-secret".into(),
+            "deepseek".into(),
+            "rust".into(),
+            "off".into(),
+            "77777777777777777777777777777777".into(),
+            43,
+            gateway_spawn_recipe("panic-stop-retry-profile"),
+        )
+        .expect("reaping an unwound candidate must unblock the next reservation")
+    };
+    assert!(finish_failed_gateway_candidate(
+        &state,
+        &lifecycle,
+        &retry_owner,
+        None,
+        None,
+    ));
 }
 
 #[test]
@@ -784,6 +851,7 @@ fn rejected_gateway_cleanup_claim_blocks_a_concurrent_spawn_reservation() {
         })
     });
     started_rx.recv().unwrap();
+    assert_eq!(rejected.len(), 1);
 
     let lifecycle = crate::lifecycle::Lifecycle::new();
     let reserve = GatewaySpawnCandidateOwner::reserve(
@@ -803,6 +871,10 @@ fn rejected_gateway_cleanup_claim_blocks_a_concurrent_spawn_reservation() {
         .retry_with(crate::runtime::system::stop_child_confirmed)
         .unwrap_err()
         .contains("cleanup 正在进行"));
+    assert!(matches!(
+        crate::lock(&state).stop_proxy_with(crate::runtime::system::stop_child_confirmed),
+        crate::GatewayStopOutcome::Uncertain { owned_count: 1, .. }
+    ));
 
     release_tx.send(()).unwrap();
     assert!(worker.join().unwrap().is_err());
@@ -840,7 +912,7 @@ fn skill_bridge_key_staging_cannot_overwrite_canonical_before_publish() {
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     )
     .unwrap();
-    accepted.publish().unwrap();
+    accepted.publish_canonical_key().unwrap();
     assert_eq!(
         fs::read(&key_file).unwrap(),
         b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"

@@ -129,13 +129,21 @@ impl GatewaySpawnCandidateOwner {
 struct GatewaySpawnCandidate {
     child: Option<std::process::Child>,
     rejected: crate::RejectedGatewayRegistry,
+    state: SharedAppState,
+    reservation: Option<GatewaySpawnCandidateOwner>,
 }
 
 impl GatewaySpawnCandidate {
-    fn new(child: std::process::Child, state: &SharedAppState) -> Self {
+    fn new(
+        child: std::process::Child,
+        state: &SharedAppState,
+        owner: GatewaySpawnCandidateOwner,
+    ) -> Self {
         Self {
             child: Some(child),
             rejected: lock(state).rejected_gateway_candidates.clone(),
+            state: state.clone(),
+            reservation: Some(owner),
         }
     }
 
@@ -146,16 +154,19 @@ impl GatewaySpawnCandidate {
     }
 
     fn accept_child(&mut self) -> std::process::Child {
-        self.child
+        let child = self
+            .child
             .take()
-            .expect("accepted Gateway candidate must own its child")
+            .expect("accepted Gateway candidate must own its child");
+        self.reservation = None;
+        child
     }
 
-    fn reject(self) -> Result<(), String> {
+    fn reject(&mut self) -> Result<(), String> {
         self.reject_with(crate::runtime::system::stop_child_confirmed)
     }
 
-    fn reject_with<Stop>(mut self, stop: Stop) -> Result<(), String>
+    fn reject_with<Stop>(&mut self, stop: Stop) -> Result<(), String>
     where
         Stop: FnOnce(&mut std::process::Child) -> Result<(), String>,
     {
@@ -185,12 +196,20 @@ impl GatewaySpawnCandidate {
 
 impl Drop for GatewaySpawnCandidate {
     fn drop(&mut self) {
-        let Some(child) = self.child.take() else {
-            return;
-        };
-        // Unwind/early-return fallback only restores affine ownership. It must
-        // not invoke another fallible stop callback while already unwinding.
-        self.rejected.retain(child);
+        if let Some(child) = self.child.take() {
+            // Unwind/early-return fallback only restores affine ownership. It
+            // must not invoke another fallible stop callback while unwinding.
+            self.rejected.retain(child);
+        }
+        if let Some(owner) = self.reservation.take() {
+            // The cleanup registry fences future spawn while the child remains
+            // uncertain. Clear only this candidate's still-matching marker;
+            // never erase a later replacement.
+            let mut current = lock(&self.state);
+            if owner.marker_matches(&current) {
+                current.clear_proxy_identity();
+            }
+        }
     }
 }
 
@@ -675,7 +694,7 @@ fn start_proxy_for_inner<R: Runtime>(
             return Err(error);
         }
     };
-    let mut candidate = GatewaySpawnCandidate::new(child, state);
+    let mut candidate = GatewaySpawnCandidate::new(child, state, spawn_owner.clone());
 
     let mut accepted_health = None;
     let mut early_exit = None;

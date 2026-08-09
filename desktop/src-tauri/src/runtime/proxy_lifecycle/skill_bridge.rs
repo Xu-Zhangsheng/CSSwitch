@@ -16,7 +16,7 @@ impl PreparedSkillInstallHost {
         self.key
             .as_mut()
             .expect("prepared Skill bridge key may only be published once")
-            .publish()
+            .publish_canonical_key()
     }
 }
 
@@ -119,7 +119,7 @@ struct PreparedSkillInstallBridgeKey {
 }
 
 impl PreparedSkillInstallBridgeKey {
-    fn publish(&mut self) -> Result<PathBuf, String> {
+    fn publish_canonical_key(&mut self) -> Result<PathBuf, String> {
         let temporary = self
             .temporary
             .as_ref()

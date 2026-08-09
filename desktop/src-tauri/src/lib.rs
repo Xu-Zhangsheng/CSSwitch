@@ -30,10 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager};
 
-use runtime::{
-    science::ScienceHostAdapter,
-    system::{kill_child, stop_child_confirmed},
-};
+use runtime::{science::ScienceHostAdapter, system::stop_child_confirmed};
 
 use codex_auth_supervisor::{CodexAuthSupervisor, SharedCodexAuthSupervisor};
 
@@ -139,6 +136,7 @@ pub(crate) struct RejectedGatewayRegistry {
 struct RejectedGatewayRegistryState {
     children: Vec<Child>,
     cleanup_in_progress: bool,
+    cleanup_owned_count: usize,
 }
 
 impl Drop for RejectedGatewayRegistryState {
@@ -169,6 +167,26 @@ impl Drop for RejectedGatewayCleanupOwner {
             .unwrap_or_else(|error| error.into_inner());
         current.children.append(&mut self.children);
         current.cleanup_in_progress = false;
+        current.cleanup_owned_count = 0;
+    }
+}
+
+impl RejectedGatewayCleanupOwner {
+    fn confirm_last_stopped(&mut self) -> Result<(), String> {
+        let mut child = self
+            .children
+            .pop()
+            .expect("confirmed Gateway cleanup must own a child");
+        if let Err(error) = child.wait() {
+            self.children.push(child);
+            return Err(format!("无法二次确认 Gateway 子进程已被 reap：{error}"));
+        }
+        self.registry
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cleanup_owned_count = self.children.len();
+        Ok(())
     }
 }
 
@@ -187,11 +205,8 @@ impl RejectedGatewayRegistry {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .children
-            .len()
+        let current = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        current.children.len() + current.cleanup_owned_count
     }
 
     pub(crate) fn retry_with<Stop>(&self, mut stop: Stop) -> Result<(), String>
@@ -201,27 +216,34 @@ impl RejectedGatewayRegistry {
         let mut owner = {
             let mut current = self.inner.lock().unwrap_or_else(|error| error.into_inner());
             if current.cleanup_in_progress {
-                return Err("rejected Gateway candidate cleanup 正在进行；已拒绝并发启动。".into());
+                return Err("Gateway child cleanup 正在进行；已拒绝并发启动。".into());
             }
             if current.children.is_empty() {
                 return Ok(());
             }
             current.cleanup_in_progress = true;
+            let children = std::mem::take(&mut current.children);
+            current.cleanup_owned_count = children.len();
             RejectedGatewayCleanupOwner {
                 registry: self.clone(),
-                children: std::mem::take(&mut current.children),
+                children,
             }
         };
 
         while let Some(child) = owner.children.last_mut() {
             match stop(child) {
                 Ok(()) => {
-                    owner.children.pop();
+                    if let Err(error) = owner.confirm_last_stopped() {
+                        let count = owner.children.len();
+                        return Err(format!(
+                            "仍有 {count} 个 Gateway child 的退出未确认；已保留 cleanup owner，拒绝启动新 Gateway：{error}"
+                        ));
+                    }
                 }
                 Err(error) => {
                     let count = owner.children.len();
                     return Err(format!(
-                        "仍有 {count} 个 rejected Gateway candidate 的退出未确认；已保留 cleanup owner，拒绝启动新 Gateway：{error}"
+                        "仍有 {count} 个 Gateway child 的退出未确认；已保留 cleanup owner，拒绝启动新 Gateway：{error}"
                     ));
                 }
             }
@@ -345,10 +367,17 @@ impl AppState {
     where
         Stop: FnMut(&mut Child) -> Result<(), String>,
     {
-        kill_child(&mut self.proxy);
-        let rejected = self.rejected_gateway_candidates.retry_with(stop);
+        if let Some(child) = self.proxy.take() {
+            // Active and rejected children share the same independent cleanup
+            // owner once teardown starts. Never discard the active Child before
+            // kill + wait has been confirmed.
+            self.rejected_gateway_candidates.retain(child);
+        }
+        // Clear the active reservation before invoking a fallible callback so
+        // panic/unwind cannot leave a permanently stale marker. The registry
+        // remains the spawn fence until every transferred child is reaped.
         self.clear_proxy_identity();
-        match rejected {
+        match self.rejected_gateway_candidates.retry_with(stop) {
             Ok(()) => GatewayStopOutcome::Stopped,
             Err(reason) => GatewayStopOutcome::Uncertain {
                 owned_count: self.rejected_gateway_candidates.len(),
@@ -1033,6 +1062,42 @@ mod tests {
         assert!(st.shim_mode.is_empty());
         assert!(st.launch_id.is_empty());
         assert_eq!(st.key_fp, 0);
+    }
+
+    #[test]
+    fn active_gateway_stop_uncertainty_retains_owner_until_reap_is_confirmed() {
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let child_pid = child.id();
+        let mut state = AppState::default();
+        state.proxy = Some(child);
+        state.secret = "active-secret".into();
+        state.provider = "deepseek".into();
+        state.gateway_kind = "rust".into();
+        state.shim_mode = "off".into();
+        state.launch_id = "active-launch".into();
+        state.key_fp = 47;
+
+        let outcome =
+            state.stop_proxy_with(|_| Err("injected active-child stop uncertainty".into()));
+        assert!(matches!(
+            outcome,
+            GatewayStopOutcome::Uncertain { owned_count: 1, .. }
+        ));
+        assert!(state.proxy.is_none());
+        assert!(state.secret.is_empty());
+        assert!(state.launch_id.is_empty());
+        assert_eq!(
+            state.rejected_gateway_candidates.owned_pids(),
+            vec![child_pid]
+        );
+        assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+
+        state
+            .rejected_gateway_candidates
+            .retry_with(crate::runtime::system::stop_child_confirmed)
+            .unwrap();
+        assert!(state.rejected_gateway_candidates.is_idle());
+        assert_ne!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
     }
 
     #[test]

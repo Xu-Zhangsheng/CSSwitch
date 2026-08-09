@@ -15,6 +15,21 @@ pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
     result
 }
 
+fn require_confirmed_gateway_stop(
+    outcome: crate::GatewayStopOutcome,
+    context: &str,
+) -> Result<(), String> {
+    match outcome {
+        crate::GatewayStopOutcome::Stopped => Ok(()),
+        crate::GatewayStopOutcome::Uncertain {
+            owned_count,
+            reason,
+        } => Err(format!(
+            "{context}：仍有 {owned_count} 个 Gateway child 的退出未确认；应用保留 process-local cleanup owner：{reason}"
+        )),
+    }
+}
+
 /// 切换运行模式（"proxy" 第三方 / "official" 官方）。切官方要先拆第三方链路成功再落盘。
 pub(super) async fn set_mode_command(
     app: tauri::AppHandle,
@@ -41,10 +56,12 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
         config::default_dir(),
         ScienceHostAdapter::claim_stop,
         |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        AppState::stop_proxy,
     )
 }
 
-pub(super) fn set_mode_inner_with<R, Claim, Execute>(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn set_mode_inner_with<R, Claim, Execute, StopGateway>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: SharedLifecycle,
@@ -52,6 +69,7 @@ pub(super) fn set_mode_inner_with<R, Claim, Execute>(
     dir: std::path::PathBuf,
     claim_science: Claim,
     execute_science: Execute,
+    stop_gateway: StopGateway,
 ) -> Result<(), String>
 where
     R: tauri::Runtime,
@@ -65,6 +83,7 @@ where
         &tauri::AppHandle<R>,
         crate::runtime::science::ScienceStopRequest,
     ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+    StopGateway: FnOnce(&mut AppState) -> crate::GatewayStopOutcome,
 {
     if mode != "proxy" && mode != "official" {
         return Err(format!("未知模式：{mode}（只支持 proxy / official）。"));
@@ -93,7 +112,10 @@ where
             .map_err(|e| {
                 format!("停止沙箱失败，未切换到官方模式：{e}（真实实例 8765 未受影响）")
             })?;
-            st.stop_proxy();
+            require_confirmed_gateway_stop(
+                stop_gateway(&mut st),
+                "Gateway 停止结果未确认，未切换到官方模式",
+            )?;
         }
         config::update_result(&dir, {
             let mode = mode.clone();
@@ -163,10 +185,12 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
         },
         ScienceHostAdapter::claim_stop,
         |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        AppState::stop_proxy,
     )
 }
 
-pub(super) fn set_settings_inner_with<R, Claim, Execute>(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn set_settings_inner_with<R, Claim, Execute, StopGateway>(
     app: tauri::AppHandle<R>,
     state: SharedAppState,
     lifecycle: SharedLifecycle,
@@ -174,6 +198,7 @@ pub(super) fn set_settings_inner_with<R, Claim, Execute>(
     paths: SetSettingsPaths,
     claim_science: Claim,
     execute_science: Execute,
+    stop_gateway: StopGateway,
 ) -> Result<(), String>
 where
     R: tauri::Runtime,
@@ -187,6 +212,7 @@ where
         &tauri::AppHandle<R>,
         crate::runtime::science::ScienceStopRequest,
     ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+    StopGateway: FnOnce(&mut AppState) -> crate::GatewayStopOutcome,
 {
     lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         let old = config::load_from(&paths.config_dir).map_err(|e| e.to_string())?;
@@ -221,7 +247,10 @@ where
                 )
             })?;
             lifecycle.bump_generation(); // 停成功后作废在途启动
-            st.stop_proxy();
+            require_confirmed_gateway_stop(
+                stop_gateway(&mut st),
+                "设置未更改：Gateway 停止结果未确认",
+            )?;
         }
         if !cfg.reuse_system_ssh {
             revoke_science_ssh_bridge(&paths.sandbox_home)?;
@@ -446,13 +475,13 @@ where
                 Err(format!("代理已停；但{error}真实实例 8765 未受影响。"))
             }
             (Ok(_), crate::GatewayStopOutcome::Uncertain { reason, .. }) => Err(format!(
-                "Gateway candidate 停止结果未确认；应用仍保留 process-local owner：{reason}"
+                "Gateway child 停止结果未确认；应用仍保留 process-local cleanup owner：{reason}"
             )),
             (
                 Err(error),
                 crate::GatewayStopOutcome::Uncertain { reason, .. },
             ) => Err(format!(
-                "Gateway candidate 停止结果未确认且 Science 停止失败；应用仍保留 process-local owner：{reason}；{error}"
+                "Gateway child 停止结果未确认且 Science 停止失败；应用仍保留 process-local cleanup owner：{reason}；{error}"
             )),
         }
     })

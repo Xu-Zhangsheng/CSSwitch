@@ -9565,6 +9565,69 @@ fn r0_set_mode_config_failure_leaves_runtime_stopped() {
 
 #[test]
 #[allow(clippy::result_large_err)]
+fn set_mode_rejects_config_commit_when_gateway_stop_is_uncertain() {
+    let root = tmpdir("set-mode-gateway-stop-uncertain");
+    let config_dir = root.join("config");
+    fs::create_dir_all(&config_dir).unwrap();
+    config::save_to(
+        &config_dir,
+        &Config {
+            mode: "proxy".into(),
+            proxy_port: 18000,
+            sandbox_port: 18765,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let config_before = fs::read(config_dir.join("config.json")).unwrap();
+    let child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let child_pid = child.id();
+    let mut authority = AppState::default();
+    authority.proxy = Some(child);
+    let state: SharedAppState = Arc::new(Mutex::new(authority));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let result = super::lifecycle::set_mode_inner_with(
+        app.handle().clone(),
+        state.clone(),
+        lifecycle,
+        "official".into(),
+        config_dir.clone(),
+        |runtime| Ok(science::ScienceStopRequest::recover(runtime)),
+        |_, _| {
+            (
+                Ok(science::VerifiedScienceStop {
+                    runtime: None,
+                    ownership_was_proven: false,
+                }),
+                false,
+            )
+        },
+        |current| current.stop_proxy_with(|_| Err("injected active stop uncertainty".into())),
+    );
+    assert!(result
+        .as_ref()
+        .is_err_and(|error| error.contains("未切换到官方模式")));
+    assert_eq!(
+        fs::read(config_dir.join("config.json")).unwrap(),
+        config_before
+    );
+    let cleanup = lock(&state).rejected_gateway_candidates.clone();
+    assert_eq!(cleanup.owned_pids(), vec![child_pid]);
+    cleanup
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[allow(clippy::result_large_err)]
 fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement() {
     let root = tmpdir("r1-set-mode-owner-cas");
     let prior_binary = root.join("prior-science");
@@ -9636,6 +9699,7 @@ fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement()
                         true,
                     )
                 },
+                AppState::stop_proxy,
             )
         });
 
@@ -9699,6 +9763,78 @@ fn r0_set_settings_failure_points_preserve_stop_before_commit() {
         "commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
         &[("CSSWITCH_TEST_R0_D_CASE", "set-settings")],
     );
+}
+
+#[test]
+#[allow(clippy::result_large_err)]
+fn set_settings_rejects_config_commit_when_gateway_stop_is_uncertain() {
+    let root = tmpdir("set-settings-gateway-stop-uncertain");
+    let config_dir = root.join("config");
+    let sandbox_home = root.join("sandbox");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::create_dir_all(&sandbox_home).unwrap();
+    config::save_to(
+        &config_dir,
+        &Config {
+            mode: "proxy".into(),
+            proxy_port: 18000,
+            sandbox_port: 18765,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let config_before = fs::read(config_dir.join("config.json")).unwrap();
+    let child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let child_pid = child.id();
+    let mut authority = AppState::default();
+    authority.proxy = Some(child);
+    let state: SharedAppState = Arc::new(Mutex::new(authority));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let result = super::lifecycle::set_settings_inner_with(
+        app.handle().clone(),
+        state.clone(),
+        lifecycle,
+        super::lifecycle::UiSettings {
+            proxy_port: 18001,
+            sandbox_port: 18766,
+            reuse_system_ssh: false,
+        },
+        super::lifecycle::SetSettingsPaths {
+            config_dir: config_dir.clone(),
+            sandbox_home,
+        },
+        |runtime| Ok(science::ScienceStopRequest::recover(runtime)),
+        |_, _| {
+            (
+                Ok(science::VerifiedScienceStop {
+                    runtime: None,
+                    ownership_was_proven: false,
+                }),
+                false,
+            )
+        },
+        |current| current.stop_proxy_with(|_| Err("injected active stop uncertainty".into())),
+    );
+    assert!(result
+        .as_ref()
+        .is_err_and(|error| error.contains("设置未更改")));
+    assert_eq!(
+        fs::read(config_dir.join("config.json")).unwrap(),
+        config_before
+    );
+    let cleanup = lock(&state).rejected_gateway_candidates.clone();
+    assert_eq!(cleanup.owned_pids(), vec![child_pid]);
+    cleanup
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -9793,6 +9929,7 @@ fn r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replaceme
                         true,
                     )
                 },
+                AppState::stop_proxy,
             )
         });
 

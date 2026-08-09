@@ -356,7 +356,7 @@
       "format": "0600 newline-terminated Skill bridge token file at runtime/skill-install-bridge.key",
       "authority_owner": "gateway.bridge-key",
       "fields": ["bridge_token"],
-      "writers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "fn stage_skill_install_bridge_key_at("}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "fn publish(&mut self) -> Result<PathBuf, String>"}],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "fn publish_canonical_key(&mut self) -> Result<PathBuf, String>"}],
       "readers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "pub(crate) fn current_skill_install_bridge_key("}],
       "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "fn skill_install_bridge_key_path()"},
       "known_gap": "The candidate stages a private temporary key before spawn and publishes the canonical key only while it still owns the AppState reservation; stale candidates discard the staged file, while an ordinary current-owner launch failure preserves the existing diagnostic and optional-bridge publication behavior."
