@@ -21,7 +21,7 @@ receipt 绑定的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science
 重新完成 `B-RUNTIME-01=PASS`，并在同一 tuple 下完成新的 `B-CORE-01=PASS`。后续文档提交只
 记录证据，不能改写被构建或运行的 source/artifact identity。
 
-当前最新已验收的 production source candidate 是
+上一份已验收的 stop-ownership production source candidate 是
 `next@65b65c13dc5db59dc3798d0dc1320e7712c726e2`。它以 owner-map baseline
 `c148e428874a0ed459a25a33145e930b4e6b9b18` 为父系，完成 macOS native exit 的
 process-local Science owner claim、锁外 stop/wait、generation + full identity CAS、
@@ -35,15 +35,29 @@ manifest SHA-256 为 `a225707be5a1c5c155f5d0b86c46c932a9fe30557df45230208fb71b0e
 该 PASS 只证明 `65b65c13` production source，不建立新的 artifact 或 live 结论；后续
 evidence-only 文档提交也不能改写 tested source identity。
 
-当前唯一 NEXT 是收敛 Gateway reuse-health 的锁边界：在 `AppState` 下冻结 exact
-process-local Gateway owner，锁外执行 HTTP health，再按 generation + full owner identity
-CAS 接受 reuse 或拒绝 stale result。旧进程清理与 spawn 仍是后续独立边界，不混入本窗口。
-Skill / MCP 安装与运行探针后置，不驱动本阶段主体重构。
+当前最新已验收的 production source candidate 是
+`next@40a2b9a762fe9bfd7b8c871044a34d6fe20bd9cf`。主实现提交 `73c726a45da82d58296614b28a792e9bdbedbfdd`
+在 `AppState` 下冻结 generation、tracked child PID、端口、secret、provider、gateway/shim、
+launch id、key fingerprint 与完整 launch recipe，锁外执行 Gateway reuse HTTP health，再按
+generation + full owner identity CAS 接受结果；stale result fail closed，不清理或覆盖 replacement，
+旧进程清理与 spawn 的锁边界保持不变。主实现与随后两处 source-gate 计数修复分别由新的
+fresh clean-context reviewer 取得零 finding `PASS`。首次 `73c726a` canonical run
+`b6a4b64b3ac363cc1c12b80308b41e45` 为 sealed `FAIL`（13/15），原因是新增 Rust test 后两处
+source-gate 容量断言仍为 573，不得当作 source PASS；修复后的 `40a2b9a` 在新的短路径 detached
+worktree 取得 canonical 15-suite `PASS`（15/15 suites、15/15 observations、runner exit 0）。
+最终 run ID `d43ae8a5a78eda3fe17af2316646e0f4`，completion seal 绑定的 source snapshot manifest
+SHA-256 为 `23cc8300302f05d26bcfc758989ad75d961866ded00507a5307a265b49ffed8f`。该 PASS 只证明
+`40a2b9a` production source，不建立新的 artifact、installed、live、签名或 release 结论；
+后续 evidence-only 文档提交也不能改写 tested source identity。
+
+当前唯一 NEXT 是先只读重审 Gateway 旧进程清理的 exact owner、外部等待与失败边界，再决定一个
+有界实现窗口；spawn 仍作为更后的独立边界，不与清理或本次 reuse-health 关闭混在一起。Skill /
+MCP 安装与运行探针后置，不驱动该重审。
 
 ## 当前源码问题
 
 - **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings` 与 native exit 已使用 process-local owner claim、锁外 wait 与 identity CAS；downgrade cleanup 及其他 sibling stop caller 尚未全部收敛到同一边界。当前 owner 与缺口见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
-- **Gateway 锁边界**：Gateway spawn 后 health poll 已在锁外，但 reuse health、旧进程清理与 spawn 仍在 `AppState` 锁内；后续只能按当前 owner 重新定义有界任务，不能恢复旧阶段编号。
+- **Gateway 锁边界**：reuse health 与 spawn 后 health poll 均已在 `AppState` 锁外，并分别由 owner CAS / generation write-back 守护；旧进程清理与 spawn 仍在锁内。后续只能按当前 owner 重新定义有界任务，不能恢复旧阶段编号或把三个边界合并外推。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
 - **Science adoption ledger**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
@@ -53,11 +67,11 @@ Skill / MCP 安装与运行探针后置，不驱动本阶段主体重构。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | source anchors mapped；`9cc0d15` exact-SHA 15-suite source gate `PASS` | `9cc0d15` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定 | `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合 | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `40a2b9a` exact-SHA review + canonical 15-suite `PASS`；Gateway reuse-health 锁外 owner/CAS 已闭合，旧清理与 spawn 锁边界仍开放 | `9cc0d15` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定；`40a2b9a` exact artifact `NOT-RUN` | `9cc0d15` tuple 的 `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合；不能外推到 `40a2b9a` | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | `65b65c13` exact-SHA review + canonical 15-suite `PASS`；native-exit replacement/race 与 best-effort Gateway policy 已闭合，downgrade 等 sibling gap 仍开放 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
-| Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；最新 current production source `65b65c13` exact-SHA canonical 15-suite `PASS`。日期化调查记录的 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object，不另行构成 current production source PASS | `c4a1159` exact artifact 只作为当次调查的日期化 identity；`65b65c13` current exact artifact `NOT-RUN` | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
+| Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；最新 current production source `40a2b9a` exact-SHA canonical 15-suite `PASS`。日期化调查记录的 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object，不另行构成 current production source PASS | `c4a1159` exact artifact 只作为当次调查的日期化 identity；`40a2b9a` current exact artifact `NOT-RUN` | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
