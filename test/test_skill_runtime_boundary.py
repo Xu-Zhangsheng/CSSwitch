@@ -729,8 +729,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertLess(
             set_mode_flow.index("publish_process_local_science_stop"),
-            set_mode_flow.index("st.stop_proxy()"),
+            set_mode_flow.index("stop_gateway(&mut st)"),
         )
+        self.assertIn("require_confirmed_gateway_stop", set_mode_flow)
         set_settings_flow = lifecycle_command.split(
             "pub(super) fn set_settings_inner_with", 1
         )[1].split("pub(super) async fn stop_all_command", 1)[0]
@@ -753,12 +754,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertLess(
             set_settings_flow.index("lifecycle.bump_generation()"),
-            set_settings_flow.index("st.stop_proxy()"),
+            set_settings_flow.index("stop_gateway(&mut st)"),
         )
         self.assertLess(
-            set_settings_flow.index("st.stop_proxy()"),
+            set_settings_flow.index("stop_gateway(&mut st)"),
             set_settings_flow.index("revoke_science_ssh_bridge"),
         )
+        self.assertIn("require_confirmed_gateway_stop", set_settings_flow)
         self.assertLess(
             set_settings_flow.index("revoke_science_ssh_bridge"),
             set_settings_flow.index("config::update_result"),
