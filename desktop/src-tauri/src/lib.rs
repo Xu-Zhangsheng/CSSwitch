@@ -30,7 +30,10 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager};
 
-use runtime::{science::ScienceHostAdapter, system::kill_child};
+use runtime::{
+    science::ScienceHostAdapter,
+    system::{kill_child, stop_child_confirmed},
+};
 
 use codex_auth_supervisor::{CodexAuthSupervisor, SharedCodexAuthSupervisor};
 
@@ -127,13 +130,148 @@ impl BootPublication {
     }
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct RejectedGatewayRegistry {
+    inner: Arc<Mutex<RejectedGatewayRegistryState>>,
+}
+
+#[derive(Default)]
+struct RejectedGatewayRegistryState {
+    children: Vec<Child>,
+    cleanup_in_progress: bool,
+}
+
+impl Drop for RejectedGatewayRegistryState {
+    fn drop(&mut self) {
+        while let Some(child) = self.children.last_mut() {
+            if stop_child_confirmed(child).is_ok() {
+                self.children.pop();
+            } else {
+                // Terminal ownership is fail-closed: without an acknowledged
+                // external supervisor, teardown may not discard a live Child.
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+struct RejectedGatewayCleanupOwner {
+    registry: RejectedGatewayRegistry,
+    children: Vec<Child>,
+}
+
+impl Drop for RejectedGatewayCleanupOwner {
+    fn drop(&mut self) {
+        let mut current = self
+            .registry
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        current.children.append(&mut self.children);
+        current.cleanup_in_progress = false;
+    }
+}
+
+impl RejectedGatewayRegistry {
+    pub(crate) fn retain(&self, child: Child) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .children
+            .push(child);
+    }
+
+    pub(crate) fn is_idle(&self) -> bool {
+        let current = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        !current.cleanup_in_progress && current.children.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .children
+            .len()
+    }
+
+    pub(crate) fn retry_with<Stop>(&self, mut stop: Stop) -> Result<(), String>
+    where
+        Stop: FnMut(&mut Child) -> Result<(), String>,
+    {
+        let mut owner = {
+            let mut current = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+            if current.cleanup_in_progress {
+                return Err("rejected Gateway candidate cleanup 正在进行；已拒绝并发启动。".into());
+            }
+            if current.children.is_empty() {
+                return Ok(());
+            }
+            current.cleanup_in_progress = true;
+            RejectedGatewayCleanupOwner {
+                registry: self.clone(),
+                children: std::mem::take(&mut current.children),
+            }
+        };
+
+        while let Some(child) = owner.children.last_mut() {
+            match stop(child) {
+                Ok(()) => {
+                    owner.children.pop();
+                }
+                Err(error) => {
+                    let count = owner.children.len();
+                    return Err(format!(
+                        "仍有 {count} 个 rejected Gateway candidate 的退出未确认；已保留 cleanup owner，拒绝启动新 Gateway：{error}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn drain_for_terminal_with<Stop>(&self, mut stop: Stop)
+    where
+        Stop: FnMut(&mut Child) -> Result<(), String>,
+    {
+        loop {
+            match self.retry_with(&mut stop) {
+                Ok(()) if self.is_idle() => return,
+                Ok(()) | Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    fn drain_for_terminal(&self) {
+        self.drain_for_terminal_with(stop_child_confirmed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owned_pids(&self) -> Vec<u32> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .children
+            .iter()
+            .map(Child::id)
+            .collect()
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum GatewayStopOutcome {
+    Stopped,
+    Uncertain { owned_count: usize, reason: String },
+}
+
 #[derive(Default)]
 pub(crate) struct AppState {
     pub(crate) proxy: Option<Child>,
     /// Rejected Gateway candidates whose exit could not yet be confirmed.
     /// They are never treated as the active proxy and retain process-local
     /// ownership until a later cleanup attempt can reap them.
-    pub(crate) rejected_gateway_candidates: Vec<Child>,
+    pub(crate) rejected_gateway_candidates: RejectedGatewayRegistry,
     pub(crate) proxy_port: u16,
     pub(crate) secret: String,
     /// 当前代理进程所用 adapter 名（deepseek | qwen | relay | openai-custom | openai-responses）；用于健康复用判定。
@@ -193,24 +331,6 @@ pub(crate) struct HistoryRecoveryChoice {
 }
 
 impl AppState {
-    fn retry_rejected_gateway_candidates(&mut self) {
-        self.rejected_gateway_candidates
-            .retain_mut(|child| match child.try_wait() {
-                Ok(Some(_)) => false,
-                Ok(None) => {
-                    if child.kill().is_err() {
-                        return !matches!(child.try_wait(), Ok(Some(_)));
-                    }
-                    child.wait().is_err()
-                }
-                Err(_) => true,
-            });
-    }
-
-    pub(crate) fn retain_rejected_gateway_candidate(&mut self, child: Child) {
-        self.rejected_gateway_candidates.push(child);
-    }
-
     pub(crate) fn clear_proxy_identity(&mut self) {
         self.secret.clear();
         self.provider.clear();
@@ -221,10 +341,24 @@ impl AppState {
         self.gateway_launch_context = None;
     }
 
-    pub(crate) fn stop_proxy(&mut self) {
+    fn stop_proxy_with<Stop>(&mut self, stop: Stop) -> GatewayStopOutcome
+    where
+        Stop: FnMut(&mut Child) -> Result<(), String>,
+    {
         kill_child(&mut self.proxy);
-        self.retry_rejected_gateway_candidates();
+        let rejected = self.rejected_gateway_candidates.retry_with(stop);
         self.clear_proxy_identity();
+        match rejected {
+            Ok(()) => GatewayStopOutcome::Stopped,
+            Err(reason) => GatewayStopOutcome::Uncertain {
+                owned_count: self.rejected_gateway_candidates.len(),
+                reason,
+            },
+        }
+    }
+
+    pub(crate) fn stop_proxy(&mut self) -> GatewayStopOutcome {
+        self.stop_proxy_with(stop_child_confirmed)
     }
 }
 
@@ -233,7 +367,8 @@ impl Drop for AppState {
         // `std::process::Child` does not kill on drop. Keep a final owned-child
         // safety net in addition to the Tauri exit events so a graceful app
         // teardown cannot orphan the managed gateway.
-        self.stop_proxy();
+        let _ = self.stop_proxy();
+        self.rejected_gateway_candidates.drain_for_terminal();
     }
 }
 
@@ -321,7 +456,8 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, ClaimScience, ExecuteScien
     claim_science: ClaimScience,
     execute_science: ExecuteScience,
     mut stop_gateway: StopGateway,
-) where
+) -> GatewayStopOutcome
+where
     R: tauri::Runtime,
     Cancel: FnMut(),
     Wait: FnMut(std::time::Duration) -> Vec<u32>,
@@ -337,7 +473,7 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, ClaimScience, ExecuteScien
         &tauri::AppHandle<R>,
         runtime::science::ScienceStopRequest,
     ) -> (runtime::science::ScienceStopOutcome, bool),
-    StopGateway: FnMut(&mut AppState),
+    StopGateway: FnMut(&mut AppState) -> GatewayStopOutcome,
 {
     // First give login its protocol-level cancel path and read-only preflight
     // its cancellation token. Do not signal a possibly committing login child
@@ -372,12 +508,12 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, ClaimScience, ExecuteScien
             );
         }
         let mut st = lock(&state);
-        stop_gateway(&mut st);
-    });
+        stop_gateway(&mut st)
+    })
 }
 
 #[allow(clippy::result_large_err)]
-fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> GatewayStopOutcome {
     let supervisor = app.state::<SharedCodexAuthSupervisor>().inner().clone();
     cleanup_for_exit_with(
         app,
@@ -400,7 +536,7 @@ fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         ScienceHostAdapter::claim_stop,
         |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
         AppState::stop_proxy,
-    );
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -409,7 +545,7 @@ enum NativeExitEvent {
     Exit,
 }
 
-type NativeExitCleanup<R> = fn(&tauri::AppHandle<R>);
+type NativeExitCleanup<R> = fn(&tauri::AppHandle<R>) -> GatewayStopOutcome;
 
 fn production_native_exit_cleanup<R: tauri::Runtime>() -> NativeExitCleanup<R> {
     cleanup_for_exit::<R>
@@ -419,16 +555,20 @@ fn run_native_exit_event_with<R, Cleanup>(
     app: &tauri::AppHandle<R>,
     event: NativeExitEvent,
     cleanup: Cleanup,
-) where
+) -> GatewayStopOutcome
+where
     R: tauri::Runtime,
-    Cleanup: FnOnce(&tauri::AppHandle<R>, NativeExitEvent),
+    Cleanup: FnOnce(&tauri::AppHandle<R>, NativeExitEvent) -> GatewayStopOutcome,
 {
-    cleanup(app, event);
+    cleanup(app, event)
 }
 
-fn run_native_exit_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: NativeExitEvent) {
+fn run_native_exit_event<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    event: NativeExitEvent,
+) -> GatewayStopOutcome {
     let cleanup = production_native_exit_cleanup();
-    run_native_exit_event_with(app, event, |app, _| cleanup(app));
+    run_native_exit_event_with(app, event, |app, _| cleanup(app))
 }
 
 pub(crate) fn publish_boot_state<R: tauri::Runtime>(
@@ -723,10 +863,23 @@ pub fn run() {
 
     app.run(|app, event| match event {
         tauri::RunEvent::Reopen { .. } => show_main_window(app),
-        tauri::RunEvent::ExitRequested { .. } => {
-            run_native_exit_event(app, NativeExitEvent::ExitRequested)
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            if matches!(
+                run_native_exit_event(app, NativeExitEvent::ExitRequested),
+                GatewayStopOutcome::Uncertain { .. }
+            ) {
+                api.prevent_exit();
+            }
         }
-        tauri::RunEvent::Exit => run_native_exit_event(app, NativeExitEvent::Exit),
+        tauri::RunEvent::Exit => {
+            let outcome = run_native_exit_event(app, NativeExitEvent::Exit);
+            if matches!(outcome, GatewayStopOutcome::Uncertain { .. }) {
+                let registry = lock(app.state::<SharedAppState>().inner())
+                    .rejected_gateway_candidates
+                    .clone();
+                registry.drain_for_terminal();
+            }
+        }
         _ => {}
     });
 }
@@ -750,8 +903,8 @@ mod tests {
         lock, production_boot_science_command, production_native_exit_cleanup,
         run_boot_decision_with, run_native_exit_event_with, run_second_instance_callback_with,
         run_startup_config_sequence, should_begin_boot, AppState, BootPublication,
-        BootScienceCommand, BootState, LaunchPath, NativeExitCleanup, NativeExitEvent,
-        SharedAppState, SharedLifecycle,
+        BootScienceCommand, BootState, GatewayStopOutcome, LaunchPath, NativeExitCleanup,
+        NativeExitEvent, SharedAppState, SharedLifecycle,
     };
 
     #[test]
@@ -963,10 +1116,10 @@ mod tests {
             let children = RefCell::new(vec![term_child, kill_child]);
             let wait_index = Cell::new(0);
 
-            run_native_exit_event_with(app.handle(), event, |app, observed_event| {
+            let outcome = run_native_exit_event_with(app.handle(), event, |app, observed_event| {
                 assert_eq!(observed_event, event);
                 actions.borrow_mut().push(format!("event:{event:?}"));
-                cleanup_for_exit_with(
+                let outcome = cleanup_for_exit_with(
                     app,
                     || actions.borrow_mut().push("codex:cancel".into()),
                     |timeout| {
@@ -1027,11 +1180,13 @@ mod tests {
                     },
                     |app_state| {
                         actions.borrow_mut().push("gateway:stop".into());
-                        app_state.stop_proxy();
+                        app_state.stop_proxy()
                     },
                 );
                 actions.borrow_mut().push(format!("completed:{event:?}"));
+                outcome
             });
+            assert_eq!(outcome, GatewayStopOutcome::Stopped);
 
             assert_eq!(wait_index.get(), 3);
             assert_eq!(lifecycle.current_generation(), generation);
@@ -1072,6 +1227,65 @@ mod tests {
                 "completed:Exit",
             ]
         );
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn rejected_gateway_terminal_uncertainty_blocks_exit_until_reap_is_confirmed() {
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let child_pid = child.id();
+        let authority = AppState::default();
+        authority.rejected_gateway_candidates.retain(child);
+        let state: SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .manage(lifecycle)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let outcome =
+            run_native_exit_event_with(app.handle(), NativeExitEvent::ExitRequested, |app, _| {
+                cleanup_for_exit_with(
+                    app,
+                    || {},
+                    |_| Vec::new(),
+                    |_| {},
+                    |_| {},
+                    |_| -> Result<
+                        crate::runtime::science::ScienceStopRequest,
+                        crate::runtime::science::ScienceStopFailure,
+                    > { panic!("no Science owner expected") },
+                    |_, _| -> (crate::runtime::science::ScienceStopOutcome, bool) {
+                        panic!("no Science stop expected")
+                    },
+                    |current| {
+                        current
+                            .stop_proxy_with(|_| Err("injected terminal stop uncertainty".into()))
+                    },
+                )
+            });
+        assert!(matches!(
+            outcome,
+            GatewayStopOutcome::Uncertain { owned_count: 1, .. }
+        ));
+        let rejected = lock(&state).rejected_gateway_candidates.clone();
+        assert_eq!(rejected.owned_pids(), vec![child_pid]);
+        assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+
+        let attempts = Cell::new(0usize);
+        rejected.drain_for_terminal_with(|child| {
+            let next = attempts.get() + 1;
+            attempts.set(next);
+            if next < 3 {
+                Err("injected repeated terminal uncertainty".into())
+            } else {
+                crate::runtime::system::stop_child_confirmed(child)
+            }
+        });
+        assert_eq!(attempts.get(), 3);
+        assert!(rejected.is_idle());
+        assert_ne!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
     }
 
     #[test]

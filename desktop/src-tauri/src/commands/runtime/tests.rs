@@ -5133,6 +5133,14 @@ fn r0_start_gateway_only_failure_matrix_preserves_current_partial_effects() {
 }
 
 #[test]
+fn gateway_spawn_production_race_preserves_replacement_and_candidate_side_effects() {
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_gateway_spawn_production_race_preserves_replacement",
+        &[],
+    );
+}
+
+#[test]
 fn s6_registered_start_proxy_is_absent_from_invoke_surface() {
     let app_source = include_str!("../../lib.rs");
     let registration = app_source
@@ -5697,6 +5705,149 @@ exit 23
         );
     }
     fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+#[ignore = "isolated production Gateway spawn race; temp HOME, loopback Gateway/upstream, and controlled replacement child only"]
+fn isolated_gateway_spawn_production_race_preserves_replacement() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let tmp = tmpdir("gateway-spawn-production-race");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    let ready = tmp.join("spawn-ready");
+    let release = tmp.join("spawn-release");
+    let wrapper = bin_dir.join("csswitch-gateway-spawn-barrier");
+    let mock_upstream = start_mock_upstream();
+    let mut port_reservations = reserve_ssh_fixture_ports();
+    let proxy_port = port_reservations.proxy_port;
+    let sandbox_port = port_reservations.sandbox_port;
+
+    let mut env_guard = EnvGuard::new();
+    env_guard.set("HOME", &home);
+    env_guard.set("CSSWITCH_REPO", &root);
+    env_guard.set("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+    let config_dir = config::default_dir();
+    let mut cfg = ssh_fixture_config(mock_upstream.port, proxy_port, sandbox_port);
+    cfg.reuse_system_ssh = false;
+    cfg.secret = config::new_id();
+    let profile = cfg.active_profile().unwrap().clone();
+    config::save_to(&config_dir, &cfg).unwrap();
+
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .manage(lifecycle.clone())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let real_gateway = proxy_lifecycle::gateway_bin_path(app.handle()).unwrap();
+    write_executable(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\n: > '{}'\nwhile [ ! -f '{}' ]; do /bin/sleep 0.01; done\nexec '{}' \"$@\"\n",
+            ready.display(),
+            release.display(),
+            real_gateway.display()
+        ),
+    );
+    env_guard.set("CSSWITCH_GATEWAY_BIN", &wrapper);
+    port_reservations.release_proxy();
+
+    let worker_handle = app.handle().clone();
+    let worker_state = state.clone();
+    let worker_lifecycle = lifecycle.clone();
+    let worker = thread::spawn(move || {
+        start_internal_active_gateway(&worker_handle, &worker_state, worker_lifecycle.as_ref())
+    });
+    for _ in 0..300 {
+        if ready.is_file() {
+            break;
+        }
+        assert!(
+            !worker.is_finished(),
+            "Gateway start exited before spawn barrier"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        ready.is_file(),
+        "production Gateway spawn did not reach barrier"
+    );
+
+    let replacement = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let replacement_pid = replacement.id();
+    lifecycle.bump_generation();
+    {
+        let mut current = state
+            .try_lock()
+            .expect("AppState must be available while candidate command is outside the lock");
+        current.proxy = Some(replacement);
+        current.proxy_port = proxy_port;
+        current.secret = "replacement-secret-0123456789abcdef".into();
+        current.provider = "replacement-provider".into();
+        current.gateway_kind = "rust".into();
+        current.shim_mode = "off".into();
+        current.launch_id = "replacement-launch-0123456789abcdef".into();
+        current.key_fp = 0x5eed;
+        current.gateway_launch_context = Some(proxy_lifecycle::GatewayLaunchRecipe {
+            profile: profile.clone(),
+            science_runtime: None,
+        });
+    }
+    let canonical_log = crate::runtime::system::log_path("proxy.log");
+    fs::create_dir_all(canonical_log.parent().unwrap()).unwrap();
+    fs::write(&canonical_log, b"replacement-log\n").unwrap();
+    let canonical_key = config_dir.join("runtime/skill-install-bridge.key");
+    fs::create_dir_all(canonical_key.parent().unwrap()).unwrap();
+    fs::write(&canonical_key, b"replacement-key\n").unwrap();
+    fs::write(&release, b"release\n").unwrap();
+
+    let error = match worker.join().unwrap() {
+        Ok(_) => panic!("generation/replacement drift must reject the spawned candidate"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("owner 已变化"), "{error}");
+    {
+        let mut current = lock(&state);
+        let replacement = current
+            .proxy
+            .as_mut()
+            .expect("replacement child must survive");
+        assert_eq!(replacement.id(), replacement_pid);
+        assert!(replacement.try_wait().unwrap().is_none());
+        assert_eq!(current.provider, "replacement-provider");
+        assert_eq!(current.launch_id, "replacement-launch-0123456789abcdef");
+        let _ = current.stop_proxy();
+    }
+    assert!(lock(&state).rejected_gateway_candidates.is_idle());
+    assert_eq!(fs::read(&canonical_log).unwrap(), b"replacement-log\n");
+    assert_eq!(fs::read(&canonical_key).unwrap(), b"replacement-key\n");
+    for _ in 0..200 {
+        if !crate::proc::loopback_port_in_use(
+            proxy_port,
+            crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+        ) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!crate::proc::loopback_port_in_use(
+        proxy_port,
+        crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+    ));
+    drop(env_guard);
+    drop(app);
+    fs::remove_dir_all(tmp).unwrap();
 }
 
 #[test]

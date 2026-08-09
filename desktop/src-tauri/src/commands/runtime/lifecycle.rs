@@ -439,10 +439,22 @@ where
             owner,
             execution,
         );
-        st.stop_proxy();
-        sandbox_res
-            .map(|_| ())
-            .map_err(|e| format!("代理已停；但{e}真实实例 8765 未受影响。"))
+        let gateway_res = st.stop_proxy();
+        match (sandbox_res, gateway_res) {
+            (Ok(_), crate::GatewayStopOutcome::Stopped) => Ok(()),
+            (Err(error), crate::GatewayStopOutcome::Stopped) => {
+                Err(format!("代理已停；但{error}真实实例 8765 未受影响。"))
+            }
+            (Ok(_), crate::GatewayStopOutcome::Uncertain { reason, .. }) => Err(format!(
+                "Gateway candidate 停止结果未确认；应用仍保留 process-local owner：{reason}"
+            )),
+            (
+                Err(error),
+                crate::GatewayStopOutcome::Uncertain { reason, .. },
+            ) => Err(format!(
+                "Gateway candidate 停止结果未确认且 Science 停止失败；应用仍保留 process-local owner：{reason}；{error}"
+            )),
+        }
     })
 }
 

@@ -128,14 +128,14 @@ impl GatewaySpawnCandidateOwner {
 
 struct GatewaySpawnCandidate {
     child: Option<std::process::Child>,
-    state: SharedAppState,
+    rejected: crate::RejectedGatewayRegistry,
 }
 
 impl GatewaySpawnCandidate {
     fn new(child: std::process::Child, state: &SharedAppState) -> Self {
         Self {
             child: Some(child),
-            state: state.clone(),
+            rejected: lock(state).rejected_gateway_candidates.clone(),
         }
     }
 
@@ -152,21 +152,29 @@ impl GatewaySpawnCandidate {
     }
 
     fn reject(self) -> Result<(), String> {
-        self.reject_with(stop_tracked_gateway_child)
+        self.reject_with(crate::runtime::system::stop_child_confirmed)
     }
 
     fn reject_with<Stop>(mut self, stop: Stop) -> Result<(), String>
     where
         Stop: FnOnce(&mut std::process::Child) -> Result<(), String>,
     {
-        let mut child = self
-            .child
-            .take()
-            .expect("rejected Gateway candidate must own its child");
-        match stop(&mut child) {
-            Ok(()) => Ok(()),
+        let stopped = stop(
+            self.child
+                .as_mut()
+                .expect("rejected Gateway candidate must own its child"),
+        );
+        match stopped {
+            Ok(()) => {
+                self.child.take();
+                Ok(())
+            }
             Err(error) => {
-                lock(&self.state).retain_rejected_gateway_candidate(child);
+                let child = self
+                    .child
+                    .take()
+                    .expect("uncertain Gateway candidate must retain its child");
+                self.rejected.retain(child);
                 Err(format!(
                     "新 Gateway candidate 停止结果未确认；已保留独立 cleanup owner，未覆盖 replacement：{error}"
                 ))
@@ -177,12 +185,12 @@ impl GatewaySpawnCandidate {
 
 impl Drop for GatewaySpawnCandidate {
     fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
+        let Some(child) = self.child.take() else {
             return;
         };
-        if stop_tracked_gateway_child(&mut child).is_err() {
-            lock(&self.state).retain_rejected_gateway_candidate(child);
-        }
+        // Unwind/early-return fallback only restores affine ownership. It must
+        // not invoke another fallible stop callback while already unwinding.
+        self.rejected.retain(child);
     }
 }
 
@@ -235,6 +243,7 @@ impl Drop for GatewayCandidateLog {
 
 fn app_state_gateway_slot_is_empty(st: &AppState) -> bool {
     st.proxy.is_none()
+        && st.rejected_gateway_candidates.is_idle()
         && st.secret.is_empty()
         && st.provider.is_empty()
         && st.gateway_kind.is_empty()
@@ -269,46 +278,9 @@ fn finish_failed_gateway_candidate(
     current_owner
 }
 
-fn stop_tracked_gateway_child(child: &mut std::process::Child) -> Result<(), String> {
-    match child.try_wait() {
-        Ok(Some(_)) => return Ok(()),
-        Ok(None) => {}
-        Err(error) => return Err(format!("无法确认旧 Gateway 子进程状态：{error}")),
-    }
-    if let Err(error) = child.kill() {
-        return match child.try_wait() {
-            Ok(Some(_)) => Ok(()),
-            _ => Err(format!("无法停止旧 Gateway 子进程：{error}")),
-        };
-    }
-    child
-        .wait()
-        .map(|_| ())
-        .map_err(|error| format!("等待旧 Gateway 子进程退出失败：{error}"))
-}
-
 fn retry_rejected_gateway_candidates_outside_state(state: &SharedAppState) -> Result<(), String> {
-    let candidates = {
-        let mut current = lock(state);
-        std::mem::take(&mut current.rejected_gateway_candidates)
-    };
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    let mut unconfirmed = Vec::new();
-    for mut child in candidates {
-        if stop_tracked_gateway_child(&mut child).is_err() {
-            unconfirmed.push(child);
-        }
-    }
-    if unconfirmed.is_empty() {
-        return Ok(());
-    }
-    let count = unconfirmed.len();
-    lock(state).rejected_gateway_candidates.extend(unconfirmed);
-    Err(format!(
-        "仍有 {count} 个 rejected Gateway candidate 的退出未确认；已保留 cleanup owner，拒绝启动新 Gateway。"
-    ))
+    let rejected = lock(state).rejected_gateway_candidates.clone();
+    rejected.retry_with(crate::runtime::system::stop_child_confirmed)
 }
 
 fn cleanup_tracked_gateway_with<'a, Stop>(
@@ -570,7 +542,13 @@ fn start_proxy_for_inner<R: Runtime>(
             }
         }
 
-        st = cleanup_tracked_gateway_with(state, lifecycle, st, gen, stop_tracked_gateway_child)?;
+        st = cleanup_tracked_gateway_with(
+            state,
+            lifecycle,
+            st,
+            gen,
+            crate::runtime::system::stop_child_confirmed,
+        )?;
         let legacy_script = asset_root(app).map(|root| root.join("proxy/csswitch_proxy.py"));
         let (next_state, _) = run_legacy_cleanup_outside_state_with(
             state,

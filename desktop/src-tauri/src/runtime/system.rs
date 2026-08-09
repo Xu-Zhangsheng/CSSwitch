@@ -184,6 +184,24 @@ pub(crate) fn kill_child(slot: &mut Option<Child>) {
     }
 }
 
+pub(crate) fn stop_child_confirmed(child: &mut Child) -> Result<(), String> {
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(error) => return Err(format!("无法确认 Gateway 子进程状态：{error}")),
+    }
+    if let Err(error) = child.kill() {
+        return match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            _ => Err(format!("无法停止 Gateway 子进程：{error}")),
+        };
+    }
+    child
+        .wait()
+        .map(|_| ())
+        .map_err(|error| format!("等待 Gateway 子进程退出失败：{error}"))
+}
+
 /// Open a URL with the system browser (macOS `open`) and verify exit status.
 fn select_browser_open_binary(override_bin: Option<std::ffi::OsString>) -> Result<PathBuf, String> {
     let Some(raw) = override_bin else {

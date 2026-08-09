@@ -701,17 +701,116 @@ fn rejected_gateway_candidate_retains_a_separate_cleanup_owner_on_stop_uncertain
         .unwrap_err();
     assert!(error.contains("独立 cleanup owner"));
     {
-        let mut current = crate::lock(&state);
+        let current = crate::lock(&state);
         assert!(current.proxy.is_none());
         assert_eq!(current.rejected_gateway_candidates.len(), 1);
-        assert_eq!(current.rejected_gateway_candidates[0].id(), child_pid);
-        assert!(current.rejected_gateway_candidates[0]
-            .try_wait()
-            .unwrap()
-            .is_none());
+        assert_eq!(
+            current.rejected_gateway_candidates.owned_pids(),
+            vec![child_pid]
+        );
+        assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
     }
     retry_rejected_gateway_candidates_outside_state(&state).unwrap();
-    assert!(crate::lock(&state).rejected_gateway_candidates.is_empty());
+    assert!(crate::lock(&state).rejected_gateway_candidates.is_idle());
+}
+
+#[test]
+fn rejected_gateway_candidate_panic_restores_owner_before_unwind_completes() {
+    let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let child_pid = child.id();
+    let candidate = GatewaySpawnCandidate::new(child, &state);
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = candidate
+            .reject_with(|_| -> Result<(), String> { panic!("injected candidate stop panic") });
+    }));
+    assert!(unwind.is_err());
+    let rejected = crate::lock(&state).rejected_gateway_candidates.clone();
+    assert_eq!(rejected.owned_pids(), vec![child_pid]);
+    assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+
+    rejected
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap();
+    assert!(rejected.is_idle());
+    assert_ne!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+}
+
+#[test]
+fn rejected_gateway_batch_panic_restores_every_affine_owner() {
+    let rejected = crate::RejectedGatewayRegistry::default();
+    let mut pids = Vec::new();
+    for _ in 0..3 {
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        pids.push(child.id());
+        rejected.retain(child);
+    }
+    pids.sort_unstable();
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = rejected
+            .retry_with(|_| -> Result<(), String> { panic!("injected rejected-batch panic") });
+    }));
+    assert!(unwind.is_err());
+    let mut retained = rejected.owned_pids();
+    retained.sort_unstable();
+    assert_eq!(retained, pids);
+    assert!(pids
+        .iter()
+        .all(|pid| unsafe { libc::kill(*pid as i32, 0) } == 0));
+
+    rejected
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap();
+    assert!(rejected.is_idle());
+}
+
+#[test]
+fn rejected_gateway_cleanup_claim_blocks_a_concurrent_spawn_reservation() {
+    let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let rejected = crate::lock(&state).rejected_gateway_candidates.clone();
+    let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let child_pid = child.id();
+    rejected.retain(child);
+    let worker_registry = rejected.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        worker_registry.retry_with(|_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Err("injected persistent uncertainty".into())
+        })
+    });
+    started_rx.recv().unwrap();
+
+    let lifecycle = crate::lifecycle::Lifecycle::new();
+    let reserve = GatewaySpawnCandidateOwner::reserve(
+        &mut crate::lock(&state),
+        lifecycle.current_generation(),
+        32124,
+        "same-persistent-secret".into(),
+        "deepseek".into(),
+        "rust".into(),
+        "off".into(),
+        "44444444444444444444444444444444".into(),
+        31,
+        gateway_spawn_recipe("cleanup-in-flight-profile"),
+    );
+    assert!(reserve.is_err());
+    assert!(rejected
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap_err()
+        .contains("cleanup 正在进行"));
+
+    release_tx.send(()).unwrap();
+    assert!(worker.join().unwrap().is_err());
+    assert_eq!(rejected.owned_pids(), vec![child_pid]);
+    rejected
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap();
+    assert!(rejected.is_idle());
 }
 
 #[test]

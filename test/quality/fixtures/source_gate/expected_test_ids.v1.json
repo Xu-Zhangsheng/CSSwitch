@@ -518,6 +518,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_survives_app_state_restart",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_register_failure_never_enters_remove",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_compensation_diagnostics_are_credential_free",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_gateway_spawn_production_race_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_late_failure_preserves_preexisting_managed_stub_when_science_stopped",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt",
@@ -583,6 +584,10 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_compensation_diagnostics_are_credential_free": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary compensation diagnostic redaction; temp HOME, fake Science, and loopback only"
+        },
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_gateway_spawn_production_race_preserves_replacement": {
+          "boundary": "acceptance",
+          "reason": "isolated production Gateway spawn race; temp HOME, loopback Gateway/upstream, and controlled replacement child only"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway": {
           "boundary": "acceptance",
@@ -799,6 +804,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::config_last_error_json_preserves_typed_config_error",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::f1_a_history_crash_and_concurrent_config_recovery_is_owned",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::f1_a_history_restore_and_resume_is_one_backend_operation",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::gateway_spawn_production_race_preserves_replacement_and_candidate_side_effects",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::h3_finalize_failures_preserve_replayable_intent",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_race_revalidates_before_delete",
@@ -806,6 +812,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_survives_app_state_restart",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_register_failure_never_enters_remove",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_compensation_diagnostics_are_credential_free",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_gateway_spawn_production_race_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_healthy_reopen_catalog_failure_restores_prior_owned_gateway",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_late_failure_preserves_preexisting_managed_stub_when_science_stopped",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_late_failure_restarts_prior_managed_science_with_fresh_receipt",
@@ -1114,7 +1121,6 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::provider::tests::upstream_endpoint_by_adapter",
         "desktop/src-tauri/Cargo.toml::lib::runtime::provider::tests::visible_catalog_default_role_or_binding_changes_require_science_restart",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy::tests::health_timeout_reason_flags_port_conflict_and_never_blames_key",
-        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy::tests::should_write_back_requires_both_gen_and_secret",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::acceptance_native_upstream_override_is_loopback_only_and_native_only",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::acceptance_override_is_wired_after_env_clear_and_before_formal_spawn",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::build_rs_stages_executable_sidecar_for_tauri_external_bin",
@@ -1132,6 +1138,8 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_lookup_prefers_explicit_env_binary",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replacement",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_reuse_health_releases_app_state_and_rejects_stale_owner_result",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_spawn_candidate_reserves_a_unique_full_owner_and_preserves_replacement",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_spawn_generation_drift_clears_only_its_marker_and_never_publishes_stale_log",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::invalid_explicit_gateway_binary_fails_closed_without_fallback",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener",
@@ -1140,6 +1148,11 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::mismatched_recovery_target_preserves_listener_and_journal",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_matrix",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::rejected_gateway_batch_panic_restores_every_affine_owner",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::rejected_gateway_candidate_panic_restores_owner_before_unwind_completes",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::rejected_gateway_candidate_retains_a_separate_cleanup_owner_on_stop_uncertainty",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::rejected_gateway_cleanup_claim_blocks_a_concurrent_spawn_reservation",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::skill_bridge_key_staging_cannot_overwrite_canonical_before_publish",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::skill_bridge_token_rotates_with_gateway_launch_identity",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::history_recovery::tests::history_resume_handoff_advances_only_by_complete_record_cas",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::route_reconcile::tests::r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes",
@@ -1290,6 +1303,7 @@
         "desktop/src-tauri/Cargo.toml::lib::tests::r0_second_instance_callback_boot_state_matrix_reuses_one_click_login_cmd",
         "desktop/src-tauri/Cargo.toml::lib::tests::r1_native_exit_wait_releases_read_model_and_stale_result_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::tests::redact_scrubs_secret_and_is_noop_when_empty",
+        "desktop/src-tauri/Cargo.toml::lib::tests::rejected_gateway_terminal_uncertainty_blocks_exit_until_reap_is_confirmed",
         "desktop/src-tauri/Cargo.toml::lib::tests::should_begin_boot_only_from_idle_or_failed"
       ]
     },
