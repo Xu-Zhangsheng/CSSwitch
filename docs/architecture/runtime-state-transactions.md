@@ -73,7 +73,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
   intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
-- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings` 与 native exit 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。cold prior stop、history、DB recovery、compensation、downgrade 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway reuse 先在 `AppState` 下冻结 generation 与 child PID、端口、secret、provider、gateway/shim、launch id、key fingerprint 和完整 launch recipe，锁外执行 HTTP health，再按 generation + 完整 owner identity CAS 接受结果；陈旧结果 fail closed，不能清理或覆盖 replacement Gateway。Gateway spawn 后的 health poll、旧 tracked child stop/wait，以及 legacy listener 的身份复核、TERM 与退出轮询均在 `AppState` 锁外；spawn 本身仍在 `AppState` 锁内；
+- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings` 与 native exit 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。cold prior stop、history、DB recovery、compensation、downgrade 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway reuse 先在 `AppState` 下冻结 generation 与 child PID、端口、secret、provider、gateway/shim、launch id、key fingerprint 和完整 launch recipe，锁外执行 HTTP health，再按 generation + 完整 owner identity CAS 接受结果；陈旧结果 fail closed，不能清理或覆盖 replacement Gateway。Gateway spawn 同样只在 `AppState` 下冻结 generation、空 slot、secret、完整 candidate owner 与 launch recipe；candidate log、命令与环境构造、Skill bridge 配置 staging、`Command::spawn()` 和 health poll 都在锁外，再按 generation + 完整 candidate owner CAS 接受结果。generation 漂移或 replacement 已出现时停止 candidate，绝不覆盖 replacement；无法确认退出的 child owner 移交独立 registry。typed `GatewayStopOutcome::Uncertain` 必须由 destructive caller 消费，并在 config、credential 或 binding commit 前 fail closed；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 的进程内 mutex 只覆盖 load-modify-save；所有可能发布 canonical
   config、迁移、降级或滚动备份的公开入口还会在 pinned config 目录内取得同一
@@ -164,8 +164,11 @@ process-local owner claim、锁外 HTTP 和 generation + full-owner CAS。旧 tr
 成功只按 generation + full-owner cleanup marker CAS 清空身份，失败则只在 owner 未变化时恢复 child；
 replacement 永不被覆盖。旧版 Python listener 的端口探测、`lsof` / `ps`、TERM 与退出轮询也在
 `AppState` 外执行，TERM 前以 UID、PID、process start、command、script 与唯一 listener 完整复核；
-identity drift fail closed。spawn 仍保留在 `AppState` 内，未随清理边界扩大。controller 只在全部接受
-条件通过后返回非序列化 `GatewayReceipt`。receipt 同时绑定 route、`Reused/Restarted`、health
+identity drift fail closed。spawn 的 reservation 只冻结 generation、空 slot、secret、完整 candidate
+owner 与 launch recipe；candidate log、命令与环境、Skill bridge staging、`Command::spawn()` 及 health
+均在 `AppState` 外，随后按 generation + 完整 candidate owner CAS 接受。stale candidate 不覆盖
+replacement；退出状态不确定的 child 由独立 registry 保留。controller 只在全部接受条件通过后返回
+非序列化 `GatewayReceipt`。receipt 同时绑定 route、`Reused/Restarted`、health
 identity、catalog fingerprint 与完整 `GatewayLaunchRecipe`；当 host context 来自健康的
 remembered Science 时，recipe 保存该 effective runtime，而不是只复制 caller 的显式参数。
 `AppState.gateway_launch_context` 与 receipt 使用同一 recipe。无 bundled caller 的 registered
