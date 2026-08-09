@@ -65,6 +65,7 @@ façade；生产实现按独立维护原因分布为：
 | live process/listener identity 与 runtime state | `runtime/science/runtime_state.rs` |
 | managed launch、receipt 与启动后身份提交 | `runtime/science/managed_launch.rs` |
 | preflight、probe、reuse、URL 与 stop lifecycle | `runtime/science/lifecycle.rs` |
+| typed host launch/stop 投影、environment exposure 与 staged identity verification | `runtime/science/host_adapter.rs::ScienceHostAdapter` |
 | 历史测试身份 | `runtime/science/tests.rs`；仍保持 `runtime::science::tests::*` |
 
 这些片段仍编译在原 `runtime::science` 模块内；拆分没有建立新的状态 owner，也没有
@@ -72,6 +73,29 @@ façade；生产实现按独立维护原因分布为：
 权限。Science transaction 与 protected projection 继续由
 `runtime/sandbox_session/` 拥有，Gateway 进程编排继续由
 `runtime/proxy_lifecycle/` 拥有。
+
+## CSSwitch → Science 生产控制链
+
+这条链只描述 CSSwitch 自有的运行编排；Science 内部的 project、Agent、
+artifact、memory、environment 和 official entitlement 仍由 Science 或外部服务拥有。
+
+| 阶段 | production caller | 当前 owner | 输出 / 失败边界 |
+|---|---|---|---|
+| runtime 预检 | `desktop/src/runtime-controller.js::oneClick` → registered `science_runtime_preflight` | `commands/runtime/status.rs` | 返回 `installed_ready` / `cached_choice_required` / missing / error；只决定是否允许继续，不启动进程 |
+| 启动 IPC | `desktop/src/runtime-controller.js::oneClick` → `runOneClick` → registered `one_click_login` | `commands/runtime/one_click.rs` | 锁外 auth preflight 与 backend failure 投影；不直接启动 OS 进程 |
+| 入口决策 | command → `runtime/sandbox_session/one_click.rs::one_click_login_entry` | `runtime/sandbox_session/one_click.rs` | recovery / healthy reopen / cold 三路分派，以 typed journal 与 generation 拒绝漂移 |
+| cold coordinator | cold branch → `run_cold_one_click` | `one_click/cold.rs` | 顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与 finalize |
+| Science phase | coordinator → `run_managed_science_launch_phase` | `one_click/cold/science_phase.rs` | 启动、health、listener/runtime identity、managed receipt、DB reverify/restart；失败回传 typed phase result |
+| host 边界 | Science phase / recovery / stop caller → `ScienceHostAdapter` | `runtime/science/host_adapter.rs` | 生成 allowlisted argv/env，投影 script acceptance、health、identity、receipt 与 stop outcome；不重建 host identity |
+| OS 进程 | adapter → bundled `scripts/launch-virtual-sandbox.sh` / `stop-science-sandbox.sh` → exact `claude-science` | scripts 与已选 runtime 的窄 host contract | `env -i`、隔离 HOME/data-dir、loopback port 与 exact listener/PID；任一身份不可证即 fail closed |
+| 读模型 | frontend polling → registered `status` | `commands/runtime/status.rs` | 只投影轻量 HTTP health 与已有 metadata，不升级为 strong runtime identity |
+| 显式停止 | frontend `stop_all` / `quit_app` / mode/settings teardown | `commands/runtime/lifecycle.rs` + `ScienceHostAdapter` | owner claim → 锁外 stop/wait → generation + full identity CAS；陈旧结果不得清 replacement runtime |
+| native exit | Tauri `RunEvent::Exit*` | `desktop/src-tauri/src/lib.rs` | terminal best-effort cleanup；当前是与显式 quit 不同的 sibling path，仍待收敛 |
+
+Gateway 在 Science phase 之前由 `runtime/proxy_lifecycle/` 建立并提供 typed
+launch receipt；Science 启动后的 provider/model 请求再进入 packaged Rust Gateway。
+因此“Science 健康”、“Gateway 健康”、“provider 能力通过”和“Science-native
+功能可用”是四个不能相互补绿的结论。
 
 ## 分离六个事实
 

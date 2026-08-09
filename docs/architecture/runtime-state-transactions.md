@@ -29,10 +29,13 @@
 | 状态或事务边界 | 当前源码 owner |
 |---|---|
 | `AppState` / `SharedLifecycle` 类型与进程级组合 | `desktop/src-tauri/src/lib.rs` |
-| command 级 mode/settings/stop/quit 串行编排 | `commands/runtime/lifecycle.rs` |
+| command 级 mode/settings/stop/显式 quit 串行编排 | `commands/runtime/lifecycle.rs` |
+| macOS native exit 的 terminal cleanup 与进程退出投影 | `desktop/src-tauri/src/lib.rs::cleanup_for_exit_with` / `cleanup_for_exit` / `run_native_exit_event` |
 | 一键 IPC、锁外 auth preflight 与 UI failure 投影 | `commands/runtime/one_click.rs` |
 | typed entry decision、protected projection、journal recovery 与 healthy / cold branch dispatch | `runtime/sandbox_session/one_click.rs` |
-| mutating cold/recovery 的 prior stop、SSH、authority、Gateway、Science、route、finalize 与 compensation 编排 | `runtime/sandbox_session/one_click/cold.rs` |
+| mutating cold/recovery 的 prior stop、SSH、authority、Gateway、phase dispatch、route 与 finalize 顺序编排 | `runtime/sandbox_session/one_click/cold.rs` |
+| cold path 的 managed Science launch、health、DB reverify 与 bounded restart phase | `runtime/sandbox_session/one_click/cold/science_phase.rs` |
+| cold failure 的 aggregate compensation outcome 与五个 top-level effect 执行顺序 | `runtime/sandbox_session/one_click/cold/compensation.rs` |
 | protected snapshot 合同、capture 与 restore | `runtime/sandbox_session/authority_snapshot.rs` façade及其 `authority_snapshot/` 片段 |
 | one-click authority capture、verified ticket、restore 与 cleanup 接口 | `runtime/sandbox_session/authority_transaction.rs` |
 | history exact stop、snapshot、credential publication、finalize 与 resume handoff | `runtime/sandbox_session/history_recovery.rs` |
@@ -45,6 +48,13 @@
 `science.rs`、`proxy_lifecycle.rs` 和部分 `sandbox_session` 根文件是保持历史
 module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`、
 `Lifecycle`、`Config`、receipt/manifest 与 live identity 的既有组合决定。
+
+显式 `quit_app` 和 macOS native exit 是两条不同的 production path。前者通过
+`commands/runtime/lifecycle.rs` 复用 `stop_all` 的 process-local owner claim、锁外 wait
+和结果 CAS，只有完整停止成功才调用 `app.exit(0)`。后者由 `lib.rs`
+的 Tauri `RunEvent::Exit*` 处理器直接编排 terminal cleanup；它不是 frontend invoke，
+且尚未收敛到同一 owner-claim / wait / CAS 边界。任何“退出链已统一”的结论
+都必须同时检查这两条路径。
 
 ## 锁序与并发
 

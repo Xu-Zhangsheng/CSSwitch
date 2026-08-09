@@ -158,7 +158,11 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
   connector 与 managed prompt，但不会启动受管 Science 或正式 Gateway 服务。两个 command 各自返回 typed result；frontend
   每个动作只提交一个 intent 并渲染 `status/message`，不串联或编排事务。Doctor/repair
   结果都不等于 provider、Science、artifact、installed 或 live 验收。
-- 关闭窗口只隐藏；显式退出才按受管顺序停止 Science/Gateway。
+- 关闭窗口只隐藏；frontend 显式 `quit_app` 由
+  `commands/runtime/lifecycle.rs` 复用完整 `stop_all` 边界，只有停止成功才退出。
+  macOS/Tauri `RunEvent::Exit*` 则是 `desktop/src-tauri/src/lib.rs` 拥有的独立 native-exit
+  cleanup path，不是 frontend command caller；它当前仍为 best-effort sibling stop
+  边界，不得与显式 quit 的 owner-claim / wait / CAS 结论合并。
 
 ## 条件入口
 

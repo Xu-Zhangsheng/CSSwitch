@@ -14,12 +14,26 @@
 
 新的唯一验收顺序是：**重要重构决策 → production source → exact artifact → isolated-live → authorized live**。当前映射、每层进入条件、授权边界和故障 fixture 边界只在[生产链路验收](../../docs/operations/real-machine-acceptance.md)维护；Science 运行细则见[Science 探针合同](../../docs/operations/science-probe-spec.md)。
 
-2026-08-08 当前已验收 source/artifact binding 为
+2026-08-08 最新已验收的 exact source/artifact binding 为
 `next@9cc0d15d457c911047585c5fb7302702e26f4e43`。独立 detached exact worktree 的固定
 15-suite source gate 为 `PASS`（15/15 suites、15/15 observations）；随后由该 SHA 构建并经 G1
 receipt 绑定的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science 0.1.25 exact tuple
 重新完成 `B-RUNTIME-01=PASS`，并在同一 tuple 下完成新的 `B-CORE-01=PASS`。后续文档提交只
 记录证据，不能改写被构建或运行的 source/artifact identity。
+
+当前可达的 committed source 是
+`next@5b16241ed4da963b72de351684c5cae263193384`，已包含 B-SKILL acceptance seam
+及相关 production source 变化，因此不能继承 `9cc0d15` 的 artifact 或
+live PASS。2026-08-09 在短路径、non-local detached clone 中为该 exact SHA 取得
+canonical 15-suite `PASS`（15/15 suites、15/15 observations、runner exit 0）；run ID
+`dd80c0388616105becc5a3c8d061f29b`，completion seal 绑定的 source snapshot manifest
+SHA-256 为 `ca67558e9ddc37761fac476b6ff7a213f00351d5cd599a27252591481c1a233e`。
+该 PASS 只证明 `5b16241` committed baseline，不自动覆盖后续 owner-map 变更。
+
+当前唯一 NEXT 仍是完成主体 source rebaseline：固定 production owner map，
+将最终变更形成新的 clean exact candidate，再取得 canonical 15-suite completion
+seal 与 fresh clean-context source review。Skill / MCP 安装与运行探针后置，
+不驱动本阶段主体重构。
 
 ## 当前源码问题
 
@@ -38,7 +52,7 @@ receipt 绑定的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science
 | runtime mutation 与 stop ownership | source anchors mapped；replacement/race fixture 与 sibling gap 待 source seal | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
-| Science host adapter 与 Skill host bridge | `c4a1159` exact-SHA 13-suite source gate `PASS`；acceptance-only loopback Git seam 已封口 | `c4a1159` 的 `CSSwitch Test.app`、packaged Gateway 与 Science 0.1.25 tuple 已绑定 | `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
+| Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；`5b16241` exact-SHA canonical 15-suite `PASS`。日期化调查记录的 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object，不另行构成 current production source PASS | `c4a1159` exact artifact 只作为当次调查的日期化 identity；`5b16241` current exact artifact `NOT-RUN` | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
