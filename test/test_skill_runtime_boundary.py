@@ -1176,10 +1176,15 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "#[derive", 1
         )[0]
         self.assertLess(
-            cleanup_flow.index("stop_science("), cleanup_flow.index("stop_gateway(")
+            cleanup_flow.index("execute_process_local_science_stop_with"),
+            cleanup_flow.index("stop_gateway("),
         )
         self.assertLess(
-            production_cleanup.index("ScienceHostAdapter::stop("),
+            production_cleanup.index("ScienceHostAdapter::claim_stop"),
+            production_cleanup.index("ScienceHostAdapter::execute_stop"),
+        )
+        self.assertLess(
+            production_cleanup.index("ScienceHostAdapter::execute_stop"),
             production_cleanup.index("AppState::stop_proxy"),
         )
         quit_command = lifecycle.split("pub(super) async fn quit_app_command", 1)[1]
