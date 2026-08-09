@@ -73,7 +73,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
   intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
-- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings` 与 native exit 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。cold prior stop、history、DB recovery、compensation、downgrade 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
+- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings` 与 native exit 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。cold prior stop、history、DB recovery、compensation、downgrade 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway reuse 先在 `AppState` 下冻结 generation 与 child PID、端口、secret、provider、gateway/shim、launch id、key fingerprint 和完整 launch recipe，锁外执行 HTTP health，再按 generation + 完整 owner identity CAS 接受结果；陈旧结果 fail closed，不能清理或覆盖 replacement Gateway。Gateway spawn 后的 health poll 同样在锁外，但旧进程清理与 spawn 仍在 `AppState` 锁内；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 的进程内 mutex 只覆盖 load-modify-save；所有可能发布 canonical
   config、迁移、降级或滚动备份的公开入口还会在 pinned config 目录内取得同一
@@ -158,7 +158,9 @@ cleanup 仍是只减小运行态暴露的 terminal cleanup，不写 config/crede
 V1 marker 仍可严格读取并阻断，但不会被生产路径升级、推进或清除。
 
 `GatewayController` 是 formal Gateway 的 process-local façade。它保留既有 spawn/reuse、双层
-health、catalog fingerprint、generation/write-back 与 child ownership 核心，但只在全部接受
+health、catalog fingerprint、generation/write-back 与 child ownership 核心；reuse health 使用
+process-local owner claim、锁外 HTTP 和 generation + full-owner CAS，旧进程清理与 spawn 的锁边界
+不随之扩大。controller 只在全部接受
 条件通过后返回非序列化 `GatewayReceipt`。receipt 同时绑定 route、`Reused/Restarted`、health
 identity、catalog fingerprint 与完整 `GatewayLaunchRecipe`；当 host context 来自健康的
 remembered Science 时，recipe 保存该 effective runtime，而不是只复制 caller 的显式参数。

@@ -28,7 +28,7 @@ use crate::runtime::proxy::{health_timeout_reason, should_write_back, ProxyActio
 use crate::runtime::system::{
     asset_root, canonical_repo_root, log_path, open_log, redact, repo_root, tail_file,
 };
-use crate::{config, lifecycle, lock, proc, SharedAppState};
+use crate::{config, lifecycle, lock, proc, AppState, SharedAppState};
 
 // Keep include fragments on rustfmt's normal module-discovery path without
 // changing the runtime module or the historical visibility surface.

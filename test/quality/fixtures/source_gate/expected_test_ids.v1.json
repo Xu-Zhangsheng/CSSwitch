@@ -1129,6 +1129,7 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_lookup_finds_dev_repo_and_staged_sidecar_layouts",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_lookup_finds_packaged_resource_sidecar_layouts",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_lookup_prefers_explicit_env_binary",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_reuse_health_releases_app_state_and_rejects_stale_owner_result",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::invalid_explicit_gateway_binary_fails_closed_without_fallback",
         "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::isolated_r0_interrupted_recovery_identity_recheck_listener",

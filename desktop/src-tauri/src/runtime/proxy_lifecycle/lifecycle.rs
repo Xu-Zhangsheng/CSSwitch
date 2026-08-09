@@ -1,3 +1,74 @@
+#[derive(Clone, PartialEq)]
+struct GatewayProcessLocalOwner {
+    generation: u64,
+    child_pid: u32,
+    proxy_port: u16,
+    secret: String,
+    provider: String,
+    gateway_kind: String,
+    shim_mode: String,
+    launch_id: String,
+    key_fp: u64,
+    launch_context: Option<GatewayLaunchRecipe>,
+}
+
+impl GatewayProcessLocalOwner {
+    fn claim(st: &AppState, generation: u64) -> Option<Self> {
+        Some(Self {
+            generation,
+            child_pid: st.proxy.as_ref()?.id(),
+            proxy_port: st.proxy_port,
+            secret: st.secret.clone(),
+            provider: st.provider.clone(),
+            gateway_kind: st.gateway_kind.clone(),
+            shim_mode: st.shim_mode.clone(),
+            launch_id: st.launch_id.clone(),
+            key_fp: st.key_fp,
+            launch_context: st.gateway_launch_context.clone(),
+        })
+    }
+
+    fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
+        self.generation == current_generation
+            && st.proxy.as_ref().map(std::process::Child::id) == Some(self.child_pid)
+            && st.proxy_port == self.proxy_port
+            && st.secret == self.secret
+            && st.provider == self.provider
+            && st.gateway_kind == self.gateway_kind
+            && st.shim_mode == self.shim_mode
+            && st.launch_id == self.launch_id
+            && st.key_fp == self.key_fp
+            && st.gateway_launch_context == self.launch_context
+    }
+}
+
+fn probe_gateway_reuse_health_with<'a, Probe>(
+    state: &'a SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    state_guard: std::sync::MutexGuard<'a, AppState>,
+    owner: &GatewayProcessLocalOwner,
+    probe: Probe,
+) -> Result<
+    (
+        std::sync::MutexGuard<'a, AppState>,
+        Option<proc::GatewayHealth>,
+    ),
+    String,
+>
+where
+    Probe: FnOnce(&GatewayProcessLocalOwner) -> Option<proc::GatewayHealth>,
+{
+    drop(state_guard);
+    let accepted_health = probe(owner);
+    let current = lock(state);
+    if !owner.still_owns(&current, lifecycle.current_generation()) {
+        return Err(
+            "Gateway reuse 探活完成时 process-local owner 已变化；已拒绝过期结果，请重试。".into(),
+        );
+    }
+    Ok((current, accepted_health))
+}
+
 fn start_proxy_for_inner<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
@@ -102,58 +173,62 @@ fn start_proxy_for_inner<R: Runtime>(
         s
     };
 
-    let gen = lifecycle.current_generation();
-
-    let (mut child, launch_id) = {
+    let (mut child, launch_id, gen) = {
         let mut st = lock(state);
+        let gen = lifecycle.current_generation();
         let tracked_child_running = proc::tracked_child_is_running(&mut st.proxy);
-        let accepted_reuse_health = (tracked_child_running
+        let reuse_owner = (tracked_child_running
             && st.proxy_port == port
             && st.provider == launch.adapter
             && st.gateway_kind == gateway_kind
             && st.shim_mode == shim_mode
             && st.key_fp == key_fp)
-            .then(|| {
-                proc::http_gateway_health(
-                    port,
-                    Some(&st.secret),
-                    operation::PROXY_REUSE_HEALTH_TIMEOUT_MS,
-                )
-                .filter(|health| {
-                    accepted_gateway_health(
-                        health,
-                        proc::GatewayHealthExpectation {
-                            gateway: gateway_kind,
-                            provider: Some(&launch.adapter),
-                            shim: Some(st.shim_mode.as_str()),
-                            launch_id: Some(st.launch_id.as_str()),
-                            provider_contract_id: Some(&launch.contract_id),
-                            provider_contract_digest: Some(&launch.contract_digest),
-                        },
-                        expected_catalog_fp.as_deref(),
-                    )
-                })
-            })
+            .then(|| GatewayProcessLocalOwner::claim(&st, gen))
             .flatten();
-        if let Some(accepted_health) = accepted_reuse_health {
-            if let Some(t) = trace {
-                t.stage(
-                    OperationStage::ProxyHealth,
-                    format!(
-                        "reused port={port} adapter={} gateway={gateway_kind}",
-                        launch.adapter
-                    ),
-                );
+        if let Some(owner) = reuse_owner {
+            let (next_state, accepted_reuse_health) =
+                probe_gateway_reuse_health_with(state, lifecycle, st, &owner, |owner| {
+                    proc::http_gateway_health(
+                        owner.proxy_port,
+                        Some(&owner.secret),
+                        operation::PROXY_REUSE_HEALTH_TIMEOUT_MS,
+                    )
+                    .filter(|health| {
+                        accepted_gateway_health(
+                            health,
+                            proc::GatewayHealthExpectation {
+                                gateway: owner.gateway_kind.as_str(),
+                                provider: Some(owner.provider.as_str()),
+                                shim: Some(owner.shim_mode.as_str()),
+                                launch_id: Some(owner.launch_id.as_str()),
+                                provider_contract_id: Some(&launch.contract_id),
+                                provider_contract_digest: Some(&launch.contract_digest),
+                            },
+                            expected_catalog_fp.as_deref(),
+                        )
+                    })
+                })?;
+            st = next_state;
+            if let Some(accepted_health) = accepted_reuse_health {
+                if let Some(t) = trace {
+                    t.stage(
+                        OperationStage::ProxyHealth,
+                        format!(
+                            "reused port={port} adapter={} gateway={gateway_kind}",
+                            launch.adapter
+                        ),
+                    );
+                }
+                st.gateway_launch_context = Some(recipe.clone());
+                return Ok(GatewayReceipt::verified(
+                    port,
+                    owner.secret,
+                    ProxyAction::Reused,
+                    &accepted_health,
+                    expected_catalog_fp.clone(),
+                    recipe,
+                ));
             }
-            st.gateway_launch_context = Some(recipe.clone());
-            return Ok(GatewayReceipt::verified(
-                port,
-                st.secret.clone(),
-                ProxyAction::Reused,
-                &accepted_health,
-                expected_catalog_fp.clone(),
-                recipe,
-            ));
         }
 
         st.stop_proxy();
@@ -240,7 +315,7 @@ fn start_proxy_for_inner<R: Runtime>(
             .stderr(Stdio::from(logf2))
             .spawn()
             .map_err(|e| format!("启动代理失败：{e}"))?;
-        (child, launch_id)
+        (child, launch_id, gen)
     };
 
     let mut accepted_health = None;

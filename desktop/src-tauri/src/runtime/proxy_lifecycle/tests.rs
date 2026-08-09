@@ -2,7 +2,8 @@ use super::{
     accepted_gateway_health, configure_acceptance_native_upstream_override,
     configure_managed_proxy_command, find_gateway_in, finish_interrupted_gateway_recovery,
     formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
-    recover_interrupted_gateway_from_dir, skill_install_bridge_token,
+    probe_gateway_reuse_health_with, recover_interrupted_gateway_from_dir,
+    skill_install_bridge_token, GatewayLaunchRecipe, GatewayProcessLocalOwner,
     InterruptedGatewayRecoveryErrorKind, InterruptedGatewayRecoveryOutcome,
     InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
 };
@@ -362,6 +363,84 @@ fn gateway_acceptance_binds_one_health_response_to_identity_intent_and_catalog()
         Some("other-catalog")
     ));
     assert!(!accepted_gateway_health(&static_health, expected, None));
+}
+
+#[test]
+fn gateway_reuse_health_releases_app_state_and_rejects_stale_owner_result() {
+    let launch_id = "0123456789abcdef0123456789abcdef";
+    let route_secret = "fixture-route-secret-never-log";
+    let accepted = health("deepseek", launch_id, "");
+
+    for case in ["unchanged", "generation-drift", "identity-drift"] {
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let child_pid = child.id();
+        let launch_context = GatewayLaunchRecipe {
+            profile: crate::config::Profile {
+                id: "reuse-owner-profile".into(),
+                ..Default::default()
+            },
+            science_runtime: None,
+        };
+        let mut authority = crate::AppState::default();
+        authority.proxy = Some(child);
+        authority.proxy_port = 32120;
+        authority.secret = route_secret.into();
+        authority.provider = "deepseek".into();
+        authority.gateway_kind = "rust".into();
+        authority.shim_mode = "off".into();
+        authority.launch_id = launch_id.into();
+        authority.key_fp = 17;
+        authority.gateway_launch_context = Some(launch_context);
+        let state: crate::SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let generation = lifecycle.current_generation();
+        let guard = crate::lock(&state);
+        let owner = GatewayProcessLocalOwner::claim(&guard, generation).unwrap();
+        let probe_state = state.clone();
+        let result = probe_gateway_reuse_health_with(&state, &lifecycle, guard, &owner, |_| {
+            let mut current = probe_state
+                .try_lock()
+                .expect("Gateway reuse HTTP health must run outside AppState");
+            if case == "identity-drift" {
+                current.launch_id = "replacement-launch-identity".into();
+            }
+            drop(current);
+            if case == "generation-drift" {
+                lifecycle.bump_generation();
+            }
+            Some(accepted.clone())
+        });
+
+        match case {
+            "unchanged" => {
+                let (mut current, health) = result.expect("current owner must accept health");
+                assert_eq!(health, Some(accepted.clone()));
+                let tracked = current.proxy.as_mut().unwrap();
+                assert_eq!(tracked.id(), child_pid);
+                assert!(tracked.try_wait().unwrap().is_none());
+                tracked.kill().unwrap();
+                tracked.wait().unwrap();
+                current.proxy = None;
+            }
+            _ => {
+                let error = result
+                    .err()
+                    .expect("generation or full owner drift must reject stale health");
+                assert!(
+                    error.contains("process-local owner 已变化"),
+                    "{case}: {error}"
+                );
+                assert!(!error.contains(route_secret), "{case}: {error}");
+                let mut current = crate::lock(&state);
+                let tracked = current.proxy.as_mut().unwrap();
+                assert_eq!(tracked.id(), child_pid, "{case}");
+                assert!(tracked.try_wait().unwrap().is_none(), "{case}");
+                tracked.kill().unwrap();
+                tracked.wait().unwrap();
+                current.proxy = None;
+            }
+        }
+    }
 }
 
 #[test]
