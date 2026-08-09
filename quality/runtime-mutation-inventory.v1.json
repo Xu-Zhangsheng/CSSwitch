@@ -583,18 +583,22 @@
     {
       "id": "op.native-exit",
       "mutation_kind": "terminal",
-      "serialization": "terminal-best-effort",
+      "serialization": "lifecycle-plus-domain-lease",
       "entrypoints": [
         {"kind": "native-hook", "name": "exit_requested", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::ExitRequested"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::RunEvent::ExitRequested"]},
         {"kind": "native-hook", "name": "exit", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::Exit"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::RunEvent::Exit"]},
         {"kind": "native-hook", "name": "app_state_drop", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "Drop for AppState"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::Drop for AppState"]}
       ],
-      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "process.gateway", "process.science"],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "lifecycle.global", "process.gateway", "process.science"],
       "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
-      "ordered_effects": ["remain available while either runtime journal is open because native terminal cleanup only reduces runtime exposure", "cancel/wait/TERM/KILL registered Codex auth child", "attempt Science stop and ignore error", "stop tracked Gateway", "allow native exit", "Drop repeats Gateway safety stop"],
-      "failure_points": [{"id": "native-exit.cleanup", "after_effects": ["one or both Tauri exit events may already have run cleanup", "Science stop may have failed"], "observed_outcome": "Cleanup remains repeatable best effort and cannot prevent native exit.", "compensation": "second event can retry; no generation bump or restart"}],
-      "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "cleanup_for_exit"}, "contract": "Both ExitRequested and Exit call cleanup; errors do not block native termination, and AppState Drop stops any still-tracked Gateway. Cleanup intentionally does not clear or write either runtime journal, config, or credentials."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway"],
+      "ordered_effects": ["remain available while either runtime journal is open because native terminal cleanup only reduces runtime exposure", "cancel/wait/TERM/KILL registered Codex auth child", "acquire the Terminal mutation lease", "if Science is tracked, claim its exact process-local owner and stop request under AppState", "release AppState while executing bounded Science stop/TERM/KILL/wait", "publish only when generation and the full process-local owner still match; ignore Science stop or stale-publication error", "stop tracked Gateway", "allow native exit", "Drop repeats Gateway safety stop"],
+      "failure_points": [
+        {"id": "native-exit.science", "after_effects": ["Science stop attempted outside AppState", "Science stop failed", "Gateway stopped"], "observed_outcome": "Ignore the Science failure so native termination continues while preserving the tracked Science read model for a repeat attempt.", "compensation": "the second Tauri event can retry; no generation bump or restart"},
+        {"id": "native-exit.owner-cas", "after_effects": ["exact Science stop attempted outside AppState", "generation or process-local owner changed before publication", "Gateway stopped"], "observed_outcome": "Reject stale publication, preserve replacement Science ownership, and continue native termination.", "compensation": "none; stale stop results cannot clear replacement runtime ownership"},
+        {"id": "native-exit.cleanup", "after_effects": ["one or both Tauri exit events may already have run cleanup", "Science stop may have failed"], "observed_outcome": "Cleanup remains repeatable best effort and cannot prevent native exit.", "compensation": "second event can retry; no generation bump or restart"}
+      ],
+      "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "cleanup_for_exit"}, "contract": "Both ExitRequested and Exit call cleanup; Science stop shares the lifecycle process-local owner/CAS publication boundary, but errors do not block native termination and Gateway stop still runs. AppState Drop stops any still-tracked Gateway. Cleanup intentionally does not clear or write either runtime journal, config, or credentials."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r1_native_exit_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway"],
       "known_gaps": ["Two Tauri events can repeat terminal side effects.", "No generation bump."]
     },
     {

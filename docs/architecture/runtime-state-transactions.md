@@ -31,6 +31,7 @@
 | `AppState` / `SharedLifecycle` 类型与进程级组合 | `desktop/src-tauri/src/lib.rs` |
 | command 级 mode/settings/stop/显式 quit 串行编排 | `commands/runtime/lifecycle.rs` |
 | macOS native exit 的 terminal cleanup 与进程退出投影 | `desktop/src-tauri/src/lib.rs::cleanup_for_exit_with` / `cleanup_for_exit` / `run_native_exit_event` |
+| process-local Science stop 的 owner claim、锁外 execute/wait 与结果 CAS | `commands/runtime/lifecycle.rs::execute_process_local_science_stop_with` |
 | 一键 IPC、锁外 auth preflight 与 UI failure 投影 | `commands/runtime/one_click.rs` |
 | typed entry decision、protected projection、journal recovery 与 healthy / cold branch dispatch | `runtime/sandbox_session/one_click.rs` |
 | mutating cold/recovery 的 prior stop、SSH、authority、Gateway、phase dispatch、route 与 finalize 顺序编排 | `runtime/sandbox_session/one_click/cold.rs` |
@@ -53,8 +54,9 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 `commands/runtime/lifecycle.rs` 复用 `stop_all` 的 process-local owner claim、锁外 wait
 和结果 CAS，只有完整停止成功才调用 `app.exit(0)`。后者由 `lib.rs`
 的 Tauri `RunEvent::Exit*` 处理器直接编排 terminal cleanup；它不是 frontend invoke，
-且尚未收敛到同一 owner-claim / wait / CAS 边界。任何“退出链已统一”的结论
-都必须同时检查这两条路径。
+但 Science stop 已复用同一个 owner-claim / wait / CAS publication helper。native exit
+仍忽略 Science stop failure 并继续关闭 Gateway；任何“退出链已统一”的结论都必须
+区分共享状态 owner 与不同 terminal policy。
 
 ## 锁序与并发
 
@@ -71,7 +73,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
   intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
-- `stop_all`、切换到 official 的 `set_mode` 与需要 teardown 的 `set_settings` 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。cold prior stop、history、DB recovery、compensation、downgrade/native-exit 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
+- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings` 与 native exit 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，并取得 exact stop request，随后释放 `AppState` 执行 stop script、TERM/KILL 与轮询等待，最后在锁内按 generation + 完整 owner identity CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。cold prior stop、history、DB recovery、compensation、downgrade 等 sibling stop 仍可能持 `AppState` 跨越外部等待；Gateway spawn 后的 health poll 在锁外，但 reuse health、旧进程清理与 spawn 仍在锁内；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - `config::update` 的进程内 mutex 只覆盖 load-modify-save；所有可能发布 canonical
   config、迁移、降级或滚动备份的公开入口还会在 pinned config 目录内取得同一
@@ -404,5 +406,5 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   restore。其他直接 full-snapshot restore 与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；
 - history restore durable commit 之后的 one-click 失败不会回滚用户已选择的历史；默认 restore-only
   与以后单独点击的一键开始仍是两个 operation，只有显式 restore-and-resume 使用同一 backend handoff；
-- `stop_all`、`set_mode` 与 teardown `set_settings` 已锁外等待，但 downgrade cleanup、native-exit 等 sibling stop caller 尚未全部收敛到同一 owner-claim / wait / CAS 边界；
+- `stop_all`、`set_mode`、teardown `set_settings` 与 native exit 已锁外等待并共享 process-local owner/CAS publication；downgrade cleanup 等 sibling stop caller 尚未全部收敛到同一边界；
 - MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。

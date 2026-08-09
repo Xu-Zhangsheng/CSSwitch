@@ -90,7 +90,7 @@ artifact、memory、environment 和 official entitlement 仍由 Science 或外�
 | OS 进程 | adapter → bundled `scripts/launch-virtual-sandbox.sh` / `stop-science-sandbox.sh` → exact `claude-science` | scripts 与已选 runtime 的窄 host contract | `env -i`、隔离 HOME/data-dir、loopback port 与 exact listener/PID；任一身份不可证即 fail closed |
 | 读模型 | frontend polling → registered `status` | `commands/runtime/status.rs` | 只投影轻量 HTTP health 与已有 metadata，不升级为 strong runtime identity |
 | 显式停止 | frontend `stop_all` / `quit_app` / mode/settings teardown | `commands/runtime/lifecycle.rs` + `ScienceHostAdapter` | owner claim → 锁外 stop/wait → generation + full identity CAS；陈旧结果不得清 replacement runtime |
-| native exit | Tauri `RunEvent::Exit*` | `desktop/src-tauri/src/lib.rs` | terminal best-effort cleanup；当前是与显式 quit 不同的 sibling path，仍待收敛 |
+| native exit | Tauri `RunEvent::Exit*` → `cleanup_for_exit_with` → `execute_process_local_science_stop_with` | `desktop/src-tauri/src/lib.rs` 编排 terminal policy；`commands/runtime/lifecycle.rs` 拥有 Science stop publication | owner claim → 锁外 stop/wait → generation + full identity CAS；best-effort 忽略 stop failure，仍关闭 Gateway |
 
 Gateway 在 Science phase 之前由 `runtime/proxy_lifecycle/` 建立并提供 typed
 launch receipt；Science 启动后的 provider/model 请求再进入 packaged Rust Gateway。

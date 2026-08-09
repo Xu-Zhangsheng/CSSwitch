@@ -1285,6 +1285,7 @@
         "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup",
         "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup",
         "desktop/src-tauri/Cargo.toml::lib::tests::r0_second_instance_callback_boot_state_matrix_reuses_one_click_login_cmd",
+        "desktop/src-tauri/Cargo.toml::lib::tests::r1_native_exit_wait_releases_read_model_and_stale_result_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::tests::redact_scrubs_secret_and_is_noop_when_empty",
         "desktop/src-tauri/Cargo.toml::lib::tests::should_begin_boot_only_from_idle_or_failed"
       ]

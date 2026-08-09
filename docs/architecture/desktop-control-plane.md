@@ -161,8 +161,10 @@ unknown；完整原 DTO 仍单独保留用于错误和 history choice 展示。
 - 关闭窗口只隐藏；frontend 显式 `quit_app` 由
   `commands/runtime/lifecycle.rs` 复用完整 `stop_all` 边界，只有停止成功才退出。
   macOS/Tauri `RunEvent::Exit*` 则是 `desktop/src-tauri/src/lib.rs` 拥有的独立 native-exit
-  cleanup path，不是 frontend command caller；它当前仍为 best-effort sibling stop
-  边界，不得与显式 quit 的 owner-claim / wait / CAS 结论合并。
+  cleanup path，不是 frontend command caller；它保留 best-effort policy，Science stop
+  复用 `commands/runtime/lifecycle.rs::execute_process_local_science_stop_with` 的 owner
+  claim、锁外 wait 与 CAS，但忽略 stop failure 并继续关闭 Gateway。不得把这种退出策略
+  与显式 quit 的“停止失败则不退出”合并。
 
 ## 条件入口
 

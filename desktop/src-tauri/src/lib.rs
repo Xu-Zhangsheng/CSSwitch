@@ -30,10 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager};
 
-use runtime::{
-    science::{ScienceHostAdapter, ScienceStopRequest},
-    system::kill_child,
-};
+use runtime::{science::ScienceHostAdapter, system::kill_child};
 
 use codex_auth_supervisor::{CodexAuthSupervisor, SharedCodexAuthSupervisor};
 
@@ -292,13 +289,14 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
+fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, ClaimScience, ExecuteScience, StopGateway>(
     app: &tauri::AppHandle<R>,
     mut cancel_codex: Cancel,
     mut wait_codex: Wait,
     mut term_codex: Term,
     mut kill_codex: Kill,
-    mut stop_science: StopScience,
+    claim_science: ClaimScience,
+    execute_science: ExecuteScience,
     mut stop_gateway: StopGateway,
 ) where
     R: tauri::Runtime,
@@ -306,11 +304,16 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
     Wait: FnMut(std::time::Duration) -> Vec<u32>,
     Term: FnMut(u32),
     Kill: FnMut(u32),
-    StopScience: FnMut(
+    ClaimScience: FnOnce(
+        Option<&runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        runtime::science::ScienceStopRequest,
+        runtime::science::ScienceStopFailure,
+    >,
+    ExecuteScience: FnOnce(
         &tauri::AppHandle<R>,
-        &mut AppState,
-        &runtime::science::ScienceRuntimeIdentity,
-    ) -> runtime::science::ScienceStopOutcome,
+        runtime::science::ScienceStopRequest,
+    ) -> (runtime::science::ScienceStopOutcome, bool),
     StopGateway: FnMut(&mut AppState),
 {
     // First give login its protocol-level cancel path and read-only preflight
@@ -329,20 +332,23 @@ fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, StopScience, StopGateway>(
     let state = app.state::<SharedAppState>().inner().clone();
     let lifecycle = app.state::<SharedLifecycle>().inner().clone();
     lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Terminal, |_| {
-        let mut st = lock(&state);
-        if let Some(runtime) = st.science_runtime.clone() {
-            match stop_science(app, &mut st, &runtime) {
-                Ok(verified) => {
-                    // Native exit remains best-effort and publishes no recovery
-                    // receipt, but it still consumes the typed stopped runtime
-                    // instead of reducing the outcome to string/boolean control.
-                    if verified.runtime.is_none() || verified.confirmed_runtime().is_some() {
-                        st.science_runtime = None;
-                    }
-                }
-                Err(_failure) => {}
-            }
+        let has_tracked_science = lock(&state).science_runtime.is_some();
+        if has_tracked_science {
+            // Native exit remains best-effort, but Science stop has the same
+            // process-local owner as explicit teardown: claim under AppState,
+            // release the lock for bounded stop/wait, then publish only when
+            // generation and the full tracked identity still match.
+            let _ = commands::runtime::execute_process_local_science_stop_with(
+                app,
+                &state,
+                &lifecycle,
+                |_st, _generation| Ok(()),
+                claim_science,
+                execute_science,
+                |_st| {},
+            );
         }
+        let mut st = lock(&state);
         stop_gateway(&mut st);
     });
 }
@@ -368,14 +374,8 @@ fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 libc::kill(pid as i32, libc::SIGKILL);
             }
         },
-        |app, st, runtime| {
-            ScienceHostAdapter::stop(
-                app,
-                &mut st.sandbox,
-                &mut st.sandbox_url,
-                ScienceStopRequest::recover(Some(runtime)),
-            )
-        },
+        ScienceHostAdapter::claim_stop,
+        |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
         AppState::stop_proxy,
     );
 }
@@ -974,23 +974,32 @@ mod tests {
                         assert_eq!(pid, kill_pid);
                         assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
                     },
-                    |_, _, observed_runtime| {
-                        assert_eq!(observed_runtime, &runtime);
+                    |observed_runtime| {
+                        assert_eq!(observed_runtime, Some(&runtime));
+                        Ok(crate::runtime::science::ScienceStopRequest::recover(
+                            observed_runtime,
+                        ))
+                    },
+                    |_, _request| {
                         let attempt = science_attempts.get() + 1;
                         science_attempts.set(attempt);
                         if attempt == 1 {
                             actions.borrow_mut().push("science:error".into());
-                            Err(
-                                crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
+                            (
+                                Err(crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
                                     "controlled first Science stop failure",
-                                ),
+                                )),
+                                false,
                             )
                         } else {
                             actions.borrow_mut().push("science:stopped".into());
-                            Ok(crate::runtime::science::VerifiedScienceStop {
-                                runtime: Some(runtime.clone()),
-                                ownership_was_proven: true,
-                            })
+                            (
+                                Ok(crate::runtime::science::VerifiedScienceStop {
+                                    runtime: Some(runtime.clone()),
+                                    ownership_was_proven: true,
+                                }),
+                                false,
+                            )
                         }
                     },
                     |app_state| {
@@ -1040,6 +1049,119 @@ mod tests {
                 "completed:Exit",
             ]
         );
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn r1_native_exit_wait_releases_read_model_and_stale_result_preserves_replacement() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "csswitch-r1-native-exit-owner-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let prior_binary = root.join("prior-science");
+        let replacement_binary = root.join("replacement-science");
+        fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+        fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior = crate::runtime::science::test_runtime_identity(prior_binary);
+        let replacement = crate::runtime::science::test_runtime_identity(replacement_binary);
+
+        for (case, replace_identity, bump_generation) in [
+            ("generation-only", false, true),
+            ("identity-only", true, false),
+        ] {
+            let gateway = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+            let gateway_pid = gateway.id();
+            let mut authority = AppState::default();
+            authority.proxy = Some(gateway);
+            authority.science_runtime = Some(prior.clone());
+            authority.sandbox_port = 18765;
+            authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+            let state: SharedAppState = Arc::new(Mutex::new(authority));
+            let lifecycle: SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let app = tauri::test::mock_builder()
+                .manage(state.clone())
+                .manage(lifecycle.clone())
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            let handle = app.handle().clone();
+            let worker_prior = prior.clone();
+            let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+            let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                cleanup_for_exit_with(
+                    &handle,
+                    || {},
+                    |_| Vec::new(),
+                    |_| {},
+                    |_| {},
+                    |runtime| {
+                        Ok(crate::runtime::science::ScienceStopRequest::recover(
+                            runtime,
+                        ))
+                    },
+                    move |_, _request| {
+                        stop_started_tx.send(()).unwrap();
+                        release_stop_rx.recv().unwrap();
+                        (
+                            Ok(crate::runtime::science::VerifiedScienceStop {
+                                runtime: Some(worker_prior),
+                                ownership_was_proven: true,
+                            }),
+                            true,
+                        )
+                    },
+                    AppState::stop_proxy,
+                );
+            });
+
+            stop_started_rx.recv().unwrap();
+            {
+                let mut read_model = state
+                    .try_lock()
+                    .expect("native-exit Science stop wait must not retain AppState");
+                assert_eq!(read_model.science_runtime.as_ref(), Some(&prior), "{case}");
+                if replace_identity {
+                    read_model.science_runtime = Some(replacement.clone());
+                    read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+                }
+            }
+            if bump_generation {
+                lifecycle.bump_generation();
+            }
+            release_stop_tx.send(()).unwrap();
+            worker.join().unwrap();
+
+            let current = lock(&state);
+            let expected_runtime = if replace_identity {
+                &replacement
+            } else {
+                &prior
+            };
+            let expected_url = if replace_identity {
+                "http://127.0.0.1:18765/replacement"
+            } else {
+                "http://127.0.0.1:18765/prior"
+            };
+            assert_eq!(
+                current.science_runtime.as_ref(),
+                Some(expected_runtime),
+                "{case}"
+            );
+            assert!(current.science_confirmed_stopped.is_none(), "{case}");
+            assert_eq!(current.sandbox_url.as_deref(), Some(expected_url), "{case}");
+            assert!(current.proxy.is_none(), "{case}");
+            drop(current);
+            assert!(unsafe { libc::kill(gateway_pid as i32, 0) } != 0, "{case}");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
