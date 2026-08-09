@@ -20,9 +20,11 @@
 以 `acceptance-build` 生成的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science 0.1.25
 exact tuple 经递归 G1 validator 取得 `PASS`。同一 tuple 随后在 deny-egress 隔离环境完成
 `B-RUNTIME-01=PASS`：production Desktop → packaged Gateway → Science、一键开始、5 次 loopback
-provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与精确清理均闭合。
-`9cc0d15` tuple 的 `B-CORE-01=PASS` 与 `B-CONTEXT-01=PASS(scope=isolated-request-shape)`
-不能外推到 `06b630b`。后续文档提交只记录证据，不能改写被构建或运行的 source/artifact identity。
+provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与精确清理均闭合；随后
+`B-CORE-01=PASS`，限定证明合成 project / 文件读写、permission request / grant / revoke、revoke 后及
+越界拒绝、artifact lineage 与 annotation 持久状态。`9cc0d15` tuple 的
+`B-CONTEXT-01=PASS(scope=isolated-request-shape)` 仍不能外推到 `06b630b`。后续文档提交只记录证据，
+不能改写被构建或运行的 source/artifact identity。
 
 上一份已验收的 stop-ownership production source candidate 是
 `next@65b65c13dc5db59dc3798d0dc1320e7712c726e2`。它以 owner-map baseline
@@ -92,6 +94,16 @@ owner，停止/重启产生新的 Gateway/Science owner，最终 8 个 exact PID
 SSH、installed、签名和 release 不外推。完整 identity、deadline、network 与 cleanup closure
 见[日期化 isolated-live 验收](../../docs/evidence/investigations/2026-08-10-claude-science-0.1.25-b-runtime-01.md)。
 
+`06b630b` exact tuple 的 `B-CORE-01` run `bcore-06b630b-r2` 在隔离 HOME/data-dir、真实
+Science 0.1.25、loopback mock 与两个专用 synthetic Git fixture 下完成。project / 文件读写、
+request → grant → revoke、revoke 后拒绝、sibling 越界拒绝、artifact v1/v2 parent / hash / diff /
+producing frame 以及 annotation 发送前持久 DB row 与下一消息传递均闭合。活动期 39 个 socket rows
+全部为 loopback；四个 exact PID、四个动态端口、`8765`、runtime、fixture 与临时 driver 最终清零。
+23 项 evidence hash 全部复算 `OK`，总判定为 `PASS`。首次 r1 因 fixture root 不可申请 permission，
+单独固定为 `INCONCLUSIVE`，不参与 PASS；B-CONTEXT、真实 provider、Skill / MCP、SSH、installed、
+签名和 release 均不外推。精确 identity、sub-gate、持久状态与 cleanup closure 见
+[日期化 B-CORE 验收](../../docs/evidence/investigations/2026-08-10-claude-science-0.1.25-b-core-01.md)。
+
 ## 当前源码问题
 
 - **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings` 与 native exit 已使用 process-local owner claim、锁外 wait 与 identity CAS；downgrade cleanup 及其他 sibling stop caller 尚未全部收敛到同一边界。当前 owner 与缺口见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
@@ -105,7 +117,7 @@ SSH、installed、签名和 release 不外推。完整 identity、deadline、net
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | 同一 `06b630b` tuple 的 `B-RUNTIME-01=PASS`：一键开始、5 次 loopback provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与精确清理均闭合 | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | 同一 `06b630b` tuple 的 `B-RUNTIME-01=PASS`；`B-CORE-01=PASS` 限定闭合合成 project / 文件、permission、artifact lineage 与 annotation 持久状态 | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | `65b65c13` exact-SHA review + canonical 15-suite `PASS`；native-exit replacement/race 与 best-effort Gateway policy 已闭合，downgrade 等 sibling gap 仍开放 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
