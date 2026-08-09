@@ -130,6 +130,10 @@ impl BootPublication {
 #[derive(Default)]
 pub(crate) struct AppState {
     pub(crate) proxy: Option<Child>,
+    /// Rejected Gateway candidates whose exit could not yet be confirmed.
+    /// They are never treated as the active proxy and retain process-local
+    /// ownership until a later cleanup attempt can reap them.
+    pub(crate) rejected_gateway_candidates: Vec<Child>,
     pub(crate) proxy_port: u16,
     pub(crate) secret: String,
     /// 当前代理进程所用 adapter 名（deepseek | qwen | relay | openai-custom | openai-responses）；用于健康复用判定。
@@ -189,6 +193,24 @@ pub(crate) struct HistoryRecoveryChoice {
 }
 
 impl AppState {
+    fn retry_rejected_gateway_candidates(&mut self) {
+        self.rejected_gateway_candidates
+            .retain_mut(|child| match child.try_wait() {
+                Ok(Some(_)) => false,
+                Ok(None) => {
+                    if child.kill().is_err() {
+                        return !matches!(child.try_wait(), Ok(Some(_)));
+                    }
+                    child.wait().is_err()
+                }
+                Err(_) => true,
+            });
+    }
+
+    pub(crate) fn retain_rejected_gateway_candidate(&mut self, child: Child) {
+        self.rejected_gateway_candidates.push(child);
+    }
+
     pub(crate) fn clear_proxy_identity(&mut self) {
         self.secret.clear();
         self.provider.clear();
@@ -201,6 +223,7 @@ impl AppState {
 
     pub(crate) fn stop_proxy(&mut self) {
         kill_child(&mut self.proxy);
+        self.retry_rejected_gateway_candidates();
         self.clear_proxy_identity();
     }
 }

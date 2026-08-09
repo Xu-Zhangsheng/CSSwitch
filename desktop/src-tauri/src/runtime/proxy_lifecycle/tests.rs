@@ -1,12 +1,15 @@
 use super::{
-    accepted_gateway_health, cleanup_tracked_gateway_with,
+    accepted_gateway_health, app_state_gateway_slot_is_empty, cleanup_tracked_gateway_with,
     configure_acceptance_native_upstream_override, configure_managed_proxy_command,
-    find_gateway_in, finish_interrupted_gateway_recovery, formal_proxy_env, gateway_bin_path_from,
-    interrupted_health_matches, probe_gateway_reuse_health_with,
-    recover_interrupted_gateway_from_dir, run_legacy_cleanup_outside_state_with,
-    skill_install_bridge_token, GatewayLaunchRecipe, GatewayProcessLocalOwner,
-    InterruptedGatewayRecoveryErrorKind, InterruptedGatewayRecoveryOutcome,
-    InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup, ManagedGatewayStopUnknownKind,
+    find_gateway_in, finish_failed_gateway_candidate, finish_interrupted_gateway_recovery,
+    formal_proxy_env, gateway_bin_path_from, interrupted_health_matches,
+    probe_gateway_reuse_health_with, recover_interrupted_gateway_from_dir,
+    retry_rejected_gateway_candidates_outside_state, run_legacy_cleanup_outside_state_with,
+    skill_install_bridge_token, stage_skill_install_bridge_key_at, GatewayCandidateLog,
+    GatewayLaunchRecipe, GatewayProcessLocalOwner, GatewaySpawnCandidate,
+    GatewaySpawnCandidateOwner, InterruptedGatewayRecoveryErrorKind,
+    InterruptedGatewayRecoveryOutcome, InterruptedGatewayStopUnknownKind, ManagedGatewayCleanup,
+    ManagedGatewayStopUnknownKind, PreparedSkillInstallHost,
 };
 use crate::provider_contracts::{
     CachePolicy, EndpointPolicy, ModelPolicy, TimeoutPolicy, Transport,
@@ -556,6 +559,194 @@ fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replaceme
             _ => unreachable!(),
         }
     }
+}
+
+fn gateway_spawn_recipe(profile_id: &str) -> GatewayLaunchRecipe {
+    GatewayLaunchRecipe {
+        profile: crate::config::Profile {
+            id: profile_id.into(),
+            ..Default::default()
+        },
+        science_runtime: None,
+    }
+}
+
+#[test]
+fn gateway_spawn_candidate_reserves_a_unique_full_owner_and_preserves_replacement() {
+    let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let lifecycle = crate::lifecycle::Lifecycle::new();
+    let generation = lifecycle.current_generation();
+    let recipe = gateway_spawn_recipe("spawn-owner-profile");
+    let owner = {
+        let mut current = crate::lock(&state);
+        GatewaySpawnCandidateOwner::reserve(
+            &mut current,
+            generation,
+            32122,
+            "same-persistent-secret".into(),
+            "deepseek".into(),
+            "rust".into(),
+            "off".into(),
+            "11111111111111111111111111111111".into(),
+            23,
+            recipe.clone(),
+        )
+        .unwrap()
+    };
+    {
+        let mut current = crate::lock(&state);
+        assert!(owner.still_owns(&current, generation));
+        assert!(GatewaySpawnCandidateOwner::reserve(
+            &mut current,
+            generation,
+            32122,
+            "same-persistent-secret".into(),
+            "deepseek".into(),
+            "rust".into(),
+            "off".into(),
+            "22222222222222222222222222222222".into(),
+            23,
+            recipe.clone(),
+        )
+        .is_err());
+    }
+
+    let replacement = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let replacement_pid = replacement.id();
+    {
+        let mut current = crate::lock(&state);
+        current.proxy = Some(replacement);
+        current.launch_id = "22222222222222222222222222222222".into();
+    }
+    assert!(!finish_failed_gateway_candidate(
+        &state, &lifecycle, &owner, None, None,
+    ));
+    {
+        let mut current = crate::lock(&state);
+        let replacement = current.proxy.as_mut().expect("replacement must survive");
+        assert_eq!(replacement.id(), replacement_pid);
+        assert!(replacement.try_wait().unwrap().is_none());
+        assert_eq!(current.launch_id, "22222222222222222222222222222222");
+        current.stop_proxy();
+    }
+}
+
+#[test]
+fn gateway_spawn_generation_drift_clears_only_its_marker_and_never_publishes_stale_log() {
+    let dir = temp_dir("spawn-owner-stale-log");
+    fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let canonical = dir.join("proxy.log");
+    let candidate_path = dir.join("proxy-candidate.log");
+    let bridge_key = dir.join("skill-install-bridge.key");
+    fs::write(&canonical, b"replacement-log\n").unwrap();
+    fs::write(&candidate_path, b"stale-candidate-log\n").unwrap();
+    fs::write(&bridge_key, b"replacement-token\n").unwrap();
+    let mut candidate_log = GatewayCandidateLog {
+        candidate_path: Some(candidate_path.clone()),
+        canonical_path: canonical.clone(),
+    };
+    let staged_bridge = stage_skill_install_bridge_key_at(
+        dir.clone(),
+        bridge_key.clone(),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .unwrap();
+    let mut skill_host = PreparedSkillInstallHost {
+        key: Some(staged_bridge),
+    };
+    let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let lifecycle = crate::lifecycle::Lifecycle::new();
+    let owner = {
+        let mut current = crate::lock(&state);
+        GatewaySpawnCandidateOwner::reserve(
+            &mut current,
+            lifecycle.current_generation(),
+            32123,
+            "same-persistent-secret".into(),
+            "deepseek".into(),
+            "rust".into(),
+            "off".into(),
+            "33333333333333333333333333333333".into(),
+            29,
+            gateway_spawn_recipe("stale-owner-profile"),
+        )
+        .unwrap()
+    };
+    lifecycle.bump_generation();
+    assert!(!finish_failed_gateway_candidate(
+        &state,
+        &lifecycle,
+        &owner,
+        Some(&mut candidate_log),
+        Some(&mut skill_host),
+    ));
+    assert!(app_state_gateway_slot_is_empty(&crate::lock(&state)));
+    assert_eq!(fs::read(&canonical).unwrap(), b"replacement-log\n");
+    assert_eq!(fs::read(&bridge_key).unwrap(), b"replacement-token\n");
+    drop(candidate_log);
+    drop(skill_host);
+    assert!(!candidate_path.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejected_gateway_candidate_retains_a_separate_cleanup_owner_on_stop_uncertainty() {
+    let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let child_pid = child.id();
+    let candidate = GatewaySpawnCandidate::new(child, &state);
+    let error = candidate
+        .reject_with(|_| Err("injected stop uncertainty".into()))
+        .unwrap_err();
+    assert!(error.contains("独立 cleanup owner"));
+    {
+        let mut current = crate::lock(&state);
+        assert!(current.proxy.is_none());
+        assert_eq!(current.rejected_gateway_candidates.len(), 1);
+        assert_eq!(current.rejected_gateway_candidates[0].id(), child_pid);
+        assert!(current.rejected_gateway_candidates[0]
+            .try_wait()
+            .unwrap()
+            .is_none());
+    }
+    retry_rejected_gateway_candidates_outside_state(&state).unwrap();
+    assert!(crate::lock(&state).rejected_gateway_candidates.is_empty());
+}
+
+#[test]
+fn skill_bridge_key_staging_cannot_overwrite_canonical_before_publish() {
+    let dir = temp_dir("skill-bridge-staging");
+    fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let key_file = dir.join("skill-install-bridge.key");
+    fs::write(&key_file, b"replacement-token\n").unwrap();
+
+    let staged = stage_skill_install_bridge_key_at(
+        dir.clone(),
+        key_file.clone(),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .unwrap();
+    let temporary = staged.temporary.as_ref().unwrap().clone();
+    assert!(temporary.is_file());
+    assert_eq!(fs::read(&key_file).unwrap(), b"replacement-token\n");
+    drop(staged);
+    assert!(!temporary.exists());
+    assert_eq!(fs::read(&key_file).unwrap(), b"replacement-token\n");
+
+    let mut accepted = stage_skill_install_bridge_key_at(
+        dir.clone(),
+        key_file.clone(),
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    .unwrap();
+    accepted.publish().unwrap();
+    assert_eq!(
+        fs::read(&key_file).unwrap(),
+        b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+    );
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

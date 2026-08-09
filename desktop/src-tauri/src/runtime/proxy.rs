@@ -14,19 +14,6 @@ impl ProxyAction {
     }
 }
 
-/// 探活结束回锁后是否可写回 `st.proxy`：generation 未被取代【且】secret 仍是本次启动的。
-/// 抽成纯函数便于确定性单测（gen 同/异 × secret 同/异 4 组合）。
-/// secret 合取防「冷启动双起、两个不同 secret、generation 却相等」的窄窗：另起若用不同 secret
-/// 重置了槽位，本次就不该拿旧 child 覆盖它（起代理前会把 `st.secret` 预置成本次 secret，故合法启动上恒真）。
-pub(crate) fn should_write_back(
-    gen_captured: u64,
-    gen_now: u64,
-    st_secret: &str,
-    my_secret: &str,
-) -> bool {
-    gen_captured == gen_now && st_secret == my_secret
-}
-
 /// 探活超时的原因措辞（纯函数，修真机 P2）：本地 `/health` 不验上游 key，故探活超时与 key 有效性
 /// 无关。日志出现绑定失败（Address already in use / EADDRINUSE）→ 明确报端口占用；否则报「探活超时」
 /// （多为 sidecar 缺失 / 启动异常），绝不再含糊说「或 key 无效」。
@@ -46,19 +33,7 @@ pub(crate) fn health_timeout_reason(port: u16, tail: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{health_timeout_reason, should_write_back};
-
-    #[test]
-    fn should_write_back_requires_both_gen_and_secret() {
-        // gen 同 + secret 同 → 写回（合法启动，未被取代）
-        assert!(should_write_back(5, 5, "sekret", "sekret"));
-        // gen 同 + secret 异 → 不写回（被并发另起用不同 secret 占了槽，冷启动双起窄窗）
-        assert!(!should_write_back(5, 5, "other", "sekret"));
-        // gen 异 + secret 同 → 不写回（被清 key/停/切 bump 取代）
-        assert!(!should_write_back(5, 6, "sekret", "sekret"));
-        // gen 异 + secret 异 → 不写回
-        assert!(!should_write_back(5, 6, "other", "sekret"));
-    }
+    use super::health_timeout_reason;
 
     #[test]
     fn health_timeout_reason_flags_port_conflict_and_never_blames_key() {

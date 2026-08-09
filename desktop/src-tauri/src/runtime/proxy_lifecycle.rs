@@ -24,7 +24,7 @@ use crate::runtime::provider::{
     assert_format_supported, current_shim_mode_for_adapter, is_openai_adapter, normalize_shim_mode,
     proxy_args_for, proxy_fingerprint_with_runtime, FormalCredential, FormalGatewayPlan,
 };
-use crate::runtime::proxy::{health_timeout_reason, should_write_back, ProxyAction};
+use crate::runtime::proxy::{health_timeout_reason, ProxyAction};
 use crate::runtime::system::{
     asset_root, canonical_repo_root, log_path, open_log, redact, repo_root, tail_file,
 };

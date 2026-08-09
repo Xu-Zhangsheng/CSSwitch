@@ -55,6 +55,184 @@ struct GatewayTrackedCleanupOwner {
     child: std::process::Child,
 }
 
+#[derive(Clone, PartialEq)]
+struct GatewaySpawnCandidateOwner {
+    generation: u64,
+    proxy_port: u16,
+    secret: String,
+    provider: String,
+    gateway_kind: String,
+    shim_mode: String,
+    launch_id: String,
+    key_fp: u64,
+    launch_context: GatewayLaunchRecipe,
+}
+
+impl GatewaySpawnCandidateOwner {
+    #[allow(clippy::too_many_arguments)]
+    fn reserve(
+        st: &mut AppState,
+        generation: u64,
+        proxy_port: u16,
+        secret: String,
+        provider: String,
+        gateway_kind: String,
+        shim_mode: String,
+        launch_id: String,
+        key_fp: u64,
+        launch_context: GatewayLaunchRecipe,
+    ) -> Result<Self, String> {
+        if !app_state_gateway_slot_is_empty(st) {
+            return Err(
+                "Gateway spawn claim 发现 runtime slot 已被 replacement 占用；已拒绝启动。".into(),
+            );
+        }
+        let owner = Self {
+            generation,
+            proxy_port,
+            secret,
+            provider,
+            gateway_kind,
+            shim_mode,
+            launch_id,
+            key_fp,
+            launch_context,
+        };
+        st.proxy_port = owner.proxy_port;
+        st.secret = owner.secret.clone();
+        st.provider = owner.provider.clone();
+        st.gateway_kind = owner.gateway_kind.clone();
+        st.shim_mode = owner.shim_mode.clone();
+        st.launch_id = owner.launch_id.clone();
+        st.key_fp = owner.key_fp;
+        st.gateway_launch_context = Some(owner.launch_context.clone());
+        Ok(owner)
+    }
+
+    fn marker_matches(&self, st: &AppState) -> bool {
+        st.proxy.is_none()
+            && st.proxy_port == self.proxy_port
+            && st.secret == self.secret
+            && st.provider == self.provider
+            && st.gateway_kind == self.gateway_kind
+            && st.shim_mode == self.shim_mode
+            && st.launch_id == self.launch_id
+            && st.key_fp == self.key_fp
+            && st.gateway_launch_context.as_ref() == Some(&self.launch_context)
+    }
+
+    fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
+        self.generation == current_generation && self.marker_matches(st)
+    }
+}
+
+struct GatewaySpawnCandidate {
+    child: Option<std::process::Child>,
+    state: SharedAppState,
+}
+
+impl GatewaySpawnCandidate {
+    fn new(child: std::process::Child, state: &SharedAppState) -> Self {
+        Self {
+            child: Some(child),
+            state: state.clone(),
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.child
+            .as_mut()
+            .expect("Gateway spawn candidate must own its child")
+    }
+
+    fn accept_child(&mut self) -> std::process::Child {
+        self.child
+            .take()
+            .expect("accepted Gateway candidate must own its child")
+    }
+
+    fn reject(self) -> Result<(), String> {
+        self.reject_with(stop_tracked_gateway_child)
+    }
+
+    fn reject_with<Stop>(mut self, stop: Stop) -> Result<(), String>
+    where
+        Stop: FnOnce(&mut std::process::Child) -> Result<(), String>,
+    {
+        let mut child = self
+            .child
+            .take()
+            .expect("rejected Gateway candidate must own its child");
+        match stop(&mut child) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                lock(&self.state).retain_rejected_gateway_candidate(child);
+                Err(format!(
+                    "新 Gateway candidate 停止结果未确认；已保留独立 cleanup owner，未覆盖 replacement：{error}"
+                ))
+            }
+        }
+    }
+}
+
+impl Drop for GatewaySpawnCandidate {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if stop_tracked_gateway_child(&mut child).is_err() {
+            lock(&self.state).retain_rejected_gateway_candidate(child);
+        }
+    }
+}
+
+struct GatewayCandidateLog {
+    candidate_path: Option<PathBuf>,
+    canonical_path: PathBuf,
+}
+
+impl GatewayCandidateLog {
+    fn open(launch_id: &str) -> Result<(std::fs::File, Self), String> {
+        let name = format!("proxy-candidate-{launch_id}.log");
+        let file = open_log(&name).map_err(|error| format!("建日志失败：{error}"))?;
+        Ok((
+            file,
+            Self {
+                candidate_path: Some(log_path(&name)),
+                canonical_path: log_path("proxy.log"),
+            },
+        ))
+    }
+
+    fn tail(&self) -> String {
+        self.candidate_path
+            .as_deref()
+            .map(|path| tail_file(path, 500))
+            .unwrap_or_default()
+    }
+
+    fn publish(&mut self) -> Result<(), String> {
+        let candidate = self
+            .candidate_path
+            .as_ref()
+            .ok_or("Gateway candidate log 已发布")?;
+        config::assert_not_symlink(&self.canonical_path)
+            .map_err(|error| format!("无法安全发布 Gateway 日志：{error}"))?;
+        fs::rename(candidate, &self.canonical_path)
+            .map_err(|error| format!("无法发布 Gateway 日志：{error}"))?;
+        self.candidate_path = None;
+        Ok(())
+    }
+}
+
+impl Drop for GatewayCandidateLog {
+    fn drop(&mut self) {
+        if let Some(path) = self.candidate_path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 fn app_state_gateway_slot_is_empty(st: &AppState) -> bool {
     st.proxy.is_none()
         && st.secret.is_empty()
@@ -64,6 +242,31 @@ fn app_state_gateway_slot_is_empty(st: &AppState) -> bool {
         && st.launch_id.is_empty()
         && st.key_fp == 0
         && st.gateway_launch_context.is_none()
+}
+
+fn finish_failed_gateway_candidate(
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    owner: &GatewaySpawnCandidateOwner,
+    candidate_log: Option<&mut GatewayCandidateLog>,
+    skill_host: Option<&mut PreparedSkillInstallHost>,
+) -> bool {
+    let mut current = lock(state);
+    let current_owner = owner.still_owns(&current, lifecycle.current_generation());
+    if current_owner {
+        // Preserve the existing diagnostic/optional-bridge publication on an
+        // ordinary current-owner launch failure. Stale candidates never publish.
+        if let Some(candidate_log) = candidate_log {
+            let _ = candidate_log.publish();
+        }
+        if let Some(skill_host) = skill_host {
+            let _ = skill_host.publish();
+        }
+    }
+    if owner.marker_matches(&current) {
+        current.clear_proxy_identity();
+    }
+    current_owner
 }
 
 fn stop_tracked_gateway_child(child: &mut std::process::Child) -> Result<(), String> {
@@ -82,6 +285,30 @@ fn stop_tracked_gateway_child(child: &mut std::process::Child) -> Result<(), Str
         .wait()
         .map(|_| ())
         .map_err(|error| format!("等待旧 Gateway 子进程退出失败：{error}"))
+}
+
+fn retry_rejected_gateway_candidates_outside_state(state: &SharedAppState) -> Result<(), String> {
+    let candidates = {
+        let mut current = lock(state);
+        std::mem::take(&mut current.rejected_gateway_candidates)
+    };
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let mut unconfirmed = Vec::new();
+    for mut child in candidates {
+        if stop_tracked_gateway_child(&mut child).is_err() {
+            unconfirmed.push(child);
+        }
+    }
+    if unconfirmed.is_empty() {
+        return Ok(());
+    }
+    let count = unconfirmed.len();
+    lock(state).rejected_gateway_candidates.extend(unconfirmed);
+    Err(format!(
+        "仍有 {count} 个 rejected Gateway candidate 的退出未确认；已保留 cleanup owner，拒绝启动新 Gateway。"
+    ))
 }
 
 fn cleanup_tracked_gateway_with<'a, Stop>(
@@ -188,6 +415,7 @@ fn start_proxy_for_inner<R: Runtime>(
     trace: Option<&OperationTrace>,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
 ) -> Result<GatewayReceipt, String> {
+    retry_rejected_gateway_candidates_outside_state(state)?;
     assert_format_supported(profile)?;
     let resolved = proxy_args_for(profile)?;
     let mut launch = resolved.formal();
@@ -283,7 +511,8 @@ fn start_proxy_for_inner<R: Runtime>(
         s
     };
 
-    let (mut child, launch_id, gen) = {
+    let launch_id = proc::gen_secret().map_err(|e| format!("无法生成 gateway launch_id：{e}"))?;
+    let spawn_owner = {
         let mut st = lock(state);
         let gen = lifecycle.current_generation();
         let tracked_child_running = proc::tracked_child_is_running(&mut st.proxy);
@@ -391,10 +620,26 @@ fn start_proxy_for_inner<R: Runtime>(
             },
         )?;
         st = next_state;
-        st.secret = secret.clone();
+        GatewaySpawnCandidateOwner::reserve(
+            &mut st,
+            gen,
+            port,
+            secret.clone(),
+            launch.adapter.clone(),
+            gateway_kind.to_string(),
+            shim_mode.to_string(),
+            launch_id.clone(),
+            key_fp,
+            recipe.clone(),
+        )?
+    };
 
-        let logf = open_log("proxy.log").map_err(|e| format!("建日志失败：{e}"))?;
-        let logf2 = logf.try_clone().map_err(|e| e.to_string())?;
+    let mut candidate_log = None;
+    let mut prepared_skill_host = None;
+    let spawn_result = (|| -> Result<std::process::Child, String> {
+        let (logf, log_owner) = GatewayCandidateLog::open(&launch_id)?;
+        let logf2 = logf.try_clone().map_err(|error| error.to_string())?;
+        candidate_log = Some(log_owner);
         if let Some(t) = trace {
             t.stage(
                 OperationStage::ProxySpawn,
@@ -404,8 +649,6 @@ fn start_proxy_for_inner<R: Runtime>(
                 ),
             );
         }
-        let launch_id =
-            proc::gen_secret().map_err(|e| format!("无法生成 gateway launch_id：{e}"))?;
         let bin = gateway_bin_path(app)
             .ok_or("找不到 csswitch-gateway 二进制；请重新安装完整应用，开发态可设置绝对 CSSWITCH_GATEWAY_BIN。")?;
         let mut cmd = Command::new(bin);
@@ -423,33 +666,44 @@ fn start_proxy_for_inner<R: Runtime>(
             &launch.adapter,
             std::env::var_os("CSSWITCH_UPSTREAM_URL").as_deref(),
         )?;
-        // The external-Skill bridge is optional. Unsafe or unwritable bridge
-        // state disables only that bridge; it must never prevent the proxy (and
-        // therefore Science) from starting.
-        let _skill_install_bridge_ready = configure_skill_install_host(
+        // Bridge preparation is candidate-scoped and optional. The canonical
+        // key is published only after this candidate still owns AppState.
+        prepared_skill_host = prepare_skill_install_host(
             &mut cmd,
             &crate::runtime::science::sandbox_home().join(".claude-science"),
             &secret,
             &launch_id,
             science_context.as_ref(),
         )
-        .is_ok();
+        .ok();
         for (k, v) in formal_proxy_env(&launch)? {
             cmd.env(k, v);
         }
-        let child = cmd
-            .stdout(Stdio::from(logf))
+        cmd.stdout(Stdio::from(logf))
             .stderr(Stdio::from(logf2))
             .spawn()
-            .map_err(|e| format!("启动代理失败：{e}"))?;
-        (child, launch_id, gen)
+            .map_err(|error| format!("启动代理失败：{error}"))
+    })();
+    let child = match spawn_result {
+        Ok(child) => child,
+        Err(error) => {
+            finish_failed_gateway_candidate(
+                state,
+                lifecycle,
+                &spawn_owner,
+                candidate_log.as_mut(),
+                prepared_skill_host.as_mut(),
+            );
+            return Err(error);
+        }
     };
+    let mut candidate = GatewaySpawnCandidate::new(child, state);
 
     let mut accepted_health = None;
     let mut early_exit = None;
     for _ in 0..(operation::PROXY_HEALTH_BUDGET_MS / POLL_INTERVAL_MS) {
         std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-        match proc::poll_child_liveness(&mut child) {
+        match proc::poll_child_liveness(candidate.child_mut()) {
             proc::ChildLiveness::Exited(status) => {
                 early_exit = Some(format!(
                     "新启动的 {gateway_kind} gateway 提前退出（{status}）"
@@ -495,9 +749,29 @@ fn start_proxy_for_inner<R: Runtime>(
         );
     }
     if accepted_health.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        let tail = redact(&tail_file(&log_path("proxy.log"), 500), &secret);
+        let tail = redact(
+            &candidate_log
+                .as_ref()
+                .map(GatewayCandidateLog::tail)
+                .unwrap_or_default(),
+            &secret,
+        );
+        let cleanup_error = candidate.reject().err();
+        let current_owner = finish_failed_gateway_candidate(
+            state,
+            lifecycle,
+            &spawn_owner,
+            candidate_log.as_mut(),
+            prepared_skill_host.as_mut(),
+        );
+        if !current_owner {
+            let mut error =
+                "Gateway candidate 探活期间 owner 已变化；已拒绝覆盖 replacement。".to_string();
+            if let Some(cleanup_error) = cleanup_error {
+                error.push_str(&format!("\n{cleanup_error}"));
+            }
+            return Err(error);
+        }
         // Never authenticate to an unowned listener during failure diagnosis.
         // A bare TCP connect carries no path secret and is enough to report the
         // occupied-port class while leaving the unknown process untouched.
@@ -514,25 +788,71 @@ fn start_proxy_for_inner<R: Runtime>(
         if !tail.is_empty() {
             details.push(tail);
         }
+        if let Some(cleanup_error) = cleanup_error {
+            details.push(cleanup_error);
+        }
         return Err(details.join("\n"));
     }
     let accepted_health = accepted_health.expect("checked accepted Gateway health");
 
     {
         let mut st = lock(state);
-        if !should_write_back(gen, lifecycle.current_generation(), &st.secret, &secret) {
-            let mut c = child;
-            let _ = c.kill();
-            let _ = c.wait();
-            return Err("代理启动期间配置已变更（被更晚的操作取代），本次启动未生效。".into());
+        if !spawn_owner.still_owns(&st, lifecycle.current_generation()) {
+            drop(st);
+            let cleanup_error = candidate.reject().err();
+            finish_failed_gateway_candidate(
+                state,
+                lifecycle,
+                &spawn_owner,
+                candidate_log.as_mut(),
+                prepared_skill_host.as_mut(),
+            );
+            let mut error =
+                "代理启动期间 owner 已变化（被更晚的操作取代），本次启动未生效。".to_string();
+            if let Some(cleanup_error) = cleanup_error {
+                error.push_str(&format!("\n{cleanup_error}"));
+            }
+            return Err(error);
         }
         if let Err(error) = proc::require_child_running(
-            &mut child,
+            candidate.child_mut(),
             &format!("新启动的 {gateway_kind} gateway 在发布 AppState 前"),
         ) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
+            drop(st);
+            let cleanup_error = candidate.reject().err();
+            finish_failed_gateway_candidate(
+                state,
+                lifecycle,
+                &spawn_owner,
+                candidate_log.as_mut(),
+                prepared_skill_host.as_mut(),
+            );
+            return Err(
+                cleanup_error.map_or(error.clone(), |cleanup| format!("{error}\n{cleanup}"))
+            );
+        }
+        if let Err(error) = candidate_log
+            .as_mut()
+            .expect("spawned Gateway candidate must own its log")
+            .publish()
+        {
+            drop(st);
+            let cleanup_error = candidate.reject().err();
+            finish_failed_gateway_candidate(
+                state,
+                lifecycle,
+                &spawn_owner,
+                candidate_log.as_mut(),
+                prepared_skill_host.as_mut(),
+            );
+            return Err(
+                cleanup_error.map_or(error.clone(), |cleanup| format!("{error}\n{cleanup}"))
+            );
+        }
+        if let Some(skill_host) = prepared_skill_host.as_mut() {
+            // The bridge remains optional. Publication failure degrades only the
+            // bridge and the staged file is removed on drop.
+            let _ = skill_host.publish();
         }
         #[cfg(test)]
         if let Some(path) = std::env::var_os("CSSWITCH_TEST_GATEWAY_PUBLISH_LOG") {
@@ -540,7 +860,7 @@ fn start_proxy_for_inner<R: Runtime>(
                 let _ = writeln!(
                     log,
                     "{} {} {} {} {}",
-                    child.id(),
+                    candidate.child_mut().id(),
                     launch_id,
                     key_fp,
                     port,
@@ -548,7 +868,7 @@ fn start_proxy_for_inner<R: Runtime>(
                 );
             }
         }
-        st.proxy = Some(child);
+        st.proxy = Some(candidate.accept_child());
         st.proxy_port = port;
         st.secret = secret.clone();
         st.provider = launch.adapter.clone();

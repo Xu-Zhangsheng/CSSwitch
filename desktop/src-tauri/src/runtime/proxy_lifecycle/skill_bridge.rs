@@ -7,27 +7,43 @@ pub(crate) fn skill_install_bridge_dir(secret: &str) -> Result<PathBuf, String> 
     Ok(home.join(format!("CSSwitch-Skill-Bridge-{}", &secret[..24])))
 }
 
-pub(crate) fn configure_skill_install_host(
+pub(crate) struct PreparedSkillInstallHost {
+    key: Option<PreparedSkillInstallBridgeKey>,
+}
+
+impl PreparedSkillInstallHost {
+    pub(crate) fn publish(&mut self) -> Result<PathBuf, String> {
+        self.key
+            .as_mut()
+            .expect("prepared Skill bridge key may only be published once")
+            .publish()
+    }
+}
+
+pub(crate) fn prepare_skill_install_host(
     cmd: &mut Command,
     data_dir: &Path,
     secret: &str,
     launch_id: &str,
     science_context: Option<&csswitch_skill_install_core::ScienceHostContext>,
-) -> Result<(), String> {
+) -> Result<PreparedSkillInstallHost, String> {
     let bridge_dir = skill_install_bridge_dir(secret)?;
     let bridge_token = skill_install_bridge_token(secret, launch_id)?;
-    write_skill_install_bridge_key(&bridge_token)?;
+    let science_context = science_context
+        .map(|context| {
+            serde_json::to_string(context).map_err(|_| "无法编码 Science Skill attach host context")
+        })
+        .transpose()?;
+    let key = stage_skill_install_bridge_key(&bridge_token)?;
     cmd.env("CSSWITCH_SKILL_DATA_DIR", data_dir)
         .env("CSSWITCH_SKILL_BRIDGE_DIR", bridge_dir)
         .env("CSSWITCH_SKILL_BRIDGE_TOKEN", bridge_token);
-    if let Some(context) = science_context {
-        let encoded = serde_json::to_string(context)
-            .map_err(|_| "无法编码 Science Skill attach host context")?;
+    if let Some(encoded) = science_context {
         cmd.env("CSSWITCH_SCIENCE_HOST_CONTEXT", encoded);
     } else {
         cmd.env_remove("CSSWITCH_SCIENCE_HOST_CONTEXT");
     }
-    Ok(())
+    Ok(PreparedSkillInstallHost { key: Some(key) })
 }
 
 fn proxy_fingerprint_with_science_context(
@@ -96,8 +112,53 @@ pub(crate) fn current_skill_install_bridge_key() -> Result<PathBuf, String> {
     Ok(key_file)
 }
 
-fn write_skill_install_bridge_key(token: &str) -> Result<PathBuf, String> {
+struct PreparedSkillInstallBridgeKey {
+    runtime_dir: PathBuf,
+    key_file: PathBuf,
+    temporary: Option<PathBuf>,
+}
+
+impl PreparedSkillInstallBridgeKey {
+    fn publish(&mut self) -> Result<PathBuf, String> {
+        let temporary = self
+            .temporary
+            .as_ref()
+            .expect("prepared Skill bridge key must own its temporary file");
+        fs::rename(temporary, &self.key_file)
+            .map_err(|_| "无法提交 CSSwitch 私有 Skill bridge key")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&self.key_file, fs::Permissions::from_mode(0o600))
+                .map_err(|_| "无法收紧 CSSwitch 私有 Skill bridge key 权限")?;
+        }
+        File::open(&self.runtime_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "无法同步 CSSwitch 私有 Skill bridge key 目录")?;
+        self.temporary = None;
+        Ok(self.key_file.clone())
+    }
+}
+
+impl Drop for PreparedSkillInstallBridgeKey {
+    fn drop(&mut self) {
+        if let Some(temporary) = self.temporary.take() {
+            let _ = fs::remove_file(temporary);
+        }
+    }
+}
+
+fn stage_skill_install_bridge_key(token: &str) -> Result<PreparedSkillInstallBridgeKey, String> {
     let runtime_dir = config::default_dir().join("runtime");
+    let key_file = runtime_dir.join("skill-install-bridge.key");
+    stage_skill_install_bridge_key_at(runtime_dir, key_file, token)
+}
+
+fn stage_skill_install_bridge_key_at(
+    runtime_dir: PathBuf,
+    key_file: PathBuf,
+    token: &str,
+) -> Result<PreparedSkillInstallBridgeKey, String> {
     reject_skill_bridge_symlinks(&runtime_dir)?;
     fs::create_dir_all(&runtime_dir).map_err(|_| "无法创建 CSSwitch 私有 Skill bridge key 目录")?;
     reject_skill_bridge_symlinks(&runtime_dir)?;
@@ -107,7 +168,6 @@ fn write_skill_install_bridge_key(token: &str) -> Result<PathBuf, String> {
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )
     .map_err(|_| "无法收紧 CSSwitch 私有 Skill bridge key 目录权限")?;
-    let key_file = skill_install_bridge_key_path();
     reject_skill_bridge_symlinks(&key_file)?;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -132,23 +192,17 @@ fn write_skill_install_bridge_key(token: &str) -> Result<PathBuf, String> {
             .and_then(|_| file.write_all(b"\n"))
             .and_then(|_| file.sync_all())
             .map_err(|_| "无法写入 CSSwitch 私有 Skill bridge key")?;
-        fs::rename(&temporary, &key_file).map_err(|_| "无法提交 CSSwitch 私有 Skill bridge key")?;
-        #[cfg(unix)]
-        fs::set_permissions(
-            &key_file,
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        )
-        .map_err(|_| "无法收紧 CSSwitch 私有 Skill bridge key 权限")?;
-        File::open(&runtime_dir)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| "无法同步 CSSwitch 私有 Skill bridge key 目录")?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result?;
-    Ok(key_file)
+    Ok(PreparedSkillInstallBridgeKey {
+        runtime_dir,
+        key_file,
+        temporary: Some(temporary),
+    })
 }
 
 fn reject_skill_bridge_symlinks(path: &Path) -> Result<(), String> {
