@@ -18,10 +18,11 @@
 `next@06b630bb3e3fb0d63425bf48d1ffc2d3613fd992`。独立 clean、non-shallow exact clone 的固定
 15-suite source gate 为 `PASS`（15/15 suites、15/15 observations、runner exit 0）；随后由该 SHA
 以 `acceptance-build` 生成的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science 0.1.25
-exact tuple 经递归 G1 validator 取得 `PASS`。该 tuple 尚未进入 isolated-live；最新 isolated-live
-仍是 `9cc0d15` tuple 的 `B-RUNTIME-01=PASS`、`B-CORE-01=PASS` 与
-`B-CONTEXT-01=PASS(scope=isolated-request-shape)`，不能外推到 `06b630b`。后续文档提交只记录
-证据，不能改写被构建或运行的 source/artifact identity。
+exact tuple 经递归 G1 validator 取得 `PASS`。同一 tuple 随后在 deny-egress 隔离环境完成
+`B-RUNTIME-01=PASS`：production Desktop → packaged Gateway → Science、一键开始、5 次 loopback
+provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与精确清理均闭合。
+`9cc0d15` tuple 的 `B-CORE-01=PASS` 与 `B-CONTEXT-01=PASS(scope=isolated-request-shape)`
+不能外推到 `06b630b`。后续文档提交只记录证据，不能改写被构建或运行的 source/artifact identity。
 
 上一份已验收的 stop-ownership production source candidate 是
 `next@65b65c13dc5db59dc3798d0dc1320e7712c726e2`。它以 owner-map baseline
@@ -82,6 +83,15 @@ exact identity 一致。受限沙箱中的首次 gate run `d1e81f780fd7ef8900533
 `FAIL`，不得当作 G1 authority；允许 loopback/进程 fixture 的最终原命令重跑才建立 PASS。完整
 identity、失败边界与不能外推的层见[日期化 exact-artifact 调查](../../docs/evidence/investigations/2026-08-10-csswitch-06b630b-exact-artifact.md)。
 
+`06b630b` exact tuple 的完整 `B-RUNTIME-01` run `r06b630bb` 在全新隔离 HOME/data-dir、
+deny-egress sandbox、真实 Science 0.1.25 与 loopback fake provider 下完成 normal production
+wiring。56 条事件 0 failure，5/5 provider requests consumed；重开保持同一 Desktop/Gateway
+owner，停止/重启产生新的 Gateway/Science owner，最终 8 个 exact PID、4 个动态端口、`8765`
+与 runtime root 全部清零。49 项 evidence hash 全部复算 `OK`，总判定为
+`PASS(scope=csswitch-gateway-science,loopback-provider-fixture)`；真实 provider/账号、Skill/MCP、
+SSH、installed、签名和 release 不外推。完整 identity、deadline、network 与 cleanup closure
+见[日期化 isolated-live 验收](../../docs/evidence/investigations/2026-08-10-claude-science-0.1.25-b-runtime-01.md)。
+
 ## 当前源码问题
 
 - **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings` 与 native exit 已使用 process-local owner claim、锁外 wait 与 identity CAS；downgrade cleanup 及其他 sibling stop caller 尚未全部收敛到同一边界。当前 owner 与缺口见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
@@ -95,7 +105,7 @@ identity、失败边界与不能外推的层见[日期化 exact-artifact 调查]
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | `9cc0d15` tuple 的 `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合；不能外推到 `06b630b`，其 isolated-live `NOT-RUN` | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | 同一 `06b630b` tuple 的 `B-RUNTIME-01=PASS`：一键开始、5 次 loopback provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与精确清理均闭合 | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | `65b65c13` exact-SHA review + canonical 15-suite `PASS`；native-exit replacement/race 与 best-effort Gateway policy 已闭合，downgrade 等 sibling gap 仍开放 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
