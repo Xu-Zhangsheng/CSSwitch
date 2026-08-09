@@ -50,7 +50,7 @@ SHA-256 为 `23cc8300302f05d26bcfc758989ad75d961866ded00507a5307a265b49ffed8f`�
 `40a2b9a` production source，不建立新的 artifact、installed、live、签名或 release 结论；
 后续 evidence-only 文档提交也不能改写 tested source identity。
 
-当前最新 exact-gated Gateway 旧进程清理 candidate 是
+当前最新已验收的 production source candidate 是
 `next@555d4e8c1b96af40a01879a6852706861fe8b484`。tracked child 以 affine owner 在锁外
 stop/wait，按 generation + full owner cleanup marker CAS 清空或恢复；legacy Python listener 的
 端口/进程识别、TERM 与轮询也移出 `AppState`，并在 signal 前复核 process start 与完整 listener
@@ -58,14 +58,15 @@ stop/wait，按 generation + full owner cleanup marker CAS 清空或恢复；leg
 15/15 observations、runner exit 0）；run ID `f9dca130c78c50ca9cbbe309e2257478`，completion
 seal SHA-256 为 `56d8f2e3be5db00ac7b3a34c19e53970d703208e850b141649ae00dd016405de`，其绑定的 source
 snapshot manifest SHA-256 为 `3ddfe92b95d6fa354103d7bafb3b1f67dfd79c89c16f0f8097a6ed9ae2646533`。
-本轮 formal independent clean-context review 为 `NOT-RUN`，因此不得写成独立审查 PASS；该 source
-PASS 也不建立 artifact、installed、live、签名或 release 结论。spawn 仍作为更后的独立边界；
-Skill / MCP 探针继续后置。
+Gateway 旧进程清理 scope 的 formal independent clean-context review 为 `PASS`（clean-context
+`YES`，`BLOCK/HIGH/MEDIUM/LOW=0/0/0/1`）；唯一 LOW 是目标提交内 Context 仍称其为未提交
+candidate，已由 evidence-only 提交 `10b1ea1` 修正，不是 runtime finding。该 source PASS 不建立
+artifact、installed、live、签名或 release 结论。spawn 仍作为更后的独立边界；Skill / MCP 探针继续后置。
 
 ## 当前源码问题
 
 - **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings` 与 native exit 已使用 process-local owner claim、锁外 wait 与 identity CAS；downgrade cleanup 及其他 sibling stop caller 尚未全部收敛到同一边界。当前 owner 与缺口见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
-- **Gateway 锁边界**：`555d4e8` 已把 reuse health、旧 tracked child stop/wait、legacy listener 身份复核/TERM/轮询及 spawn 后 health poll 移出 `AppState`，分别由 full-owner CAS、signal 前 exact identity recheck 与 generation write-back 守护，并取得 exact-SHA canonical 15-suite `PASS`；spawn 仍在锁内，formal independent clean-context review 为 `NOT-RUN`。
+- **Gateway 锁边界**：`555d4e8` 已把 reuse health、旧 tracked child stop/wait、legacy listener 身份复核/TERM/轮询及 spawn 后 health poll 移出 `AppState`，分别由 full-owner CAS、signal 前 exact identity recheck 与 generation write-back 守护，并取得 exact-SHA canonical 15-suite `PASS`；spawn 仍在锁内。Gateway 旧清理 scope 的 formal independent clean-context review 为 `PASS`（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/1`，唯一 LOW 已由 `10b1ea1` 修正文档）。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
 - **Science adoption ledger**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
 
@@ -75,11 +76,11 @@ Skill / MCP 探针继续后置。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `555d4e8` exact-SHA canonical 15-suite `PASS`；Gateway reuse-health 与旧清理锁外 owner/CAS 已闭合，spawn 锁边界仍开放；formal independent clean-context review `NOT-RUN` | `9cc0d15` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定；`555d4e8` exact artifact `NOT-RUN` | `9cc0d15` tuple 的 `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合；不能外推到 `555d4e8` | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `555d4e8` exact-SHA canonical 15-suite `PASS`；Gateway reuse-health 与旧清理锁外 owner/CAS 已闭合，spawn 锁边界仍开放；Gateway 旧清理 scoped formal independent clean-context review `PASS`（`0/0/0/1`，LOW 已修正文档） | `9cc0d15` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已绑定；`555d4e8` exact artifact `NOT-RUN` | `9cc0d15` tuple 的 `B-RUNTIME-01=PASS`：一键开始、provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与清理均闭合；不能外推到 `555d4e8` | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | `65b65c13` exact-SHA review + canonical 15-suite `PASS`；native-exit replacement/race 与 best-effort Gateway policy 已闭合，downgrade 等 sibling gap 仍开放 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
-| Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；最新 current exact-gated source `555d4e8` canonical 15-suite `PASS`，formal independent clean-context review `NOT-RUN`。日期化调查记录的 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object，不另行构成 current production source PASS | `c4a1159` exact artifact 只作为当次调查的日期化 identity；`555d4e8` current exact artifact `NOT-RUN` | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
+| Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；最新 current source `555d4e8` canonical 15-suite `PASS`。本轮 formal review 只覆盖 Gateway 旧清理，Science host adapter / Skill host bridge 专项独立审查仍为 `NOT-RUN`。日期化调查记录的 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object，不另行构成 current production source PASS | `c4a1159` exact artifact 只作为当次调查的日期化 identity；`555d4e8` current exact artifact `NOT-RUN` | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；fresh source seal 待执行 | `NOT-RUN` | current artifact + Gateway + real Science + loopback provider fixture `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
