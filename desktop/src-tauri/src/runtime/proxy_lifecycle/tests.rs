@@ -452,7 +452,13 @@ fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replaceme
     let launch_id = "0123456789abcdef0123456789abcdef";
     let route_secret = "fixture-cleanup-secret-never-log";
 
-    for case in ["success", "stop-failed", "replacement"] {
+    for case in [
+        "success",
+        "stop-failed",
+        "generation-drift",
+        "replacement",
+        "replacement-stop-failed",
+    ] {
         let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let child_pid = child.id();
         let launch_context = GatewayLaunchRecipe {
@@ -494,6 +500,12 @@ fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replaceme
                         Ok(())
                     }
                     "stop-failed" => Err("injected stop failure".into()),
+                    "generation-drift" => {
+                        owned_child.kill().unwrap();
+                        owned_child.wait().unwrap();
+                        lifecycle.bump_generation();
+                        Ok(())
+                    }
                     "replacement" => {
                         owned_child.kill().unwrap();
                         owned_child.wait().unwrap();
@@ -503,6 +515,14 @@ fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replaceme
                         current.proxy = Some(replacement);
                         current.launch_id = "replacement-launch-id".into();
                         Ok(())
+                    }
+                    "replacement-stop-failed" => {
+                        lifecycle.bump_generation();
+                        let replacement = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+                        let mut current = crate::lock(&cleanup_state);
+                        current.proxy = Some(replacement);
+                        current.launch_id = "replacement-launch-id".into();
+                        Err("injected stop failure after replacement".into())
                     }
                     _ => unreachable!(),
                 }
@@ -545,6 +565,12 @@ fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replaceme
                 restored.wait().unwrap();
                 current.proxy = None;
             }
+            "generation-drift" => {
+                let error = result.err().expect("generation drift must fail");
+                assert!(error.contains("process-local owner 已变化"), "{error}");
+                assert!(!error.contains(route_secret), "{error}");
+                assert!(app_state_gateway_slot_is_empty(&crate::lock(&state)));
+            }
             "replacement" => {
                 let error = result.err().expect("replacement drift must fail");
                 assert!(error.contains("拒绝覆盖 replacement"), "{error}");
@@ -556,9 +582,97 @@ fn gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replaceme
                 replacement.wait().unwrap();
                 current.proxy = None;
             }
+            "replacement-stop-failed" => {
+                let error = result
+                    .err()
+                    .expect("replacement plus injected stop failure must fail");
+                assert!(error.contains("拒绝覆盖 replacement"), "{error}");
+                assert!(error.contains("独立 cleanup owner"), "{error}");
+                assert!(!error.contains(route_secret), "{error}");
+                let rejected = {
+                    let mut current = crate::lock(&state);
+                    assert_eq!(current.launch_id, "replacement-launch-id");
+                    let replacement = current.proxy.as_mut().expect("replacement is preserved");
+                    assert_ne!(replacement.id(), child_pid);
+                    assert!(replacement.try_wait().unwrap().is_none());
+                    let rejected = current.rejected_gateway_candidates.clone();
+                    assert_eq!(rejected.owned_pids(), vec![child_pid]);
+                    assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, 0);
+                    rejected
+                };
+                rejected
+                    .retry_with(crate::runtime::system::stop_child_confirmed)
+                    .unwrap();
+                assert!(rejected.is_idle());
+                let _ = crate::lock(&state).stop_proxy();
+            }
             _ => unreachable!(),
         }
     }
+}
+
+#[test]
+fn tracked_gateway_cleanup_panic_retains_old_child_and_preserves_replacement() {
+    let old_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let old_pid = old_child.id();
+    let launch_context = GatewayLaunchRecipe {
+        profile: crate::config::Profile {
+            id: "panic-cleanup-owner-profile".into(),
+            ..Default::default()
+        },
+        science_runtime: None,
+    };
+    let mut authority = crate::AppState::default();
+    authority.proxy = Some(old_child);
+    authority.proxy_port = 32129;
+    authority.secret = "panic-cleanup-secret-never-log".into();
+    authority.provider = "deepseek".into();
+    authority.gateway_kind = "rust".into();
+    authority.shim_mode = "off".into();
+    authority.launch_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1".into();
+    authority.key_fp = 47;
+    authority.gateway_launch_context = Some(launch_context);
+    let state: crate::SharedAppState = Arc::new(Mutex::new(authority));
+    let lifecycle = crate::lifecycle::Lifecycle::new();
+    let generation = lifecycle.current_generation();
+    let unwind_state = state.clone();
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let guard = crate::lock(&unwind_state);
+        let cleanup_state = unwind_state.clone();
+        let _cleanup_result = cleanup_tracked_gateway_with(
+            &unwind_state,
+            &lifecycle,
+            guard,
+            generation,
+            |_owned_child| -> Result<(), String> {
+                lifecycle.bump_generation();
+                let replacement = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+                let mut current = crate::lock(&cleanup_state);
+                current.proxy = Some(replacement);
+                current.launch_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2".into();
+                panic!("injected tracked cleanup panic after replacement")
+            },
+        );
+    }));
+    assert!(unwind.is_err());
+
+    let rejected = {
+        let mut current = crate::lock(&state);
+        assert_eq!(current.launch_id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2");
+        let replacement = current.proxy.as_mut().expect("replacement is preserved");
+        assert_ne!(replacement.id(), old_pid);
+        assert!(replacement.try_wait().unwrap().is_none());
+        let rejected = current.rejected_gateway_candidates.clone();
+        assert_eq!(rejected.owned_pids(), vec![old_pid]);
+        assert_eq!(unsafe { libc::kill(old_pid as i32, 0) }, 0);
+        rejected
+    };
+    rejected
+        .retry_with(crate::runtime::system::stop_child_confirmed)
+        .unwrap();
+    assert!(rejected.is_idle());
+    let _ = crate::lock(&state).stop_proxy();
 }
 
 fn gateway_spawn_recipe(profile_id: &str) -> GatewayLaunchRecipe {
@@ -627,7 +741,7 @@ fn gateway_spawn_candidate_reserves_a_unique_full_owner_and_preserves_replacemen
         assert_eq!(replacement.id(), replacement_pid);
         assert!(replacement.try_wait().unwrap().is_none());
         assert_eq!(current.launch_id, "22222222222222222222222222222222");
-        current.stop_proxy();
+        let _ = current.stop_proxy();
     }
 }
 

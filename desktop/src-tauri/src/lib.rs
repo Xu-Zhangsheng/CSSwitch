@@ -281,10 +281,25 @@ impl RejectedGatewayRegistry {
     }
 }
 
+#[must_use = "Gateway stop uncertainty must be handled before later mutations or exit"]
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum GatewayStopOutcome {
     Stopped,
     Uncertain { owned_count: usize, reason: String },
+}
+
+impl GatewayStopOutcome {
+    pub(crate) fn require_stopped(self, context: &str) -> Result<(), String> {
+        match self {
+            Self::Stopped => Ok(()),
+            Self::Uncertain {
+                owned_count,
+                reason,
+            } => Err(format!(
+                "{context}：仍有 {owned_count} 个 Gateway child 的退出未确认；应用保留 process-local cleanup owner：{reason}"
+            )),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -533,12 +548,19 @@ where
                 |_st, _generation| Ok(()),
                 claim_science,
                 execute_science,
-                |_st| {},
+                native_exit_after_science_stop,
             );
         }
         let mut st = lock(&state);
         stop_gateway(&mut st)
     })
+}
+
+#[allow(clippy::result_large_err)]
+fn native_exit_after_science_stop(
+    _state: &mut AppState,
+) -> Result<(), runtime::science::ScienceStopFailure> {
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]
@@ -1398,7 +1420,7 @@ mod tests {
             let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
             let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
             let worker = std::thread::spawn(move || {
-                cleanup_for_exit_with(
+                let _ = cleanup_for_exit_with(
                     &handle,
                     || {},
                     |_| Vec::new(),
@@ -1520,7 +1542,7 @@ mod tests {
             .unwrap();
         let generation = lifecycle.current_generation();
 
-        cleanup_for_exit(app.handle());
+        assert_eq!(cleanup_for_exit(app.handle()), GatewayStopOutcome::Stopped);
         assert!(lock(&state).proxy.is_none());
         assert!(unsafe { libc::kill(first_pid as i32, 0) } != 0);
         assert_eq!(lock(&state).science_runtime.as_ref(), Some(&runtime));
@@ -1530,7 +1552,7 @@ mod tests {
         let second_proxy = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let second_pid = second_proxy.id();
         lock(&state).proxy = Some(second_proxy);
-        cleanup_for_exit(app.handle());
+        assert_eq!(cleanup_for_exit(app.handle()), GatewayStopOutcome::Stopped);
         assert!(lock(&state).proxy.is_none());
         assert!(unsafe { libc::kill(second_pid as i32, 0) } != 0);
         assert_eq!(lock(&state).science_runtime.as_ref(), Some(&runtime));

@@ -561,7 +561,13 @@ fn restore_proxy_for_active<R: tauri::Runtime>(
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
 ) -> bool {
     if old_active.is_empty() {
-        lock(state).stop_proxy();
+        if lock(state)
+            .stop_proxy()
+            .require_stopped("回滚空 profile 时无法安全停止 Gateway")
+            .is_err()
+        {
+            return false;
+        }
         return !crate::proc::loopback_port_in_use(
             cfg.proxy_port,
             crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
@@ -579,7 +585,13 @@ fn restore_proxy_for_active<R: tauri::Runtime>(
                 // restarting the old Codex Gateway, fail closed without a
                 // auth-file read and stop the candidate runtime so
                 // config/runtime cannot silently disagree.
-                lock(state).stop_proxy();
+                if lock(state)
+                    .stop_proxy()
+                    .require_stopped("回滚 Codex profile 时无法安全停止 candidate Gateway")
+                    .is_err()
+                {
+                    return false;
+                }
                 return false;
             }
             GatewayController::start_for(app, state, lifecycle, old, None, trace, auth_proof)

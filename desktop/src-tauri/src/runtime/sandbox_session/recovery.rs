@@ -168,7 +168,9 @@ impl AppAuthoritySnapshot {
     ) -> Result<(), String> {
         let mut current = lock(state);
         if proxy_action == ProxyAction::Restarted {
-            current.stop_proxy();
+            current
+                .stop_proxy()
+                .require_stopped("测试补偿恢复前无法安全停止 Gateway")?;
         }
         if current.sandbox.is_some() && !self.sandbox_present {
             return Err("late-failure 补偿发现未预期的 Science child，拒绝伪造恢复状态".into());
@@ -202,7 +204,9 @@ impl AppAuthoritySnapshot {
         proxy_action: ProxyAction,
     ) -> Result<(), String> {
         if proxy_action == ProxyAction::Restarted {
-            lock(state).stop_proxy();
+            lock(state)
+                .stop_proxy()
+                .require_stopped("late-failure 补偿恢复前无法安全停止 Gateway")?;
         }
         if self.proxy_present {
             let context = self
@@ -1206,7 +1210,13 @@ impl OneClickAuthoritySnapshot {
             return Err("one-click compensation found drifted config authority; preserved the current config, authority, runtime state, and recovery snapshot".into());
         }
         if proxy_action == ProxyAction::Restarted {
-            lock(state).stop_proxy();
+            if let Err(error) = lock(state)
+                .stop_proxy()
+                .require_stopped("one-click compensation 恢复前无法安全停止 Gateway")
+            {
+                self.preserve_recovery = true;
+                return Err(error);
+            }
         }
         let mut errors = Vec::new();
         let science_restore_allowed = match self.validate_science_restore_root() {

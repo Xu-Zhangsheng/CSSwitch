@@ -668,7 +668,9 @@ fn replay_candidate_gateway_cleanup<R: Runtime>(
                 );
             }
             if current.proxy.is_some() {
-                current.stop_proxy();
+                current.stop_proxy().require_stopped(
+                    "补偿重放停止已由外部确认退出的 Gateway 时仍无法确认 process-local child 退出",
+                )?;
             }
             Ok(())
         }

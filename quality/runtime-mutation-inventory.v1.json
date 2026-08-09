@@ -51,8 +51,8 @@
       "id": "app.gateway",
       "kind": "process-local",
       "durability": "process",
-      "authority": "Tracked Gateway child plus public launch identity and secret-bearing in-memory launch recipe.",
-      "fields": ["gateway_kind", "gateway_launch_context", "key_fp", "launch_id", "provider", "proxy", "proxy_port", "secret", "shim_mode"],
+      "authority": "Tracked active Gateway child, independent rejected or cleanup-in-flight child owners, public launch identity, and secret-bearing in-memory launch recipe.",
+      "fields": ["gateway_kind", "gateway_launch_context", "key_fp", "launch_id", "provider", "proxy", "proxy_port", "rejected_gateway_candidates", "secret", "shim_mode"],
       "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "AppState"}
     },
     {

@@ -28,9 +28,8 @@ impl GatewayProcessLocalOwner {
         })
     }
 
-    fn metadata_matches(&self, st: &AppState, current_generation: u64) -> bool {
-        self.generation == current_generation
-            && st.proxy_port == self.proxy_port
+    fn state_metadata_matches(&self, st: &AppState) -> bool {
+        st.proxy_port == self.proxy_port
             && st.secret == self.secret
             && st.provider == self.provider
             && st.gateway_kind == self.gateway_kind
@@ -38,6 +37,10 @@ impl GatewayProcessLocalOwner {
             && st.launch_id == self.launch_id
             && st.key_fp == self.key_fp
             && st.gateway_launch_context == self.launch_context
+    }
+
+    fn metadata_matches(&self, st: &AppState, current_generation: u64) -> bool {
+        self.generation == current_generation && self.state_metadata_matches(st)
     }
 
     fn still_owns(&self, st: &AppState, current_generation: u64) -> bool {
@@ -48,11 +51,59 @@ impl GatewayProcessLocalOwner {
     fn owns_cleanup_marker(&self, st: &AppState, current_generation: u64) -> bool {
         st.proxy.is_none() && self.metadata_matches(st, current_generation)
     }
+
+    fn cleanup_marker_matches(&self, st: &AppState) -> bool {
+        st.proxy.is_none() && self.state_metadata_matches(st)
+    }
 }
 
 struct GatewayTrackedCleanupOwner {
     identity: GatewayProcessLocalOwner,
-    child: std::process::Child,
+    child: Option<std::process::Child>,
+    rejected: crate::RejectedGatewayRegistry,
+    state: SharedAppState,
+}
+
+impl GatewayTrackedCleanupOwner {
+    fn clear_cleanup_marker_if_owned(&self) {
+        let mut current = lock(&self.state);
+        if self.identity.cleanup_marker_matches(&current) {
+            current.clear_proxy_identity();
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.child
+            .as_mut()
+            .expect("tracked Gateway cleanup must own its child")
+    }
+
+    fn take_child(&mut self) -> std::process::Child {
+        self.child
+            .take()
+            .expect("tracked Gateway cleanup must own its child")
+    }
+
+    fn confirm_stopped(&mut self) -> Result<(), String> {
+        let mut child = self.take_child();
+        if let Err(error) = child.wait() {
+            self.child = Some(child);
+            return Err(format!(
+                "无法二次确认 tracked Gateway 子进程已被 reap：{error}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GatewayTrackedCleanupOwner {
+    fn drop(&mut self) {
+        let Some(child) = self.child.take() else {
+            return;
+        };
+        self.rejected.retain(child);
+        self.clear_cleanup_marker_if_owned();
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -316,31 +367,56 @@ where
         state_guard.clear_proxy_identity();
         return Ok(state_guard);
     };
+    let rejected = state_guard.rejected_gateway_candidates.clone();
     let child = state_guard
         .proxy
         .take()
         .expect("Gateway cleanup claim must own the tracked child");
-    let mut owner = GatewayTrackedCleanupOwner { identity, child };
+    let mut owner = GatewayTrackedCleanupOwner {
+        identity,
+        child: Some(child),
+        rejected,
+        state: state.clone(),
+    };
     drop(state_guard);
 
-    let stopped = stop(&mut owner.child);
+    let stopped = stop(owner.child_mut());
     let mut current = lock(state);
     if !owner
         .identity
         .owns_cleanup_marker(&current, lifecycle.current_generation())
     {
-        return Err(
-            "旧 Gateway 清理完成时 process-local owner 已变化；已拒绝覆盖 replacement，请重试。"
-                .into(),
-        );
+        drop(current);
+        let drift =
+            "旧 Gateway 清理完成时 process-local owner 已变化；已拒绝覆盖 replacement，请重试。";
+        return match stopped {
+            Ok(()) => match owner.confirm_stopped() {
+                Ok(()) => {
+                    owner.clear_cleanup_marker_if_owned();
+                    Err(drift.into())
+                }
+                Err(error) => Err(format!(
+                    "{drift} 旧 child 的退出仍未确认；已保留独立 cleanup owner：{error}"
+                )),
+            },
+            Err(error) => Err(format!(
+                "{drift} 旧 child 的退出未确认；已保留独立 cleanup owner：{error}"
+            )),
+        };
     }
     match stopped {
         Ok(()) => {
+            if let Err(error) = owner.confirm_stopped() {
+                drop(current);
+                return Err(format!(
+                    "旧 Gateway 清理未确认完成；已保留独立 cleanup owner 以便安全重试：{error}"
+                ));
+            }
             current.clear_proxy_identity();
             Ok(current)
         }
         Err(error) => {
-            current.proxy = Some(owner.child);
+            current.proxy = Some(owner.take_child());
             Err(format!(
                 "旧 Gateway 清理未确认完成；已保留 process-local owner 以便安全重试：{error}"
             ))

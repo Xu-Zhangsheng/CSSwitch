@@ -744,7 +744,7 @@ impl<R: tauri::Runtime> RuntimeSmokeCleanup<R> {
                 sandbox_url,
                 science::ScienceStopRequest::recover(runtime.as_ref()),
             );
-            st.stop_proxy();
+            let _ = st.stop_proxy();
             result
         };
         stop_result.map_err(|error| error.to_string())?;
@@ -6748,7 +6748,7 @@ fn run_cleanup_recovery_oracle(oracle: &str) {
                 sandbox_url,
                 science::ScienceStopRequest::recover(runtime.as_ref()),
             );
-            authority.stop_proxy();
+            let _ = authority.stop_proxy();
             result
         };
         assert!(
@@ -7198,7 +7198,7 @@ fn isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent() {
             sandbox_url,
             science::ScienceStopRequest::recover(runtime.as_ref()),
         );
-        authority.stop_proxy();
+        let _ = authority.stop_proxy();
     }
     drop(failpoint);
     let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
@@ -9752,7 +9752,7 @@ fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement()
         assert!(current.proxy.is_some(), "{case}");
         assert!(r0_d_process_is_running(proxy_pid), "{case}");
         drop(current);
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
     }
     fs::remove_dir_all(root).unwrap();
 }
@@ -9987,7 +9987,7 @@ fn r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replaceme
         assert!(current.proxy.is_some(), "{case}");
         assert!(r0_d_process_is_running(proxy_pid), "{case}");
         drop(current);
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
     }
     fs::remove_dir_all(root).unwrap();
 }
@@ -10205,7 +10205,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         assert_eq!(lifecycle.current_generation(), generation);
         assert!(lock(&state).proxy.is_some());
         assert!(r0_d_process_is_running(proxy_pid));
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
 
         let stop_home = root.join("mode-stop-home");
         fs::create_dir_all(&stop_home).unwrap();
@@ -10229,7 +10229,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         assert_eq!(lifecycle.current_generation(), generation + 1);
         assert!(lock(&state).proxy.is_some());
         assert!(r0_d_process_is_running(proxy_pid));
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
 
         let commit_home = root.join("mode-commit-home");
         fs::create_dir_all(&commit_home).unwrap();
@@ -10283,7 +10283,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         assert_eq!(lifecycle.current_generation(), generation);
         assert!(lock(&state).proxy.is_some());
         assert!(r0_d_process_is_running(proxy_pid));
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
 
         let stop_home = root.join("settings-stop-home");
         fs::create_dir_all(&stop_home).unwrap();
@@ -10311,7 +10311,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         assert_eq!(lifecycle.current_generation(), generation);
         assert!(lock(&state).proxy.is_some());
         assert!(r0_d_process_is_running(proxy_pid));
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
 
         let revoke_home = root.join("settings-revoke-home");
         fs::create_dir_all(&revoke_home).unwrap();

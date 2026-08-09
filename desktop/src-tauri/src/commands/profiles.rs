@@ -11,7 +11,9 @@ use crate::runtime::profile::{
 };
 use crate::runtime::profile_switch::scratch_validate_candidate;
 use crate::runtime::provider::{reject_openai_custom_anthropic_base, resolve_launch_plan};
-use crate::{config, lifecycle, lock, run_blocking_typed, SharedAppState, SharedLifecycle};
+use crate::{
+    config, lifecycle, lock, run_blocking_typed, AppState, SharedAppState, SharedLifecycle,
+};
 
 fn catalog_edit_from_parts(
     legacy_model_present: bool,
@@ -229,6 +231,19 @@ fn clear_profile_key_cmd(
     lifecycle: &lifecycle::Lifecycle,
     id: &str,
 ) -> Result<(), String> {
+    clear_profile_key_cmd_with(dir, state, lifecycle, id, AppState::stop_proxy)
+}
+
+fn clear_profile_key_cmd_with<StopGateway>(
+    dir: &Path,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    id: &str,
+    stop_gateway: StopGateway,
+) -> Result<(), String>
+where
+    StopGateway: FnOnce(&mut AppState) -> crate::GatewayStopOutcome,
+{
     lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Destructive, |_| {
         let cfg = load_without_runtime_transaction(dir)?;
         let was_applied = cfg
@@ -236,12 +251,13 @@ fn clear_profile_key_cmd(
             .as_ref()
             .map(|binding| binding.profile_id.as_str())
             == Some(id);
-        clear_profile_key_inner(dir, id)?;
         if was_applied {
             lifecycle.bump_generation();
             let mut st = lock(state);
-            st.stop_proxy();
+            stop_gateway(&mut st)
+                .require_stopped("清除已应用 profile key 前无法安全停止 Gateway；配置未修改")?;
         }
+        clear_profile_key_inner(dir, id)?;
         Ok(())
     })
 }
@@ -252,6 +268,19 @@ fn delete_profile_cmd(
     lifecycle: &lifecycle::Lifecycle,
     id: &str,
 ) -> Result<(), String> {
+    delete_profile_cmd_with(dir, state, lifecycle, id, AppState::stop_proxy)
+}
+
+fn delete_profile_cmd_with<StopGateway>(
+    dir: &Path,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    id: &str,
+    stop_gateway: StopGateway,
+) -> Result<(), String>
+where
+    StopGateway: FnOnce(&mut AppState) -> crate::GatewayStopOutcome,
+{
     lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Destructive, |_| {
         let cfg = load_without_runtime_transaction(dir)?;
         let was_applied = cfg
@@ -259,12 +288,13 @@ fn delete_profile_cmd(
             .as_ref()
             .map(|binding| binding.profile_id.as_str())
             == Some(id);
-        delete_profile_inner(dir, id)?;
         if was_applied {
             lifecycle.bump_generation();
             let mut st = lock(state);
-            st.stop_proxy();
+            stop_gateway(&mut st)
+                .require_stopped("删除已应用 profile 前无法安全停止 Gateway；配置未修改")?;
         }
+        delete_profile_inner(dir, id)?;
         Ok(())
     })
 }
@@ -588,8 +618,9 @@ fn pin_active_profile_in_dir(
 mod tests {
     use super::{
         apply_profile_preset_sync_inner_cmd, catalog_edit_from_parts, clear_profile_key_cmd,
-        delete_profile_cmd, persist_profile_candidate_inner, pin_active_profile_in_dir,
-        require_preview_fingerprint, update_profile_connection_with,
+        clear_profile_key_cmd_with, delete_profile_cmd, delete_profile_cmd_with,
+        persist_profile_candidate_inner, pin_active_profile_in_dir, require_preview_fingerprint,
+        update_profile_connection_with,
     };
     use crate::{
         config::{self, Config, Profile, RuntimeBindingCommit, RuntimeTransactionJournal},
@@ -740,6 +771,45 @@ mod tests {
         assert!(st.launch_id.is_empty());
         assert_eq!(st.key_fp, 0);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profile_clear_and_delete_fail_before_commit_on_gateway_uncertainty() {
+        for operation in ["clear", "delete"] {
+            let dir = tmpdir(&format!("{operation}-active-gateway-uncertain"));
+            let cfg = Config {
+                profiles: vec![profile("active", "sk-active")],
+                active_id: "active".into(),
+                runtime_binding: Some(binding("active")),
+                ..Default::default()
+            };
+            config::save_to(&dir, &cfg).unwrap();
+            let before = fs::read(dir.join("config.json")).unwrap();
+            let state = state_with_proxy_identity();
+            let lifecycle = lifecycle::Lifecycle::new();
+            let stop_uncertain = |_: &mut AppState| crate::GatewayStopOutcome::Uncertain {
+                owned_count: 1,
+                reason: "injected retained child".into(),
+            };
+
+            let error = match operation {
+                "clear" => {
+                    clear_profile_key_cmd_with(&dir, &state, &lifecycle, "active", stop_uncertain)
+                        .unwrap_err()
+                }
+                "delete" => {
+                    delete_profile_cmd_with(&dir, &state, &lifecycle, "active", stop_uncertain)
+                        .unwrap_err()
+                }
+                _ => unreachable!(),
+            };
+            assert!(error.contains("配置未修改"), "{operation}: {error}");
+            assert_eq!(fs::read(dir.join("config.json")).unwrap(), before);
+            let after = config::load_from(&dir).unwrap();
+            assert_eq!(after.profile_by_id("active").unwrap().api_key, "sk-active");
+            assert!(after.runtime_binding.is_some());
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

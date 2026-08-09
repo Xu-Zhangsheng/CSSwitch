@@ -340,8 +340,11 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         .find("let authority_matches = match runtime_transaction")
         .expect("one-click compensation must preflight the current journal");
     let first_restore_effect = one_click_restore
-        .find("lock(state).stop_proxy()")
+        .find(".stop_proxy()")
         .expect("one-click compensation runtime restore must remain discoverable");
+    let confirmed_gateway_stop = one_click_restore
+        .find(".require_stopped(\"one-click compensation 恢复前无法安全停止 Gateway\")")
+        .expect("one-click compensation must fail closed on uncertain Gateway stop");
     assert!(
         one_click_progress.contains("record: config::RuntimeTransactionV2")
             && one_click_progress.contains("Self::Finalized { .. } =>")
@@ -461,7 +464,8 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && recovery_source.contains("Some(compensation.clone())")
             && recovery_source
                 .contains("current.runtime_transaction.as_ref() != expected.as_ref()")
-            && restore_guard < first_restore_effect,
+            && restore_guard < first_restore_effect
+            && first_restore_effect < confirmed_gateway_stop,
         "authority restore must preserve the exact durable compensation record before effects"
     );
     assert!(

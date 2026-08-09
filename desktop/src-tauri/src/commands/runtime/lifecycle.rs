@@ -19,15 +19,7 @@ fn require_confirmed_gateway_stop(
     outcome: crate::GatewayStopOutcome,
     context: &str,
 ) -> Result<(), String> {
-    match outcome {
-        crate::GatewayStopOutcome::Stopped => Ok(()),
-        crate::GatewayStopOutcome::Uncertain {
-            owned_count,
-            reason,
-        } => Err(format!(
-            "{context}：仍有 {owned_count} 个 Gateway child 的退出未确认；应用保留 process-local cleanup owner：{reason}"
-        )),
-    }
+    outcome.require_stopped(context)
 }
 
 /// 切换运行模式（"proxy" 第三方 / "official" 官方）。切官方要先拆第三方链路成功再落盘。
@@ -410,7 +402,7 @@ where
         &tauri::AppHandle<R>,
         crate::runtime::science::ScienceStopRequest,
     ) -> (crate::runtime::science::ScienceStopOutcome, bool),
-    AfterSuccess: FnOnce(&mut AppState),
+    AfterSuccess: FnOnce(&mut AppState) -> Result<(), crate::runtime::science::ScienceStopFailure>,
 {
     let (owner, request) = {
         let mut st = lock(state);
@@ -429,7 +421,7 @@ where
         execution,
     );
     if outcome.is_ok() {
-        after_success(&mut st);
+        after_success(&mut st)?;
     }
     outcome
 }

@@ -569,13 +569,14 @@ fn codex_science_owner_changed() -> crate::runtime::science::ScienceStopFailure 
 }
 
 #[allow(clippy::result_large_err)]
-fn stop_managed_codex_runtime_with<R, Claim, Execute>(
+fn stop_managed_codex_runtime_with<R, Claim, Execute, StopGateway>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
     lifecycle: &crate::lifecycle::Lifecycle,
     observation: CodexScienceObservation,
     claim_science: Claim,
     execute_science: Execute,
+    mut stop_gateway: StopGateway,
 ) -> Result<(), String>
 where
     R: tauri::Runtime,
@@ -589,6 +590,7 @@ where
         &tauri::AppHandle<R>,
         crate::runtime::science::ScienceStopRequest,
     ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+    StopGateway: FnMut(&mut AppState) -> crate::GatewayStopOutcome,
 {
     let CodexScienceObservation {
         state: science_state,
@@ -612,7 +614,11 @@ where
                 execute_science,
                 |st| {
                     lifecycle.bump_generation();
-                    st.stop_proxy();
+                    stop_gateway(st)
+                        .require_stopped("停止受管 Codex Gateway 失败")
+                        .map_err(
+                            crate::runtime::science::ScienceStopFailure::outcome_publication_failure,
+                        )
                 },
             )
             .map_err(|error| {
@@ -633,7 +639,8 @@ where
             st.science_confirmed_stopped = owner.confirmed_stopped;
             st.science_runtime = None;
             lifecycle.bump_generation();
-            st.stop_proxy();
+            stop_gateway(&mut st)
+                .require_stopped("停止受管 Codex Gateway 失败；认证未变更，实验开关也未关闭")?;
             Ok(())
         }
         SandboxScienceState::Unknown => Err(
@@ -704,6 +711,7 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
             },
             ScienceHostAdapter::claim_stop,
             |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+            AppState::stop_proxy,
         )?;
     }
     Ok(action)
@@ -831,10 +839,19 @@ fn stop_all_before_downgrade<R: tauri::Runtime>(
     lifecycle.bump_generation();
     let mut app_state = lock(state);
     let sandbox_result = super::runtime::stop_sandbox_state(app, &mut app_state);
-    app_state.stop_proxy();
-    sandbox_result.map(|_| ()).map_err(|error| {
-        format!("降级前无法安全停止受管 Science；配置、导出和本地认证文件均未修改：{error}")
-    })
+    let gateway_result = app_state
+        .stop_proxy()
+        .require_stopped("降级前无法安全停止受管 Gateway；配置、导出和本地认证文件均未修改");
+    match (sandbox_result, gateway_result) {
+        (Ok(_), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(format!(
+            "降级前无法安全停止受管 Science；配置、导出和本地认证文件均未修改：{error}"
+        )),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(science_error), Err(gateway_error)) => Err(format!(
+            "{gateway_error}；同时无法安全停止受管 Science：{science_error}"
+        )),
+    }
 }
 
 fn production_home() -> Result<PathBuf, String> {
@@ -2668,6 +2685,7 @@ mod tests {
                                 true,
                             )
                         },
+                        AppState::stop_proxy,
                     )
                 })
             });
@@ -2726,7 +2744,7 @@ mod tests {
             assert!(current.proxy.is_some(), "{case}");
             assert!(r0_process_is_running(proxy_pid), "{case}");
             drop(current);
-            lock(&state).stop_proxy();
+            let _ = lock(&state).stop_proxy();
         }
     }
 
@@ -2792,6 +2810,7 @@ mod tests {
                 },
                 |_| panic!("pre-claim owner drift must reject before typed stop claim"),
                 |_, _| panic!("pre-claim owner drift must reject before stop execution"),
+                AppState::stop_proxy,
             )
         });
         assert!(
@@ -2813,7 +2832,56 @@ mod tests {
         assert!(current.proxy.is_some());
         assert!(r0_process_is_running(proxy_pid));
         drop(current);
-        lock(&state).stop_proxy();
+        let _ = lock(&state).stop_proxy();
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn r3_codex_mutation_gateway_uncertainty_fails_before_config_commit() {
+        let temp = TempDir::new("r3-codex-gateway-stop-uncertain");
+        fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+        config::save_to(
+            &temp.0,
+            &config::Config {
+                experimental_codex_enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let config_before = fs::read(temp.0.join("config.json")).unwrap();
+        let (state, proxy_pid) = r0_proxy_state("codex");
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let owner = CodexScienceOwnerSnapshot::claim(&lock(&state), lifecycle.current_generation());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let changed = set_experimental_codex_enabled_at(&temp.0, false, || {
+            stop_managed_codex_runtime_with(
+                app.handle(),
+                &state,
+                &lifecycle,
+                CodexScienceObservation {
+                    state: SandboxScienceState::Stopped,
+                    detected_runtime: None,
+                    owner,
+                },
+                |_| panic!("stopped Science must not claim a stop request"),
+                |_, _| panic!("stopped Science must not execute a stop request"),
+                |_| crate::GatewayStopOutcome::Uncertain {
+                    owned_count: 1,
+                    reason: "injected retained Gateway child".into(),
+                },
+            )
+        });
+
+        let error = changed.unwrap_err();
+        assert!(error.contains("认证未变更"), "{error}");
+        assert!(error.contains("退出未确认"), "{error}");
+        assert_eq!(fs::read(temp.0.join("config.json")).unwrap(), config_before);
+        assert!(lock(&state).proxy.is_some());
+        assert!(r0_process_is_running(proxy_pid));
+        let _ = lock(&state).stop_proxy();
     }
 
     #[test]
@@ -4176,7 +4244,7 @@ mod tests {
             assert!(r0_process_is_running(guarded_pid));
             assert!(lock(&guarded_state).proxy.is_some());
             assert!(supervisor.snapshot().is_none());
-            lock(&guarded_state).stop_proxy();
+            let _ = lock(&guarded_state).stop_proxy();
             config::update(&config_dir, |cfg| cfg.runtime_compensation = None).unwrap();
 
             let (other_state, other_pid) = r0_proxy_state("deepseek");
@@ -4201,7 +4269,7 @@ mod tests {
             assert!(matches!(other_result, Err(RuntimeCommandError::Auth(_))));
             assert!(supervisor.snapshot().is_none());
             assert!(r0_process_is_running(other_pid));
-            lock(&other_state).stop_proxy();
+            let _ = lock(&other_state).stop_proxy();
 
             let (codex_state, codex_pid) = r0_proxy_state("codex");
             let failed = start_codex_login_inner(
@@ -4297,7 +4365,7 @@ mod tests {
                 assert!(ensure_called.load(Ordering::SeqCst));
             }
             assert!(r0_process_is_running(other_pid));
-            lock(&state).stop_proxy();
+            let _ = lock(&state).stop_proxy();
         }
 
         if requested == "logout-failure" {
@@ -4445,7 +4513,7 @@ mod tests {
                 .contains("test-only config update commit failure"));
             assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
             assert!(r0_process_is_running(other_pid));
-            lock(&other_state).stop_proxy();
+            let _ = lock(&other_state).stop_proxy();
 
             let (codex_state, codex_pid) = r0_proxy_state("codex");
             let fault = config::test_arm_update_commit_failure(config_dir.clone());
@@ -4500,7 +4568,7 @@ mod tests {
                 .contains("test-only config update commit failure"));
             assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
             assert!(r0_process_is_running(other_pid));
-            lock(&other_state).stop_proxy();
+            let _ = lock(&other_state).stop_proxy();
 
             let (codex_state, codex_pid) = r0_proxy_state("codex");
             let fault = config::test_arm_update_commit_failure(config_dir.clone());
