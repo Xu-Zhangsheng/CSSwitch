@@ -2,7 +2,7 @@
 
 状态：当前；只汇总已绑定的 v0.8.4 分层事实
 
-最后复核：2026-07-30（Asia/Shanghai）
+最后复核：2026-08-11（Asia/Taipei）
 
 失效条件：release source、最终 DMG、安装 app、公开附件或维护基线任一变化时，
 对应层立即失效；未受影响层仍按其 exact identity 判断。
@@ -18,9 +18,13 @@
 
 以下仍不是当前 PASS：全部真实 provider/model、真实 SSH server、官方账号 entitlement、
 Science 全领域行为、Intel/Windows/WSL、Developer ID/notarization/Gatekeeper。
-`B-RUNTIME-01` 因缺少允许的 Science executable 保持
-`INCONCLUSIVE(reason=artifact-or-binary-identity)`；它与历史 release evidence
-属于不同 probe/环境，不能互相覆盖。
+另有一条不覆盖公开 release/installed 事实的当前 exact-artifact 验收：
+`next@9e08924481c8f5edb181254332d94daba0cbe4b2` 的 G1-bound `CSSwitch Test.app`、
+packaged Gateway 与 Claude Science 0.1.25 已取得
+`B-RUNTIME-01=PASS(scope=csswitch-gateway-science,loopback-provider-fixture)`；唯一 canonical
+run `r9e08924b` elapsed `291.892949s`，post-cleanup 51/51 evidence hashes `OK`。它只证明隔离 normal production wiring/lifecycle，
+不覆盖本表的 installed/public release artifact，也不外推完整 Provider、B-CORE、B-CONTEXT、
+Skill、SSH、签名或 release-ready 状态。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
