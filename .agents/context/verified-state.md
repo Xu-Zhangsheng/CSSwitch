@@ -19,23 +19,13 @@
 以下仍不是当前 PASS：全部真实 provider/model、真实 SSH server、官方账号 entitlement、
 Science 全领域行为、Intel/Windows/WSL、Developer ID/notarization/Gatekeeper。
 另有一条不覆盖公开 release/installed 事实的当前 exact-artifact 验收：
-`next@9e08924481c8f5edb181254332d94daba0cbe4b2` 的 G1-bound `CSSwitch Test.app`、
-packaged Gateway 与 Claude Science 0.1.25 已取得
-`B-RUNTIME-01=PASS(scope=csswitch-gateway-science,loopback-provider-fixture)`；唯一 canonical
-run `r9e08924b` elapsed `291.892949s`，post-cleanup 51/51 evidence hashes `OK`。同一 tuple 的
-`B-CORE-01` run `bcore-9e08924-r1` 又限定闭合 synthetic project/file、permission grant/revoke/
-denial、artifact lineage/diff/preview/provenance 与 annotation 下一消息传递，post-cleanup 14/14
-evidence hashes `OK`。同一 tuple 的 `B-CONTEXT-01` run `bcontext-9e08924-r9` 又限定闭合
-plan/delegation/fork/restore、Memory/compaction、Reviewer/Specialist local surface/request-shape 与
-two-project/two-session isolation，11 份 observation/event 与 post-cleanup 89/89 evidence hashes
-`OK`。r9 的 UI stop 后没有封存 stop-state snapshot，Desktop 最终由 exact PID SIGTERM 收口，故不把
-正常 App exit 外推给本轮；正常 stop/exit 已由 B-RUNTIME 独立证明。同一 tuple 的
-`B-PROVIDER-01` run `provider-9e08924-r1` 又闭合 11 个本地严格 Provider case：10 项由 exact App
-启动 packaged Gateway，SiliconFlow 仅由同一 exact packaged Gateway 直启以保留 hostname-aware
-proxy fixture，明确不写成 Desktop 级 E2E。99 个 observation/event、55 个 fixture request 与
-64 个 active socket rows 全部通过；收口后 64 个 owned PID、88 个动态端口和 9 个临时路径清零，
-583/583 top evidence hashes `OK`。这四项不覆盖本表的 installed/public release artifact，也不外推
-真实 Provider、Skill、SSH、签名或 release-ready 状态。
+`next@a60c2ee656429903f1fd8f398dc6ad8194aa9346` 的 canonical 15-suite source gate、由该
+exact source 新构建的 `CSSwitch Test.app`、packaged Gateway 与 Claude Science 0.1.25 identity
+已由递归 G1 receipt 绑定并取得 `PASS`。bundle、Desktop、Gateway SHA-256 分别为
+`52cd48c…73c9`、`77b4ebef…9be8`、`610c0206…87ab`；G1 receipt SHA-256 为
+`b01cf7a2…ddbb`。当前 tuple 的 `B-RUNTIME-01`、`B-CORE-01`、`B-CONTEXT-01`、Provider、
+Skill/MCP、SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 均为
+`NOT-RUN`。旧 `9e08924` tuple 的 isolated-live 结论只保留为历史日期化证据，不能继承。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
