@@ -109,13 +109,11 @@ EXPECTED_OPERATIONS = {
     "op.set-settings",
     "op.startup-config-migration",
     "op.stop-all",
-    "op.sync-preset",
     "op.update-connection",
 }
 EXPECTED_SURFACE_CONTRACT = {
     "acknowledge_pending_notice": ("config-nonruntime", "none"),
     "app_version": ("read-only", "none"),
-    "apply_profile_preset_sync": ("intent-mutation", "op.sync-preset"),
     "boot_snapshot": ("read-only", "none"),
     "clear_profile_key": ("runtime-mutation", "op.revoke-profile"),
     "codex_auth_cancel": ("runtime-mutation", "op.codex-auth-cancel"),
@@ -133,14 +131,12 @@ EXPECTED_SURFACE_CONTRACT = {
     "get_config": ("read-only", "none"),
     "install_local_skill_package": ("host-bridge-mutation", "op.install-local-skill"),
     "list_installed_skills": ("read-only", "none"),
-    "list_templates": ("read-only", "none"),
     "one_click_login": ("runtime-mutation", "op.one-click"),
     "open_logs": ("external-side-effect", "none"),
     "open_official": ("external-side-effect", "none"),
     "open_release_page": ("external-side-effect", "none"),
     "open_science_download_page": ("external-side-effect", "none"),
     "open_url": ("external-side-effect", "none"),
-    "preview_profile_preset_sync": ("read-only", "none"),
     "quit_app": ("terminal-mutation", "op.quit-command"),
     "report_bug": ("external-side-effect", "none"),
     "restore_history_choice": ("runtime-mutation", "op.history-restore"),
@@ -156,19 +152,15 @@ EXPECTED_SURFACE_CONTRACT = {
     "stop_all": ("runtime-mutation", "op.stop-all"),
     "update_profile_connection": ("intent-mutation", "op.update-connection"),
     "update_profile_metadata": ("config-nonruntime", "none"),
-    "validate_profile_catalog_model": ("transient-probe", "none"),
 }
 EXPECTED_IMPLICIT_OPERATION_CONTRACT = {
     "acknowledge_pending_notice": {"op.startup-config-migration"},
     "codex_auth_status": {"op.startup-config-migration"},
     "codex_downgrade_preview": {"op.startup-config-migration"},
     "create_profile": {"op.startup-config-migration"},
-    "list_templates": {"op.startup-config-migration"},
-    "preview_profile_preset_sync": {"op.startup-config-migration"},
     "science_runtime_preflight": {"op.startup-config-migration"},
     "status": {"op.startup-config-migration"},
     "update_profile_metadata": {"op.startup-config-migration"},
-    "validate_profile_catalog_model": {"op.startup-config-migration"},
 }
 EXPECTED_OPERATION_IMPLICIT_CONTRACT = {
     "op.history-restore": {"op.one-click"},

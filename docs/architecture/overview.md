@@ -85,7 +85,7 @@ project/session/artifact、Skills、MCP/connectors、Plugins、environments、Re
 - Science UI port 与 sandbox port 分开校验，`8765` 是用户真实 Science 保留端口。
 - 一次性 Science URL、nonce、CSRF 和 path secret 不进入普通 status/log。
 - 第三方模式不读取或复制真实 Claude 登录数据。
-- Gateway raw `CONNECT` 在 path-secret 认证前分派；listener 虽只在 loopback，任何本机进程仍可使用。它只按 Anthropic/Claude hostname denylist 拒绝目标；DNS resolver 本身没有 deadline，DNS 返回后的地址连接共享剩余 10 秒预算，建立后的双向转发没有 session deadline、idle timeout、byte cap 或并发连接/session-count 上限。这条通用 TCP transport 不证明 Remote MCP。
+- Gateway raw `CONNECT` 在 path-secret 认证前分派；listener 虽只在 loopback，任何本机进程仍可使用。它只按 Anthropic/Claude hostname denylist 拒绝目标。DNS 与 dial 共用 10 秒绝对期限，另以 8 条 resolver 额度界定不可取消的系统 resolver 调用；建立后的 tunnel 受全局 128 连接额度、30 分钟 session deadline、60 秒读写 idle timeout 与每方向 256 MiB byte budget 约束，任一方向超限或失败都会共享取消并回收两端，正常 EOF 则 half-close 对端写入。这条通用 TCP transport 仍不证明 Remote MCP；完整 owner 与失败边界见 [Gateway 路由](gateway-provider-routing.md)。
 - Science app proxy、sandbox network、package mirror、Codex route 与 provider egress 是不同网络面。
 - SSH opt-in 是行为授权；不复制 `.ssh`、不启动 `sshd`、不开放监听。
 

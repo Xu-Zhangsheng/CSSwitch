@@ -72,14 +72,7 @@ Tauri backend
 完成 package commit 与 Science attach/readback。该合同闭合的是本地 Skill 的
 最终 runtime-context race，不把 picker/download 放进锁，也不建立跨进程或全局 durable journal。
 
-以下 command 已注册但没有当前生产 frontend caller：
-
-- `list_templates`
-- `validate_profile_catalog_model`
-- `preview_profile_preset_sync`
-- `apply_profile_preset_sync`
-
-它们可能是预留面或遗留面，当前统一标为 `dormant registered / UNKNOWN`。注册本身不构成产品能力。
+当前注册面没有已知的无 bundled production caller command；内部 preview/helper 不注册为产品 IPC。
 
 S6 已移除无 bundled caller 的 `start_proxy` Tauri command；formal Gateway 只能由现有
 cold/healthy/profile-switch/recovery 内部流程经 `GatewayController` 启动或复用，不再暴露

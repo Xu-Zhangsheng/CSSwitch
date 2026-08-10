@@ -283,6 +283,79 @@ fn transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publica
     let _ = std::fs::remove_dir_all(tmp);
 }
 
+#[test]
+fn transaction_science_stop_probe_is_lock_free_and_rechecks_owner_before_effect() {
+    use crate::runtime::science::{ScienceStopRequest, VerifiedScienceStop};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let tmp = isolated_tmpdir("transaction-science-stop-probe");
+    let prior_binary = tmp.join("prior-science");
+    let replacement_binary = tmp.join("replacement-science");
+    std::fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+    std::fs::set_permissions(&prior_binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&replacement_binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let prior = crate::runtime::science::test_runtime_identity(prior_binary);
+    let replacement = crate::runtime::science::test_runtime_identity(replacement_binary);
+    let mut authority = AppState::default();
+    authority.science_runtime = Some(prior.clone());
+    authority.sandbox_port = 18765;
+    authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+    let state: SharedAppState = Arc::new(Mutex::new(authority));
+    let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+    let (probe_started_tx, probe_started_rx) = std::sync::mpsc::channel();
+    let (release_probe_tx, release_probe_rx) = std::sync::mpsc::channel();
+    let effect_ran = Arc::new(AtomicBool::new(false));
+    let worker_effect_ran = effect_ran.clone();
+    let worker_state = state.clone();
+    let worker_lifecycle = lifecycle.clone();
+    let claimed_runtime = prior.clone();
+    let verified_runtime = prior.clone();
+    let worker = std::thread::spawn(move || {
+        execute_transaction_science_stop_with(
+            &worker_state,
+            worker_lifecycle.as_ref(),
+            TransactionScienceStopBoundary::ColdPriorStop,
+            &claimed_runtime,
+            18765,
+            || {
+                probe_started_tx.send(()).unwrap();
+                release_probe_rx.recv().unwrap();
+                Ok(ScienceStopRequest::recover(Some(&claimed_runtime)))
+            },
+            move |_request| {
+                worker_effect_ran.store(true, Ordering::SeqCst);
+                (
+                    Ok(VerifiedScienceStop {
+                        runtime: Some(verified_runtime),
+                        ownership_was_proven: true,
+                    }),
+                    true,
+                )
+            },
+            |_state, _confirmed_runtime| {},
+        )
+    });
+
+    probe_started_rx.recv().unwrap();
+    {
+        let mut current = state
+            .try_lock()
+            .expect("external Science request probe retained AppState");
+        current.science_runtime = Some(replacement.clone());
+        current.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+    }
+    release_probe_tx.send(()).unwrap();
+    let outcome = worker.join().unwrap();
+    assert!(outcome.is_err());
+    assert!(!effect_ran.load(Ordering::SeqCst));
+    assert_eq!(
+        crate::lock(&state).science_runtime.as_ref(),
+        Some(&replacement)
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
 fn tree(root: &Path) -> BTreeMap<PathBuf, TreeEntry> {
     fn walk(root: &Path, current: &Path, entries: &mut BTreeMap<PathBuf, TreeEntry>) {
         let metadata = match fs::symlink_metadata(current) {

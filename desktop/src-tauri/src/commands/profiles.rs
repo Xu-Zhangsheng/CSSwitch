@@ -4,11 +4,12 @@ use serde_json::json;
 use tauri::State;
 
 use crate::runtime::profile::{
-    acknowledge_pending_notice_inner, build_get_config, build_list_templates,
-    build_preset_sync_preview, clear_profile_key_inner, create_profile_with_catalog_inner,
-    delete_profile_inner, persist_profile_candidate_inner, update_profile_metadata_inner,
-    CatalogEdit, ConnectionEdit,
+    acknowledge_pending_notice_inner, build_get_config, clear_profile_key_inner,
+    create_profile_with_catalog_inner, delete_profile_inner, persist_profile_candidate_inner,
+    update_profile_metadata_inner, CatalogEdit, ConnectionEdit,
 };
+#[cfg(test)]
+use crate::runtime::profile::build_preset_sync_preview;
 use crate::runtime::profile_switch::scratch_validate_candidate;
 use crate::runtime::provider::{reject_openai_custom_anthropic_base, resolve_launch_plan};
 use crate::{
@@ -38,6 +39,7 @@ fn catalog_edit_from_parts(
     Ok(catalog_edit)
 }
 
+#[cfg(test)]
 fn require_preview_fingerprint(preview: &serde_json::Value, expected: &str) -> Result<(), String> {
     if preview
         .get("preview_fingerprint")
@@ -68,37 +70,7 @@ pub(crate) fn acknowledge_pending_notice(
     acknowledge_pending_notice_inner(&config::default_dir(), &expected_notice_id)
 }
 
-/// 模板注册表交前端铺 UI（新建向导用）。
-#[tauri::command]
-pub(crate) fn list_templates() -> Result<Vec<serde_json::Value>, String> {
-    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
-    Ok(build_list_templates(cfg.experimental_codex_enabled))
-}
-
-#[tauri::command]
-pub(crate) fn preview_profile_preset_sync(id: String) -> Result<serde_json::Value, String> {
-    build_preset_sync_preview(&config::default_dir(), &id)
-}
-
-#[tauri::command]
-pub(crate) async fn apply_profile_preset_sync(
-    lifecycle: State<'_, SharedLifecycle>,
-    id: String,
-    expected_preview_fingerprint: String,
-) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    let lifecycle = lifecycle.inner().clone();
-    run_blocking_typed(move || {
-        let dir = config::default_dir();
-        apply_profile_preset_sync_inner_cmd(
-            lifecycle.as_ref(),
-            &dir,
-            &id,
-            &expected_preview_fingerprint,
-        )
-    })
-    .await
-}
-
+#[cfg(test)]
 fn apply_profile_preset_sync_inner_cmd(
     lifecycle: &lifecycle::Lifecycle,
     dir: &Path,
@@ -112,6 +84,7 @@ fn apply_profile_preset_sync_inner_cmd(
         .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 
+#[cfg(test)]
 fn apply_profile_preset_sync_in_dir(
     dir: &Path,
     id: &str,
@@ -327,54 +300,6 @@ pub(crate) async fn update_profile_connection(
             default_model_route_id,
             role_bindings,
         )
-    })
-    .await
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn validate_profile_catalog_model(
-    app: tauri::AppHandle,
-    lifecycle: State<'_, SharedLifecycle>,
-    id: String,
-    model_reference: String,
-    base_url: Option<String>,
-    key: Option<String>,
-    model_catalog: Vec<crate::model_catalog::ModelRoute>,
-    role_bindings: crate::model_catalog::RoleBindings,
-) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    let lifecycle = lifecycle.inner().clone();
-    run_blocking_typed(move || {
-        lifecycle.with_observed_context(|| {
-            let cfg =
-                config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
-            let mut candidate = cfg
-                .profile_by_id(&id)
-                .cloned()
-                .ok_or_else(|| format!("找不到 profile：{id}"))?;
-            if candidate.model_policy != crate::provider_contracts::ModelPolicy::SavedCatalog {
-                return Err(crate::commands::codex::RuntimeCommandError::from(
-                    "动态 Codex 目录不支持静态逐模型验证".to_string(),
-                ));
-            }
-            ConnectionEdit::new(base_url, None, None, key)
-                .with_catalog(Some(CatalogEdit {
-                    routes: model_catalog,
-                    default_model_route_id: model_reference,
-                    role_bindings,
-                }))
-                .apply(&mut candidate)?;
-            let validated = scratch_validate_candidate(&app, &candidate, None)?;
-            Ok(json!({
-                "validated": validated,
-                "status": if validated { "ok" } else { "unknown" },
-                "message": if validated {
-                    "该模型已通过隔离 scratch 请求验证。"
-                } else {
-                    "未能确认该模型；未修改配置。"
-                },
-            }))
-        })
     })
     .await
 }

@@ -246,6 +246,7 @@ pub(crate) fn build_list_templates(experimental_codex_enabled: bool) -> Vec<serd
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn build_preset_sync_preview(dir: &Path, id: &str) -> Result<serde_json::Value, String> {
     let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
     let profile = cfg

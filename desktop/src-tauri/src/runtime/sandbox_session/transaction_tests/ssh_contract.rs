@@ -1010,7 +1010,11 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         "打包的 CSSwitch SSH bridge 缺失"
     );
     let wrapper = root.join("ssh");
-    std::fs::write(&wrapper, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(
+        &wrapper,
+        include_bytes!("../../../../../../scripts/ssh-bridge/ssh"),
+    )
+    .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o600)).unwrap();
     std::env::set_var("CSSWITCH_TEST_SSH_WRAPPER_OVERRIDE", &wrapper);
     assert_eq!(
@@ -1022,6 +1026,31 @@ fn ssh_wrapper_prevalidation_uses_the_running_runtime_validator_before_oauth() {
         super::validate_system_ssh_wrapper_path(app.handle()).unwrap(),
         wrapper
     );
+    let mut wrong_content = include_bytes!("../../../../../../scripts/ssh-bridge/ssh").to_vec();
+    wrong_content[0] = b'x';
+    std::fs::write(&wrapper, wrong_content).unwrap();
+    assert_eq!(
+        super::validate_system_ssh_wrapper_path(app.handle()).unwrap_err(),
+        "打包的 CSSwitch SSH bridge 内容身份不匹配"
+    );
+    std::fs::write(
+        &wrapper,
+        include_bytes!("../../../../../../scripts/ssh-bridge/ssh"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o722)).unwrap();
+    assert_eq!(
+        super::validate_system_ssh_wrapper_path(app.handle()).unwrap_err(),
+        "打包的 CSSwitch SSH bridge 不是安全的可执行文件"
+    );
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let wrapper_hardlink = root.join("ssh-hardlink");
+    std::fs::hard_link(&wrapper, &wrapper_hardlink).unwrap();
+    assert_eq!(
+        super::validate_system_ssh_wrapper_path(app.handle()).unwrap_err(),
+        "打包的 CSSwitch SSH bridge 不是安全的可执行文件"
+    );
+    std::fs::remove_file(wrapper_hardlink).unwrap();
     let wrapper_link = root.join("ssh-link");
     std::os::unix::fs::symlink(&wrapper, &wrapper_link).unwrap();
     std::env::set_var("CSSWITCH_TEST_SSH_WRAPPER_OVERRIDE", &wrapper_link);

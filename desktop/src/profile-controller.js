@@ -337,6 +337,20 @@ async function loadConfig(options) {
   return true;
 }
 
+async function loadConfigAfterCommit() {
+  try {
+    await loadConfig({ throwOnError: true });
+  } catch (cause) {
+    const error = new Error(String(cause));
+    error.configCommitted = true;
+    throw error;
+  }
+}
+
+function committedRefreshMessage(action, error) {
+  return action + "已提交，但界面刷新失败；请重新打开配置页确认当前状态。原因：" + error.message;
+}
+
 // 列表优先展示默认 route；静态目录未配置时明确提示，Codex 仍由 Science 选择。
 function modelSummary(p) {
   const route = (p.model_catalog || []).find((item) =>
@@ -855,12 +869,12 @@ async function wizSave() {
   try {
     await call("create_profile", args);
     els.wizKey.value = "";
-    await loadConfig();
+    await loadConfigAfterCommit();
     setMsg(codex
       ? "已创建「" + name + "」。先设为当前；一键开始后请在 Science 的 More models 选择 Codex / …。"
       : "已创建「" + name + "」。请设为当前选择，再点「一键开始」应用。", "ok");
   } catch (e) {
-    setMsg("创建失败：" + e, "err");
+    setMsg(e && e.configCommitted ? committedRefreshMessage("创建配置", e) : "创建失败：" + e, "err");
   } finally {
     setBusy(false);
   }
@@ -1007,7 +1021,7 @@ async function connSave() {
   try {
     const r = await call("update_profile_connection", args);
     els.connKey.value = "";
-    await loadConfig();
+    await loadConfigAfterCommit();
     if (r && (r.status === "error" || r.committed === false)) {
       const recovery = r.recovery_status === "degraded" ? "；恢复也未完全成功，请先全部停止后检查" : r.recovery_status === "restored" ? "；旧配置已恢复" : "";
       setMsg((r.message || "连接未应用") + recovery + "（阶段：" + (r.stage || "unknown") + "）", "err");
@@ -1021,7 +1035,9 @@ async function connSave() {
   } catch (e) {
     // 后端错误文案已如实说明回滚/代理状态（可能是「已回滚到原配置」或「回滚未成功：代理当前已停」），
     // 前端不再盲目追加「仍在用原配置运行」，避免与「代理已停」相互矛盾。修 GPT 三轮 P2
-    setMsg("连接未保存：" + codexController.runtimeCommandErrorText(e), "err");
+    setMsg(e && e.configCommitted
+      ? committedRefreshMessage("连接配置", e)
+      : "连接未保存：" + codexController.runtimeCommandErrorText(e), "err");
   } finally {
     setBusy(false);
     await runtime.refreshStatus();
@@ -1042,7 +1058,7 @@ async function doClearKey(id) {
   setMsg("清除 key 中…");
   try {
     await call("clear_profile_key", { id });
-    await loadConfig();
+    await loadConfigAfterCommit();
     setMsg(
       wasApplied
         ? "已清除 key（该配置属于上次提交的运行绑定，代理已停止；请重新填写并一键开始）。"
@@ -1052,7 +1068,7 @@ async function doClearKey(id) {
       "ok"
     );
   } catch (e) {
-    setMsg("清除失败：" + e, "err");
+    setMsg(e && e.configCommitted ? committedRefreshMessage("清除 key", e) : "清除失败：" + e, "err");
   } finally {
     setBusy(false);
     await runtime.refreshStatus();
@@ -1078,10 +1094,10 @@ async function metaSave() {
   setMsg("保存中…");
   try {
     await call("update_profile_metadata", { id, name, notes });
-    await loadConfig();
+    await loadConfigAfterCommit();
     setMsg("已保存。", "ok");
   } catch (e) {
-    setMsg("保存失败：" + e, "err");
+    setMsg(e && e.configCommitted ? committedRefreshMessage("配置元数据", e) : "保存失败：" + e, "err");
   } finally {
     setBusy(false);
   }
@@ -1099,7 +1115,7 @@ async function doDelete(id) {
   setMsg("删除中…");
   try {
     await call("delete_profile", { id });
-    await loadConfig();
+    await loadConfigAfterCommit();
     setMsg(
       wasApplied
         ? "已删除上次提交的运行绑定配置，相关代理已停止。"
@@ -1109,7 +1125,7 @@ async function doDelete(id) {
       "ok"
     );
   } catch (e) {
-    setMsg("删除失败：" + e, "err");
+    setMsg(e && e.configCommitted ? committedRefreshMessage("删除配置", e) : "删除失败：" + e, "err");
   } finally {
     setBusy(false);
     await runtime.refreshStatus();
@@ -1134,7 +1150,7 @@ async function activate(id) {
     const r = await call("set_active_profile", { id });
     if (r && r.committed) {
       runtime.hideHistoryRecovery();
-      await loadConfig();
+      await loadConfigAfterCommit();
       if (r.apply_state === "pending") {
         getConfigState().selection_pending = true;
         renderList();
@@ -1147,8 +1163,10 @@ async function activate(id) {
       setMsg((r && (r.message || r.hint)) || "当前选择未更改。", "err");
     }
   } catch (e) {
-    await loadConfig();
-    setMsg("设为当前失败：" + codexController.runtimeCommandErrorText(e), "err");
+    if (!(e && e.configCommitted)) await loadConfig();
+    setMsg(e && e.configCommitted
+      ? committedRefreshMessage("当前选择", e)
+      : "设为当前失败：" + codexController.runtimeCommandErrorText(e), "err");
   } finally {
     setActivationInFlight(false);
     await runtime.refreshStatus();

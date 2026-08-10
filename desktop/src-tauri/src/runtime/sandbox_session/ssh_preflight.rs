@@ -1,9 +1,12 @@
 //! SSH preflight for one-click / running-bridge validation.
 use crate::config;
 use crate::runtime::system::asset_root;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use tauri::Runtime;
+
+const SYSTEM_SSH_WRAPPER_BYTES: &[u8] = include_bytes!("../../../../../scripts/ssh-bridge/ssh");
 
 pub(super) fn validate_system_ssh_wrapper_path<R: Runtime>(
     app: &tauri::AppHandle<R>,
@@ -30,14 +33,44 @@ pub(super) fn validate_system_ssh_wrapper_path<R: Runtime>(
             wrapper
         }
     };
-    let metadata = std::fs::symlink_metadata(&wrapper)
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&wrapper)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "打包的 CSSwitch SSH bridge 缺失".to_string()
+            } else {
+                "打包的 CSSwitch SSH bridge 不是安全的可执行文件".to_string()
+            }
+        })?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "打包的 CSSwitch SSH bridge 不是安全的可执行文件".to_string())?;
+    let named = std::fs::symlink_metadata(&wrapper)
         .map_err(|_| "打包的 CSSwitch SSH bridge 缺失".to_string())?;
-    if metadata.file_type().is_symlink()
-        || !metadata.file_type().is_file()
-        || metadata.len() > 128 * 1024
-        || metadata.permissions().mode() & 0o111 == 0
+    // SAFETY: geteuid has no preconditions and does not dereference pointers.
+    let uid = unsafe { libc::geteuid() };
+    let mode = opened.permissions().mode();
+    if !opened.file_type().is_file()
+        || named.file_type().is_symlink()
+        || !named.file_type().is_file()
+        || opened.dev() != named.dev()
+        || opened.ino() != named.ino()
+        || opened.uid() != uid
+        || opened.nlink() != 1
+        || mode & 0o111 == 0
+        || mode & 0o022 != 0
+        || opened.len() != SYSTEM_SSH_WRAPPER_BYTES.len() as u64
     {
         return Err("打包的 CSSwitch SSH bridge 不是安全的可执行文件".into());
+    }
+    let mut bytes = Vec::with_capacity(SYSTEM_SSH_WRAPPER_BYTES.len());
+    file.take((SYSTEM_SSH_WRAPPER_BYTES.len() + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "打包的 CSSwitch SSH bridge 不是安全的可执行文件".to_string())?;
+    if bytes.as_slice() != SYSTEM_SSH_WRAPPER_BYTES {
+        return Err("打包的 CSSwitch SSH bridge 内容身份不匹配".into());
     }
     Ok(wrapper)
 }

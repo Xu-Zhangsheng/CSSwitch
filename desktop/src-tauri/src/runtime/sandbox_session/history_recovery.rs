@@ -18,15 +18,15 @@ use crate::{lifecycle, lock, oauth_forge, SharedAppState};
 
 use super::authority_snapshot::{AuthoritySnapshotScope, AuthorityTreeSnapshot};
 use super::authority_transaction::AuthorityTransaction;
-use super::one_click::{
-    execute_transaction_science_stop_with, one_click_login_after_history_handoff,
-    TransactionScienceStopBoundary,
-};
+use super::one_click::one_click_login_after_history_handoff;
 use super::pending_cleanup::{
     open_history_snapshot_root, prepare_history_snapshot_cleanup_only,
     retry_pending_authority_cleanup,
 };
 use super::recovery::RuntimeTransactionRestoreExpectation;
+use super::transaction_science_stop::{
+    execute_transaction_science_stop_with, TransactionScienceStopBoundary,
+};
 
 const HISTORY_RECOVERY_MANIFEST_FILE: &str = ".csswitch-history-recovery.v1.json";
 const MAX_HISTORY_RECOVERY_MANIFEST_BYTES: u64 = 16 * 1024;

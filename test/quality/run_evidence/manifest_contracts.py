@@ -27,6 +27,18 @@ EVIDENCE_FIELDS = frozenset(("schema", "run_id", "run_manifest", "test_results")
 SOURCE_EVIDENCE_FIELDS = EVIDENCE_FIELDS | frozenset(("source_observations",))
 SEAL_FIELDS = frozenset(("schema", "run_id", "run_manifest", "source_snapshot_manifest", "evidence_manifest", "input_digest_set_sha256", "aggregate_decision", "runner_exit", "completed_at"))
 FAILURE_FIELDS = frozenset(("schema", "run_id", "stage", "reason_code", "run_manifest", "created_at", "terminal"))
+FAILURE_DIAGNOSTIC_FIELDS = frozenset(("suite_id", "checkpoint", "detail_code"))
+FAILURE_CHECKPOINTS = frozenset((
+    "after-snapshot", "after-plan", "suite-before", "suite-after",
+    "before-evidence", "before-seal",
+))
+FAILURE_DETAIL_CODES = frozenset((
+    "GIT_BINDING_CHANGED", "SOURCE_METADATA_CHANGED",
+    "PYTHON_AUTHORITY_CHANGED", "OFFLINE_ROOT_IDENTITY_CHANGED",
+    "CARGO_DEPENDENCY_DIGEST_CHANGED", "CARGO_CONFIG_CHANGED",
+    "GATEWAY_TARGET_CHANGED", "TOOL_IDENTITY_CHANGED",
+    "PYTHON_DEPENDENCY_CHANGED", "UNKNOWN_INPUT_DRIFT",
+))
 CANDIDATE_FIELDS = frozenset(("schema", "version", "candidate_head_sha", "previous_release", "source_candidate", "gate_ids", "completion_seal"))
 SOURCE_CANDIDATE_FIELDS = frozenset((
     "schema", "development_line", "comparison_base", "candidate_head_sha",
@@ -589,10 +601,25 @@ def validate_terminal_set(seal: Any | None, failure: Any | None, *, run_manifest
         _fail("terminal outcome is required")
     if failure is None:
         return
-    failure = _keys(failure, FAILURE_FIELDS, "run failure")
+    if not isinstance(failure, Mapping) or set(failure) not in {
+        FAILURE_FIELDS,
+        FAILURE_FIELDS | FAILURE_DIAGNOSTIC_FIELDS,
+    }:
+        _fail("run failure")
     if failure["schema"] != "run-failure.v1" or not _sha(failure["run_id"], 32) or failure["stage"] not in FAILURE_STAGES or failure["reason_code"] not in FAILURE_REASONS or failure["terminal"] is not True:
         _fail("run failure")
     _time(failure["created_at"])
+    if FAILURE_DIAGNOSTIC_FIELDS.issubset(failure):
+        if (
+            failure["reason_code"] != "INPUT_DRIFT"
+            or failure["checkpoint"] not in FAILURE_CHECKPOINTS
+            or failure["detail_code"] not in FAILURE_DETAIL_CODES
+            or (
+                failure["suite_id"] is not None
+                and not _matches(SUITE_RE, failure["suite_id"])
+            )
+        ):
+            _fail("run failure diagnostic")
     ref = failure["run_manifest"]
     if ref is not None:
         if artifacts is None:

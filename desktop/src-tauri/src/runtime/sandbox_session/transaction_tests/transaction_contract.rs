@@ -196,6 +196,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     }
 
     let source = include_str!("../one_click.rs");
+    let transaction_stop_source = include_str!("../transaction_science_stop.rs");
     let recovery_source = include_str!("../recovery.rs");
     let failure_source = include_str!("../../failure.rs");
     let command_projection_source = include_str!("../../../commands/runtime/one_click.rs");
@@ -555,9 +556,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "durable PriorStopIntent must precede the exact stop and typed outcome publication"
     );
     assert!(
-        source.contains("struct TransactionScienceStopOwner")
-            && source.contains("owner.still_owns(&current, lifecycle.current_generation())")
-            && source.contains("fn execute_transaction_science_stop_with")
+        transaction_stop_source.contains("struct TransactionScienceStopOwner")
+            && transaction_stop_source
+                .contains("owner.still_owns(&current, lifecycle.current_generation())")
+            && transaction_stop_source.contains("fn execute_transaction_science_stop_with")
             && cold_source.contains("TransactionScienceStopBoundary::ColdPriorStop")
             && cold_source.contains("ScienceHostAdapter::execute_stop(&app, request)"),
         "cold prior Science stop must execute outside AppState and publish only through generation plus full-owner CAS"
@@ -1083,7 +1085,8 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
 
 #[test]
 fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
-    let owner_source = include_str!("../one_click.rs");
+    let owner_source = include_str!("../transaction_science_stop.rs");
+    let one_click_source = include_str!("../one_click.rs");
     let cold_source = include_str!("../one_click/cold.rs");
     let science_phase_source = include_str!("../one_click/cold/science_phase.rs");
     let compensation_source = include_str!("../one_click/cold/compensation.rs");
@@ -1094,7 +1097,6 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
     let owner = owner_source
         .split("pub(super) fn execute_transaction_science_stop_with")
         .nth(1)
-        .and_then(|tail| tail.split("fn open_science_surface").next())
         .expect("transaction-scoped Science stop owner must remain discoverable");
     for field in [
         "generation: u64",
@@ -1107,8 +1109,15 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
         assert!(owner_source.contains(field), "stop owner lost {field}");
     }
     let freeze = owner
-        .find("let (owner, request)")
-        .expect("owner/request freeze must remain explicit");
+        .find("let owner =")
+        .expect("owner freeze must remain explicit");
+    let probe = owner
+        .find("claim_exact_request()")
+        .expect("exact request probe must remain explicit");
+    let pre_execute_cas = owner[probe..]
+        .find("owner.still_owns(&current, lifecycle.current_generation())")
+        .map(|index| index + probe)
+        .expect("owner must be rechecked after the external probe");
     let execute = owner
         .find("let execution = request.map")
         .expect("stop execution must remain explicit");
@@ -1116,8 +1125,8 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
         .find("let mut current = lock(state)")
         .expect("CAS publication must reacquire AppState");
     assert!(
-        freeze < execute && execute < publish,
-        "the exact stop effect must remain between the two AppState critical sections"
+        freeze < probe && probe < pre_execute_cas && pre_execute_cas < execute && execute < publish,
+        "probe and exact stop must remain outside AppState with a pre-execute owner recheck"
     );
     assert!(
         owner.contains("};\n    crate::runtime::system::kill_child(&mut stopped_child);"),
@@ -1133,7 +1142,7 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
     assert!(!cold_source.contains("ColdPriorScienceStopOwner"));
     assert!(!owner_source.contains("fn restart_managed_science_with_budget"));
 
-    let profile_rollback = owner_source
+    let profile_rollback = one_click_source
         .split("pub(crate) fn force_restart_science_for_active")
         .nth(1)
         .and_then(|tail| tail.split("fn typed_one_click_err").next())

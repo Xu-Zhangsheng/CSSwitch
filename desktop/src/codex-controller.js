@@ -476,12 +476,14 @@ async function repairCodexProfile() {
   if (isBusy() || codexOperationActive() || !codexProfileRepairNeeded) return;
   setBusy(true, { kind: "codexProfileRepair" });
   setMsg("正在用已保存的授权补建 Codex 配置；不会重新登录或切换当前 provider…");
+  let disposition = null;
   try {
     const result = await call("codex_ensure_profile");
     if (!result || !["created", "existing"].includes(result.disposition) ||
         typeof result.profile_id !== "string" || !result.profile_id || result.profile_id.length > 128) {
       throw new Error("补建配置响应协议不匹配。");
     }
+    disposition = result.disposition;
     await loadConfig({ throwOnError: true });
     if (!hasCodexProfile()) throw new Error("补建后未能在配置列表中确认 Codex。");
     codexProfileRepairNeeded = false;
@@ -491,7 +493,9 @@ async function repairCodexProfile() {
       : "Codex 配置已存在并确认就绪。下一步可设为当前。", "ok");
   } catch (e) {
     refreshCodexProfileRepairState();
-    setMsg("补建 Codex 配置失败：" + runtimeCommandErrorText(e) + " 已保存的授权不会因此删除，可重试。", "err");
+    setMsg(disposition === "created"
+      ? "Codex 配置已在后端补建，但界面刷新或回读确认失败：" + runtimeCommandErrorText(e) + " 请重新打开配置页确认，不要重复补建。"
+      : "补建 Codex 配置失败：" + runtimeCommandErrorText(e) + " 已保存的授权不会因此删除，可重试。", "err");
   } finally {
     setBusy(false);
   }

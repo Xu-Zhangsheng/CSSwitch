@@ -36,6 +36,9 @@ SYSTEM_SSH_HOSTS="${CSSWITCH_SYSTEM_SSH_HOSTS:-}"
 SYSTEM_SSH_CONFIG="$REAL_HOME/.ssh/config"
 SSH_BRIDGE_DIR="$PROJ/scripts/ssh-bridge"
 SSH_BRIDGE_BIN="$SSH_BRIDGE_DIR/ssh"
+SSH_BRIDGE_SHA256="0828acbda9f296983c127149879526e92a3eb915cbc9874747e8cecbeab87c5c"
+SSH_RUNTIME_BRIDGE_DIR="$SANDBOX_HOME/.csswitch-ssh-bridge"
+SSH_RUNTIME_BRIDGE_BIN="$SSH_RUNTIME_BRIDGE_DIR/ssh"
 SANDBOX_SSH_DIR="$SANDBOX_HOME/.ssh"
 SANDBOX_SSH_CONFIG="$SANDBOX_SSH_DIR/config"
 SSH_STUB_MARKER_V1="# CSSwitch managed system SSH config bridge v1"
@@ -66,6 +69,44 @@ path_contains_symlink() {
     probe="${probe:h}"
   done
   return 1
+}
+
+validate_ssh_wrapper_identity() {
+  local candidate="$1"
+  local metadata digest owner mode nlink
+  is_safe_science_bin "$candidate" || return 1
+  metadata="$(/usr/bin/stat -f '%u %Lp %l' "$candidate" 2>/dev/null)" || return 1
+  read -r owner mode nlink <<< "$metadata"
+  [[ "$owner" == "$(/usr/bin/id -u)" && "$nlink" == "1" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 8#22) == 0 )) || return 1
+  digest="$(/usr/bin/shasum -a 256 "$candidate" 2>/dev/null | /usr/bin/awk '{print $1}')" || return 1
+  [[ "$digest" == "$SSH_BRIDGE_SHA256" ]]
+}
+
+materialize_system_ssh_wrapper_snapshot() {
+  local owner mode temporary
+  if [[ -e "$SSH_RUNTIME_BRIDGE_DIR" || -L "$SSH_RUNTIME_BRIDGE_DIR" ]]; then
+    [[ -d "$SSH_RUNTIME_BRIDGE_DIR" && ! -L "$SSH_RUNTIME_BRIDGE_DIR" ]] || return 1
+    owner="$(/usr/bin/stat -f '%u' "$SSH_RUNTIME_BRIDGE_DIR" 2>/dev/null)" || return 1
+    mode="$(/usr/bin/stat -f '%Lp' "$SSH_RUNTIME_BRIDGE_DIR" 2>/dev/null)" || return 1
+    [[ "$owner" == "$(/usr/bin/id -u)" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 8#22) == 0 )) || return 1
+    validate_ssh_wrapper_identity "$SSH_RUNTIME_BRIDGE_BIN" || return 1
+    /bin/chmod 700 "$SSH_RUNTIME_BRIDGE_DIR" || return 1
+    return 0
+  fi
+
+  /bin/mkdir -m 700 "$SSH_RUNTIME_BRIDGE_DIR" || return 1
+  temporary="$SSH_RUNTIME_BRIDGE_DIR/.ssh.$PPID.$$"
+  [[ ! -e "$temporary" && ! -L "$temporary" && ! -e "$SSH_RUNTIME_BRIDGE_BIN" ]] || return 1
+  if ! /usr/bin/install -m 500 "$SSH_BRIDGE_BIN" "$temporary" \
+      || ! validate_ssh_wrapper_identity "$temporary" \
+      || ! /bin/mv "$temporary" "$SSH_RUNTIME_BRIDGE_BIN" \
+      || ! /bin/chmod 700 "$SSH_RUNTIME_BRIDGE_DIR" \
+      || ! validate_ssh_wrapper_identity "$SSH_RUNTIME_BRIDGE_BIN"; then
+    /bin/rm -f "$temporary"
+    return 1
+  fi
 }
 
 validate_science_opaque_bindings() {
@@ -235,8 +276,8 @@ if [[ "$REUSE_SYSTEM_SSH" == "1" ]]; then
     echo "拒绝：未找到系统 ~/.ssh/config，不能启用系统 SSH 配置"
     exit 1
   fi
-  if ! is_safe_science_bin "$SSH_BRIDGE_BIN"; then
-    echo "拒绝：CSSwitch SSH bridge 不存在或不是安全的可执行文件"
+  if ! validate_ssh_wrapper_identity "$SSH_BRIDGE_BIN"; then
+    echo "拒绝：CSSwitch SSH bridge 内容身份或文件权限不匹配"
     exit 1
   fi
   if [[ -z "$SYSTEM_SSH_HOSTS" ]]; then
@@ -348,7 +389,12 @@ validate_science_opaque_bindings
 _SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 _SCIENCE_PATH="$_SAFE_PATH"
 if [[ "$REUSE_SYSTEM_SSH" == "1" ]]; then
-  _SCIENCE_PATH="$SSH_BRIDGE_DIR:$_SAFE_PATH"
+  if ! validate_ssh_wrapper_identity "$SSH_BRIDGE_BIN" \
+      || ! materialize_system_ssh_wrapper_snapshot; then
+    echo "拒绝：CSSwitch SSH bridge 无法固定为隔离的内容身份 snapshot" >&2
+    exit 1
+  fi
+  _SCIENCE_PATH="$SSH_RUNTIME_BRIDGE_DIR:$_SAFE_PATH"
 fi
 _SCIENCE_TMPDIR="${TMPDIR:-/private/tmp}"
 _SCIENCE_LANG="${LANG:-en_US.UTF-8}"
@@ -390,6 +436,10 @@ elif [[ "$ACCEPTANCE_OUTER_SANDBOX" != "0" ]]; then
   exit 1
 fi
 if [[ "$REUSE_SYSTEM_SSH" == "1" ]]; then
+  if ! validate_ssh_wrapper_identity "$SSH_RUNTIME_BRIDGE_BIN"; then
+    echo "拒绝：隔离的 CSSwitch SSH bridge snapshot 在 Science 启动前发生变化" >&2
+    exit 1
+  fi
   _SCIENCE_ENV+=(
     "CSSWITCH_SYSTEM_SSH_CONFIG=$SYSTEM_SSH_CONFIG"
   )

@@ -248,6 +248,7 @@
         "test.test_document_governance.DocumentGovernanceTest.test_markdown_relative_links_and_anchors_resolve",
         "test.test_process_ownership_policy.ProductionProcessOwnershipPolicy.test_tauri_runtime_has_no_global_name_or_argv_kill",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_backend_pin_is_local_and_one_click_remains_the_apply_boundary",
+        "test.test_profile_pin_contract.ProfilePinContractTests.test_committed_profile_mutations_distinguish_refresh_failure",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_skill_and_browser_warnings_preserve_runtime_success",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_success_keeps_single_finally_busy_ownership_through_refresh",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_ui_activation_has_no_skip_path_and_reports_pending_selection"
@@ -1196,6 +1197,7 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::o1_e4_history_full_snapshot_restore_has_one_durable_effect_owner",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::transaction_scoped_science_stop_owner_covers_every_durable_boundary",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_science_stop_probe_is_lock_free_and_rechecks_owner_before_effect",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publication",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::launch_failure_tests::script_failure_preserves_stable_kind_and_exit_code",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::cached_runtime_symlink_is_never_offered_or_executed",
@@ -1781,6 +1783,7 @@
         "test_source_gate_runtime.ProductionInputAuthority.test_malformed_offline_root_records_cannot_produce_digest",
         "test_source_gate_runtime.ProductionInputAuthority.test_missing_real_schema_cannot_fall_back_to_legacy_looking_path",
         "test_source_gate_runtime.ProductionInputAuthority.test_offline_root_identity_and_path_only_change_tools_digest",
+        "test_source_gate_runtime.ProductionInputAuthority.test_private_cargo_view_releases_shared_registry_metadata_authority",
         "test_source_gate_runtime.ProductionInputAuthority.test_process_image_lookup_rejects_unavailable_and_truncated",
         "test_source_gate_runtime.ProductionInputAuthority.test_production_input_digests_accept_bound_directory_records",
         "test_source_gate_runtime.ProductionInputAuthority.test_production_input_digests_are_stable_for_same_identity",
@@ -1793,7 +1796,8 @@
         "test_source_gate_runtime.SourceGateRuntime.test_one_failed_suite_still_seals_fail_and_returns_ten",
         "test_source_gate_runtime.SourceGateRuntime.test_preflight_dependency_drift_stops_before_run_and_seal",
         "test_source_gate_runtime.SourceGateRuntime.test_preseal_drift_leaves_no_completion_seal",
-        "test_source_gate_runtime.SourceGateRuntime.test_rust_desktop_worst_case_observation_fits_source_limit"
+        "test_source_gate_runtime.SourceGateRuntime.test_rust_desktop_worst_case_observation_fits_source_limit",
+        "test_source_gate_runtime.SourceGateRuntime.test_suite_drift_failure_records_suite_checkpoint_and_closed_detail"
       ]
     }
   }

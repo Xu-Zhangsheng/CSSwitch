@@ -115,6 +115,35 @@ class SourceRuntimeError(RuntimeError):
     pass
 
 
+_SOURCE_DRIFT_DETAIL_CODES = frozenset({
+    "GIT_BINDING_CHANGED",
+    "SOURCE_METADATA_CHANGED",
+    "PYTHON_AUTHORITY_CHANGED",
+    "OFFLINE_ROOT_IDENTITY_CHANGED",
+    "CARGO_DEPENDENCY_DIGEST_CHANGED",
+    "CARGO_CONFIG_CHANGED",
+    "GATEWAY_TARGET_CHANGED",
+    "TOOL_IDENTITY_CHANGED",
+    "PYTHON_DEPENDENCY_CHANGED",
+    "UNKNOWN_INPUT_DRIFT",
+})
+
+
+class SourceInputDrift(ContractViolation):
+    def __init__(
+        self,
+        checkpoint: str,
+        suite_id: str | None,
+        detail_code: str,
+    ) -> None:
+        if detail_code not in _SOURCE_DRIFT_DETAIL_CODES:
+            detail_code = "UNKNOWN_INPUT_DRIFT"
+        super().__init__("ADAPTER_MALFORMED", "source input drift")
+        self.checkpoint = checkpoint
+        self.suite_id = suite_id
+        self.detail_code = detail_code
+
+
 @dataclass(frozen=True)
 class SourceRuntimeInputs:
     catalog: Mapping[str, Any]
@@ -144,7 +173,7 @@ class SourceRuntimeDependencies:
         [RunLayout, SourceSuitePlan, Mapping[str, Any]], Any
     ]
     recheck: Callable[
-        [str, int | None, SourceSuitePlan | None], bool
+        [str, int | None, SourceSuitePlan | None], bool | str
     ]
     input_digests: Callable[
         [
@@ -331,8 +360,13 @@ def _require_recheck(
     index: int | None = None,
     plan: SourceSuitePlan | None = None,
 ) -> bool:
-    if dependencies.recheck(stage, index, plan) is not True:
-        raise ContractViolation("ADAPTER_MALFORMED", "source input drift")
+    result = dependencies.recheck(stage, index, plan)
+    if result is not True:
+        raise SourceInputDrift(
+            stage,
+            None if plan is None else plan.suite["id"],
+            result if isinstance(result, str) else "UNKNOWN_INPUT_DRIFT",
+        )
     return True
 
 
@@ -436,6 +470,11 @@ def _record_source_failure(
                 error,
                 partial_results=partial_results,
             ),
+            **({
+                "suite_id": error.suite_id,
+                "checkpoint": error.checkpoint,
+                "detail_code": error.detail_code,
+            } if isinstance(error, SourceInputDrift) else {}),
             "run_manifest": None,
             "created_at": created_at,
             "terminal": True,
@@ -1185,6 +1224,14 @@ def _directory_record(path: str) -> tuple[int, ...]:
             os.close(fd)
 
 
+def _recheck_shared_offline_root(path: str, state: Mapping[str, Any]) -> bool:
+    """Shared Cargo provenance stops being live authority after private copy closure."""
+    return not (
+        state.get("private_cargo_view_ready") is True
+        and path == state.get("cargo_registry_root")
+    )
+
+
 def _offline_root_digest_records(
     value: Any,
 ) -> dict[str, list[int]]:
@@ -1856,6 +1903,7 @@ def _production_dependencies(root_fd: int) -> SourceRuntimeDependencies:
                 "cargo_dependency_inventory": cargo_dependency_inventory,
                 "cargo_dependency_digest": dependency_digest,
                 "cargo_dependency_roots": dependency_roots,
+                "cargo_registry_root": cargo_registry,
                 "active_cargo_inventory": cargo_dependency_inventory,
                 "active_cargo_digest": dependency_digest,
                 "active_cargo_roots": dependency_roots,
@@ -1911,19 +1959,19 @@ def _production_dependencies(root_fd: int) -> SourceRuntimeDependencies:
         stage: str,
         index: int | None,
         plan: SourceSuitePlan | None,
-    ) -> bool:
+    ) -> bool | str:
         if rue_cli._git_binding() != state.get("git"):
-            return False
+            return "GIT_BINDING_CHANGED"
         expected_raw = state.get("raw")
         raw_paths = state.get("raw_paths")
         if (
             not isinstance(expected_raw, Mapping)
             or not isinstance(raw_paths, Mapping)
         ):
-            return False
+            return "SOURCE_METADATA_CHANGED"
         for key, relative in raw_paths.items():
             if read(relative) != expected_raw.get(key):
-                return False
+                return "SOURCE_METADATA_CHANGED"
         python_authority = state.get("python_authority")
         python_authority_fds = state.get("python_authority_fds")
         if (
@@ -1934,31 +1982,33 @@ def _production_dependencies(root_fd: int) -> SourceRuntimeDependencies:
                 python_authority,
             )
         ):
-            return False
+            return "PYTHON_AUTHORITY_CHANGED"
         tools, digest, records = bind_tools(python_authority)
         dependency_root, dependency_inventory = rue_cli._dependency_bootstrap()
         offline_roots = state.get("offline_roots")
         if not isinstance(offline_roots, Mapping):
-            return False
+            return "OFFLINE_ROOT_IDENTITY_CHANGED"
         for path, expected in offline_roots.items():
+            if not _recheck_shared_offline_root(path, state):
+                continue
             try:
                 actual = _directory_record(path)
             except SourceRuntimeError:
-                return False
+                return "OFFLINE_ROOT_IDENTITY_CHANGED"
             if actual != tuple(expected):
-                return False
+                return "OFFLINE_ROOT_IDENTITY_CHANGED"
         try:
             cargo_inventory, cargo_digest = _dependency_inventory(
                 state["active_cargo_roots"],
             )
         except SourceRuntimeError:
-            return False
+            return "CARGO_DEPENDENCY_DIGEST_CHANGED"
         cargo_config_path = state.get("cargo_config_path")
         if cargo_config_path is not None:
             try:
                 config_record = _tool_record(cargo_config_path)
             except SourceRuntimeError:
-                return False
+                return "CARGO_CONFIG_CHANGED"
             if (
                 config_record["mode"] != 0o600
                 or config_record["owner"] != os.geteuid()
@@ -1967,7 +2017,7 @@ def _production_dependencies(root_fd: int) -> SourceRuntimeDependencies:
                 or config_record["sha256"]
                 != hashlib.sha256(_CARGO_CONFIG).hexdigest()
             ):
-                return False
+                return "CARGO_CONFIG_CHANGED"
         accepted_gateway = state.get("accepted_gateway_record")
         if accepted_gateway is not None:
             try:
@@ -1977,16 +2027,24 @@ def _production_dependencies(root_fd: int) -> SourceRuntimeDependencies:
                     accepted_gateway,
                 )
             except (KeyError, SourceRuntimeError, TypeError):
-                return False
-        return (
-            tools == state.get("tools")
-            and digest == state.get("binary_tool_digest")
-            and records == state.get("tool_records")
-            and dependency_root == state.get("dependency_root")
-            and dependency_inventory == state.get("dependency_inventory")
-            and cargo_digest == state.get("active_cargo_digest")
-            and cargo_inventory == state.get("active_cargo_inventory")
-        )
+                return "GATEWAY_TARGET_CHANGED"
+        if (
+            tools != state.get("tools")
+            or digest != state.get("binary_tool_digest")
+            or records != state.get("tool_records")
+        ):
+            return "TOOL_IDENTITY_CHANGED"
+        if (
+            dependency_root != state.get("dependency_root")
+            or dependency_inventory != state.get("dependency_inventory")
+        ):
+            return "PYTHON_DEPENDENCY_CHANGED"
+        if (
+            cargo_digest != state.get("active_cargo_digest")
+            or cargo_inventory != state.get("active_cargo_inventory")
+        ):
+            return "CARGO_DEPENDENCY_DIGEST_CHANGED"
+        return True
 
     def prepare_cargo_view(
         inputs: SourceRuntimeInputs,
@@ -2005,6 +2063,7 @@ def _production_dependencies(root_fd: int) -> SourceRuntimeDependencies:
         state["active_cargo_roots"] = roots
         state["active_cargo_inventory"] = inventory
         state["active_cargo_digest"] = digest
+        state["private_cargo_view_ready"] = True
         state["cargo_config_path"] = os.path.join(
             cargo_home,
             "config.toml",

@@ -7,6 +7,7 @@ mod pending_cleanup;
 mod recovery;
 mod route_reconcile;
 mod ssh_preflight;
+mod transaction_science_stop;
 
 // Internal modules stay private; only re-export the historical crate-facing surface.
 #[cfg(test)]
@@ -53,8 +54,6 @@ use one_click::{
     test_begin_replayable_compensation, test_compensate_one_click_failure,
     write_one_click_checkpoint, OneClickJournalProgress, OneClickTransactionIdentity,
 };
-#[cfg(test)]
-use one_click::{execute_transaction_science_stop_with, TransactionScienceStopBoundary};
 #[allow(unused_imports)]
 pub(crate) use one_click::{
     force_restart_science_for_active, interrupted_compensation_requires_pre_auth_replay,
@@ -76,6 +75,10 @@ pub(crate) use route_reconcile::{
     force_third_party_reconcile, SkillRouteRepairOutcome, SkillRouteRepairStatus,
 };
 use ssh_preflight::*;
+#[cfg(test)]
+use transaction_science_stop::{
+    execute_transaction_science_stop_with, TransactionScienceStopBoundary,
+};
 
 #[cfg(test)]
 pub(crate) use authority_snapshot::{

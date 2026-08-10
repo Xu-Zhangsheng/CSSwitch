@@ -139,15 +139,34 @@ struct RejectedGatewayRegistryState {
     cleanup_owned_count: usize,
 }
 
+fn terminal_gateway_cleanup_backoff(attempt: u32) -> std::time::Duration {
+    let shift = attempt.saturating_sub(1).min(7);
+    std::time::Duration::from_millis(10_u64.saturating_mul(1_u64 << shift))
+}
+
+fn report_terminal_gateway_cleanup_retry(attempt: u32, owned_count: usize, detail_code: &str) {
+    eprintln!(
+        "CSSWITCH_TERMINAL_GATEWAY_CLEANUP_RETRY attempt={attempt} owned_count={owned_count} detail_code={detail_code}"
+    );
+}
+
 impl Drop for RejectedGatewayRegistryState {
     fn drop(&mut self) {
+        let mut attempt = 0_u32;
         while let Some(child) = self.children.last_mut() {
             if stop_child_confirmed(child).is_ok() {
                 self.children.pop();
+                attempt = 0;
             } else {
                 // Terminal ownership is fail-closed: without an acknowledged
                 // external supervisor, teardown may not discard a live Child.
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                attempt = attempt.saturating_add(1);
+                report_terminal_gateway_cleanup_retry(
+                    attempt,
+                    self.children.len(),
+                    "drop_stop_unconfirmed",
+                );
+                std::thread::sleep(terminal_gateway_cleanup_backoff(attempt));
             }
         }
     }
@@ -255,11 +274,23 @@ impl RejectedGatewayRegistry {
     where
         Stop: FnMut(&mut Child) -> Result<(), String>,
     {
+        let mut attempt = 0_u32;
         loop {
             match self.retry_with(&mut stop) {
                 Ok(()) if self.is_idle() => return,
-                Ok(()) | Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                Ok(()) => {
+                    attempt = attempt.saturating_add(1);
+                    report_terminal_gateway_cleanup_retry(
+                        attempt,
+                        self.len(),
+                        "cleanup_owner_busy",
+                    );
+                    std::thread::sleep(terminal_gateway_cleanup_backoff(attempt));
+                }
+                Err(_error) => {
+                    attempt = attempt.saturating_add(1);
+                    report_terminal_gateway_cleanup_retry(attempt, self.len(), "stop_unconfirmed");
+                    std::thread::sleep(terminal_gateway_cleanup_backoff(attempt));
                 }
             }
         }
@@ -854,16 +885,12 @@ pub fn run() {
             commands::codex::codex_downgrade_export_all,
             commands::profiles::get_config,
             commands::profiles::acknowledge_pending_notice,
-            commands::profiles::list_templates,
             commands::runtime::set_settings,
             commands::runtime::set_mode,
             commands::runtime::open_official,
             commands::profiles::create_profile,
             commands::profiles::update_profile_metadata,
             commands::profiles::update_profile_connection,
-            commands::profiles::validate_profile_catalog_model,
-            commands::profiles::preview_profile_preset_sync,
-            commands::profiles::apply_profile_preset_sync,
             commands::profiles::clear_profile_key,
             commands::profiles::delete_profile,
             commands::profiles::set_active_profile,
@@ -1319,6 +1346,15 @@ mod tests {
     #[test]
     #[allow(clippy::result_large_err)]
     fn rejected_gateway_terminal_uncertainty_blocks_exit_until_reap_is_confirmed() {
+        assert_eq!(super::terminal_gateway_cleanup_backoff(1).as_millis(), 10);
+        assert_eq!(
+            super::terminal_gateway_cleanup_backoff(8).as_millis(),
+            1_280
+        );
+        assert_eq!(
+            super::terminal_gateway_cleanup_backoff(80).as_millis(),
+            1_280
+        );
         let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let child_pid = child.id();
         let authority = AppState::default();

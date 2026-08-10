@@ -49,7 +49,7 @@ class ProfilePinContractTests(unittest.TestCase):
             r"config::RuntimeFinalizeAction::CommitBinding\s*\{\s*binding:\s*committed\s*\},\s*\)"
             r"[\s\S]*?complete_one_click_finalize\(\s*&dir,\s*&mut journal_progress\s*\)",
         )
-        preset = profiles.split("pub(crate) async fn apply_profile_preset_sync", 1)[1].split(
+        preset = profiles.split("fn apply_profile_preset_sync_inner_cmd", 1)[1].split(
             "// ---------- profile CRUD", 1
         )[0]
         connection = profiles.split("fn update_profile_connection_inner_cmd", 1)[1].split(
@@ -123,6 +123,20 @@ class ProfilePinContractTests(unittest.TestCase):
         finally_block = run_one_click.split("} finally {", 1)[1]
         self.assertLess(finally_block.index("setBusy(false)"), finally_block.index("refreshIfLoaded"))
         self.assertIn("await getSkillPage()?.refreshIfLoaded()", run_one_click)
+
+    def test_committed_profile_mutations_distinguish_refresh_failure(self):
+        js = (ROOT / "desktop/src/profile-controller.js").read_text()
+        helper = js.split("async function loadConfigAfterCommit()", 1)[1].split(
+            "// 列表优先展示", 1
+        )[0]
+        self.assertIn("loadConfig({ throwOnError: true })", helper)
+        self.assertIn("error.configCommitted = true", helper)
+        self.assertIn("已提交，但界面刷新失败", helper)
+        self.assertEqual(js.count("await loadConfigAfterCommit()"), 6)
+        for action in (
+            "创建配置", "连接配置", "清除 key", "配置元数据", "删除配置", "当前选择",
+        ):
+            self.assertIn(f'committedRefreshMessage("{action}"', js)
 
     def test_skill_and_browser_warnings_preserve_runtime_success(self):
         session = sandbox_session_source()

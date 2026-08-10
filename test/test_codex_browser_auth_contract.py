@@ -52,6 +52,9 @@ class CodexBrowserAuthContractTest(unittest.TestCase):
         self.assertIn("无需重新登录", html)
         self.assertIn('call("codex_ensure_profile")', js)
         self.assertIn("profile_ensure_failed", js)
+        self.assertIn('disposition === "created"', js)
+        self.assertIn("已在后端补建，但界面刷新或回读确认失败", js)
+        self.assertIn("不要重复补建", js)
         self.assertIn("commands::codex::codex_ensure_profile", tauri)
         dom_ready = main.split('window.addEventListener("DOMContentLoaded"', 1)[1]
         self.assertNotIn("refreshCodexAuthStatus", dom_ready)
