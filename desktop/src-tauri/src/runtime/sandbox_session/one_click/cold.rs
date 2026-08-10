@@ -729,7 +729,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!(
+            let path = std::path::PathBuf::from("/private/tmp").join(format!(
                 "csswitch-cold-prior-stop-{label}-{}-{nonce}",
                 std::process::id()
             ));
