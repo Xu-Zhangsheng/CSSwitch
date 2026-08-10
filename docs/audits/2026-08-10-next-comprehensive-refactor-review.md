@@ -202,9 +202,10 @@ CLI 自身挂起会让操作无限等待；即使直接子进程退出，只要�
 
 ## 10. 2026-08-10 收口执行结果
 
-本节取代第 8–9 节的后续执行建议，但不改写本页原始审查基线。实时基线为
-`next@a325802404a5346cd2cb82a95be9d58dfac44277` 加未提交工作树 overlay；因为用户未授权
-commit，overlay 不是 exact HEAD，也没有 production source seal。
+本节取代第 8–9 节的后续执行建议，但不改写本页原始审查基线。收口执行起点为
+`next@a325802404a5346cd2cb82a95be9d58dfac44277` 加未提交工作树 overlay；用户随后授权本地
+commit 与 source gate，最终 code-bearing production source candidate 为
+`next@9e08924481c8f5edb181254332d94daba0cbe4b2`。
 
 ### 10.1 finding disposition
 
@@ -239,18 +240,30 @@ commit，overlay 不是 exact HEAD，也没有 production source seal。
 
 ### 10.3 canonical source-gate 边界
 
-在没有其他 Cargo 测试进程的窗口执行唯一入口：
+主工作区包含受保护、被 ignore 的运行时数据，其中的未跟踪 `.gitignore` 被 clean-snapshot
+合同作为 ignore-control 拒绝；未删除或读取这些用户数据。随后在全新 non-shallow 本地 clone、
+没有其他 Cargo / rustc 进程的窗口执行唯一入口。
+
+首次 code candidate `18aabcf648c493e5ee081487a6ce4d55fdfa6c69` 的完整 run
+`3ff7b58addee2f5c5b4b8902ad258033` 为 sealed `FAIL`（12/15 `PASS`、3/15 `FAIL`、
+runner exit 12）。它只暴露并随后修复三项 closure regression：Skill boundary 静态 source
+截断、source-observation 容量断言仍为 598、Rust test module 缺少显式 `AppState` import；
+该 run 不得作为 PASS。
+
+修复后的 `9e08924481c8f5edb181254332d94daba0cbe4b2` 在新的 clean clone 执行：
 
 ```bash
-bash test/run_all.sh --output-root /private/tmp/csg.Xvtbnw
+bash test/run_all.sh --output-root /private/tmp/csg.wv0YdB
 ```
 
-公共 CLI 以 `runner_exit=12`、`reason=internal-failure` fail closed；输出根保持为空，未创建
-run layout、run ID、suite observation、aggregate 或 completion seal。随后只运行同一 production
-preflight seam 诊断，精确异常为 `worktree is not clean`。因此本轮 15 个 suite 均为
-`NOT-RUN(preflight)`，不是 suite `FAIL`；`SOURCE-GREEN: NOT ESTABLISHED`。当前 exact HEAD
-`a325802…` 不包含本节所述 overlay；在禁止自行 commit 的边界内，不可能为该 overlay 取得
-“current exact HEAD 15/15” seal，也不得用临时 stash、伪 commit 或旧 SHA 的 PASS 替代。
+最终 run ID `078d462c81abcec146644c8096254069`，15/15 suites 与 15/15 observations 均
+`PASS`，aggregate `PASS`，runner exit 0。completion seal SHA-256 为
+`1c071a18701ac6e6a191c6dfc3cd1513d3465bce90d3567a6460cd46f36d0fe8`；其绑定的 source
+snapshot manifest SHA-256 为
+`61dd5eb54b02695ff8664984c356b122c80cb3d864776992fafb88b2fc416005`，evidence manifest
+SHA-256 为 `8789add68dd704b0fd6941db276f620b37dfa60b6573ceb3d79c698a41a20cae`。
+因此该 exact code-bearing candidate 建立 `SOURCE-GREEN`；它不建立 artifact、installed、live、
+signing 或 release 结论。
 
 ### 10.4 证据层边界
 
