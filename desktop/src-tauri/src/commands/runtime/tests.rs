@@ -4347,6 +4347,7 @@ fn isolated_r0_one_click_history_attention() {
     {
         let mut authority = lock(&state);
         authority.science_runtime = Some(runtime.clone());
+        authority.sandbox_port = sandbox_port;
         authority.sandbox_url = Some(format!("http://127.0.0.1:{sandbox_port}/history-drift"));
     }
     let restored_after_live_drift = invoke_json(
