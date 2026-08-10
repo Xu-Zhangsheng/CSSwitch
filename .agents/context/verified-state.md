@@ -23,9 +23,12 @@ Science 全领域行为、Intel/Windows/WSL、Developer ID/notarization/Gatekeep
 exact source 新构建的 `CSSwitch Test.app`、packaged Gateway 与 Claude Science 0.1.25 identity
 已由递归 G1 receipt 绑定并取得 `PASS`。bundle、Desktop、Gateway SHA-256 分别为
 `52cd48c…73c9`、`77b4ebef…9be8`、`610c0206…87ab`；G1 receipt SHA-256 为
-`b01cf7a2…ddbb`。当前 tuple 的 `B-RUNTIME-01`、`B-CORE-01`、`B-CONTEXT-01`、Provider、
-Skill/MCP、SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 均为
-`NOT-RUN`。旧 `9e08924` tuple 的 isolated-live 结论只保留为历史日期化证据，不能继承。
+`b01cf7a2…ddbb`。当前 tuple 的 `B-RUNTIME-01` canonical run `ra60c2eec` 已在隔离 HOME/data-dir、
+deny-egress sandbox、真实 Science 0.1.25 与 loopback fake provider 下取得 scoped `PASS`；55 条事件
+严格单调、5/5 请求命中、controller elapsed `298.825957s < 300s`，51/51 evidence hashes 与最终
+cleanup 经 clean-context 独立复算通过。`B-CORE-01`、`B-CONTEXT-01`、完整 Provider、Skill/MCP、
+SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 仍为 `NOT-RUN`。
+旧 `9e08924` tuple 的 isolated-live 结论只保留为历史日期化证据，不能继承。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从

@@ -18,10 +18,20 @@
 `next@a60c2ee656429903f1fd8f398dc6ad8194aa9346`。独立 clean exact worktree 的固定 15-suite
 source gate 为 `PASS`（15/15 suites、15/15 observations、runner exit 0）；随后由该 SHA 以
 `acceptance-build` 全新生成的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science
-0.1.25 exact tuple 经递归 G1 validator 取得 `PASS`。当前 tuple 的 `B-RUNTIME-01`、`B-CORE-01`、
-`B-CONTEXT-01`、Provider、Skill/MCP、SSH、installed、升级/rollback、签名与 release-ready 均为
-`NOT-RUN`。旧 `9e08924` 与 `06b630b` tuple 的对应 PASS 只保留为历史日期化证据，不能继承给
-新 artifact。
+0.1.25 exact tuple 经递归 G1 validator 取得 `PASS`。当前 tuple 的 `B-RUNTIME-01` canonical run
+`ra60c2eec` 又在全新隔离 HOME/data-dir、deny-egress sandbox、真实 Science 0.1.25 与 loopback fake
+provider 下完成 normal one-click、reopen reuse、stop、restart、再次请求、最终 stop/exit 与精确清理，
+取得 scoped `PASS`。`B-CORE-01`、`B-CONTEXT-01`、完整 Provider、Skill/MCP、SSH、installed、
+升级/rollback、签名与 release-ready 仍为 `NOT-RUN`。旧 `9e08924` 与 `06b630b` tuple 的对应 PASS
+只保留为历史日期化证据，不能继承给新 artifact。
+
+`ra60c2eec` 的 55 条事件严格单调，5/5 provider requests consumed；LaunchServices 重开保持同一
+Desktop/Gateway owner，产品重启产生新 Gateway/Science owner。controller overall elapsed 为
+`298.825957s`，小于 300s hard deadline。五个 tracked PID、四个动态端口与 runtime open PID 清零，
+随后 runtime、initializer 与 Python cache 临时根精确删除；post-cleanup 后 51 项 evidence hash 全部
+复算 `OK`。正式 clean-context 独立审查为 `BLOCKER/HIGH/MEDIUM/LOW=0/0/0/0`、`PASS`。完整
+identity、network、deadline、failed-attempt 与 cleanup 边界见
+[当前 B-RUNTIME 日期化验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-b-runtime-01.md)。
 
 此前 cold one-click prior Science stop 子阶段的历史 production source candidate 是
 `next@5cf3eb1670eec6dc58d5d1d873ca3834f9a76623`。cold one-click prior Science stop 保留
@@ -180,9 +190,9 @@ Science、SSH、signing 或 release 结论。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `a60c2ee` exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `a60c2ee` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01`、`B-CORE-01`、`B-CONTEXT-01` 均 `NOT-RUN` | 真实 provider/账号分项 `NOT-RUN` |
-| runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click / stop / restart lifecycle `NOT-RUN`；replacement/race/crash 仍由 source fixture 证明 | installed normal stop `NOT-RUN` |
-| authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click transaction UI outcome `NOT-RUN`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
+| 一键入口、Gateway / Science 启动与 finalize | `a60c2ee` exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `a60c2ee` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01=PASS`；`B-CORE-01`、`B-CONTEXT-01` 仍 `NOT-RUN` | 真实 provider/账号分项 `NOT-RUN` |
+| runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click / stop / restart lifecycle `PASS`；replacement/race/crash 仍由 source fixture 证明 | installed normal stop `NOT-RUN` |
+| authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click transaction UI outcome `PASS`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | `a60c2ee` 闭合 acceptance host Gateway fixture 注入；comprehensive source review 未替代 Skill 专项能力审查 | 同一 `a60c2ee` G1 exact artifact `PASS`；只证明 bundle identity，不证明 Skill runtime | current tuple `B-SKILL-01=NOT-RUN`；旧 artifact 的安全停止/公共 GitHub 尝试只保留为历史问题证据 | 真实 Skill / domain execution分项 `NOT-RUN` |
 | provider protocol capabilities | source/test/fixture anchors mapped；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | current tuple `B-PROVIDER-01=NOT-RUN` | 真实 provider/model 的 Desktop E2E、配额、计费、服务质量与实际 stream/tools/reasoning/error 仍为 `NOT-RUN` |
