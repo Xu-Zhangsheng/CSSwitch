@@ -35,6 +35,7 @@
 - [2026-08-10 CSSwitch `06b630b` exact artifact 与 G1 binding](2026-08-10-csswitch-06b630b-exact-artifact.md)
 - [2026-08-10 Claude Science 0.1.25 `B-RUNTIME-01` exact-artifact isolated-live 验收](2026-08-10-claude-science-0.1.25-b-runtime-01.md)
 - [2026-08-10 Claude Science 0.1.25 `B-CORE-01` exact-artifact isolated-live 验收](2026-08-10-claude-science-0.1.25-b-core-01.md)
+- [2026-08-10 Claude Science 0.1.25 `B-CONTEXT-01` exact-artifact isolated-live 验收](2026-08-10-claude-science-0.1.25-b-context-01.md)
 - [2026-07-30 CSSwitch ↔ Science 关联机制与合理设计](2026-07-30-csswitch-science-association-and-design.md)
 - [2026-07-30 CSSwitch 代码重构优先级](2026-07-30-csswitch-refactor-priorities.md)
 

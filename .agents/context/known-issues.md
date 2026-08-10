@@ -22,9 +22,10 @@ exact tuple 经递归 G1 validator 取得 `PASS`。同一 tuple 随后在 deny-e
 `B-RUNTIME-01=PASS`：production Desktop → packaged Gateway → Science、一键开始、5 次 loopback
 provider request、单实例重开复用、产品停止/重启、再次请求、最终停止与精确清理均闭合；随后
 `B-CORE-01=PASS`，限定证明合成 project / 文件读写、permission request / grant / revoke、revoke 后及
-越界拒绝、artifact lineage 与 annotation 持久状态。`9cc0d15` tuple 的
-`B-CONTEXT-01=PASS(scope=isolated-request-shape)` 仍不能外推到 `06b630b`。后续文档提交只记录证据，
-不能改写被构建或运行的 source/artifact identity。
+越界拒绝、artifact lineage 与 annotation 持久状态；随后同一 tuple 的
+`B-CONTEXT-01=PASS(scope=isolated-request-shape)`，限定闭合 plan、delegation、fork/restore、
+Memory/compaction、Reviewer/Specialist local surface 与跨 project/session 隔离。后续文档提交只记录
+证据，不能改写被构建或运行的 source/artifact identity。
 
 上一份已验收的 stop-ownership production source candidate 是
 `next@65b65c13dc5db59dc3798d0dc1320e7712c726e2`。它以 owner-map baseline
@@ -117,7 +118,7 @@ producing frame 以及 annotation 发送前持久 DB row 与下一消息传递�
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | 同一 `06b630b` tuple 的 `B-RUNTIME-01=PASS`；`B-CORE-01=PASS` 限定闭合合成 project / 文件、permission、artifact lineage 与 annotation 持久状态 | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | 同一 `06b630b` tuple 的 `B-RUNTIME-01=PASS`；`B-CORE-01=PASS` 限定闭合合成 project / 文件、permission、artifact lineage 与 annotation 持久状态；`B-CONTEXT-01=PASS(scope=isolated-request-shape)` 限定闭合上下文 local surface/request shape 与 project/session 隔离 | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | `65b65c13` exact-SHA review + canonical 15-suite `PASS`；native-exit replacement/race 与 best-effort Gateway policy 已闭合，downgrade 等 sibling gap 仍开放 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal stop/restart observation `PASS`；replacement/race 不由 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
@@ -164,6 +165,17 @@ target root session 的 717 个脱敏 request envelope 中，四项 cross-domain
 `B-CONTEXT-01=PASS(scope=isolated-request-shape)`。global `About you` memory 的显式共享 surface
 不外推为 project-scoped memory 的全部语义；精确状态、fixture loop 噪声、网络与 cleanup 见
 [日期化验收](../../docs/evidence/investigations/2026-08-08-claude-science-0.1.25-b-context-01.md)。
+
+2026-08-10 的新 `B-CONTEXT-01` 绑定同一个 `06b630b` G1 exact artifact / Science 0.1.25
+tuple，没有重建 artifact。plan approve/reject、delegation、fork/restore、Memory save/search、
+compaction、Reviewer/Specialist local surface 与两 project/两 target root session 隔离均取得
+独立观察；140 个脱敏 request envelope 的四项 cross-domain violation 均为 0。Reviewer 保持
+`Inconclusive`，Reviewer/Specialist 服务端结果为 `UNVERIFIED`。活动期 non-loopback=0、
+8765=0；停止后 owned process/端口清零，合成 Memory 删除，runtime/source worktree/driver/pycache
+精确清理。23-entry hash closure 已脱敏一次性 nonce 并纳入 post-cleanup receipt。因此当前
+`B-CONTEXT-01=PASS(scope=isolated-request-shape)`；真实账号/provider、Skill/MCP、SSH、
+installed、签名与 release 均不在本轮范围。精确状态、身份、网络与 cleanup 见
+[日期化验收](../../docs/evidence/investigations/2026-08-10-claude-science-0.1.25-b-context-01.md)。
 
 2026-08-09 的 `B-SKILL-01` 绑定 `c4a1159` clean source gate 与同 SHA 新构建的 exact
 `CSSwitch Test.app` / packaged Gateway / Science 0.1.25 tuple。Science 在用户对话前的 bundled

@@ -71,9 +71,9 @@ ownership、典型 stage 链、托管/non-target、证据与 `UNKNOWN`；组合�
 实；需要更新 ownership 时先写日期化 audit，再改本表。`SOURCE/TEST` 不证明最终
 artifact；`PACKAGE-STATIC` 不证明实际调用；`FIXTURE` 不证明 live。
 本表中当前的 `ARTIFACT` / `ISOLATED-LIVE` 条目只绑定
-[B-RUNTIME-01](../evidence/investigations/2026-08-08-claude-science-0.1.25-b-runtime-01.md)、
-[B-CORE-01](../evidence/investigations/2026-08-08-claude-science-0.1.25-b-core-01.md) 与
-[B-CONTEXT-01](../evidence/investigations/2026-08-08-claude-science-0.1.25-b-context-01.md)
+[B-RUNTIME-01](../evidence/investigations/2026-08-10-claude-science-0.1.25-b-runtime-01.md)、
+[B-CORE-01](../evidence/investigations/2026-08-10-claude-science-0.1.25-b-core-01.md) 与
+[B-CONTEXT-01](../evidence/investigations/2026-08-10-claude-science-0.1.25-b-context-01.md)
 各自写明的 exact tuple 和 scope；它们不是 current HEAD 的验收结果。
 
 ## 能力、所有权与托管决策表
@@ -84,8 +84,8 @@ artifact；`PACKAGE-STATIC` 不证明实际调用；`FIXTURE` 不证明 live。
 |---|---|---|---|---|---|---|---|
 | 安装与平台 | macOS App/CLI | 是：Science App、CLI 与本地数据语义 | `CSSWITCH-RUNTIME → SCIENCE-NATIVE` | `原生保留`；第三方受管启动另见“第三方运行包络” | 否 | `OFFICIAL`、`PACKAGE-STATIC` | 当前 final artifact、普通 installed 行为与发布态 |
 | 安装与平台 | whole-app remote Linux / WSL | 是：Science 的整机部署能力 | `SCIENCE-NATIVE → SCIENCE-EXTERNAL` | `原生保留`；CSSwitch 当前不提供部署管理 | 是：CSSwitch 不提供 whole-app Linux/WSL 管理面 | `OFFICIAL` | 第三方模式兼容性、端口、preview 与数据目录行为 |
-| 第三方运行包络 | 隔离 HOME、持久 data-dir、runtime identity、启动/停止/恢复 | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME` | `必须托管` | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`9cc0d15` B-RUNTIME scope） | current HEAD exact artifact、installed-live 连续性与新 Science 版本兼容性 |
-| 第三方运行包络 | 本地虚拟登录、loopback Gateway 与受限 route | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME → MODEL-GATEWAY` | `必须托管`；虚拟登录只建立本地受管路径 | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`9cc0d15` B-RUNTIME/B-CORE scope） | current HEAD exact artifact、真实第三方 provider/model 与版本兼容性 |
+| 第三方运行包络 | 隔离 HOME、持久 data-dir、runtime identity、启动/停止/恢复 | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME` | `必须托管` | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`06b630b` B-RUNTIME scope） | current HEAD exact artifact、installed-live 连续性与新 Science 版本兼容性 |
+| 第三方运行包络 | 本地虚拟登录、loopback Gateway 与受限 route | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME → MODEL-GATEWAY` | `必须托管`；虚拟登录只建立本地受管路径 | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`06b630b` B-RUNTIME/B-CORE/B-CONTEXT scope） | current HEAD exact artifact、真实第三方 provider/model 与版本兼容性 |
 | Provider | profile、第三方 provider、模型 selector、模型目录与协议适配 | 否：第三方 provider 拥有模型、认证、配额和计费 | `MODEL-GATEWAY`；provider 只作为 external dependency | `必须托管` profile/selector/routing；不拥有模型服务 | 否 | `SOURCE`、`TEST` | 指定 provider/model 的 live、配额与服务质量 |
 | Project | project、session、conversation、custom instructions、archive/import | 是：Science 本地 UI、数据库和 session control plane | `SCIENCE-NATIVE`；推理操作再进入 `MODEL-GATEWAY` | `原生保留`；CSSwitch 只隔离和保全数据域 | 是：不提供 Science 语义 CRUD | `OFFICIAL`、`PACKAGE-STATIC`、`ISOLATED-LIVE`（B-CONTEXT local surface/request-shape scope） | archive/unarchive、import、restart readback 与完整语义 |
 | Agent 工作流 | plans、delegation、fork 与恢复 | 是：Science session/plan control plane | `SCIENCE-NATIVE`；只有创建、继续或执行推理的 operation 再进入 `MODEL-GATEWAY`，本地恢复/readback 不进入 | `原生保留` | 是：不实现第二套 plan/delegation engine | `OFFICIAL`、`PACKAGE-STATIC`、`ISOLATED-LIVE`（B-CONTEXT surface/request-shape scope） | 服务端结果、第三方实际模型请求、配额和 entitlement |
