@@ -22,9 +22,11 @@ Science 全领域行为、Intel/Windows/WSL、Developer ID/notarization/Gatekeep
 `next@9e08924481c8f5edb181254332d94daba0cbe4b2` 的 G1-bound `CSSwitch Test.app`、
 packaged Gateway 与 Claude Science 0.1.25 已取得
 `B-RUNTIME-01=PASS(scope=csswitch-gateway-science,loopback-provider-fixture)`；唯一 canonical
-run `r9e08924b` elapsed `291.892949s`，post-cleanup 51/51 evidence hashes `OK`。它只证明隔离 normal production wiring/lifecycle，
-不覆盖本表的 installed/public release artifact，也不外推完整 Provider、B-CORE、B-CONTEXT、
-Skill、SSH、签名或 release-ready 状态。
+run `r9e08924b` elapsed `291.892949s`，post-cleanup 51/51 evidence hashes `OK`。同一 tuple 的
+`B-CORE-01` run `bcore-9e08924-r1` 又限定闭合 synthetic project/file、permission grant/revoke/
+denial、artifact lineage/diff/preview/provenance 与 annotation 下一消息传递，post-cleanup 14/14
+evidence hashes `OK`。这两项不覆盖本表的 installed/public release artifact，也不外推完整 Provider、
+B-CONTEXT、Skill、SSH、签名或 release-ready 状态。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
