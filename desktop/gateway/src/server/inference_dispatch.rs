@@ -1386,6 +1386,9 @@ pub(super) fn handle_post(
         }
     };
     if path != "/v1/messages" {
+        // Discard any already-buffered request bytes before closing so an
+        // early route rejection cannot turn the flushed 404 into a TCP RST.
+        let _ = stream.shutdown(std::net::Shutdown::Read);
         not_found_json(stream, &path);
         return;
     }

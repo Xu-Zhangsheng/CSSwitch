@@ -520,7 +520,7 @@ fn science_control_helpers_clear_ambient_sensitive_environment(
     const CHILD_ENV: &str = "CSSWITCH_CONTROL_ENV_TEST_CHILD";
     const HOSTILE_ENV: &str = "CSSWITCH_TEST_HOSTILE_API_KEY";
     if std::env::var_os(CHILD_ENV).is_none() {
-        let status = Command::new(std::env::current_exe()?)
+        let output = Command::new(std::env::current_exe()?)
             .args([
                 "--exact",
                 "runtime::science::tests::science_control_helpers_clear_ambient_sensitive_environment",
@@ -528,8 +528,13 @@ fn science_control_helpers_clear_ambient_sensitive_environment(
             ])
             .env(CHILD_ENV, "1")
             .env(HOSTILE_ENV, "must-not-reach-science")
-            .status()?;
-        assert!(status.success());
+            .output()?;
+        assert!(
+            output.status.success(),
+            "isolated hostile-environment control probe failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return Ok(());
     }
 
@@ -545,15 +550,15 @@ fn science_control_helpers_clear_ambient_sensitive_environment(
     let runtime = test_runtime_identity(binary.clone());
 
     assert_eq!(
-        safe_science_version_with_timeout(&binary, Duration::from_secs(2)).as_deref(),
+        safe_science_version_with_timeout(&binary, super::SCIENCE_VERSION_TIMEOUT).as_deref(),
         Some("safe-version")
     );
     assert_eq!(
-        runtime_status_with_timeout(&runtime, Duration::from_secs(2)),
+        runtime_status_with_timeout(&runtime, super::SCIENCE_CONTROL_TIMEOUT),
         Some(false)
     );
     assert_eq!(
-        sandbox_url_with_timeout(19090, &runtime, Duration::from_secs(2)),
+        sandbox_url_with_timeout(19090, &runtime, super::SCIENCE_CONTROL_TIMEOUT),
         "http://127.0.0.1:19090/safe"
     );
     fs::remove_dir_all(root)?;
@@ -600,7 +605,7 @@ fn science_url_probe_kills_descendant_after_direct_parent_exits(
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
     let runtime = test_runtime_identity(binary);
     assert_eq!(
-        sandbox_url_with_timeout(19091, &runtime, Duration::from_secs(2)),
+        sandbox_url_with_timeout(19091, &runtime, super::SCIENCE_CONTROL_TIMEOUT),
         "http://127.0.0.1:19091/safe"
     );
     assert!(started_marker.exists());
