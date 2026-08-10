@@ -161,6 +161,39 @@ fn acceptance_override_is_wired_after_env_clear_and_before_formal_spawn() {
     );
 }
 
+#[test]
+fn acceptance_github_fixture_is_wired_to_the_host_gateway_spawn() {
+    let lifecycle = include_str!("lifecycle.rs");
+    let formal_start = lifecycle
+        .split_once("fn start_proxy_for_inner")
+        .map(|(_, suffix)| suffix)
+        .expect("production formal start owner must exist");
+    let configure = formal_start
+        .find("configure_managed_proxy_command(")
+        .expect("formal start must configure the env-cleared managed command");
+    let github_fixture = formal_start
+        .find("configure_acceptance_github_host_command(&mut cmd)")
+        .expect("formal start must wire the host Gateway GitHub fixture");
+    let prepare_bridge = formal_start
+        .find("prepare_skill_install_host(")
+        .expect("formal start must prepare the host Skill bridge");
+    let spawn = formal_start
+        .find(".spawn()")
+        .expect("formal start must spawn the configured Gateway command");
+    assert!(
+        configure < github_fixture,
+        "fixture must follow env_clear setup"
+    );
+    assert!(
+        github_fixture < prepare_bridge,
+        "fixture must be present before the host Skill bridge is prepared"
+    );
+    assert!(
+        github_fixture < spawn,
+        "fixture must reach the final host spawn"
+    );
+}
+
 extern "C" fn observe_r0_recovery_term(_signal: libc::c_int) {
     R0_RECOVERY_TERM_OBSERVED.store(true, Ordering::SeqCst);
 }

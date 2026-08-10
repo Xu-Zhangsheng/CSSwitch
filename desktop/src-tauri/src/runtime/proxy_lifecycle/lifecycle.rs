@@ -739,6 +739,11 @@ fn start_proxy_for_inner<R: Runtime>(
             &launch.adapter,
             std::env::var_os("CSSWITCH_UPSTREAM_URL").as_deref(),
         )?;
+        // The Science-side connector only writes the bridge request. The
+        // long-lived host Gateway below performs the GitHub download, so the
+        // validated Acceptance fixture must reach this command as well.
+        #[cfg(feature = "acceptance-build")]
+        crate::runtime::skill_install_bridge::configure_acceptance_github_host_command(&mut cmd)?;
         // Bridge preparation is candidate-scoped and optional. The canonical
         // key is published only after this candidate still owns AppState.
         prepared_skill_host = prepare_skill_install_host(

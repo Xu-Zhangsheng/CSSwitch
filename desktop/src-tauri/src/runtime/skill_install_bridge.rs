@@ -18,7 +18,7 @@ const MANAGED_MARKER: &str = "[managed-by:csswitch]";
 const ROUTE_STATE_FILE: &str = ".csswitch-route-state.json";
 const ROUTE_STATE_SCHEMA: u64 = 1;
 const ROUTE_POLICY_REVISION: u64 = 3;
-#[cfg(feature = "acceptance-build")]
+#[cfg(any(test, feature = "acceptance-build"))]
 const ACCEPTANCE_GITHUB_BASE_URL_ENV: &str = "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL";
 #[cfg(any(test, feature = "acceptance-build"))]
 const ACCEPTANCE_RESERVED_PORTS: [u16; 3] = [1455, 1457, 8765];
@@ -318,6 +318,23 @@ fn acceptance_github_fixture_base(raw: Option<&OsStr>) -> Result<Option<String>,
     Ok(Some(format!("http://{authority}/")))
 }
 
+#[cfg(feature = "acceptance-build")]
+pub(crate) fn configure_acceptance_github_host_command(cmd: &mut Command) -> Result<(), String> {
+    let raw = std::env::var_os(ACCEPTANCE_GITHUB_BASE_URL_ENV);
+    configure_acceptance_github_host_command_with(cmd, raw.as_deref())
+}
+
+#[cfg(any(test, feature = "acceptance-build"))]
+fn configure_acceptance_github_host_command_with(
+    cmd: &mut Command,
+    raw: Option<&OsStr>,
+) -> Result<(), String> {
+    if let Some(base) = acceptance_github_fixture_base(raw)? {
+        cmd.env(ACCEPTANCE_GITHUB_BASE_URL_ENV, base);
+    }
+    Ok(())
+}
+
 fn registration_matches(config: &Path, expected: &[Value]) -> Result<bool, String> {
     if !config.exists() {
         return Ok(false);
@@ -594,6 +611,36 @@ mod tests {
             );
         }
         assert_eq!(acceptance_github_fixture_base(None).unwrap(), None);
+    }
+
+    #[test]
+    fn acceptance_github_fixture_reaches_host_gateway_command_only_when_explicit() {
+        let mut accepted = Command::new("csswitch-gateway");
+        configure_acceptance_github_host_command_with(
+            &mut accepted,
+            Some(OsStr::new("http://127.0.0.1:32123/")),
+        )
+        .unwrap();
+        assert!(accepted.get_envs().any(|(key, value)| {
+            key == ACCEPTANCE_GITHUB_BASE_URL_ENV
+                && value.is_some_and(|value| value == "http://127.0.0.1:32123/")
+        }));
+
+        let mut absent = Command::new("csswitch-gateway");
+        configure_acceptance_github_host_command_with(&mut absent, None).unwrap();
+        assert!(!absent
+            .get_envs()
+            .any(|(key, _)| key == ACCEPTANCE_GITHUB_BASE_URL_ENV));
+
+        let mut rejected = Command::new("csswitch-gateway");
+        assert!(configure_acceptance_github_host_command_with(
+            &mut rejected,
+            Some(OsStr::new("https://github.com/")),
+        )
+        .is_err());
+        assert!(!rejected
+            .get_envs()
+            .any(|(key, _)| key == ACCEPTANCE_GITHUB_BASE_URL_ENV));
     }
 
     #[test]
