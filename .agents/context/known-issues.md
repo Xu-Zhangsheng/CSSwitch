@@ -21,8 +21,10 @@ source gate 为 `PASS`（15/15 suites、15/15 observations、runner exit 0）；
 0.1.25 exact tuple 经递归 G1 validator 取得 `PASS`。后续 `f8ef373` 只记录 source evidence，不能
 改写被构建的 source/artifact identity。该 tuple 的 `B-RUNTIME-01`、`B-CORE-01` 与
 `B-CONTEXT-01` 已在隔离 HOME/data-dir、真实 Science、packaged Gateway、对应 loopback fixture
-与专用 synthetic inputs 下取得有边界的 `PASS`；完整 Provider、Skill、SSH 与
-installed/runtime 仍为 `NOT-RUN`。旧 `06b630b` tuple 的对应 PASS 只保留为历史日期化证据，
+与专用 synthetic inputs 下取得有边界的 `PASS`。同一 tuple 的 `B-PROVIDER-01` 本地严格矩阵也已
+取得有边界的 `PASS`：10 个 case 为 exact App + packaged Gateway，SiliconFlow 仅为 exact packaged
+Gateway direct local mock；真实 provider、Skill、SSH 与 installed/runtime 仍为 `NOT-RUN`。
+旧 `06b630b` tuple 的对应 PASS 只保留为历史日期化证据，
 不能继承给新 artifact。
 
 此前 cold one-click prior Science stop 子阶段的历史 production source candidate 是
@@ -133,6 +135,16 @@ two-project/two-session isolation 共 11 个子门均 `PASS`；Reviewer UI 仍�
 release-ready 均不外推。精确 identity、sub-gate、退出边界与 cleanup closure 见
 [当前 B-CONTEXT 验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-b-context-01.md)。
 
+`9e08924` exact tuple 的 `B-PROVIDER-01` run `provider-9e08924-r1` 在隔离 HOME/TMPDIR、
+deny-egress sandbox、loopback strict fixture 与固定假凭证下完成 11-case 本地矩阵。10 个 case 由
+exact App 启动 packaged Gateway；SiliconFlow 因 production Desktop 的 Gateway env allowlist 不转发
+ambient HTTP proxy，改由同一 exact packaged Gateway 直启执行 hostname-preserving proxy fixture，
+并明确不外推 Desktop 级 E2E。99 个 observation/event、55 个 request、64 个 active socket rows
+全部通过；64 个 owned PID、88 个动态端口与 9 个临时路径最终清零，post-cleanup top closure
+583/583 `OK`。真实 provider/model、账号、配额与服务质量仍为 `NOT-RUN`；精确 scope、identity、
+SiliconFlow 边界与 cleanup 见
+[当前 B-PROVIDER 验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-b-provider-01.md)。
+
 此前 `06b630b` exact tuple 的完整 `B-RUNTIME-01` run `r06b630bb` 在全新隔离 HOME/data-dir、
 deny-egress sandbox、真实 Science 0.1.25 与 loopback fake provider 下完成 normal production
 wiring。56 条事件 0 failure，5/5 provider requests consumed；重开保持同一 Desktop/Gateway
@@ -172,7 +184,7 @@ live provider、Science、SSH、signing 或 release 结论。
 | authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | normal one-click transaction UI outcome `PASS`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；`555d4e8` 仅是 host adapter / bridge 局部历史 source seal，早于当前 transaction caller seam 与后续 HEAD，不能表述为当前完整 caller seal。comprehensive source review 未替代 Skill 专项能力审查；日期化 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object | 同一 `9e08924` G1 exact artifact `PASS`；只证明 bundle identity，不证明 Skill runtime | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)` 只绑定旧 artifact；`9e08924` 六阶段均 `NOT-RUN` | 真实 Skill / domain execution分项 `NOT-RUN` |
-| provider protocol capabilities | source/test/fixture anchors mapped；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | DeepSeek-off basic loopback request shape 5/5 `PASS`；完整 Provider capability matrix `NOT-RUN` | stream/tools/reasoning/error 按 provider/model `NOT-RUN` |
+| provider protocol capabilities | source/test/fixture anchors mapped；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | `B-PROVIDER-01=PASS(scope=exact-artifact-local-mock,mixed-launch-boundary)`：10 个 exact App case 加 1 个 SiliconFlow exact packaged Gateway direct case；99 observations/events、55 strict requests；不外推真实服务 | 真实 provider/model 的 Desktop E2E、配额、计费、服务质量与实际 stream/tools/reasoning/error 仍为 `NOT-RUN` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
 receipt、provider launch receipt 与 network isolation receipt。pre-run manifest SHA-256 为

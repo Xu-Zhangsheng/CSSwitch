@@ -29,8 +29,13 @@ evidence hashes `OK`。同一 tuple 的 `B-CONTEXT-01` run `bcontext-9e08924-r9`
 plan/delegation/fork/restore、Memory/compaction、Reviewer/Specialist local surface/request-shape 与
 two-project/two-session isolation，11 份 observation/event 与 post-cleanup 89/89 evidence hashes
 `OK`。r9 的 UI stop 后没有封存 stop-state snapshot，Desktop 最终由 exact PID SIGTERM 收口，故不把
-正常 App exit 外推给本轮；正常 stop/exit 已由 B-RUNTIME 独立证明。这三项不覆盖本表的
-installed/public release artifact，也不外推完整 Provider、Skill、SSH、签名或 release-ready 状态。
+正常 App exit 外推给本轮；正常 stop/exit 已由 B-RUNTIME 独立证明。同一 tuple 的
+`B-PROVIDER-01` run `provider-9e08924-r1` 又闭合 11 个本地严格 Provider case：10 项由 exact App
+启动 packaged Gateway，SiliconFlow 仅由同一 exact packaged Gateway 直启以保留 hostname-aware
+proxy fixture，明确不写成 Desktop 级 E2E。99 个 observation/event、55 个 fixture request 与
+64 个 active socket rows 全部通过；收口后 64 个 owned PID、88 个动态端口和 9 个临时路径清零，
+583/583 top evidence hashes `OK`。这四项不覆盖本表的 installed/public release artifact，也不外推
+真实 Provider、Skill、SSH、签名或 release-ready 状态。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
