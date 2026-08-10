@@ -540,7 +540,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         .find("let intent = begin_prior_stop_intent")
         .expect("prior Science durable intent must remain on the production path");
     let prior_stop = cold_source[prior_intent..]
-        .find("ScienceHostAdapter::stop")
+        .find("stop_prior_science_with")
         .map(|index| index + prior_intent)
         .expect("prior Science exact stop must remain after durable intent");
     let prior_outcome = cold_source[prior_stop..]
@@ -550,6 +550,12 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     assert!(
         prior_intent < prior_stop && prior_stop < prior_outcome,
         "durable PriorStopIntent must precede the exact stop and typed outcome publication"
+    );
+    assert!(
+        cold_source.contains("struct ColdPriorScienceStopOwner")
+            && cold_source.contains("owner.still_owns(&current, lifecycle.current_generation())")
+            && cold_source.contains("ScienceHostAdapter::execute_stop(&app, request)"),
+        "cold prior Science stop must execute outside AppState and publish only through generation plus full-owner CAS"
     );
     let success_finalize = cold_source
         .rfind("begin_one_click_finalize(")

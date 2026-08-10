@@ -515,7 +515,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             "persist prior Science stop intent"
         )
         stop_outcome_index = one_click["ordered_effects"].index(
-            "stop prior managed Science and persist typed outcome"
+            "claim the exact prior Science generation and full process-local owner under AppState, execute the existing stop/TERM/KILL/wait policy outside AppState, publish only by generation plus full-owner CAS, and persist the typed outcome"
         )
         snapshot_index = one_click["ordered_effects"].index(
             "capture authority snapshot and attach its ticket"
@@ -532,6 +532,10 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         self.assertLess(finalize_index, cleanup_only_index)
         self.assertLess(cleanup_only_index, binding_index)
         one_click_failures = {item["id"]: item for item in one_click["failure_points"]}
+        self.assertEqual(
+            one_click_failures["one-click.prior-stop-owner-cas"]["compensation"],
+            "manual recovery from the retained durable intent; stale publication cannot clear or restart replacement Science",
+        )
         self.assertIn("one-click.post-stop-pre-snapshot", one_click_failures)
         self.assertEqual(
             one_click_failures["one-click.post-snapshot-pre-journal"]["after_effects"],
@@ -546,6 +550,10 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         )
         self.assertIn("one-click.success-finalize", one_click_failures)
         self.assertFalse(any("F5" in gap for gap in one_click["known_gaps"]))
+        self.assertIn(
+            "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::one_click::cold::tests::cold_prior_science_stop_wait_releases_read_model_and_stale_result_preserves_replacement",
+            one_click["characterization_tests"],
+        )
         self.assertTrue(
             {
                 "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::h3_finalize_failures_preserve_replayable_intent",

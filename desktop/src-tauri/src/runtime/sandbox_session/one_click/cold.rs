@@ -12,6 +12,104 @@ pub(in super::super) use compensation::{
     CompensationStepOutcome,
 };
 
+#[derive(Clone)]
+struct ColdPriorScienceStopOwner {
+    generation: u64,
+    runtime: Option<ScienceRuntimeIdentity>,
+    confirmed_stopped: Option<ScienceRuntimeIdentity>,
+    sandbox_child_pid: Option<u32>,
+    sandbox_port: u16,
+    sandbox_url: Option<String>,
+}
+
+impl ColdPriorScienceStopOwner {
+    fn claim(state: &AppState, generation: u64) -> Self {
+        Self {
+            generation,
+            runtime: state.science_runtime.clone(),
+            confirmed_stopped: state.science_confirmed_stopped.clone(),
+            sandbox_child_pid: state.sandbox.as_ref().map(std::process::Child::id),
+            sandbox_port: state.sandbox_port,
+            sandbox_url: state.sandbox_url.clone(),
+        }
+    }
+
+    fn still_owns(&self, state: &AppState, current_generation: u64) -> bool {
+        self.generation == current_generation
+            && self.runtime == state.science_runtime
+            && self.confirmed_stopped == state.science_confirmed_stopped
+            && self.sandbox_child_pid == state.sandbox.as_ref().map(std::process::Child::id)
+            && self.sandbox_port == state.sandbox_port
+            && self.sandbox_url == state.sandbox_url
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn stop_prior_science_with<Claim, Execute>(
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    prior_runtime: &ScienceRuntimeIdentity,
+    prior_port: u16,
+    claim: Claim,
+    execute: Execute,
+) -> crate::runtime::science::ScienceStopOutcome
+where
+    Claim: FnOnce() -> ScienceStopRequest,
+    Execute: FnOnce(ScienceStopRequest) -> (crate::runtime::science::ScienceStopOutcome, bool),
+{
+    let (owner, request) = {
+        let current = lock(state);
+        let owner = ColdPriorScienceStopOwner::claim(&current, lifecycle.current_generation());
+        let request =
+            if owner.runtime.as_ref() == Some(prior_runtime) && owner.sandbox_port == prior_port {
+                Ok(claim())
+            } else {
+                Err(
+                    crate::runtime::science::ScienceStopFailure::request_rejected(
+                        "prior Science stop claim 时 process-local owner 已变化；未执行停止。",
+                    ),
+                )
+            };
+        (owner, request)
+    };
+
+    // The durable PriorStopIntent is already committed by the caller. Keep the
+    // existing stop/TERM/KILL/wait policy, but do not retain AppState while it
+    // runs so status and other read-model consumers remain available.
+    let execution = request.map(execute);
+    let mut current = lock(state);
+    match execution {
+        Err(error) => Err(error),
+        Ok((_outcome, _clear_tracking))
+            if !owner.still_owns(&current, lifecycle.current_generation()) =>
+        {
+            Err(
+                crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
+                    "prior Science stop 完成时 process-local owner 已变化；已保留 replacement runtime。",
+                ),
+            )
+        }
+        Ok((outcome, clear_tracking)) => {
+            if clear_tracking {
+                crate::runtime::system::kill_child(&mut current.sandbox);
+                current.sandbox_url = None;
+            }
+            match &outcome {
+                Ok(verified) => {
+                    current.science_runtime = None;
+                    current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
+                }
+                Err(error) if error.confirmed_runtime() == Some(prior_runtime) => {
+                    current.science_runtime = None;
+                    current.science_confirmed_stopped = error.confirmed_runtime().cloned();
+                }
+                Err(_) => {}
+            }
+            outcome
+        }
+    }
+}
+
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(super) fn run_cold_one_click<R: Runtime>(
     app: tauri::AppHandle<R>,
@@ -94,36 +192,29 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             recipe,
         )
         .map_err(|error| typed_one_click_err(OneClickFailureKind::ScienceStop, error))?;
-        let stop_result = {
-            let mut current = lock(&state);
-            let AppState {
-                sandbox,
-                sandbox_url,
-                ..
-            } = &mut *current;
-            let result = ScienceHostAdapter::stop(
-                &app,
-                sandbox,
-                sandbox_url,
+        let stop_result = stop_prior_science_with(
+            &state,
+            lifecycle,
+            &prior.runtime,
+            prior.port,
+            || {
                 ScienceStopRequest::exact(
                     &prior.runtime,
                     ScienceStopOwnershipReceipt::from_managed_launch(&prior.launch_token),
-                ),
-            )
-            .and_then(|verified| verified.require_exact_stop_of(&prior.runtime));
-            if let Ok(verified) = &result {
-                current.science_runtime = None;
-                current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-            }
-            result
-        };
+                )
+            },
+            |request| {
+                let (outcome, clear_tracking) =
+                    ScienceHostAdapter::execute_stop(&app, request).into_parts();
+                (
+                    outcome.and_then(|verified| verified.require_exact_stop_of(&prior.runtime)),
+                    clear_tracking,
+                )
+            },
+        );
         let durable_outcome = match &stop_result {
             Ok(_) => config::RuntimePriorStopOutcome::ExactStopped,
             Err(error) if error.confirmed_runtime() == Some(&prior.runtime) => {
-                let confirmed_runtime = error.confirmed_runtime().cloned();
-                let mut current = lock(&state);
-                current.science_runtime = None;
-                current.science_confirmed_stopped = confirmed_runtime;
                 config::RuntimePriorStopOutcome::ExactStopped
             }
             Err(error) => match error.kind() {
@@ -619,5 +710,137 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             failure,
             reconcile_disposition,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir(std::path::PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "csswitch-cold-prior-stop-{label}-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn cold_prior_science_stop_wait_releases_read_model_and_stale_result_preserves_replacement() {
+        let temp = TestDir::new("owner-cas");
+        let prior_binary = temp.0.join("prior-science");
+        let replacement_binary = temp.0.join("replacement-science");
+        fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+        fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior =
+            crate::runtime::science::test_runtime_identity(prior_binary.canonicalize().unwrap());
+        let replacement = crate::runtime::science::test_runtime_identity(
+            replacement_binary.canonicalize().unwrap(),
+        );
+
+        for (case, replace_identity, bump_generation) in [
+            ("generation-only", false, true),
+            ("identity-only", true, false),
+        ] {
+            let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+            {
+                let mut current = lock(&state);
+                current.science_runtime = Some(prior.clone());
+                current.sandbox_port = 18765;
+                current.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+            }
+            let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+            let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+            let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+            let worker_state = state.clone();
+            let worker_lifecycle = lifecycle.clone();
+            let claim_prior = prior.clone();
+            let verified_prior = prior.clone();
+            let worker = std::thread::spawn(move || {
+                stop_prior_science_with(
+                    &worker_state,
+                    worker_lifecycle.as_ref(),
+                    &claim_prior,
+                    18765,
+                    || ScienceStopRequest::recover(Some(&claim_prior)),
+                    move |_| {
+                        stop_started_tx.send(()).unwrap();
+                        release_stop_rx.recv().unwrap();
+                        (
+                            Ok(crate::runtime::science::VerifiedScienceStop {
+                                runtime: Some(verified_prior),
+                                ownership_was_proven: true,
+                            }),
+                            true,
+                        )
+                    },
+                )
+            });
+
+            stop_started_rx.recv().unwrap();
+            {
+                let mut read_model = state
+                    .try_lock()
+                    .expect("cold prior Science stop wait must not retain AppState");
+                assert_eq!(read_model.science_runtime.as_ref(), Some(&prior), "{case}");
+                if replace_identity {
+                    read_model.science_runtime = Some(replacement.clone());
+                    read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+                }
+            }
+            if bump_generation {
+                lifecycle.bump_generation();
+            }
+            release_stop_tx.send(()).unwrap();
+
+            let outcome = worker.join().unwrap();
+            assert!(
+                outcome
+                    .as_ref()
+                    .is_err_and(|error| error.to_string().contains("process-local owner 已变化")),
+                "{case}: {outcome:?}"
+            );
+            let current = lock(&state);
+            assert_eq!(
+                current.science_runtime.as_ref(),
+                Some(if replace_identity {
+                    &replacement
+                } else {
+                    &prior
+                }),
+                "{case}"
+            );
+            assert_eq!(
+                current.sandbox_url.as_deref(),
+                Some(if replace_identity {
+                    "http://127.0.0.1:18765/replacement"
+                } else {
+                    "http://127.0.0.1:18765/prior"
+                }),
+                "{case}"
+            );
+        }
     }
 }

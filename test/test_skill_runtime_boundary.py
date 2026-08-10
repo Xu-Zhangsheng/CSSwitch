@@ -987,8 +987,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "let prior_science_for_compensation", prior_stop_start
         )
         prior_stop = coordinator[prior_stop_start:prior_stop_end]
-        self.assertEqual(prior_stop.count("ScienceHostAdapter::stop("), 1)
-        stop_offset = coordinator.index("ScienceHostAdapter::stop(", prior_stop_start)
+        self.assertEqual(prior_stop.count("stop_prior_science_with("), 1)
+        self.assertEqual(prior_stop.count("ScienceHostAdapter::execute_stop("), 1)
+        stop_offset = coordinator.index("stop_prior_science_with(", prior_stop_start)
         capture_offset = coordinator.index(
             "capture_authority_after_science_quiesce(", prior_stop_end
         )
