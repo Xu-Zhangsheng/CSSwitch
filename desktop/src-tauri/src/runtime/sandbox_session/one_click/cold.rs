@@ -643,6 +643,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AppState;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};

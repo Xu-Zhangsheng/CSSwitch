@@ -4,12 +4,10 @@ use serde_json::json;
 use tauri::State;
 
 use crate::runtime::profile::{
-    acknowledge_pending_notice_inner, build_get_config, clear_profile_key_inner,
-    create_profile_with_catalog_inner, delete_profile_inner, persist_profile_candidate_inner,
-    update_profile_metadata_inner, CatalogEdit, ConnectionEdit,
+    acknowledge_pending_notice_inner, build_get_config, build_preset_sync_preview,
+    clear_profile_key_inner, create_profile_with_catalog_inner, delete_profile_inner,
+    persist_profile_candidate_inner, update_profile_metadata_inner, CatalogEdit, ConnectionEdit,
 };
-#[cfg(test)]
-use crate::runtime::profile::build_preset_sync_preview;
 use crate::runtime::profile_switch::scratch_validate_candidate;
 use crate::runtime::provider::{reject_openai_custom_anthropic_base, resolve_launch_plan};
 use crate::{
@@ -39,7 +37,7 @@ fn catalog_edit_from_parts(
     Ok(catalog_edit)
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
 fn require_preview_fingerprint(preview: &serde_json::Value, expected: &str) -> Result<(), String> {
     if preview
         .get("preview_fingerprint")
@@ -70,7 +68,7 @@ pub(crate) fn acknowledge_pending_notice(
     acknowledge_pending_notice_inner(&config::default_dir(), &expected_notice_id)
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
 fn apply_profile_preset_sync_inner_cmd(
     lifecycle: &lifecycle::Lifecycle,
     dir: &Path,
@@ -84,7 +82,7 @@ fn apply_profile_preset_sync_inner_cmd(
         .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
 fn apply_profile_preset_sync_in_dir(
     dir: &Path,
     id: &str,
