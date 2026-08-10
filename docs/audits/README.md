@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [Downgrade cleanup stop owner（2026-08-10）](2026-08-10-downgrade-stop-owner.md)：terminal downgrade 的 process-local owner、锁外 wait、replacement preservation、独立审查与 exact-SHA source gate closure。
 - [R3 Codex mutation stop owner（2026-08-06）](2026-08-06-r3-codex-mutation-stop-owner.md)：Codex 共享 mutation 的 process-local owner、双窗口 CAS、独立复审与 exact-SHA source gate closure。
 - [R2 set_settings stop owner（2026-08-06）](2026-08-06-r2-set-settings-stop-owner.md)：`set_settings` 的 process-local owner / lock-free wait / CAS、双漂移回归、独立审查与 exact-SHA source gate closure。
 - [R1 set_mode stop owner（2026-08-06）](2026-08-06-r1-set-mode-stop-owner.md)：`set_mode` 的 process-local owner / lock-free wait / CAS、双漂移回归、独立复审与 exact-SHA source gate closure。
