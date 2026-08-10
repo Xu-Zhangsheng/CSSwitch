@@ -19,12 +19,13 @@
 source gate 为 `PASS`（15/15 suites、15/15 observations、runner exit 0）；随后由该 SHA 以
 `acceptance-build` 全新生成的 `CSSwitch Test.app`、packaged Rust Gateway 与 Claude Science
 0.1.25 exact tuple 经递归 G1 validator 取得 `PASS`。后续 `f8ef373` 只记录 source evidence，不能
-改写被构建的 source/artifact identity。该 tuple 的 `B-RUNTIME-01` 与 `B-CORE-01` 已在隔离
-HOME/data-dir、真实 Science、packaged Gateway、loopback fake provider 与专用 synthetic Git fixture
-下取得有边界的 `PASS`；`B-CONTEXT-01`、完整 Provider、Skill、SSH 与 installed/runtime 仍为
-`NOT-RUN`。旧 `06b630b` tuple 的对应 PASS 只保留为历史日期化证据，不能继承给新 artifact。
+改写被构建的 source/artifact identity。该 tuple 的 `B-RUNTIME-01`、`B-CORE-01` 与
+`B-CONTEXT-01` 已在隔离 HOME/data-dir、真实 Science、packaged Gateway、对应 loopback fixture
+与专用 synthetic inputs 下取得有边界的 `PASS`；完整 Provider、Skill、SSH 与
+installed/runtime 仍为 `NOT-RUN`。旧 `06b630b` tuple 的对应 PASS 只保留为历史日期化证据，
+不能继承给新 artifact。
 
-此前 cold one-click prior Science stop 子阶段的已验收 production source candidate 是
+此前 cold one-click prior Science stop 子阶段的历史 production source candidate 是
 `next@5cf3eb1670eec6dc58d5d1d873ca3834f9a76623`。cold one-click prior Science stop 保留
 credential-free durable `PriorStopIntent` → exact stop → typed outcome 顺序，在 intent 后于
 `AppState` 下冻结 generation、runtime、confirmed-stopped proof、child PID、port 与 URL，锁外执行
@@ -68,7 +69,7 @@ SHA-256 为 `23cc8300302f05d26bcfc758989ad75d961866ded00507a5307a265b49ffed8f`�
 `40a2b9a` production source，不建立新的 artifact、installed、live、签名或 release 结论；
 后续 evidence-only 文档提交也不能改写 tested source identity。
 
-当前最新已验收的 Gateway spawn production source closure 是
+上一份 Gateway spawn 子阶段的历史 production source closure 是
 `next@06b630bb3e3fb0d63425bf48d1ffc2d3613fd992`。Gateway spawn 在 `AppState` 下只冻结
 generation、空 slot、secret、完整 candidate owner 与 launch recipe；candidate log、命令与环境构造、
 Skill bridge 配置 staging、`Command::spawn()` 和 health poll 均在锁外执行，再按 generation + 完整
@@ -120,6 +121,18 @@ fixture、临时 driver/cache/stage 最终清零。16 条事件严格单调且�
 Provider、Skill / MCP、SSH、installed、签名和 release 均不外推。精确 identity、sub-gate 与 cleanup
 closure 见[当前 B-CORE 验收](../../docs/evidence/investigations/2026-08-10-claude-science-0.1.25-b-core-01.md)。
 
+`9e08924` exact tuple 的 `B-CONTEXT-01` run `bcontext-9e08924-r9` 在隔离 HOME/data-dir、真实
+Science 0.1.25、packaged Gateway、loopback fixture 与合成 project/session 下完成。plan approve/reject、
+delegation、fork/restore、Memory save/search/delete、compaction、Reviewer/Specialist local surface 与
+two-project/two-session isolation 共 11 个子门均 `PASS`；Reviewer UI 仍为 `Inconclusive`，服务结果
+保持 `UNVERIFIED`。159 个脱敏 request envelope 的四项跨域计数均为 0；exact owned process 的
+26 条 socket rows 全部 loopback，四个 PID、五个端口、runtime 与临时 driver/cache 最终清零。
+11 份 observation / event 与 89 项 evidence hash 全部复算 `OK`。本轮没有读取账号数据库、真实用户
+文件或凭证；UI stop 后未封存 stop-state snapshot，Desktop 由 exact PID SIGTERM 收口，因此不把
+正常 App exit 写作 r9 证据。完整 Provider、Skill/MCP、SSH、installed、升级/rollback、签名和
+release-ready 均不外推。精确 identity、sub-gate、退出边界与 cleanup closure 见
+[当前 B-CONTEXT 验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-b-context-01.md)。
+
 此前 `06b630b` exact tuple 的完整 `B-RUNTIME-01` run `r06b630bb` 在全新隔离 HOME/data-dir、
 deny-egress sandbox、真实 Science 0.1.25 与 loopback fake provider 下完成 normal production
 wiring。56 条事件 0 failure，5/5 provider requests consumed；重开保持同一 Desktop/Gateway
@@ -154,7 +167,7 @@ live provider、Science、SSH、signing 或 release 结论。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `9e08924` comprehensive exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `9e08924` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01=PASS`；`B-CORE-01=PASS` 限定闭合 synthetic project/file、permission、artifact lineage 与 annotation；B-CONTEXT 不外推 | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `9e08924` comprehensive exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `9e08924` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01=PASS`；`B-CORE-01=PASS` 限定闭合 synthetic project/file、permission、artifact lineage 与 annotation；`B-CONTEXT-01=PASS(scope=isolated-request-shape)` 限定闭合 plan/delegation/fork/restore、Memory/compaction、Reviewer/Specialist local surface/request-shape 与两域隔离 | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | normal one-click / stop / restart lifecycle `PASS`；replacement/race/crash 仍由 source fixture 证明 | installed normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | normal one-click transaction UI outcome `PASS`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`9e08924` canonical 15-suite `PASS` | 同一 `9e08924` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
