@@ -28,6 +28,21 @@ Memory/compaction、Reviewer/Specialist local surface 与跨 project/session 隔
 证据，不能改写被构建或运行的 source/artifact identity。
 
 当前最新已验收的 production source candidate 是
+`next@5cf3eb1670eec6dc58d5d1d873ca3834f9a76623`。cold one-click prior Science stop 保留
+credential-free durable `PriorStopIntent` → exact stop → typed outcome 顺序，在 intent 后于
+`AppState` 下冻结 generation、runtime、confirmed-stopped proof、child PID、port 与 URL，锁外执行
+既有 stop/TERM/KILL/wait，再按 generation + full owner CAS 发布。stale publication 保留
+replacement Science、持久化 `Unknown` 并在 authority snapshot 前失败。本窗口 code-grounded review
+为 `PASS`（`clean-context=NO`，`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`）。`424800d` 的受限 sandbox run
+`03cbbe30677f17594580c72fd369d227` 是 sealed `FAIL`（runner exit 12），多个 loopback/process fixture
+同时受阻；允许本地 fixture 后的 run `59734c1198bd9b8b291bf77a5eabc8d9` 仍是 sealed `FAIL`
+（14/15），暴露新增测试误用了额外 environment API。修复后的 `5cf3eb1` canonical run
+`155365a14b55bcec89090a29d481bb6c` 为 15/15 suites、15/15 observations、runner exit 0；completion
+seal SHA-256 为 `53051235eb8ae0720ffbe5642a6977012cb06904b5087e80e5678c3b0077da35`，source snapshot
+manifest SHA-256 为 `98cbbaad757af123ad7236de216d6963cd13bf67a7fbb972b59b0028bad9d818`。该 PASS
+只证明 production source，不建立新的 artifact、installed、live、签名或 release 结论。
+
+上一份已验收的 production source candidate 是
 `next@b5141a9bab393cbed5e180d3e47e1d4ae300f290`。terminal downgrade cleanup 已复用
 process-local Science owner claim、锁外 stop/wait 与 generation + full identity CAS；陈旧结果
 保留 replacement Science，仍按原 terminal policy 停 tracked Gateway，并在 export、backup 或 v2
@@ -107,7 +122,7 @@ producing frame 以及 annotation 发送前持久 DB row 与下一消息传递�
 
 ## 当前源码问题
 
-- **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings`、native exit 与 downgrade cleanup 已使用 process-local owner claim、锁外 wait 与 identity CAS；transaction-scoped one-click/history/recovery/compensation stop 仍保留各自事务与恢复时序，不能从 terminal cleanup 的闭合直接外推。当前 owner 与剩余复核边界见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
+- **Sibling stop owner / wait 边界**：`stop_all`、切换 official 的 `set_mode`、teardown `set_settings`、native exit、downgrade cleanup 与 cold one-click prior stop 已使用各自的 process-local owner claim、锁外 wait 与 identity CAS；cold 路径额外保留 durable prior-stop intent/outcome。history、DB recovery、managed Science DB restart、compensation 与 replay 仍保留各自事务与恢复时序，不能从已闭合 caller 直接外推。当前 owner 与剩余复核边界见[运行时状态与事务](../../docs/architecture/runtime-state-transactions.md)。
 - **Gateway 锁边界**：`06b630b` 已把 candidate log、命令与环境构造、Skill bridge 配置 staging、spawn 和 health poll 全部移出 `AppState`；锁内 reservation 与 generation + full candidate-owner CAS 守护接受，replacement 不被覆盖，不确定 child 由独立 registry 持有，destructive caller 对 typed uncertain stop fail closed。该 exact SHA 的 formal independent clean-context review 为 `PASS`（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`），canonical 15-suite 为 15/15 `PASS`。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
 - **Science adoption ledger**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
@@ -119,7 +134,7 @@ producing frame 以及 annotation 发送前持久 DB row 与下一消息传递�
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
 | 一键入口、Gateway / Science 启动与 finalize | `06b630b` exact-SHA review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 已闭合；formal independent clean-context review `PASS`（`0/0/0/0`） | `06b630b` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | 同一 `06b630b` tuple 的 `B-RUNTIME-01=PASS`；`B-CORE-01=PASS` 限定闭合合成 project / 文件、permission、artifact lineage 与 annotation 持久状态；`B-CONTEXT-01=PASS(scope=isolated-request-shape)` 限定闭合上下文 local surface/request shape 与 project/session 隔离 | 真实 provider/账号分项 `NOT-RUN` |
-| runtime mutation 与 stop ownership | `b5141a9` exact-SHA review + canonical 15-suite `PASS`；stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 的 process-local owner / 锁外 wait / CAS 已闭合；transaction-scoped stop 仍须逐项重审 | `9cc0d15` exact artifact 已由旧 `B-RUNTIME-01` 绑定；`b5141a9` 专项 artifact gate `NOT-RUN` | 旧 artifact 的 normal stop/restart observation `PASS`；`b5141a9` replacement/race 与 downgrade 不由旧 live 外推 | normal stop `NOT-RUN` |
+| runtime mutation 与 stop ownership | `5cf3eb1` exact-SHA code-grounded review + canonical 15-suite `PASS`；stop_all、set_mode、set_settings、native exit、downgrade cleanup 与 cold one-click prior stop 的 process-local owner / 锁外 wait / CAS 已闭合；history、DB recovery、managed Science DB restart、compensation 与 replay 仍须逐项重审 | `9cc0d15` exact artifact 已由旧 `B-RUNTIME-01` 绑定；`5cf3eb1` 专项 artifact gate `NOT-RUN` | 旧 artifact 的 normal stop/restart observation `PASS`；`5cf3eb1` replacement/race 与 cold prior-stop CAS 不由旧 live 外推 | normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | source/compensation/replay fixture anchors mapped；fresh source seal 待执行 | `9cc0d15` exact artifact 已由 `B-RUNTIME-01` 绑定；本行专项 artifact gate 未单独执行 | normal binding/finalize observation `PASS`；crash/compensation/replay 不由 live 外推 | happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | source anchors mapped；fresh source seal 待执行 | `NOT-RUN` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | current owner/seam anchors mapped；最新 current source `555d4e8` canonical 15-suite `PASS`。本轮 formal review 只覆盖 Gateway 旧清理，Science host adapter / Skill host bridge 专项独立审查仍为 `NOT-RUN`。日期化调查记录的 synthetic `c4a1159` 只有 13/13，且当前 repo 无法解析该 object，不另行构成 current production source PASS | `c4a1159` exact artifact 只作为当次调查的日期化 identity；`555d4e8` current exact artifact `NOT-RUN` | 日期化 `B-SKILL-01=INCONCLUSIVE(reason=safety-stop)`：Science 在对话前尝试非预期外部 destination；六阶段均 `NOT-RUN` | 真实 Skill / domain execution 分项 `NOT-RUN` |
