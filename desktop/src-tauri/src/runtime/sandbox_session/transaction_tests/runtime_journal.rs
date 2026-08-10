@@ -1483,6 +1483,17 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
     }
     let converged = config::load_from(&dir).unwrap();
     assert!(converged.runtime_compensation.is_none());
+    assert!(
+        !replay_interrupted_one_click_compensation(
+            app.handle(),
+            &state,
+            &lifecycle,
+            None,
+            &converged,
+        )
+        .unwrap(),
+        "fresh replay after convergence must be an idempotent no-op"
+    );
     assert_eq!(converged.runtime_transaction, initial.runtime_transaction);
     assert_eq!(std::fs::read(&authority_file).unwrap(), b"before\n");
     assert_eq!(

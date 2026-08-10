@@ -1195,6 +1195,8 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::o1_e3_compensation_replay_has_one_durable_pre_auth_owner",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::o1_e4_history_full_snapshot_restore_has_one_durable_effect_owner",
         "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::transaction_scoped_science_stop_owner_covers_every_durable_boundary",
+        "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publication",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::launch_failure_tests::script_failure_preserves_stable_kind_and_exit_code",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::cached_runtime_symlink_is_never_offered_or_executed",
         "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::first_http_url_takes_only_first_valid_url",

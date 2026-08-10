@@ -53,6 +53,8 @@ use one_click::{
     test_begin_replayable_compensation, test_compensate_one_click_failure,
     write_one_click_checkpoint, OneClickJournalProgress, OneClickTransactionIdentity,
 };
+#[cfg(test)]
+use one_click::{execute_transaction_science_stop_with, TransactionScienceStopBoundary};
 #[allow(unused_imports)]
 pub(crate) use one_click::{
     force_restart_science_for_active, interrupted_compensation_requires_pre_auth_replay,

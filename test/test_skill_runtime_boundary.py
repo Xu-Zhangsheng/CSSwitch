@@ -479,7 +479,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertNotIn("replay_interrupted_one_click_finalize", one_click_command)
         recovery_projection = one_click_source.split(
             "fn typed_interrupted_gateway_recovery_error", 1
-        )[1].split("fn stop_sandbox_state", 1)[0]
+        )[1].split("pub(super) enum TransactionScienceStopBoundary", 1)[0]
         self.assertIn("error.kind()", recovery_projection)
         self.assertIn("error.recovery()", recovery_projection)
         self.assertRegex(
@@ -602,9 +602,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ScienceStopRequest::recover", session)
         self.assertIn("ScienceStopOwnershipReceipt::from_managed_launch", session)
         self.assertIn("require_exact_stop_of", science_contracts)
-        self.assertGreaterEqual(session.count("require_exact_stop_of"), 5)
-        self.assertGreaterEqual(history_recovery.count("require_exact_stop_of"), 1)
-        self.assertIn("verified.confirmed_runtime().cloned()", session)
+        self.assertIn("fn execute_transaction_science_stop_with", session)
+        self.assertIn(
+            "outcome.and_then(|verified| verified.require_exact_stop_of(expected_runtime))",
+            session,
+        )
+        self.assertIn("Ok(verified) => verified.confirmed_runtime()", session)
+        self.assertIn("current.science_confirmed_stopped = Some(confirmed_runtime.clone())", session)
         force_restart = session.split(
             "pub(crate) fn force_restart_science_for_active", 1
         )[1].split("fn typed_one_click_err", 1)[0]
@@ -613,9 +617,13 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )[1]
         for recovery_caller in (force_restart, history_restore):
             self.assertIn("ScienceStopRequest::exact", recovery_caller)
-            self.assertIn("require_exact_stop_of", recovery_caller)
-            self.assertIn("confirmed_runtime().cloned()", recovery_caller)
-            self.assertNotIn("stop_sandbox_state", recovery_caller)
+            self.assertIn("execute_transaction_science_stop_with", recovery_caller)
+        self.assertIn(
+            "TransactionScienceStopBoundary::ProfileSwitchRollback", force_restart
+        )
+        self.assertIn(
+            "TransactionScienceStopBoundary::HistoryRecoveryPriorStop", history_restore
+        )
         self.assertIn("HistoryRecoveryScienceQuiescence", session)
         self.assertIn("HistoryRecoveryScienceQuiescence", history_restore)
         self.assertIn("ExactStopped(expected)", history_restore)
@@ -624,8 +632,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ScienceHostAdapter::probe_cached", history_restore)
         self.assertIn("observed != SandboxScienceState::Stopped", history_restore)
         self.assertIn("observed_runtime.is_some()", history_restore)
+        self.assertIn("session.science_quiescence =", history_restore)
         self.assertIn(
-            "session.science_quiescence =\n                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime.clone())",
+            "crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime.clone())",
             history_restore,
         )
         self.assertIn("remembered_runtime_was_present", session)
@@ -670,10 +679,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         for typed_publisher in (
             runtime_command_module("lifecycle"),
             runtime_command_module("one_click"),
-            sandbox_session_one_click_source(),
             codex,
         ):
             self.assertNotIn("science_confirmed_stopped = Some(", typed_publisher)
+        self.assertEqual(session.count("science_confirmed_stopped = Some("), 1)
         self.assertNotIn("stop_sandbox_with_launch_token", science)
         stop_contract = science_lifecycle.split(
             "pub(crate) fn stop_sandbox", 1

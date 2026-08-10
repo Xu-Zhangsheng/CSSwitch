@@ -258,7 +258,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let gateway_projection = source
         .split("fn typed_interrupted_gateway_recovery_error")
         .nth(1)
-        .and_then(|tail| tail.split("fn stop_sandbox_state").next())
+        .and_then(|tail| {
+            tail.split("pub(super) enum TransactionScienceStopBoundary")
+                .next()
+        })
         .expect("interrupted Gateway runtime projection must remain discoverable");
     assert!(
         gateway_projection.contains("error.kind()")
@@ -552,8 +555,10 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "durable PriorStopIntent must precede the exact stop and typed outcome publication"
     );
     assert!(
-        cold_source.contains("struct ColdPriorScienceStopOwner")
-            && cold_source.contains("owner.still_owns(&current, lifecycle.current_generation())")
+        source.contains("struct TransactionScienceStopOwner")
+            && source.contains("owner.still_owns(&current, lifecycle.current_generation())")
+            && source.contains("fn execute_transaction_science_stop_with")
+            && cold_source.contains("TransactionScienceStopBoundary::ColdPriorStop")
             && cold_source.contains("ScienceHostAdapter::execute_stop(&app, request)"),
         "cold prior Science stop must execute outside AppState and publish only through generation plus full-owner CAS"
     );
@@ -710,8 +715,6 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         .expect("cold one-click coordinator must remain module-level");
     let science_phase = top_level(&science_phase_file, "run_managed_science_launch_phase")
         .expect("managed Science launch phase must remain module-level");
-    let recovery_restart = top_level(&file, "restart_managed_science_with_budget")
-        .expect("DB recovery restart must remain a module-level bounded helper");
     let durable_recovery_restart = top_level(&file, "restart_science_identity_with_budget")
         .expect("fresh-process compensation must share the bounded Science restart owner");
     assert!(
@@ -873,7 +876,6 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "the managed Science phase must use the typed ScienceHostAdapter instead of interpreting shell process methods"
     );
     let mut recovery_restart_flow = FlowFacts::default();
-    recovery_restart_flow.visit_item_fn(recovery_restart);
     recovery_restart_flow.visit_item_fn(durable_recovery_restart);
     for required in [
         "spawn_launch",
@@ -1076,6 +1078,160 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             .count(),
         1,
         "all post-snapshot AST must contain exactly one compensation call, solely in Err"
+    );
+}
+
+#[test]
+fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
+    let owner_source = include_str!("../one_click.rs");
+    let cold_source = include_str!("../one_click/cold.rs");
+    let science_phase_source = include_str!("../one_click/cold/science_phase.rs");
+    let compensation_source = include_str!("../one_click/cold/compensation.rs");
+    let replay_source = include_str!("../one_click/compensation_replay.rs");
+    let history_source = include_str!("../history_recovery.rs");
+    let runtime_journal_source = include_str!("runtime_journal.rs");
+
+    let owner = owner_source
+        .split("pub(super) fn execute_transaction_science_stop_with")
+        .nth(1)
+        .and_then(|tail| tail.split("fn open_science_surface").next())
+        .expect("transaction-scoped Science stop owner must remain discoverable");
+    for field in [
+        "generation: u64",
+        "runtime: Option<ScienceRuntimeIdentity>",
+        "confirmed_stopped: Option<ScienceRuntimeIdentity>",
+        "sandbox_child_pid: Option<u32>",
+        "sandbox_port: u16",
+        "sandbox_url: Option<String>",
+    ] {
+        assert!(owner_source.contains(field), "stop owner lost {field}");
+    }
+    let freeze = owner
+        .find("let (owner, request)")
+        .expect("owner/request freeze must remain explicit");
+    let execute = owner
+        .find("let execution = request.map")
+        .expect("stop execution must remain explicit");
+    let publish = owner
+        .find("let mut current = lock(state)")
+        .expect("CAS publication must reacquire AppState");
+    assert!(
+        freeze < execute && execute < publish,
+        "the exact stop effect must remain between the two AppState critical sections"
+    );
+    assert!(
+        owner.contains("};\n    crate::runtime::system::kill_child(&mut stopped_child);"),
+        "tracked-child KILL/wait must run only after the CAS publication lock is released"
+    );
+    assert!(
+        owner.contains("owner.still_owns(&current, lifecycle.current_generation())")
+            && owner.contains("verified.require_exact_stop_of(expected_runtime)")
+            && owner.contains("已保留 replacement runtime"),
+        "publication must require generation plus full owner identity and exact stop proof"
+    );
+    assert!(!owner_source.contains("fn stop_sandbox_state"));
+    assert!(!cold_source.contains("ColdPriorScienceStopOwner"));
+    assert!(!owner_source.contains("fn restart_managed_science_with_budget"));
+
+    let profile_rollback = owner_source
+        .split("pub(crate) fn force_restart_science_for_active")
+        .nth(1)
+        .and_then(|tail| tail.split("fn typed_one_click_err").next())
+        .expect("profile-switch rollback stop boundary must remain discoverable");
+    let history_prior_stop = history_source
+        .split("pub(crate) fn restore_history_choice_entry")
+        .nth(1)
+        .expect("history prior-stop boundary must remain discoverable");
+    let live_compensation = compensation_source
+        .split("fn compensate_one_click_failure")
+        .nth(1)
+        .expect("live compensation stop boundary must remain discoverable");
+    let fresh_replay = replay_source
+        .split("fn replay_science_cleanup")
+        .nth(1)
+        .and_then(|tail| tail.split("fn replay_ssh_cleanup").next())
+        .expect("fresh compensation replay stop boundary must remain discoverable");
+    for (name, source, boundary) in [
+        (
+            "managed DB restart",
+            science_phase_source,
+            "ManagedDbRestart",
+        ),
+        (
+            "profile-switch rollback",
+            profile_rollback,
+            "ProfileSwitchRollback",
+        ),
+        (
+            "history recovery prior stop",
+            history_prior_stop,
+            "HistoryRecoveryPriorStop",
+        ),
+        (
+            "live compensation cleanup",
+            live_compensation,
+            "LiveCompensationCleanup",
+        ),
+        (
+            "fresh compensation replay cleanup",
+            fresh_replay,
+            "CompensationReplayCleanup",
+        ),
+    ] {
+        assert!(
+            source.contains("execute_transaction_science_stop_with")
+                && source.contains(&format!("TransactionScienceStopBoundary::{boundary}"))
+                && source.contains("ScienceStopRequest::exact"),
+            "{name} must freeze an exact request and use the shared owner/wait/CAS boundary"
+        );
+    }
+
+    let history_intent = history_prior_stop
+        .find("begin_history_transaction")
+        .expect("history stop intent must be durable");
+    let history_effect = history_prior_stop
+        .find("execute_transaction_science_stop_with")
+        .expect("history exact stop effect must exist");
+    let history_outcome = history_prior_stop
+        .find("publish_stop_outcome")
+        .expect("history stop outcome must be durable");
+    assert!(history_intent < history_effect && history_effect < history_outcome);
+
+    let live_intent = live_compensation
+        .find("persist_compensation_step_intent")
+        .expect("live compensation step intent must be durable");
+    let live_effect = live_compensation
+        .find("TransactionScienceStopBoundary::LiveCompensationCleanup")
+        .expect("live compensation cleanup effect must exist");
+    let live_outcome = live_compensation
+        .find("persist_compensation_step_outcome")
+        .expect("live compensation step outcome must be durable");
+    assert!(live_intent < live_effect && live_effect < live_outcome);
+
+    let replay_owner = replay_source
+        .split("fn replay_interrupted_one_click_compensation")
+        .nth(1)
+        .and_then(|tail| tail.split("fn validate_replay_manifest").next())
+        .expect("fresh replay owner must remain discoverable");
+    assert!(
+        replay_owner
+            .find("begin_one_click_compensation_step")
+            .unwrap()
+            < replay_owner.find("replay_science_cleanup").unwrap()
+            && replay_owner.find("replay_science_cleanup").unwrap()
+                < replay_owner
+                    .find("finish_one_click_compensation_step")
+                    .unwrap(),
+        "fresh replay must retain durable step intent -> effect -> outcome order"
+    );
+    assert!(
+        runtime_journal_source
+            .contains("fixture must crash after authority effect but before durable outcome")
+            && runtime_journal_source
+                .contains("o1_e3_fresh_process_replays_durable_compensation_to_convergence")
+            && runtime_journal_source
+                .contains("fresh replay after convergence must be an idempotent no-op"),
+        "compensation/replay crash and idempotence fixtures must remain live"
     );
 }
 

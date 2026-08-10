@@ -2,13 +2,14 @@ use super::{
     begin_one_click_compensation, begin_one_click_compensation_step, begin_one_click_finalize,
     begin_prior_stop_intent, cleanup_tombstone_path, clear_one_click_transaction,
     commit_healthy_reopen_binding, commit_runtime_binding, complete_one_click_finalize,
-    finalize_registered_authority_cleanup, finish_one_click_authority_restore_step,
-    finish_one_click_compensation, finish_one_click_compensation_step,
-    gateway_model_catalog_timeout_ms, healthy_reopen_transaction_matches, one_click_phase_exposure,
-    parse_pending_cleanup_manifest, prepare_registered_authority_cleanup,
-    prevalidate_one_click_system_ssh, publish_prior_stop_outcome,
-    replay_interrupted_one_click_compensation, resolve_gateway_terminal_handoff,
-    resolve_profile_switch_handoff, retry_pending_authority_cleanup, science_health_control_error,
+    execute_transaction_science_stop_with, finalize_registered_authority_cleanup,
+    finish_one_click_authority_restore_step, finish_one_click_compensation,
+    finish_one_click_compensation_step, gateway_model_catalog_timeout_ms,
+    healthy_reopen_transaction_matches, one_click_phase_exposure, parse_pending_cleanup_manifest,
+    prepare_registered_authority_cleanup, prevalidate_one_click_system_ssh,
+    publish_prior_stop_outcome, replay_interrupted_one_click_compensation,
+    resolve_gateway_terminal_handoff, resolve_profile_switch_handoff,
+    retry_pending_authority_cleanup, science_health_control_error,
     test_arm_authority_cleanup_parent_sync_failure, test_arm_authority_snapshot_capture_failure,
     test_arm_authority_snapshot_cleanup_fault, test_arm_authority_snapshot_clone_errno,
     test_arm_authority_snapshot_completion_sync_failure,
@@ -20,7 +21,7 @@ use super::{
     AuthorityCleanupPhase, AuthorityCopyBudget, AuthoritySnapshotCategory, AuthoritySnapshotScope,
     AuthorityTransaction, AuthorityTreeSnapshot, OneClickAuthoritySnapshot,
     OneClickJournalProgress, OneClickTransactionIdentity, PendingCleanupEntry,
-    RegisteredAuthorityCleanup, MAX_AUTHORITY_FULL_COPY_FILE_BYTES,
+    RegisteredAuthorityCleanup, TransactionScienceStopBoundary, MAX_AUTHORITY_FULL_COPY_FILE_BYTES,
     MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES, MAX_AUTHORITY_SNAPSHOT_ENTRIES,
     MAX_AUTHORITY_SNAPSHOT_FILE_BYTES, MAX_AUTHORITY_SNAPSHOT_TOTAL_BYTES,
     PENDING_CLEANUP_MARKER_FILE, SCIENCE_OWNED_OPAQUE_ROOTS,
@@ -120,6 +121,166 @@ fn isolated_tmpdir(label: &str) -> PathBuf {
     ));
     fs::create_dir_all(&path).unwrap();
     path.canonicalize().unwrap()
+}
+
+#[test]
+#[allow(clippy::result_large_err)]
+fn transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publication() {
+    use crate::runtime::science::{ScienceStopFailure, ScienceStopRequest, VerifiedScienceStop};
+
+    let tmp = isolated_tmpdir("transaction-science-stop-owner");
+    let prior_binary = tmp.join("prior-science");
+    let replacement_binary = tmp.join("replacement-science");
+    std::fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+    std::fs::set_permissions(&prior_binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&replacement_binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let prior = crate::runtime::science::test_runtime_identity(prior_binary);
+    let replacement = crate::runtime::science::test_runtime_identity(replacement_binary);
+    let boundaries = [
+        TransactionScienceStopBoundary::ColdPriorStop,
+        TransactionScienceStopBoundary::ManagedDbRestart,
+        TransactionScienceStopBoundary::ProfileSwitchRollback,
+        TransactionScienceStopBoundary::HistoryRecoveryPriorStop,
+        TransactionScienceStopBoundary::LiveCompensationCleanup,
+        TransactionScienceStopBoundary::CompensationReplayCleanup,
+    ];
+
+    for boundary in boundaries {
+        for (case, replace_identity, bump_generation) in
+            [("replacement", true, false), ("generation", false, true)]
+        {
+            let mut authority = AppState::default();
+            authority.science_runtime = Some(prior.clone());
+            authority.sandbox_port = 18765;
+            authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+            let state: SharedAppState = Arc::new(Mutex::new(authority));
+            let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+            let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+            let worker_state = state.clone();
+            let worker_lifecycle = lifecycle.clone();
+            let claimed_runtime = prior.clone();
+            let verified_runtime = prior.clone();
+            let worker = std::thread::spawn(move || {
+                execute_transaction_science_stop_with(
+                    &worker_state,
+                    worker_lifecycle.as_ref(),
+                    boundary,
+                    &claimed_runtime,
+                    18765,
+                    || Ok(ScienceStopRequest::recover(Some(&claimed_runtime))),
+                    move |_request| {
+                        stop_started_tx.send(()).unwrap();
+                        release_stop_rx.recv().unwrap();
+                        (
+                            Ok(VerifiedScienceStop {
+                                runtime: Some(verified_runtime),
+                                ownership_was_proven: true,
+                            }),
+                            true,
+                        )
+                    },
+                    |_state, _confirmed_runtime| {},
+                )
+            });
+
+            stop_started_rx.recv().unwrap();
+            {
+                let mut read_model = state
+                    .try_lock()
+                    .unwrap_or_else(|_| panic!("{boundary:?}/{case}: stop wait retained AppState"));
+                assert_eq!(read_model.science_runtime.as_ref(), Some(&prior));
+                if replace_identity {
+                    read_model.science_runtime = Some(replacement.clone());
+                    read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+                }
+            }
+            if bump_generation {
+                lifecycle.bump_generation();
+            }
+            release_stop_tx.send(()).unwrap();
+
+            let outcome = worker.join().unwrap();
+            assert!(
+                outcome.as_ref().is_err_and(|error| {
+                    error.to_string().contains("process-local owner 已变化")
+                }),
+                "{boundary:?}/{case}: {outcome:?}"
+            );
+            let current = crate::lock(&state);
+            assert_eq!(
+                current.science_runtime.as_ref(),
+                Some(if replace_identity {
+                    &replacement
+                } else {
+                    &prior
+                }),
+                "{boundary:?}/{case}"
+            );
+            assert!(current.science_confirmed_stopped.is_none());
+        }
+
+        let mut authority = AppState::default();
+        authority.science_runtime = Some(prior.clone());
+        authority.sandbox_port = 18765;
+        authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+        let state: SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let failed = execute_transaction_science_stop_with(
+            &state,
+            &lifecycle,
+            boundary,
+            &prior,
+            18765,
+            || Ok(ScienceStopRequest::recover(Some(&prior))),
+            |_request| {
+                (
+                    Err(ScienceStopFailure::stop_command_failed(
+                        "fixture stop failure",
+                    )),
+                    false,
+                )
+            },
+            |_state, _confirmed_runtime| {},
+        );
+        assert!(failed.is_err(), "{boundary:?}: stop failure was accepted");
+        let current = crate::lock(&state);
+        assert_eq!(current.science_runtime.as_ref(), Some(&prior));
+        assert!(current.science_confirmed_stopped.is_none());
+    }
+
+    for boundary in [
+        TransactionScienceStopBoundary::LiveCompensationCleanup,
+        TransactionScienceStopBoundary::CompensationReplayCleanup,
+    ] {
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let stopped = execute_transaction_science_stop_with(
+            &state,
+            &lifecycle,
+            boundary,
+            &prior,
+            18765,
+            || Ok(ScienceStopRequest::recover(Some(&prior))),
+            |_request| {
+                (
+                    Ok(VerifiedScienceStop {
+                        runtime: Some(prior.clone()),
+                        ownership_was_proven: true,
+                    }),
+                    false,
+                )
+            },
+            |_state, _confirmed_runtime| {},
+        );
+        assert!(stopped.is_ok(), "{boundary:?}: durable owner was rejected");
+        let current = crate::lock(&state);
+        assert!(current.science_runtime.is_none());
+        assert_eq!(current.science_confirmed_stopped.as_ref(), Some(&prior));
+    }
+
+    let _ = std::fs::remove_dir_all(tmp);
 }
 
 fn tree(root: &Path) -> BTreeMap<PathBuf, TreeEntry> {
