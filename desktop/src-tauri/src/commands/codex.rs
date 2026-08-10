@@ -836,11 +836,52 @@ fn stop_all_before_downgrade<R: tauri::Runtime>(
     state: &SharedAppState,
     lifecycle: &crate::lifecycle::Lifecycle,
 ) -> Result<(), String> {
+    stop_all_before_downgrade_with(
+        app,
+        state,
+        lifecycle,
+        ScienceHostAdapter::claim_stop,
+        |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        AppState::stop_proxy,
+    )
+}
+
+fn stop_all_before_downgrade_with<R, Claim, Execute, StopGateway>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    claim_science: Claim,
+    execute_science: Execute,
+    stop_gateway: StopGateway,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    Claim: FnOnce(
+        Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+    ) -> Result<
+        crate::runtime::science::ScienceStopRequest,
+        crate::runtime::science::ScienceStopFailure,
+    >,
+    Execute: FnOnce(
+        &tauri::AppHandle<R>,
+        crate::runtime::science::ScienceStopRequest,
+    ) -> (crate::runtime::science::ScienceStopOutcome, bool),
+    StopGateway: FnOnce(&mut AppState) -> crate::GatewayStopOutcome,
+{
     lifecycle.bump_generation();
-    let mut app_state = lock(state);
-    let sandbox_result = super::runtime::stop_sandbox_state(app, &mut app_state);
-    let gateway_result = app_state
-        .stop_proxy()
+    // Downgrade keeps its terminal stop-all policy, but the bounded Science
+    // stop/wait must not retain AppState. Publication is accepted only while
+    // the bumped generation and complete process-local owner still match.
+    let sandbox_result = super::runtime::execute_process_local_science_stop_with(
+        app,
+        state,
+        lifecycle,
+        |_st, _generation| Ok(()),
+        claim_science,
+        execute_science,
+        |_st| Ok(()),
+    );
+    let gateway_result = stop_gateway(&mut lock(state))
         .require_stopped("降级前无法安全停止受管 Gateway；配置、导出和本地认证文件均未修改");
     match (sandbox_result, gateway_result) {
         (Ok(_), Ok(())) => Ok(()),
@@ -2833,6 +2874,126 @@ mod tests {
         assert!(r0_process_is_running(proxy_pid));
         drop(current);
         let _ = lock(&state).stop_proxy();
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn downgrade_cleanup_wait_releases_read_model_and_stale_result_preserves_replacement() {
+        let temp = TempDir::new("downgrade-stop-owner-cas");
+        fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior_binary = temp.0.join("prior-science");
+        let replacement_binary = temp.0.join("replacement-science");
+        fs::write(&prior_binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&replacement_binary, b"#!/bin/sh\nexit 0\n# replacement\n").unwrap();
+        fs::set_permissions(&prior_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&replacement_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let prior =
+            crate::runtime::science::test_runtime_identity(prior_binary.canonicalize().unwrap());
+        let replacement = crate::runtime::science::test_runtime_identity(
+            replacement_binary.canonicalize().unwrap(),
+        );
+
+        for (case, replace_identity, bump_generation) in [
+            ("generation-only", false, true),
+            ("identity-only", true, false),
+        ] {
+            let (state, proxy_pid) = r0_proxy_state("codex");
+            {
+                let mut authority = lock(&state);
+                authority.science_runtime = Some(prior.clone());
+                authority.sandbox_port = 18765;
+                authority.sandbox_url = Some("http://127.0.0.1:18765/prior".into());
+            }
+            let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let generation_before = lifecycle.current_generation();
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            let handle = app.handle().clone();
+
+            let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+            let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+            let worker_state = state.clone();
+            let worker_lifecycle = lifecycle.clone();
+            let worker_prior = prior.clone();
+            let worker = std::thread::spawn(move || {
+                let claim_prior = worker_prior.clone();
+                worker_lifecycle.with_mutation(RuntimeMutationDomain::Terminal, |_| {
+                    stop_all_before_downgrade_with(
+                        &handle,
+                        &worker_state,
+                        worker_lifecycle.as_ref(),
+                        |runtime| {
+                            assert_eq!(runtime, Some(&claim_prior));
+                            Ok(crate::runtime::science::ScienceStopRequest::recover(
+                                runtime,
+                            ))
+                        },
+                        move |_, _| {
+                            stop_started_tx.send(()).unwrap();
+                            release_stop_rx.recv().unwrap();
+                            (
+                                Ok(crate::runtime::science::VerifiedScienceStop {
+                                    runtime: Some(worker_prior),
+                                    ownership_was_proven: true,
+                                }),
+                                true,
+                            )
+                        },
+                        AppState::stop_proxy,
+                    )
+                })
+            });
+
+            stop_started_rx.recv().unwrap();
+            {
+                let mut read_model = state
+                    .try_lock()
+                    .expect("downgrade Science stop wait must not retain AppState");
+                assert_eq!(read_model.science_runtime.as_ref(), Some(&prior), "{case}");
+                if replace_identity {
+                    read_model.science_runtime = Some(replacement.clone());
+                    read_model.sandbox_url = Some("http://127.0.0.1:18765/replacement".into());
+                }
+            }
+            if bump_generation {
+                lifecycle.bump_generation();
+            }
+            release_stop_tx.send(()).unwrap();
+
+            let stopped = worker.join().unwrap();
+            assert!(
+                stopped
+                    .as_ref()
+                    .is_err_and(|error| error.contains("process-local owner 已变化")),
+                "{case}: {stopped:?}"
+            );
+            assert_eq!(
+                lifecycle.current_generation(),
+                generation_before + 1 + u64::from(bump_generation),
+                "{case}"
+            );
+            let current = lock(&state);
+            let expected_runtime = if replace_identity {
+                &replacement
+            } else {
+                &prior
+            };
+            let expected_url = if replace_identity {
+                "http://127.0.0.1:18765/replacement"
+            } else {
+                "http://127.0.0.1:18765/prior"
+            };
+            assert_eq!(
+                current.science_runtime.as_ref(),
+                Some(expected_runtime),
+                "{case}"
+            );
+            assert!(current.science_confirmed_stopped.is_none(), "{case}");
+            assert_eq!(current.sandbox_url.as_deref(), Some(expected_url), "{case}");
+            assert!(current.proxy.is_none(), "{case}");
+            assert!(!r0_process_is_running(proxy_pid), "{case}");
+        }
     }
 
     #[test]

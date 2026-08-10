@@ -765,6 +765,19 @@ class SkillRuntimeBoundary(unittest.TestCase):
             set_settings_flow.index("revoke_science_ssh_bridge"),
             set_settings_flow.index("config::update_result"),
         )
+        downgrade_flow = codex.split(
+            "fn stop_all_before_downgrade_with", 1
+        )[1].split("fn production_home", 1)[0]
+        self.assertNotIn("stop_sandbox_state(app, &mut app_state)", downgrade_flow)
+        self.assertLess(
+            downgrade_flow.index("lifecycle.bump_generation()"),
+            downgrade_flow.index("execute_process_local_science_stop_with"),
+        )
+        self.assertLess(
+            downgrade_flow.index("execute_process_local_science_stop_with"),
+            downgrade_flow.index("stop_gateway(&mut lock(state))"),
+        )
+        self.assertIn("require_stopped", downgrade_flow)
         self.assertIn("pub(crate) fn claim_science_stop_request", science_lifecycle)
         self.assertIn("pub(crate) fn execute_science_stop", science_lifecycle)
         self.assertIn("ScienceStopRequest::exact", science_lifecycle)

@@ -643,10 +643,34 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         )
         self.assertLess(export_index, backup_index)
         self.assertLess(backup_index, v2_index)
+        claim_index = downgrade["ordered_effects"].index(
+            "bump generation and claim the exact process-local Science owner and typed stop request under AppState"
+        )
+        execute_index = downgrade["ordered_effects"].index(
+            "release AppState while executing the existing Science stop policy"
+        )
+        publish_index = downgrade["ordered_effects"].index(
+            "CAS the Science result against generation and complete owner identity, then always stop the tracked Gateway"
+        )
+        effect_index = downgrade["ordered_effects"].index(
+            "only a current confirmed stop proceeds to the secure writer, which rechecks both journals"
+        )
+        self.assertLess(claim_index, execute_index)
+        self.assertLess(execute_index, publish_index)
+        self.assertLess(publish_index, effect_index)
+        self.assertLess(effect_index, export_index)
         downgrade_failures = {item["id"]: item for item in downgrade["failure_points"]}
+        self.assertEqual(
+            downgrade_failures["codex-downgrade.owner-cas"]["compensation"],
+            "no runtime restart; stale Science ownership cannot be cleared and downgrade effects do not begin",
+        )
         self.assertEqual(
             downgrade_failures["codex-downgrade.post-export-pre-v2"]["compensation"],
             "no export rollback and no runtime restart",
+        )
+        self.assertIn(
+            "commands::codex::tests::downgrade_cleanup_wait_releases_read_model_and_stale_result_preserves_replacement",
+            downgrade["characterization_tests"],
         )
         self.assertIn(
             "desktop/src-tauri/Cargo.toml::lib::config::tests::completed_export_survives_later_config_precommit_failure",
