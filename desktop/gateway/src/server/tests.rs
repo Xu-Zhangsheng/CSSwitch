@@ -1178,49 +1178,54 @@ fn codex_auth_errors_distinguish_login_from_transient_refresh_failure() {
 }
 
 #[test]
-fn codex_request_body_limit_returns_413_before_reading_body() {
-    let mut headers = HashMap::new();
-    headers.insert(
-        "content-length".to_string(),
-        (MAX_REQUEST_BYTES + 1).to_string(),
-    );
-    let head = RequestHead {
-        method: "POST".into(),
-        target: "/v1/messages".into(),
-        headers,
-    };
-    let cfg = GatewayConfig {
-        provider: "codex".into(),
-        port: 0,
-        auth_secret: None,
-        api_key: None,
-        upstream_url: DEFAULT_CODEX_UPSTREAM_URL.into(),
-        models_url: None,
-        relay_thinking: None,
-        provider_contract: None,
-        intent: crate::config::GatewayIntent::Formal,
-        static_model_resolver: None,
-        shim_mode: "off".into(),
-        codex_state_root: None,
-        codex_contract: None,
-        launch_id: "test".into(),
-        skill_data_dir: None,
-        skill_bridge_dir: None,
-        skill_bridge_token: None,
-        science_host_context: None,
-    };
-    let response = capture_tcp_response(|stream| {
-        handle_post(
-            stream,
-            &cfg,
-            "/v1/messages",
-            &head,
-            None,
-            &RelayModelCache::default(),
-            CodexComponents::default(),
-        )
-    });
-    assert!(response.starts_with(b"HTTP/1.1 413 Payload Too Large"));
+fn every_provider_request_body_limit_returns_413_before_allocation() {
+    for provider in ["codex", "deepseek", "relay", "openai-custom"] {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "content-length".to_string(),
+            (MAX_REQUEST_BYTES + 1).to_string(),
+        );
+        let head = RequestHead {
+            method: "POST".into(),
+            target: "/v1/messages".into(),
+            headers,
+        };
+        let cfg = GatewayConfig {
+            provider: provider.into(),
+            port: 0,
+            auth_secret: None,
+            api_key: None,
+            upstream_url: DEFAULT_CODEX_UPSTREAM_URL.into(),
+            models_url: None,
+            relay_thinking: None,
+            provider_contract: None,
+            intent: crate::config::GatewayIntent::Formal,
+            static_model_resolver: None,
+            shim_mode: "off".into(),
+            codex_state_root: None,
+            codex_contract: None,
+            launch_id: "test".into(),
+            skill_data_dir: None,
+            skill_bridge_dir: None,
+            skill_bridge_token: None,
+            science_host_context: None,
+        };
+        let response = capture_tcp_response(|stream| {
+            handle_post(
+                stream,
+                &cfg,
+                "/v1/messages",
+                &head,
+                None,
+                &RelayModelCache::default(),
+                CodexComponents::default(),
+            )
+        });
+        assert!(
+            response.starts_with(b"HTTP/1.1 413 Payload Too Large"),
+            "provider {provider} must reject before reading or allocating the body"
+        );
+    }
 }
 
 #[cfg(unix)]

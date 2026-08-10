@@ -61,16 +61,27 @@ fn test_listener_marker_matches(pid: &str, runtime: &ScienceRuntimeIdentity) -> 
 
 /// Return the sandbox UI URL, falling back to the plain localhost port.
 pub(crate) fn sandbox_url(port: u16, runtime: &ScienceRuntimeIdentity) -> String {
+    sandbox_url_with_timeout(port, runtime, SCIENCE_CONTROL_TIMEOUT)
+}
+
+fn sandbox_url_with_timeout(
+    port: u16,
+    runtime: &ScienceRuntimeIdentity,
+    timeout: Duration,
+) -> String {
     let home = sandbox_home();
     let data_dir = sandbox_data_dir();
     if runtime.is_current() {
-        if let Ok(out) = Command::new(&runtime.path)
-            .arg("url")
-            .arg("--data-dir")
-            .arg(&data_dir)
-            .env("HOME", &home)
-            .output()
-        {
+        if let Some(out) = run_science_control_command(
+            &runtime.path,
+            &home,
+            timeout,
+            MAX_SCIENCE_CONTROL_OUTPUT_BYTES,
+            MAX_SCIENCE_CONTROL_OUTPUT_BYTES,
+            |command| {
+                command.arg("url").arg("--data-dir").arg(&data_dir);
+            },
+        ) {
             let s = String::from_utf8_lossy(&out.stdout);
             if let Some(url) = first_http_url(&s) {
                 return url;
@@ -81,16 +92,27 @@ pub(crate) fn sandbox_url(port: u16, runtime: &ScienceRuntimeIdentity) -> String
 }
 
 fn runtime_status(runtime: &ScienceRuntimeIdentity) -> Option<bool> {
+    runtime_status_with_timeout(runtime, SCIENCE_CONTROL_TIMEOUT)
+}
+
+fn runtime_status_with_timeout(
+    runtime: &ScienceRuntimeIdentity,
+    timeout: Duration,
+) -> Option<bool> {
     if !runtime.is_current() {
         return None;
     }
-    let out = Command::new(&runtime.path)
-        .arg("status")
-        .arg("--data-dir")
-        .arg(sandbox_data_dir())
-        .env("HOME", sandbox_home())
-        .output()
-        .ok()?;
+    let data_dir = sandbox_data_dir();
+    let out = run_science_control_command(
+        &runtime.path,
+        &sandbox_home(),
+        timeout,
+        MAX_SCIENCE_CONTROL_OUTPUT_BYTES,
+        MAX_SCIENCE_CONTROL_OUTPUT_BYTES,
+        |command| {
+            command.arg("status").arg("--data-dir").arg(&data_dir);
+        },
+    )?;
     // Some Science builds use a non-zero exit to mean "not running" while
     // still returning a valid {"running":false} payload. Accept only that
     // negative result; a non-zero positive or malformed response stays unknown.

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -12,11 +13,40 @@ pub(super) struct RequestHead {
     pub(super) headers: HashMap<String, String>,
 }
 
+const REQUEST_HEAD_DEADLINE: Duration = Duration::from_secs(10);
+const REQUEST_BODY_DEADLINE: Duration = Duration::from_secs(30);
+
+fn read_with_deadline(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    deadline: Instant,
+    timeout_detail: &str,
+) -> Result<usize, String> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| timeout_detail.to_string())?;
+    stream
+        .set_read_timeout(Some(remaining))
+        .map_err(|error| error.to_string())?;
+    stream.read(buf).map_err(|error| {
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ) {
+            timeout_detail.to_string()
+        } else {
+            error.to_string()
+        }
+    })
+}
+
 pub(super) fn read_head(stream: &mut TcpStream) -> Result<RequestHead, String> {
+    let deadline = Instant::now() + REQUEST_HEAD_DEADLINE;
     let mut buf = Vec::with_capacity(4096);
     let mut byte = [0_u8; 1];
     while !buf.ends_with(b"\r\n\r\n") {
-        let n = stream.read(&mut byte).map_err(|e| e.to_string())?;
+        let n = read_with_deadline(stream, &mut byte, deadline, "request headers timed out")?;
         if n == 0 {
             return Err("empty request".to_string());
         }
@@ -61,8 +91,21 @@ pub(super) fn content_length(headers: &HashMap<String, String>) -> Result<usize,
 }
 
 pub(super) fn read_body(stream: &mut TcpStream, len: usize) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + REQUEST_BODY_DEADLINE;
     let mut body = vec![0_u8; len];
-    stream.read_exact(&mut body).map_err(|e| e.to_string())?;
+    let mut offset = 0;
+    while offset < len {
+        let read = read_with_deadline(
+            stream,
+            &mut body[offset..],
+            deadline,
+            "request body timed out",
+        )?;
+        if read == 0 {
+            return Err("request body ended early".into());
+        }
+        offset += read;
+    }
     Ok(body)
 }
 

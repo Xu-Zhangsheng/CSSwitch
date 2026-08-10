@@ -1385,6 +1385,10 @@ pub(super) fn handle_post(
             return;
         }
     };
+    if path != "/v1/messages" {
+        not_found_json(stream, &path);
+        return;
+    }
     let len = match content_length(&head.headers) {
         Ok(len) => len,
         Err(e) => {
@@ -1392,7 +1396,7 @@ pub(super) fn handle_post(
             return;
         }
     };
-    if cfg.provider == "codex" && codex_protocol::validate_request_body_size(len).is_err() {
+    if codex_protocol::validate_request_body_size(len).is_err() {
         request_too_large_json(stream);
         return;
     }
@@ -1407,9 +1411,5 @@ pub(super) fn handle_post(
             }
         }
     };
-    if path != "/v1/messages" {
-        not_found_json(stream, &path);
-        return;
-    }
     handle_messages(stream, cfg, body, request_nonces, relay_models, codex);
 }

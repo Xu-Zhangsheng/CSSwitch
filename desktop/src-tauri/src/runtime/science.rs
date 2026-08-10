@@ -63,6 +63,9 @@ pub(crate) fn test_arm_post_stop_result_failure(
 #[path = "science/contracts.rs"]
 mod format_contracts;
 #[cfg(any())]
+#[path = "science/control_runner.rs"]
+mod format_control_runner;
+#[cfg(any())]
 #[path = "science/executable.rs"]
 mod format_executable;
 #[cfg(any())]
@@ -79,6 +82,7 @@ mod format_managed_launch;
 mod format_runtime_state;
 
 include!("science/contracts.rs");
+include!("science/control_runner.rs");
 include!("science/executable.rs");
 include!("science/runtime_state.rs");
 include!("science/managed_launch.rs");

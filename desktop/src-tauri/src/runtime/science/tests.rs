@@ -14,8 +14,9 @@ use super::{
     official_updated_snapshot_from_process_paths, parse_unique_listener_pid,
     prior_restart_receipt_is_absent_at, probe_sandbox_runtime_cached, read_managed_launch_record,
     restore_unmatched_managed_launch_tombstone, runtime_identity_is_current, runtime_status_value,
-    safe_science_version_with_timeout, sandbox_home, sandbox_running_ours, sandbox_url,
-    science_executable_fingerprint, science_post_term_action, science_runtime_preflight_for_paths,
+    runtime_status_with_timeout, safe_science_version_with_timeout, sandbox_home,
+    sandbox_running_ours, sandbox_url, sandbox_url_with_timeout, science_executable_fingerprint,
+    science_post_term_action, science_runtime_preflight_for_paths,
     science_runtime_preflight_for_paths_cached, science_runtime_preflight_for_paths_with_updated,
     science_status_running, secure_runtime_snapshot_root, select_science_runtime_for_paths,
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
@@ -508,6 +509,105 @@ fn science_version_probe_rejects_oversize_output() -> Result<(), Box<dyn std::er
         safe_science_version_with_timeout(&binary, std::time::Duration::from_secs(2)),
         None,
         "a legal first line must not hide oversized trailing output"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn science_control_helpers_clear_ambient_sensitive_environment(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD_ENV: &str = "CSSWITCH_CONTROL_ENV_TEST_CHILD";
+    const HOSTILE_ENV: &str = "CSSWITCH_TEST_HOSTILE_API_KEY";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let status = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "runtime::science::tests::science_control_helpers_clear_ambient_sensitive_environment",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env(HOSTILE_ENV, "must-not-reach-science")
+            .status()?;
+        assert!(status.success());
+        return Ok(());
+    }
+
+    let root = unique_temp_dir("science-control-env-clear")?;
+    let binary = root.join("science");
+    fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nif [ -n \"${{{HOSTILE_ENV}:-}}\" ]; then printf '%s\\n' leaked; exit 0; fi\ncase \"${{1:-}}\" in\n  --version) printf '%s\\n' safe-version ;;\n  status) printf '%s\\n' '{{\"running\":false}}' ;;\n  url) printf '%s\\n' 'http://127.0.0.1:19090/safe' ;;\nesac\n"
+        ),
+    )?;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+    let runtime = test_runtime_identity(binary.clone());
+
+    assert_eq!(
+        safe_science_version_with_timeout(&binary, Duration::from_secs(2)).as_deref(),
+        Some("safe-version")
+    );
+    assert_eq!(
+        runtime_status_with_timeout(&runtime, Duration::from_secs(2)),
+        Some(false)
+    );
+    assert_eq!(
+        sandbox_url_with_timeout(19090, &runtime, Duration::from_secs(2)),
+        "http://127.0.0.1:19090/safe"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn science_status_probe_times_out_and_reaps_direct_child() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = unique_temp_dir("science-status-timeout")?;
+    let binary = root.join("science");
+    fs::write(
+        &binary,
+        "#!/bin/sh\nif [ \"${1:-}\" = status ]; then exec /bin/sleep 60; fi\nexit 0\n",
+    )?;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+    let runtime = test_runtime_identity(binary);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        runtime_status_with_timeout(&runtime, Duration::from_millis(100)),
+        None
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn science_url_probe_kills_descendant_after_direct_parent_exits(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_temp_dir("science-url-descendant")?;
+    let binary = root.join("science");
+    let started_marker = root.join("descendant-started");
+    let late_marker = root.join("descendant-late");
+    fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = url ]; then\n  ( : > '{}'; /bin/sleep 1; : > '{}' ) &\n  while [ ! -f '{}' ]; do /bin/sleep 0.01; done\n  printf '%s\\n' 'http://127.0.0.1:19091/safe'\n  exit 0\nfi\nexit 0\n",
+            started_marker.display(),
+            late_marker.display(),
+            started_marker.display(),
+        ),
+    )?;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+    let runtime = test_runtime_identity(binary);
+    assert_eq!(
+        sandbox_url_with_timeout(19091, &runtime, Duration::from_secs(2)),
+        "http://127.0.0.1:19091/safe"
+    );
+    assert!(started_marker.exists());
+    std::thread::sleep(Duration::from_millis(1_200));
+    assert!(
+        !late_marker.exists(),
+        "the bounded runner must kill descendants before returning"
     );
     fs::remove_dir_all(root)?;
     Ok(())

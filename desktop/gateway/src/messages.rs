@@ -51,10 +51,12 @@ const INFERENCE_TIMEOUTS: InferenceTimeouts = InferenceTimeouts {
 };
 
 const MAX_ERROR_BODY_BYTES: u64 = 16 * 1024;
+const MAX_SUCCESS_BODY_BYTES: u64 = crate::codex_protocol::MAX_NONSTREAM_BYTES as u64;
 
 #[derive(Debug, Eq, PartialEq)]
 enum BodyReadFailure {
     Deadline,
+    Limit,
     Io(String),
 }
 
@@ -64,11 +66,23 @@ enum BodyReadFailure {
 /// at the remaining deadline. Cancellation is observed after the current
 /// bounded read, so a timed-out request cannot leave an unbounded reader.
 fn read_body_with_deadline(
-    mut response: Response,
+    response: Response,
     limit: Option<u64>,
     started: Instant,
     total: Duration,
 ) -> Result<Vec<u8>, BodyReadFailure> {
+    read_reader_with_deadline(response, limit, started, total)
+}
+
+fn read_reader_with_deadline<R>(
+    mut reader: R,
+    limit: Option<u64>,
+    started: Instant,
+    total: Duration,
+) -> Result<Vec<u8>, BodyReadFailure>
+where
+    R: Read + Send + 'static,
+{
     let remaining = total
         .checked_sub(started.elapsed())
         .ok_or(BodyReadFailure::Deadline)?;
@@ -91,7 +105,7 @@ fn read_body_with_deadline(
             if capacity == 0 {
                 break Ok(body);
             }
-            match response.read(&mut chunk[..capacity]) {
+            match reader.read(&mut chunk[..capacity]) {
                 Ok(0) => break Ok(body),
                 Ok(read) => {
                     body.extend_from_slice(&chunk[..read]);
@@ -114,6 +128,36 @@ fn read_body_with_deadline(
             "upstream body reader terminated unexpectedly".into(),
         )),
     }
+}
+
+fn read_success_body_with_limit(
+    response: Response,
+    started: Instant,
+    total: Duration,
+    limit: u64,
+) -> Result<Vec<u8>, BodyReadFailure> {
+    let content_length = response.content_length();
+    read_success_reader_with_limit(response, content_length, started, total, limit)
+}
+
+fn read_success_reader_with_limit<R>(
+    reader: R,
+    content_length: Option<u64>,
+    started: Instant,
+    total: Duration,
+    limit: u64,
+) -> Result<Vec<u8>, BodyReadFailure>
+where
+    R: Read + Send + 'static,
+{
+    if content_length.is_some_and(|length| length > limit) {
+        return Err(BodyReadFailure::Limit);
+    }
+    let body = read_reader_with_deadline(reader, Some(limit.saturating_add(1)), started, total)?;
+    if body.len() as u64 > limit {
+        return Err(BodyReadFailure::Limit);
+    }
+    Ok(body)
 }
 
 fn auth_scheme(cfg: &GatewayConfig) -> AuthScheme {
@@ -279,21 +323,23 @@ fn get_once(cfg: &GatewayConfig, url: &str) -> Result<UpstreamBody, UpstreamErro
             detail,
         });
     }
-    let body = read_body_with_deadline(resp, None, started, timeouts.total).map_err(|error| {
-        let detail = match error {
-            BodyReadFailure::Deadline => {
-                "upstream models response exceeded the total timeout".into()
+    let body = read_success_body_with_limit(resp, started, timeouts.total, MAX_SUCCESS_BODY_BYTES)
+        .map_err(|error| {
+            let detail = match error {
+                BodyReadFailure::Deadline => {
+                    "upstream models response exceeded the total timeout".into()
+                }
+                BodyReadFailure::Io(error) => {
+                    format!("upstream response body read failed: {error}")
+                }
+                BodyReadFailure::Limit => "upstream models response body is too large".into(),
+            };
+            UpstreamError {
+                status: 502,
+                upstream_status: None,
+                detail,
             }
-            BodyReadFailure::Io(error) => {
-                format!("upstream response body read failed: {error}")
-            }
-        };
-        UpstreamError {
-            status: 502,
-            upstream_status: None,
-            detail,
-        }
-    })?;
+        })?;
     Ok(UpstreamBody {
         status,
         content_type,
@@ -429,6 +475,7 @@ fn bounded_redacted_error_body(
     match read_body_with_deadline(resp, Some(MAX_ERROR_BODY_BYTES + 1), started, total) {
         Ok(bytes) => redact_error_body(bytes, api_key),
         Err(BodyReadFailure::Deadline) => "upstream error body exceeded the total timeout".into(),
+        Err(BodyReadFailure::Limit) => "upstream error body exceeded the size limit".into(),
         Err(BodyReadFailure::Io(_)) => "upstream error body could not be read".into(),
     }
 }
@@ -478,19 +525,23 @@ pub fn post_nonstream(cfg: &GatewayConfig, body: Vec<u8>) -> Result<UpstreamBody
         .unwrap_or("application/json")
         .to_string();
     let response_body =
-        read_body_with_deadline(resp, None, started, timeouts.total).map_err(|error| {
-            let detail = match error {
-                BodyReadFailure::Deadline => "upstream response exceeded the total timeout".into(),
-                BodyReadFailure::Io(error) => {
-                    format!("upstream response body read failed: {error}")
+        read_success_body_with_limit(resp, started, timeouts.total, MAX_SUCCESS_BODY_BYTES)
+            .map_err(|error| {
+                let detail = match error {
+                    BodyReadFailure::Deadline => {
+                        "upstream response exceeded the total timeout".into()
+                    }
+                    BodyReadFailure::Io(error) => {
+                        format!("upstream response body read failed: {error}")
+                    }
+                    BodyReadFailure::Limit => "upstream response body is too large".into(),
+                };
+                UpstreamError {
+                    status: 502,
+                    upstream_status: Some(status),
+                    detail,
                 }
-            };
-            UpstreamError {
-                status: 502,
-                upstream_status: Some(status),
-                detail,
-            }
-        })?;
+            })?;
     Ok(UpstreamBody {
         status,
         content_type,
@@ -564,7 +615,7 @@ pub fn open_stream(cfg: &GatewayConfig, body: Vec<u8>) -> Result<UpstreamStream,
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::io::{Cursor, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc};
@@ -573,8 +624,8 @@ mod tests {
 
     use super::{
         models_timeout_secs, models_timeouts, post_with_timeouts, read_body_with_deadline,
-        read_first_line, redact_error_body, BodyReadFailure, InferenceTimeouts, ModelsTimeouts,
-        INFERENCE_TIMEOUTS,
+        read_first_line, read_success_reader_with_limit, redact_error_body, BodyReadFailure,
+        InferenceTimeouts, ModelsTimeouts, INFERENCE_TIMEOUTS,
     };
     use crate::config::GatewayConfig;
 
@@ -860,6 +911,23 @@ mod tests {
         assert!(read_started.elapsed() < Duration::from_millis(100));
         release.release();
         upstream.join().unwrap();
+    }
+
+    #[test]
+    fn success_body_rejects_declared_and_streamed_oversize_payloads() {
+        for content_length in [Some(9), None] {
+            let started = Instant::now();
+            assert_eq!(
+                read_success_reader_with_limit(
+                    Cursor::new(b"123456789"),
+                    content_length,
+                    started,
+                    Duration::from_secs(2),
+                    8,
+                ),
+                Err(BodyReadFailure::Limit)
+            );
+        }
     }
 
     #[test]

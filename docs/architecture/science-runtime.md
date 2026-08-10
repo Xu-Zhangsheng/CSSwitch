@@ -44,9 +44,13 @@ Gateway 进程就把它们都解释成 model routing：
 launch script → Science 均使用显式 allowlist（`runtime/launch_env.rs` +
 `scripts/launch-virtual-sandbox.sh` 的 `env -i`）；stop/launch 控制面注入
 `CSSWITCH_HOST_HOME`，Gateway base 注入绝对 host `HOME`（Codex 等主机态路径）；
-provider secret 只进入 Gateway。sentinel 与 stub 回归见 `runtime::launch_env`
-测试和 `test/test_launch_science_env_allowlist.sh`。完整所有权与 bridge 边界
-见下方能力依赖正文。
+provider secret 只进入 Gateway。Science `--version`、`status` 与 `url` 共用唯一
+`runtime/science/control_runner.rs`：先 `env_clear`，只恢复 `base_process_env` 与隔离
+`HOME`，再以私有进程组、绝对 deadline、有限 stdout/stderr、kill-group 和 direct-child
+`wait` 执行。version 使用 15 秒期限和 1 KiB 输出合同；status/url 使用 5 秒期限和
+64 KiB 输出合同。sentinel、直接 child 挂起及父进程退出后代继续存活的回归见
+`runtime::science::tests`；launch/stop allowlist 的 stub 回归见 `runtime::launch_env`
+测试和 `test/test_launch_science_env_allowlist.sh`。完整所有权与 bridge 边界见下方能力依赖正文。
 
 完整 ownership、运行路径、bridge 准入和拆分前冻结项见
 [Claude Science 能力依赖](science-capability-dependencies.md)；逐能力当前决策只在
@@ -61,6 +65,7 @@ façade；生产实现按独立维护原因分布为：
 | 边界 | 当前源码 owner |
 |---|---|
 | 基础类型、常量、receipt/runtime 合同 | `runtime/science/contracts.rs` |
+| `--version` / `status` / `url` 的 allowlisted bounded command runner | `runtime/science/control_runner.rs` |
 | executable 选择、安全读取、snapshot 与版本识别 | `runtime/science/executable.rs` |
 | live process/listener identity 与 runtime state | `runtime/science/runtime_state.rs` |
 | managed launch、receipt 与启动后身份提交 | `runtime/science/managed_launch.rs` |
@@ -73,6 +78,10 @@ façade；生产实现按独立维护原因分布为：
 权限。Science transaction 与 protected projection 继续由
 `runtime/sandbox_session/` 拥有，Gateway 进程编排继续由
 `runtime/proxy_lifecycle/` 拥有。
+
+当前 source 已关闭此前 Science control/probe 继承 ambient environment，以及
+`status/url` 可无限等待或被后代输出 pipe 拖住的边界；该结论不建立 exact artifact、
+installed、真实 Science/live、签名或 release 证据。
 
 ## CSSwitch → Science 生产控制链
 

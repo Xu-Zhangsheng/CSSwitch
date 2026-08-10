@@ -10,9 +10,11 @@ const MIN_SCIENCE_BINARY_SIZE: u64 = 1024 * 1024;
 const MAX_SCIENCE_BINARY_SIZE: u64 = 512 * 1024 * 1024;
 const OFFICIAL_UPDATED_SNAPSHOT_DIR: &str = "runtime-snapshots/science";
 const SCIENCE_VERSION_TIMEOUT: Duration = Duration::from_secs(15);
+const SCIENCE_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_SCIENCE_CONTROL_OUTPUT_BYTES: u64 = 64 * 1024;
 const MANAGED_LAUNCH_FILE: &str = "science-managed-launch.v1.json";
 const MAX_MANAGED_LAUNCH_BYTES: u64 = 16 * 1024;
-static SCIENCE_VERSION_OUTPUT_NONCE: AtomicU64 = AtomicU64::new(1);
+static SCIENCE_CONTROL_OUTPUT_NONCE: AtomicU64 = AtomicU64::new(1);
 #[cfg(test)]
 static MANAGED_LAUNCH_LAST_READ_BYTES: AtomicU64 = AtomicU64::new(0);
 

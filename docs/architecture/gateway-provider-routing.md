@@ -23,6 +23,7 @@ Desktop build 会构建并打包同变体 Rust Gateway sidecar。当前生产运
 |---|---|
 | Gateway listener、method dispatch 与唯一 public server entry | `desktop/gateway/src/server.rs` |
 | HTTP head/body codec、limits 与错误响应 | `desktop/gateway/src/server/http_codec.rs` |
+| CONNECT target policy、DNS/dial 与双向 tunnel budget | `desktop/gateway/src/connect.rs` |
 | GET/POST、provider/Codex inference 与 SSE | `desktop/gateway/src/server/inference_dispatch.rs` |
 | Skill install bridge host lifecycle | `desktop/gateway/src/server/skill_bridge_host.rs` |
 | `server::tests::*` 测试身份 | `desktop/gateway/src/server/tests.rs` |
@@ -51,12 +52,18 @@ CSSwitch 私有认证状态，并接收已校验的独立 network route。
 - 按 provider contract 路由 Anthropic Messages、OpenAI Chat/Responses、SSE、tools/tool results；
 - 提供 `/v1/models` 与严格 Science selector 映射；
 - Codex profile 使用 CSSwitch 私有 auth、动态 model catalog 与 Responses transport；
+- server 在 `accept` 前取得进程内 128 条全局连接额度，额度覆盖普通请求与完整
+  CONNECT 生命周期；HTTP header/body 分别使用 10/30 秒绝对读取期限，响应写入
+  使用 30 秒 idle timeout。未知 POST route 与所有 provider 超过 64 MiB 的请求在
+  body 分配前拒绝；models/nonstream 2xx 同时执行 Content-Length 预检和逐块累计
+  64 MiB 上限，超限投影稳定 502；
 - `CONNECT` 在 path-secret 认证前分派，只按 Anthropic/Claude hostname denylist
-  拒绝目标；DNS resolver 本身没有 deadline，DNS 返回后的地址连接共享剩余
-  10 秒预算，建立后的双向转发没有 session deadline、idle timeout、byte cap
-  或并发连接/session-count 上限；accepted connection 与双向复制直接创建线程。
-  listener 虽为 loopback，这仍是任何本机进程可使用的通用 TCP tunnel，不是
-  受 path-secret 保护的产品 API。
+  拒绝目标。DNS 与 dial 共用 10 秒绝对期限；标准 resolver 无取消能力，因此另以
+  8 条全局 resolver 额度硬界定可能滞留的系统调用。建立后的 tunnel 使用 30 分钟
+  session deadline、60 秒读写 idle timeout 和每方向 256 MiB byte budget；任一方向
+  超限或失败会共享取消、shutdown 两端 socket 并等待两个复制线程回收。listener
+  仍只绑定 loopback，所以上述额度就是未认证本机 CONNECT 的 owner policy；它仍是
+  通用 TCP tunnel，不是受 path-secret 保护的产品 API。
 
 API key 会作为入站 Tauri command/IPC 参数进入进程，并进入正式 Gateway 的
 credential env / launch context；它不进 argv 或普通日志，出站配置 DTO 只返回
@@ -127,10 +134,9 @@ connector 清理与 custom-prompt 更新。
 
 - Gateway 与 Science UI 只绑定 loopback；
 - path secret 认证本地 inference 路径；
-- raw `CONNECT` 在 HTTP path-secret 认证前分派，只有 hostname denylist；DNS
-  resolver 没有 deadline，地址连接共享剩余 dial budget，已建立 session 没有
-  时长/流量上限。它只是 loopback 可达的 TCP transport，不证明
-  HTTP/SSE/Streamable HTTP MCP；
+- raw `CONNECT` 在 HTTP path-secret 认证前分派，只有 hostname denylist；本机调用者
+  共用 server 连接额度，DNS/dial、resolver、session、idle 与双向流量均有上述硬上限。
+  它只是 loopback 可达的 TCP transport，不证明 HTTP/SSE/Streamable HTTP MCP；
 - Science app proxy、sandbox network、package mirror 与 Gateway provider egress 是不同网络面；
 - Codex 有独立网络 route，不能代表 Science network preference；
 - server/client error 按稳定 code/category 投影时才可跨层引用，provider body、HTML challenge、timeout 和 protocol mismatch 不互相混写。
@@ -146,3 +152,5 @@ connector 清理与 custom-prompt 更新。
 | raw CONNECT target | 只说明目标 transport 失败，不证明 MCP 产品结论 |
 
 source/unit、scratch、local mock、真实 provider、final artifact、installed/live 必须分别记录。
+当前 source 已关闭此前 Gateway connection/CONNECT 与普通请求/成功响应的无界资源
+边界；该结论不建立 exact artifact、installed、真实 provider、Science live、签名或 release 证据。
