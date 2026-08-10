@@ -216,32 +216,24 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
         proc::ScienceDbHealth::Ready => {}
         proc::ScienceDbHealth::ReverifyPending => unreachable!(),
         proc::ScienceDbHealth::RestartRequired => {
-            {
-                let mut current = lock(state);
-                let AppState {
-                    sandbox,
-                    sandbox_url,
-                    ..
-                } = &mut *current;
-                let verified = one_click_step(
-                    ScienceHostAdapter::stop(
-                        app,
-                        sandbox,
-                        sandbox_url,
-                        ScienceStopRequest::exact(
+            one_click_step(
+                execute_transaction_science_stop_with(
+                    state,
+                    lifecycle,
+                    TransactionScienceStopBoundary::ManagedDbRestart,
+                    launch_runtime,
+                    sport,
+                    || {
+                        Ok(ScienceStopRequest::exact(
                             launch_runtime,
                             ScienceStopOwnershipReceipt::from_managed_launch(&first_token),
-                        ),
-                    ),
-                    rollback_context,
-                )?;
-                let verified = one_click_step(
-                    verified.require_exact_stop_of(launch_runtime),
-                    rollback_context,
-                )?;
-                current.science_runtime = None;
-                current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-            }
+                        ))
+                    },
+                    |request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+                    |_state, _confirmed_runtime| {},
+                ),
+                rollback_context,
+            )?;
             rollback_context.launch_confirmed_stopped = true;
             if proc::loopback_port_in_use(sport, operation::LOCAL_HEALTH_TIMEOUT_MS)
                 || ScienceHostAdapter::receipt_process_is_alive(&first_token)
@@ -262,18 +254,20 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
             let recovery = PriorScienceContext {
                 runtime: launch_runtime.clone(),
                 port: sport,
-                // restart_managed_science_with_budget does not consume the
+                // restart_science_identity_with_budget does not consume the
                 // stopped token; retaining it gives compensation an exact
                 // absence proof until the fresh receipt is committed.
                 launch_token: first_token.clone(),
             };
-            if let Err(error) = restart_managed_science_with_budget(
+            if let Err(error) = restart_science_identity_with_budget(
                 app,
                 state,
                 lifecycle,
                 auth_proof,
-                &recovery,
+                &recovery.runtime,
+                recovery.port,
                 science_db_recovery_restart_budget_ms(),
+                None,
             ) {
                 rollback_context.candidate_stop_proof = error.candidate_stop_proof;
                 return Err(rollback_context.failure(error.to_string()));

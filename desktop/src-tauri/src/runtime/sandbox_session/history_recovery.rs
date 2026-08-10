@@ -14,11 +14,14 @@ use crate::runtime::science::{
     SandboxScienceState, ScienceHostAdapter, ScienceStopFailureKind, ScienceStopOwnershipReceipt,
     ScienceStopRequest,
 };
-use crate::{lifecycle, lock, oauth_forge, AppState, SharedAppState};
+use crate::{lifecycle, lock, oauth_forge, SharedAppState};
 
 use super::authority_snapshot::{AuthoritySnapshotScope, AuthorityTreeSnapshot};
 use super::authority_transaction::AuthorityTransaction;
-use super::one_click::one_click_login_after_history_handoff;
+use super::one_click::{
+    execute_transaction_science_stop_with, one_click_login_after_history_handoff,
+    TransactionScienceStopBoundary,
+};
 use super::pending_cleanup::{
     open_history_snapshot_root, prepare_history_snapshot_cleanup_only,
     retry_pending_authority_cleanup,
@@ -999,39 +1002,31 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
     let mut record = begin_history_transaction(&dir, &cfg, prior_stop)?;
 
     if let Some((runtime, receipt, _)) = running.as_ref() {
-        let stop_result = {
-            let mut app_state = lock(&state);
-            let AppState {
-                sandbox,
-                sandbox_url,
-                ..
-            } = &mut *app_state;
-            let result = ScienceHostAdapter::stop(
-                &app,
-                sandbox,
-                sandbox_url,
-                ScienceStopRequest::exact(
+        let stop_result = execute_transaction_science_stop_with(
+            &state,
+            lifecycle,
+            TransactionScienceStopBoundary::HistoryRecoveryPriorStop,
+            runtime,
+            expected_port,
+            || {
+                Ok(ScienceStopRequest::exact(
                     runtime,
                     ScienceStopOwnershipReceipt::from_managed_launch(receipt),
-                ),
-            )
-            .and_then(|verified| verified.require_exact_stop_of(runtime));
-            if let Ok(verified) = &result {
-                app_state.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-                app_state.science_runtime = None;
-                if let Some(session) = app_state.history_recovery.as_mut() {
-                    session.science_quiescence =
-                        crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime.clone());
+                ))
+            },
+            |request| ScienceHostAdapter::execute_stop(&app, request).into_parts(),
+            |app_state, confirmed_runtime| {
+                if confirmed_runtime == Some(runtime) {
+                    if let Some(session) = app_state.history_recovery.as_mut() {
+                        session.science_quiescence =
+                            crate::HistoryRecoveryScienceQuiescence::ExactStopped(runtime.clone());
+                    }
                 }
-            }
-            result
-        };
+            },
+        );
         let durable_outcome = match &stop_result {
             Ok(_) => config::RuntimePriorStopOutcome::ExactStopped,
             Err(error) if error.confirmed_runtime() == Some(runtime) => {
-                let mut app_state = lock(&state);
-                app_state.science_confirmed_stopped = error.confirmed_runtime().cloned();
-                app_state.science_runtime = None;
                 config::RuntimePriorStopOutcome::ExactStopped
             }
             Err(error) if error.kind() == ScienceStopFailureKind::RequestRejected => {

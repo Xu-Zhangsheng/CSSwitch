@@ -318,6 +318,7 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
                 config::RuntimeCompensationStep::ScienceCleanup => replay_science_cleanup(
                     app,
                     state,
+                    lifecycle,
                     manifest
                         .as_ref()
                         .expect("Science replay requires its private manifest"),
@@ -502,6 +503,7 @@ fn replay_dependency_outcome(
 fn replay_science_cleanup<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
     manifest: &CompensationReplayManifest,
 ) -> config::RuntimeCompensationStepState {
     if manifest.candidate_stop_proof == DurableCandidateStopProof::Unproven {
@@ -526,28 +528,29 @@ fn replay_science_cleanup<R: Runtime>(
     if port_in_use && receipt.is_none() {
         return config::RuntimeCompensationStepState::Failed;
     }
-    let request = receipt
-        .as_ref()
-        .map(|receipt| {
-            ScienceStopRequest::exact(
+    let result = execute_transaction_science_stop_with(
+        state,
+        lifecycle,
+        TransactionScienceStopBoundary::CompensationReplayCleanup,
+        &runtime,
+        manifest.sandbox_port,
+        || {
+            let receipt = ScienceHostAdapter::managed_receipt(manifest.sandbox_port, &runtime)
+                .ok_or_else(|| {
+                    crate::runtime::science::ScienceStopFailure::request_rejected(
+                        "compensation replay 无法冻结候选 Science 的 exact managed receipt",
+                    )
+                })?;
+            Ok(ScienceStopRequest::exact(
                 &runtime,
-                ScienceStopOwnershipReceipt::from_managed_launch(receipt),
-            )
-        })
-        .unwrap_or_else(|| ScienceStopRequest::recover(Some(&runtime)));
-    let result = {
-        let mut current = lock(state);
-        let AppState {
-            sandbox,
-            sandbox_url,
-            ..
-        } = &mut *current;
-        ScienceHostAdapter::stop(app, sandbox, sandbox_url, request)
-    };
+                ScienceStopOwnershipReceipt::from_managed_launch(&receipt),
+            ))
+        },
+        |request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        |_state, _confirmed_runtime| {},
+    );
     match result {
-        Ok(verified) if receipt.is_none() || verified.proves_exact_stop_of(&runtime) => {
-            config::RuntimeCompensationStepState::Succeeded
-        }
+        Ok(_) => config::RuntimeCompensationStepState::Succeeded,
         _ => config::RuntimeCompensationStepState::Failed,
     }
 }

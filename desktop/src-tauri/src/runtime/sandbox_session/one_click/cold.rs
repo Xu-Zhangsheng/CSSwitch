@@ -12,38 +12,6 @@ pub(in super::super) use compensation::{
     CompensationStepOutcome,
 };
 
-#[derive(Clone)]
-struct ColdPriorScienceStopOwner {
-    generation: u64,
-    runtime: Option<ScienceRuntimeIdentity>,
-    confirmed_stopped: Option<ScienceRuntimeIdentity>,
-    sandbox_child_pid: Option<u32>,
-    sandbox_port: u16,
-    sandbox_url: Option<String>,
-}
-
-impl ColdPriorScienceStopOwner {
-    fn claim(state: &AppState, generation: u64) -> Self {
-        Self {
-            generation,
-            runtime: state.science_runtime.clone(),
-            confirmed_stopped: state.science_confirmed_stopped.clone(),
-            sandbox_child_pid: state.sandbox.as_ref().map(std::process::Child::id),
-            sandbox_port: state.sandbox_port,
-            sandbox_url: state.sandbox_url.clone(),
-        }
-    }
-
-    fn still_owns(&self, state: &AppState, current_generation: u64) -> bool {
-        self.generation == current_generation
-            && self.runtime == state.science_runtime
-            && self.confirmed_stopped == state.science_confirmed_stopped
-            && self.sandbox_child_pid == state.sandbox.as_ref().map(std::process::Child::id)
-            && self.sandbox_port == state.sandbox_port
-            && self.sandbox_url == state.sandbox_url
-    }
-}
-
 #[allow(clippy::result_large_err)]
 fn stop_prior_science_with<Claim, Execute>(
     state: &SharedAppState,
@@ -57,57 +25,16 @@ where
     Claim: FnOnce() -> ScienceStopRequest,
     Execute: FnOnce(ScienceStopRequest) -> (crate::runtime::science::ScienceStopOutcome, bool),
 {
-    let (owner, request) = {
-        let current = lock(state);
-        let owner = ColdPriorScienceStopOwner::claim(&current, lifecycle.current_generation());
-        let request =
-            if owner.runtime.as_ref() == Some(prior_runtime) && owner.sandbox_port == prior_port {
-                Ok(claim())
-            } else {
-                Err(
-                    crate::runtime::science::ScienceStopFailure::request_rejected(
-                        "prior Science stop claim 时 process-local owner 已变化；未执行停止。",
-                    ),
-                )
-            };
-        (owner, request)
-    };
-
-    // The durable PriorStopIntent is already committed by the caller. Keep the
-    // existing stop/TERM/KILL/wait policy, but do not retain AppState while it
-    // runs so status and other read-model consumers remain available.
-    let execution = request.map(execute);
-    let mut current = lock(state);
-    match execution {
-        Err(error) => Err(error),
-        Ok((_outcome, _clear_tracking))
-            if !owner.still_owns(&current, lifecycle.current_generation()) =>
-        {
-            Err(
-                crate::runtime::science::ScienceStopFailure::outcome_publication_failure(
-                    "prior Science stop 完成时 process-local owner 已变化；已保留 replacement runtime。",
-                ),
-            )
-        }
-        Ok((outcome, clear_tracking)) => {
-            if clear_tracking {
-                crate::runtime::system::kill_child(&mut current.sandbox);
-                current.sandbox_url = None;
-            }
-            match &outcome {
-                Ok(verified) => {
-                    current.science_runtime = None;
-                    current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-                }
-                Err(error) if error.confirmed_runtime() == Some(prior_runtime) => {
-                    current.science_runtime = None;
-                    current.science_confirmed_stopped = error.confirmed_runtime().cloned();
-                }
-                Err(_) => {}
-            }
-            outcome
-        }
-    }
+    execute_transaction_science_stop_with(
+        state,
+        lifecycle,
+        TransactionScienceStopBoundary::ColdPriorStop,
+        prior_runtime,
+        prior_port,
+        || Ok(claim()),
+        execute,
+        |_state, _confirmed_runtime| {},
+    )
 }
 
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]

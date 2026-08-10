@@ -407,37 +407,37 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             Ok(())
         }
     } else {
-        let mut current = lock(state);
-        let AppState {
-            sandbox,
-            sandbox_url,
-            ..
-        } = &mut *current;
-        let result = ScienceHostAdapter::stop(
-            app,
-            sandbox,
-            sandbox_url,
-            failure
-                .rollback
-                .launch_token
-                .as_ref()
-                .map(|token| {
-                    ScienceStopRequest::exact(
-                        &failure.rollback.launch_runtime,
-                        ScienceStopOwnershipReceipt::from_managed_launch(token),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    ScienceStopRequest::recover(Some(&failure.rollback.launch_runtime))
-                }),
-        );
-        let result = result
-            .and_then(|verified| verified.require_exact_stop_of(&failure.rollback.launch_runtime));
-        if let Ok(verified) = result.as_ref() {
-            current.science_runtime = None;
-            current.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-        }
-        result.map(|_| ()).map_err(|error| error.to_string())
+        execute_transaction_science_stop_with(
+            state,
+            lifecycle,
+            TransactionScienceStopBoundary::LiveCompensationCleanup,
+            &failure.rollback.launch_runtime,
+            failure.rollback.sandbox_port,
+            || {
+                let ownership = match failure.rollback.launch_token.as_ref() {
+                    Some(token) => ScienceStopOwnershipReceipt::from_managed_launch(token),
+                    None => ScienceStopOwnershipReceipt::from_managed_launch(
+                        &ScienceHostAdapter::managed_receipt(
+                            failure.rollback.sandbox_port,
+                            &failure.rollback.launch_runtime,
+                        )
+                        .ok_or_else(|| {
+                            crate::runtime::science::ScienceStopFailure::request_rejected(
+                                "live compensation 无法冻结候选 Science 的 exact managed receipt",
+                            )
+                        })?,
+                    ),
+                };
+                Ok(ScienceStopRequest::exact(
+                    &failure.rollback.launch_runtime,
+                    ownership,
+                ))
+            },
+            |request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+            |_state, _confirmed_runtime| {},
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     };
     let science_cleanup = match cleanup.as_ref() {
         Ok(()) if science_cleanup_required => CompensationStepOutcome::Succeeded,
