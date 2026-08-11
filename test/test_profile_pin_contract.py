@@ -53,10 +53,13 @@ class ProfilePinContractTests(unittest.TestCase):
         )
         self.assertRegex(
             one_click,
-            r"let adoption_attempt_id\s*=\s*committed\s*"
-            r"\.science_adoption_attempt_id\s*\.clone\(\)\s*"
-            r"\.filter\(\|attempt_id\|[\s\S]*?launch_runtime\.adoption_attempt_id\(\)\s*"
-            r"==\s*Some\(attempt_id\.as_str\(\)\)",
+            r"let adoption_attempt_id\s*=\s*match\s*"
+            r"committed\.science_adoption_attempt_id\.clone\(\)\s*\{\s*"
+            r"Some\(attempt_id\)\s*if\s*launch_runtime\.adoption_attempt_id\(\)\s*"
+            r"==\s*Some\(attempt_id\.as_str\(\)\)\s*=>\s*\{\s*attempt_id\s*\}\s*"
+            r"_\s*=>\s*\{\s*return\s*Err\(rollback_context\.failure\(\s*"
+            r'"Science managed receipt、runtime 与 binding adoption provenance 不一致"\s*'
+            r",?\s*\)\);\s*\}\s*\};",
         )
         preset = profiles.split("fn apply_profile_preset_sync_inner_cmd", 1)[1].split(
             "// ---------- profile CRUD", 1
