@@ -36,14 +36,24 @@ Specialist/isolation 子门；150 个脱敏 request envelope 的四项跨域计�
 evidence hashes 复算 `OK`。其 `B-PROVIDER-01` canonical run `provider-a60c2ee-r1` 又完成 11-case
 exact-artifact local-mock 矩阵：10 个 case 由 exact App 启动 packaged Gateway，SiliconFlow 由同一
 exact packaged Gateway 直启；99/99 observation/event、55/55 request、64/64 loopback socket row
-与 583/583 top closure 全部通过，111/111 Provider loopback tests 从头重跑 `PASS`。Reviewer/
-Specialist 服务结果仍为 `UNVERIFIED`；RM-46 新 Provider 配置 UX、Skill/MCP、
-SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 仍为 `NOT-RUN`。
-旧 `9e08924` tuple 的 isolated-live 结论只保留为历史日期化证据，不能继承。
+与 583/583 top closure 全部通过，111/111 Provider loopback tests 从头重跑 `PASS`。
+
+当前 code-bearing RM-46 候选为 `next@d74221e2948f32cd67db0aed8920af6122d0c798`：clean detached
+15-suite source gate run `33e290ddc03a1a131c064cf4b5dcb7e1` 为 15/15 `PASS`、runner exit 0；
+由该 SHA 新构建、完整 ad-hoc 签名且未安装的唯一 bundle ID Acceptance App，又在隔离 HOME、假 key
+与动态 loopback mock 下完成 OpenCode Go 双 transport、Grok、Gemini 的 4 次 discovery、4 次明确
+选择/手填与创建、4 次保存前 scratch 校验。discovery 前后正式 config 不变；最终 4 个 profile 与
+8 个 mock request 闭合，OpenCode 上游只收到裸 `kimi-k3` / `minimax-m3`。本结论只关闭 RM-46；
+`a60c2ee` 的 B-RUNTIME/B-CORE/B-CONTEXT/B-PROVIDER 结果仍只绑定旧 exact tuple，不能继承给
+`d74221e`。Reviewer/Specialist 服务结果、RM-47 真实 Provider、Skill/MCP、SSH、installed、
+升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 仍为 `NOT-RUN`。旧 `9e08924`
+tuple 的 isolated-live 结论也只保留为历史日期化证据，不能继承。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
 [调查索引](../../docs/evidence/investigations/README.md)进入；当前 exact tuple 的上下文验收见
 [`B-CONTEXT-01`](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-context-01.md)。
 当前 exact tuple 的 Provider 本地矩阵见
-[`B-PROVIDER-01`](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-provider-01.md)。
+[`B-PROVIDER-01`](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-provider-01.md)；
+当前 code-bearing RM-46 配置 UX 见
+[RM-46 日期化证据](../../docs/evidence/investigations/2026-08-11-rm46-provider-configuration-ux.md)。

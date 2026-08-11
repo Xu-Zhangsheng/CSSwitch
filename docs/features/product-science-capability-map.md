@@ -75,7 +75,9 @@ artifact；`PACKAGE-STATIC` 不证明实际调用；`FIXTURE` 不证明 live。
 [B-CORE-01](../evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-core-01.md)、
 [B-CONTEXT-01](../evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-context-01.md) 与
 [B-PROVIDER-01](../evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-provider-01.md)
-各自写明的 exact tuple 和 scope；它们不是 current HEAD 的验收结果。
+各自写明的 `a60c2ee` exact tuple 和 scope；它们不是 current HEAD 的验收结果。另有
+[RM-46 Provider 配置 UX](../evidence/investigations/2026-08-11-rm46-provider-configuration-ux.md)
+只绑定 `d74221e` exact artifact 的本地 mock UI scope，不继承旧 tuple 的 Science 验收。
 
 ## 能力、所有权与托管决策表
 
@@ -87,7 +89,7 @@ artifact；`PACKAGE-STATIC` 不证明实际调用；`FIXTURE` 不证明 live。
 | 安装与平台 | whole-app remote Linux / WSL | 是：Science 的整机部署能力 | `SCIENCE-NATIVE → SCIENCE-EXTERNAL` | `原生保留`；CSSwitch 当前不提供部署管理 | 是：CSSwitch 不提供 whole-app Linux/WSL 管理面 | `OFFICIAL` | 第三方模式兼容性、端口、preview 与数据目录行为 |
 | 第三方运行包络 | 隔离 HOME、持久 data-dir、runtime identity、启动/停止/恢复 | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME` | `必须托管` | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`a60c2ee` B-RUNTIME scope） | 后续 code-bearing exact artifact、installed-live 连续性与新 Science 版本兼容性 |
 | 第三方运行包络 | 本地虚拟登录、loopback Gateway 与受限 route | 否：这是 CSSwitch 第三方模式责任 | `CSSWITCH-RUNTIME → MODEL-GATEWAY` | `必须托管`；虚拟登录只建立本地受管路径 | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`a60c2ee` B-RUNTIME/B-CORE/B-CONTEXT scope） | 后续 code-bearing exact artifact、真实第三方 provider/model 与版本兼容性 |
-| Provider | profile、第三方 provider、模型 selector、模型目录与协议适配 | 否：第三方 provider 拥有模型、认证、配额和计费 | `MODEL-GATEWAY`；provider 只作为 external dependency | `必须托管` profile/selector/routing；不拥有模型服务 | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`a60c2ee` B-PROVIDER local-mock；10 exact App case + SiliconFlow exact packaged Gateway direct case） | OpenCode Go/Grok/Gemini RM-46 配置 UX；指定 provider/model 的真实 Desktop E2E、配额、计费与服务质量 |
+| Provider | profile、第三方 provider、模型 selector、模型目录与协议适配 | 否：第三方 provider 拥有模型、认证、配额和计费 | `MODEL-GATEWAY`；provider 只作为 external dependency | `必须托管` profile/selector/routing；不拥有模型服务 | 否 | `SOURCE`、`TEST`、`ARTIFACT`、`ISOLATED-LIVE`（`a60c2ee` B-PROVIDER protocol local-mock；`d74221e` RM-46 配置 UI local-mock） | RM-47 指定 provider/model 的真实 Desktop E2E、账号、配额、计费与服务质量 |
 | Project | project、session、conversation、custom instructions、archive/import | 是：Science 本地 UI、数据库和 session control plane | `SCIENCE-NATIVE`；推理操作再进入 `MODEL-GATEWAY` | `原生保留`；CSSwitch 只隔离和保全数据域 | 是：不提供 Science 语义 CRUD | `OFFICIAL`、`PACKAGE-STATIC`、`ISOLATED-LIVE`（B-CONTEXT local surface/request-shape scope） | archive/unarchive、import、restart readback 与完整语义 |
 | Agent 工作流 | plans、delegation、fork 与恢复 | 是：Science session/plan control plane | `SCIENCE-NATIVE`；只有创建、继续或执行推理的 operation 再进入 `MODEL-GATEWAY`，本地恢复/readback 不进入 | `原生保留` | 是：不实现第二套 plan/delegation engine | `OFFICIAL`、`PACKAGE-STATIC`、`ISOLATED-LIVE`（B-CONTEXT surface/request-shape scope） | 服务端结果、第三方实际模型请求、配额和 entitlement |
 | 文件与权限 | attachments、路径授权、standing grant、撤销和越界拒绝 | 是：Science 拥有 permission UI、scope、持久化和 enforcement；用户拥有授权决定与资源 | `SCIENCE-NATIVE`；模型 payload 再进入 `MODEL-GATEWAY` | `原生保留`；CSSwitch 不扩大授权 | 是：不提供通用文件权限管理 | `OFFICIAL`、`PACKAGE-STATIC`、`ISOLATED-LIVE`（B-CORE grant/revoke/sibling-boundary scope） | 跨 session、重启后 enforcement 与真实用户资源 |
