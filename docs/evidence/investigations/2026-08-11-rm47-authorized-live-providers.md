@@ -45,7 +45,7 @@ CSSwitch profile / static model catalog
 | DeepSeek / `deepseek-v4-flash` | `DeepSeek V4 Flash` | 最小文本返回；Bash `printf` 经一次性授权执行并返回 | `PASS(text,client-tool)` |
 | Qwen / `qwen-plus-latest` | `Qwen Plus` | 最小文本返回；模型产生 client tool_use，但 Science `claude-science-mcp` environment 失败、执行未完成 | `PASS(text)`；`INCONCLUSIVE(science-compute)` |
 | GLM / `glm-5.2` | `glm-5.2` | 最小文本返回 | `PASS(text)` |
-| Kimi / `kimi-k3` | Science 一度显示旧 selector 为 unavailable；Gateway 仍固定路由到 `kimi-k3` | 搜索块可见且不再报 OPERON tool-not-found；受控原生请求中未搜索与搜索均 200；PDF 进入本地 Python 一次性授权，最终受 Science package 环境阻断 | `PASS(text,server-search)`；`INCONCLUSIVE(pdf-compute,selector-display)` |
+| Kimi / `kimi-k3` | Science 一度显示旧 selector 为 unavailable；Gateway 仍固定路由到 `kimi-k3` | 搜索块可见且不再报 OPERON tool-not-found；受控原生请求中未搜索与搜索均 200；PDF 历史尝试进入本地 Python 一次性授权后受 Science package 环境阻断 | `PASS(text,server-search)`；`INCONCLUSIVE(selector-display)`；`DEFERRED(pdf-compute,non-gate)` |
 | MiniMax / `MiniMax-M3` | `MiniMax-M3` | 最小文本返回 | `PASS(text)` |
 | OpenRouter / `anthropic/claude-sonnet-5` | `Anthropic / Claude Sonnet 5` | Science 请求到达真实上游；因账户可用额度不足以承受 Science 的 `max_tokens=128000` 返回 402，未 fallback | `INCONCLUSIVE(quota)` |
 | SiliconFlow / `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4-Pro` | 最小文本返回 | `PASS(text)` |
@@ -87,6 +87,9 @@ PDF 引擎。
 HTTP 200，所以这里只能判为 Science package/compute 环境阻断，不能写成 Kimi document 失败或
 PDF E2E PASS。
 
+用户在本轮收口后明确把 PDF compute 移出当前验收目标。因此上述内容只保留为历史边界证据，
+`DEFERRED(non-gate)` 不再阻塞 RM-47 当前授权 scope，也不授权继续修改 PDF 路径。
+
 Kimi server-search 行为参考官方说明：
 
 - <https://platform.kimi.ai/docs/guide/use-web-search>
@@ -110,5 +113,5 @@ Kimi server-search 行为参考官方说明：
   `PASS`；真实 8765 listener PID 保持不变，59704/59705 无残留监听，本轮 Chrome tabs 为 0，
   隔离 HOME、临时 credential/config、合成 PDF、诊断响应、source-gate clone/output 均精确删除。
 
-本证据不建立 OpenCode/Grok/Gemini、OpenRouter 足额配额、Kimi PDF compute、installed app、
-签名、公证或 release PASS。
+本证据不建立 OpenCode/Grok/Gemini、OpenRouter 足额配额、installed app、签名、公证或 release
+PASS；Kimi PDF compute 明确为 `DEFERRED(non-gate)`。

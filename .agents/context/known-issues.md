@@ -22,13 +22,15 @@
 compatibility tests 与 targeted loopback 已通过。授权 RM-47 已从隔离 Test app 贯通真实 Science：
 DeepSeek、Qwen、GLM、Kimi、MiniMax、SiliconFlow、Xiaomi 的最小文本/对应子项到达真实 Provider；
 OpenRouter 到达上游但因余额不足返回 402；OpenCode、Grok、Gemini 因 credential 缺失未运行。
-Kimi 搜索已 PASS，PDF 已到 Science 本地 Python 一次性授权，但 conda package environment 失败，
-因此 PDF compute 与 Kimi selector-display 仍是 `INCONCLUSIVE`。`0ecc7e2` 的 full source gate
+Kimi 搜索已 PASS；PDF 尝试已到 Science 本地 Python 一次性授权，但用户随后明确把 PDF compute
+移出当前 gate，固定为 `DEFERRED(non-gate)`。Kimi selector-display 仍是 `INCONCLUSIVE`，但不改变
+Gateway 路由到 `kimi-k3` 和 server-search PASS。`0ecc7e2` 的 full source gate
 为 15/15 `PASS`（run `903ebd2e365ac12274639fc676ca9388`）；最终 Test app Desktop / packaged
 Gateway SHA-256 分别为 `98f24b69e40c2e238fbf18ae26539c44293a4f33c7d6c9b025008b840597566a` /
 `56a724832dc41dafd3d8bea6d5d67446d49393260336d4cd8aaf31152fca37a0`，最终 stop/guard/tab/runtime
-cleanup 也已 PASS。OpenRouter 足额配额、Kimi PDF compute/selector 与三家缺 credential 仍使整张
-C-PROVIDER 不能升级为全 PASS；完整矩阵见
+cleanup 也已 PASS。因此有 credential 的 RM-47 最小 Provider/Science scope 已收口；OpenRouter
+足额配额、三家缺 credential 与更深的逐 Provider capability card 仍未闭合，PDF 不再属于这些阻塞项。
+完整矩阵见
 [RM-47 日期化证据](../../docs/evidence/investigations/2026-08-11-rm47-authorized-live-providers.md)。
 
 RM-46 的 `d74221e2948f32cd67db0aed8920af6122d0c798` source gate 与 exact-artifact
@@ -229,15 +231,14 @@ observation 与 23 项 evidence closure 不得继承到当前 `a60c2ee` artifact
 ## 当前源码问题
 
 2026-08-11 最新 code-bearing production source candidate 为
-`next@a60c2ee656429903f1fd8f398dc6ad8194aa9346`。`48cfffd` 修复 acceptance host Gateway 丢失
-GitHub loopback fixture 的真实路径，`a60c2ee` 同步 source-gate test identity inventory；两项 fresh
-clean-context 终审均为 `PASS`（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`）。canonical run
-`6e5124c43c1ceadac3bd54f6408e2141` 为 15/15 suites、15/15 observations、runner exit 0，
-completion seal SHA-256 为
-`fe8d24939dd8b950c95984383645aa8de87dae4956c5c34c9a533b310560d86e`。首次 `48cfffd` run
-`b34b27f08e3992a7e445468e5bd349f4` 是 sealed `FAIL`（13/15），只暴露新增/改名测试尚未进入
-identity inventory，不得当作 PASS。该 source PASS 不建立 isolated-live、installed、真实 provider、
-Science、SSH、signing 或 release 结论。
+`next@e1832bd35e9384265df9911a42f841ed90c0f43c`；`0ecc7e2a105b2bb270d42f95a42148a6cd23bbca`
+只补 test fixture 和过时 integration 断言，`2136803ced6a4c45a9ba6ce7910110fdf49ce053`
+只补日期化 evidence。`0ecc7e2` 的 canonical run `903ebd2e365ac12274639fc676ca9388` 为
+15/15 suites、15/15 observations、runner exit 0，completion seal SHA-256 为
+`a7d31bb706ef8acb57e44abe640d3f24387cc76d7eb956fdad261c40f7d4f102`。本轮重新回读
+`6b1b999..e1832bd` production diff 与 live evidence，未发现漏提交的 tracked 源码；该回读不是
+formal independent clean-context review。source PASS 和 live Provider scope 仍不建立 installed、SSH、
+signing 或 release 结论。
 
 - **Gateway 锁边界**：`06b630b` 已把 candidate log、命令与环境构造、Skill bridge 配置 staging、spawn 和 health poll 全部移出 `AppState`；锁内 reservation 与 generation + full candidate-owner CAS 守护接受，replacement 不被覆盖，不确定 child 由独立 registry 持有，destructive caller 对 typed uncertain stop fail closed。该 exact SHA 的 formal independent clean-context review 为 `PASS`（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`），canonical 15-suite 为 15/15 `PASS`。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
@@ -249,12 +250,12 @@ Science、SSH、signing 或 release 结论。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `a60c2ee` exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `a60c2ee` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01=PASS`、`B-CORE-01=PASS`、`B-CONTEXT-01=PASS(scope=isolated-request-shape)`；Reviewer/Specialist 服务结果仍 `UNVERIFIED` | RM-47 已建立部分真实 provider + Science 子项；整张 C-PROVIDER、账号与 installed 仍未闭合 |
+| 一键入口、Gateway / Science 启动与 finalize | `a60c2ee` exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合；后续 Provider compatibility source 见本节顶部 `e1832bd` / `0ecc7e2` | `a60c2ee` 的完整 G1 exact tuple 保留历史 `PASS`；RM-47 Test app / packaged Gateway hash 已单独固定，installed/signing/release 不外推 | `a60c2ee` tuple 的 `B-RUNTIME-01=PASS`、`B-CORE-01=PASS`、`B-CONTEXT-01=PASS(scope=isolated-request-shape)`；Reviewer/Specialist 服务结果仍 `UNVERIFIED` | RM-47 已完成所有 credential 非空 profile 的最小 Provider + Science scope；OpenRouter 足额配额、三家缺 credential、账号与 installed 仍未闭合 |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click / stop / restart lifecycle `PASS`；replacement/race/crash 仍由 source fixture 证明 | installed normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click transaction UI outcome `PASS`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | `a60c2ee` 闭合 acceptance host Gateway fixture 注入；comprehensive source review 未替代 Skill 专项能力审查 | 同一 `a60c2ee` G1 exact artifact `PASS`；只证明 bundle identity，不证明 Skill runtime | current tuple `B-SKILL-01=NOT-RUN`；旧 artifact 的安全停止/公共 GitHub 尝试只保留为历史问题证据 | 真实 Skill / domain execution分项 `NOT-RUN` |
-| provider protocol capabilities | `e1832bd` Kimi server-search compatibility + targeted tests；`a60c2ee` protocol matrix 与 `d74221e` RM-46 保留各自历史 gate | 最终 `e1832bd` code-equivalent Test app hash 待本轮收口；旧 G1/RM-46 artifact 不继承 | `a60c2ee` `B-PROVIDER-01=PASS(scope=exact-artifact-local-mock,mixed-launch-boundary)`；`d74221e` `RM-46=PASS(scope=exact-artifact-local-mock-UI)` | DeepSeek/Qwen/GLM/Kimi/MiniMax/SiliconFlow/Xiaomi 已取得真实 Science 子项；OpenRouter `INCONCLUSIVE(quota)`，Kimi PDF `INCONCLUSIVE(science-compute)`，OpenCode/Grok/Gemini `NOT-RUN`；usage/整卡 cleanup 未闭合 |
+| provider protocol capabilities | `e1832bd` Kimi server-search compatibility + targeted tests；`0ecc7e2` canonical 15-suite `PASS`；`a60c2ee` protocol matrix 与 `d74221e` RM-46 保留各自历史 gate | code-equivalent Test app Desktop / packaged Gateway identity 已由本页 RM-47 日期化证据固定，空 data-root status 与 cleanup `PASS`；旧 G1/RM-46 artifact 不继承 | `a60c2ee` `B-PROVIDER-01=PASS(scope=exact-artifact-local-mock,mixed-launch-boundary)`；`d74221e` `RM-46=PASS(scope=exact-artifact-local-mock-UI)` | DeepSeek/Qwen/GLM/Kimi/MiniMax/SiliconFlow/Xiaomi 已取得真实 Science 子项；OpenRouter `INCONCLUSIVE(quota)`，OpenCode/Grok/Gemini `NOT-RUN`；PDF 为 `DEFERRED(non-gate)`；本轮 stop/guard/tab/runtime cleanup 已闭合 |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
 receipt、provider launch receipt 与 network isolation receipt。pre-run manifest SHA-256 为
