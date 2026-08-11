@@ -367,8 +367,14 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
     };
+    let prior_runtime_fingerprint =
+        prior_science.map(|prior| prior.runtime.environment_transaction_id());
+    let launch_runtime_fingerprint = failure.rollback.launch_runtime.environment_transaction_id();
     let cross_runtime_environment = failure.rollback.launch_environment.may_be_exposed()
-        && prior_science.is_some_and(|prior| prior.runtime != failure.rollback.launch_runtime);
+        && runtime_environment_fingerprint_changed(
+            prior_runtime_fingerprint.as_deref(),
+            &launch_runtime_fingerprint,
+        );
     let environment = CompensationEnvironment::from_launch(
         failure.rollback.launch_environment,
         cross_runtime_environment,

@@ -233,6 +233,18 @@ fn assert_v1_prior_restart_replay_hydrates_v2_receipt(env: &mut ScopedEnv) {
     config::save_to(&dir, &initial).unwrap();
 
     let runtime = crate::runtime::science::test_runtime_identity(science_bin);
+    let mut launch_runtime = runtime.clone();
+    crate::runtime::science::bind_selected_science_runtime_attempt(&mut launch_runtime).unwrap();
+    assert_ne!(runtime, launch_runtime);
+    assert!(runtime.adoption_attempt_id().is_none());
+    assert!(launch_runtime.adoption_attempt_id().is_some());
+    assert!(
+        !runtime_environment_fingerprint_changed(
+            Some(&runtime.environment_transaction_id()),
+            &launch_runtime.environment_transaction_id(),
+        ),
+        "adoption provenance alone must not split one executable environment"
+    );
     let recipe = config::RuntimePriorScienceRecipe {
         port,
         runtime_path: runtime.path.clone(),
@@ -287,7 +299,7 @@ fn assert_v1_prior_restart_replay_hydrates_v2_receipt(env: &mut ScopedEnv) {
         &state,
         &identity,
         &mut progress,
-        runtime.clone(),
+        launch_runtime,
         None,
         true,
     )

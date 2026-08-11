@@ -203,7 +203,10 @@ pub(super) fn persist_compensation_replay_manifest(
         ssh_stub_transaction: rollback.ssh_stub_transaction.clone(),
         cross_runtime_environment: rollback.launch_environment.may_be_exposed()
             && prior_science.as_ref().is_some_and(|recipe| {
-                recipe.runtime_fingerprint != rollback.launch_runtime.environment_transaction_id()
+                runtime_environment_fingerprint_changed(
+                    Some(&recipe.runtime_fingerprint),
+                    &rollback.launch_runtime.environment_transaction_id(),
+                )
             }),
         prior_restart_launch_id: prior_science.as_ref().map(|_| config::new_id()),
         prior_science,

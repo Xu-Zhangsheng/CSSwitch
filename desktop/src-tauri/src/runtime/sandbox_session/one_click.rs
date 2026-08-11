@@ -73,6 +73,13 @@ pub(super) use cold::{
 
 use healthy_reopen::healthy_reopen_with_gateway_rollback;
 
+pub(super) fn runtime_environment_fingerprint_changed(
+    prior_runtime_fingerprint: Option<&str>,
+    launch_runtime_fingerprint: &str,
+) -> bool {
+    prior_runtime_fingerprint.is_some_and(|fingerprint| fingerprint != launch_runtime_fingerprint)
+}
+
 #[derive(Clone, PartialEq)]
 struct OneClickGatewayPreflightSnapshot {
     child_pid: u32,
