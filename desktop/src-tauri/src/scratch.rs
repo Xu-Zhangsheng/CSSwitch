@@ -11,6 +11,39 @@ use std::time::Duration;
 
 use crate::runtime::operation::{self, OperationStage, OperationTrace};
 
+#[cfg(any(test, feature = "acceptance-build"))]
+const ACCEPTANCE_PROVIDER_BASE_URL_ENV: &str = "CSSWITCH_ACCEPTANCE_PROVIDER_BASE_URL";
+
+#[cfg(any(test, feature = "acceptance-build"))]
+fn configure_acceptance_provider_base_override(
+    cmd: &mut Command,
+    provider: &str,
+    raw: Option<&std::ffi::OsStr>,
+) -> Result<(), String> {
+    let base_env = match provider {
+        "openai-custom" | "openai-responses" => "CSSWITCH_OPENAI_BASE_URL",
+        "relay" => "CSSWITCH_RELAY_BASE_URL",
+        _ => return Ok(()),
+    };
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let value = raw
+        .to_str()
+        .ok_or_else(|| "acceptance Provider base override 不是 UTF-8，已拒绝探测。".to_string())?;
+    crate::runtime::provider::status_upstream_endpoint(provider, "", Some(raw)).ok_or_else(
+        || {
+            "acceptance Provider base override 只允许显式 loopback http(s) URL，已拒绝探测。"
+                .to_string()
+        },
+    )?;
+    cmd.env(base_env, value);
+    // The scratch listener also exposes CONNECT before path-secret dispatch.
+    // Close that side channel while the acceptance-only loopback fixture is active.
+    cmd.env("CSSWITCH_CONNECT_LOOPBACK_ONLY", "1");
+    Ok(())
+}
+
 /// 探测类型：Models 验端点+鉴权（透传预设保存/获取模型）；Message 验具体模型（选了模型时）。
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum ProbeKind {
@@ -335,6 +368,17 @@ pub fn scratch_probe(
         target.relay_thinking,
     ) {
         cmd.env(k, v);
+    }
+    #[cfg(feature = "acceptance-build")]
+    if let Err(error) = configure_acceptance_provider_base_override(
+        &mut cmd,
+        target.provider,
+        std::env::var_os(ACCEPTANCE_PROVIDER_BASE_URL_ENV).as_deref(),
+    ) {
+        return ProbeResult {
+            status: None,
+            body: error,
+        };
     }
     if let Some(route) = &backend.codex_network_route {
         match csswitch_codex_network::encode_route(route) {
@@ -774,6 +818,114 @@ mod tests {
         assert_eq!(
             env,
             vec![("DEEPSEEK_API_KEY".to_string(), "sk-x".to_string())]
+        );
+    }
+
+    #[test]
+    fn acceptance_provider_base_override_is_profile_only_and_loopback_only() {
+        let env = |cmd: &Command, name: &str| {
+            cmd.get_envs()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+        };
+
+        let mut openai = Command::new("/usr/bin/true");
+        configure_acceptance_provider_base_override(&mut openai, "openai-custom", None).unwrap();
+        assert_eq!(env(&openai, "CSSWITCH_OPENAI_BASE_URL"), None);
+        assert_eq!(env(&openai, "CSSWITCH_CONNECT_LOOPBACK_ONLY"), None);
+        configure_acceptance_provider_base_override(
+            &mut openai,
+            "openai-custom",
+            Some(std::ffi::OsStr::new("http://127.0.0.1:32131/opencode")),
+        )
+        .unwrap();
+        assert_eq!(
+            env(&openai, "CSSWITCH_OPENAI_BASE_URL").as_deref(),
+            Some("http://127.0.0.1:32131/opencode")
+        );
+        assert_eq!(
+            env(&openai, "CSSWITCH_CONNECT_LOOPBACK_ONLY").as_deref(),
+            Some("1")
+        );
+
+        let mut relay = Command::new("/usr/bin/true");
+        configure_acceptance_provider_base_override(
+            &mut relay,
+            "relay",
+            Some(std::ffi::OsStr::new("http://[::1]:32132/anthropic")),
+        )
+        .unwrap();
+        assert_eq!(
+            env(&relay, "CSSWITCH_RELAY_BASE_URL").as_deref(),
+            Some("http://[::1]:32132/anthropic")
+        );
+
+        let mut native = Command::new("/usr/bin/true");
+        configure_acceptance_provider_base_override(
+            &mut native,
+            "deepseek",
+            Some(std::ffi::OsStr::new("https://provider.invalid/v1")),
+        )
+        .unwrap();
+        assert_eq!(env(&native, "CSSWITCH_OPENAI_BASE_URL"), None);
+        assert_eq!(env(&native, "CSSWITCH_RELAY_BASE_URL"), None);
+        assert_eq!(env(&native, "CSSWITCH_CONNECT_LOOPBACK_ONLY"), None);
+
+        for rejected in [
+            "https://provider.invalid/v1",
+            "not-a-url",
+            "http://127.0.0.1@provider.invalid/v1",
+        ] {
+            let mut cmd = Command::new("/usr/bin/true");
+            assert!(configure_acceptance_provider_base_override(
+                &mut cmd,
+                "openai-custom",
+                Some(std::ffi::OsStr::new(rejected)),
+            )
+            .is_err());
+            assert_eq!(env(&cmd, "CSSWITCH_OPENAI_BASE_URL"), None);
+            assert_eq!(env(&cmd, "CSSWITCH_CONNECT_LOOPBACK_ONLY"), None);
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+
+            let mut cmd = Command::new("/usr/bin/true");
+            assert!(configure_acceptance_provider_base_override(
+                &mut cmd,
+                "relay",
+                Some(std::ffi::OsStr::from_bytes(b"http://127.0.0.1:32133/\xff")),
+            )
+            .is_err());
+            assert_eq!(env(&cmd, "CSSWITCH_RELAY_BASE_URL"), None);
+            assert_eq!(env(&cmd, "CSSWITCH_CONNECT_LOOPBACK_ONLY"), None);
+        }
+    }
+
+    #[test]
+    fn acceptance_provider_base_override_is_wired_after_scratch_env_before_spawn() {
+        let source = include_str!("scratch.rs");
+        let probe = source
+            .split_once("pub fn scratch_probe")
+            .map(|(_, suffix)| suffix)
+            .expect("scratch probe owner must exist");
+        let normal_env = probe
+            .find("for (k, v) in scratch_env(")
+            .expect("scratch command must inject the resolved production candidate");
+        let acceptance = probe
+            .find("configure_acceptance_provider_base_override(")
+            .expect("scratch command must wire the compile-gated acceptance override");
+        let spawn = probe
+            .find("cmd.spawn()")
+            .expect("scratch command must spawn the configured Gateway");
+        assert!(
+            normal_env < acceptance,
+            "acceptance override must follow the normal candidate env"
+        );
+        assert!(
+            acceptance < spawn,
+            "acceptance override must reach the spawned Gateway"
         );
     }
 

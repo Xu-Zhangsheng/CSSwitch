@@ -1276,6 +1276,8 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::transaction::tests::native_adapter_no_longer_bypasses_upstream_verify",
         "desktop/src-tauri/Cargo.toml::lib::runtime::transaction::tests::rollback_clause_tells_truth_when_restore_failed",
         "desktop/src-tauri/Cargo.toml::lib::runtime::transaction::tests::transaction_commits_only_when_healthy",
+        "desktop/src-tauri/Cargo.toml::lib::scratch::tests::acceptance_provider_base_override_is_profile_only_and_loopback_only",
+        "desktop/src-tauri/Cargo.toml::lib::scratch::tests::acceptance_provider_base_override_is_wired_after_scratch_env_before_spawn",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::cancelled_probe_never_spawns_the_scratch_gateway",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::classify_maps_status_to_outcome",
         "desktop/src-tauri/Cargo.toml::lib::scratch::tests::discovery_fallback_source_splits_unsupported_from_network",
