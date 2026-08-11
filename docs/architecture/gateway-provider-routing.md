@@ -65,6 +65,26 @@ CSSwitch 私有认证状态，并接收已校验的独立 network route。
   仍只绑定 loopback，所以上述额度就是未认证本机 CONNECT 的 owner policy；它仍是
   通用 TCP tunnel，不是受 path-secret 保护的产品 API。
 
+Science 的一次可见回答并不总是一条模型请求。实际链路是：Science 先从
+`/v1/models` 选择 selector，再向 path-secret 下的 `/v1/messages` 发送 agent、标题、
+reviewer 或后续 tool-result 请求；Gateway 用 static model resolver 固定 upstream model，
+执行 provider adapter 和 SSE 兼容后回传。普通 client `tool_use` 仍由 Science 执行并在
+下一请求回放结果；provider 原生 server tool 则必须保留其 server block，不能改写成一个
+Science 没有 executor 的同名 client tool。标题、reviewer、environment/kernel 失败也不能
+反向写成主模型请求失败。
+
+Kimi 的 Anthropic-compatible 路由采用以下窄兼容：
+
+- 保留 Kimi 实际支持的 `web_search_*` 声明，以及响应中的 `server_tool_use` /
+  `web_search_tool_result`；其他 Anthropic server tool 继续过滤。把 server search 降成普通
+  `web_search` 会让 Science 的 OPERON 本地分发返回 tool-not-found；
+- 保留有效 signed thinking，删除无法回放的 unsigned thinking，同时压紧 SSE index；
+- `document.source.type=text` 和只含 text/image 的 `content` 在本地展开；原始
+  `application/pdf` document block 在 Gateway 本地明确拒绝，PDF 必须先由 Science 的
+  PDF skill/OCR 转为 text 或 image，Gateway 不内置第二套 PDF 引擎；
+- provider 的瞬时 4xx、Science package/environment 失败和确定性的 document capability
+  拒绝分别归类，不做自动重试，也不互相冒充。
+
 API key 会作为入站 Tauri command/IPC 参数进入进程，并进入正式 Gateway 的
 credential env / launch context；它不进 argv 或普通日志，出站配置 DTO 只返回
 掩码而不回传完整 key。

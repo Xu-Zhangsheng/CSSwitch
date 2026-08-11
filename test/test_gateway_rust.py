@@ -3160,10 +3160,10 @@ class RustGatewayLoopback(unittest.TestCase):
             b'event: message_start\ndata: {"type":"message_start","message":{"id":"m_kimi","type":"message","role":"assistant","model":"kimi-k2.7-code","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
             b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
             b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-            b'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","name":"web_search"}}\n\n',
+            b'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_search_1","name":"web_search"}}\n\n',
             b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta"}}\n\n',
             b'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
-            b'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"web_search_tool_result","content":[]}}\n\n',
+            b'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_search_1","content":[]}}\n\n',
             b'event: content_block_stop\ndata: {"type":"content_block_stop","index":2}\n\n',
             b'event: content_block_start\ndata: {"type":"content_block_start","index":3,"content_block":{"type":"thinking","thinking":"","signature":""}}\n\n',
             b'event: content_block_stop\ndata: {"type":"content_block_stop","index":3}\n\n',
@@ -3514,8 +3514,8 @@ class RustGatewayLoopback(unittest.TestCase):
             recovered_history = complete_round + [
                 {"role": "user", "content": "round two"},
                 {"role": "assistant", "content": [
-                    {"type": "server_tool_use", "name": "web_search"},
-                    {"type": "web_search_tool_result", "content": []},
+                    {"type": "server_tool_use", "id": "srvtoolu_round2", "name": "web_search"},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_round2", "content": []},
                     {"type": "thinking", "thinking": "", "signature": ""},
                 ]},
                 {"role": "user", "content": "round two edited and resent"},

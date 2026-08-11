@@ -1029,8 +1029,8 @@ mod tests {
                 {"role": "assistant", "content": [{"type": "text", "text": "round one done"}]},
                 {"role": "user", "content": "round two"},
                 {"role": "assistant", "content": [
-                    {"type": "server_tool_use", "name": "web_search"},
-                    {"type": "web_search_tool_result", "content": []},
+                    {"type": "server_tool_use", "id": "srvtoolu_round2", "name": "web_search"},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_round2", "content": []},
                     {"type": "thinking", "thinking": "", "signature": ""},
                     {"type": "text", "text": ""}
                 ]},
@@ -1052,6 +1052,7 @@ mod tests {
         assert_eq!(messages[5]["content"].as_array().unwrap().len(), 2);
         assert_eq!(messages[5]["content"][0]["type"], "server_tool_use");
         assert_eq!(messages[5]["content"][1]["type"], "web_search_tool_result");
+        assert_eq!(messages[5]["content"][1]["tool_use_id"], "srvtoolu_round2");
         assert_eq!(messages[6]["content"], "round two edited and resent");
         assert!(metadata
             .rule_ids
@@ -1343,10 +1344,10 @@ mod tests {
         let sse = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"name\":\"web_search\"}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_search_1\",\"name\":\"web_search\"}}\n\n",
             "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
-            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":[]}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_search_1\",\"content\":[]}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n",
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":3}\n\n",
@@ -1362,6 +1363,7 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("server_tool_use"));
         assert!(text.contains("web_search_tool_result"));
+        assert!(text.contains("srvtoolu_search_1"));
         assert!(!text.contains("\"type\":\"thinking\""));
         assert!(text.contains("\"index\":3"));
         assert!(text.contains("\"text\":\"OK\""));

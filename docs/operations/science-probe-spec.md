@@ -588,6 +588,11 @@ destination、允许的数据、凭证注入方式、请求/费用上限、取�
 - **PASS**：upstream identity、selector、实际响应 model、stream/non-stream 和
   usage receipt 一致；故意超出一个受控软限额时错误分类正确且不 fallback；stop 后
   不遗留该 route。
+- **Science 组合子项**：声明 provider 原生 server search 时，分别记录模型未调用和
+  实际调用两种响应；普通 client tool 必须由 Science 执行，server tool 不得降成无 executor
+  的同名本地工具。document 子项分 text/content、raw PDF、本地 PDF skill/OCR 三层；raw PDF
+  的确定性 capability 拒绝、provider 4xx 与 Science environment/package 失败分别判定。
+  子项 PASS 不能在缺少 usage、stream 或 cleanup 时升级为整张 card PASS。
 - **FAIL**：有效授权下错 model/provider、静默 fallback、凭证泄漏、usage 超限、
   错误分类导致重试风暴或 stop 后仍路由。
 - **INCONCLUSIVE**：provider outage、quota/region 不确定、model rollout 变化、

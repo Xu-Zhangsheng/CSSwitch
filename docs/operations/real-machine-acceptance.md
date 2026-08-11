@@ -194,7 +194,7 @@ RM-01～RM-34 保留历史编号；Codex 场景从 RM-35 继续，0.8.1 新增 p
 | RM-44 | Acceptance artifact + 本地 fixture | 显式代理 | HTTP CONNECT 与 SOCKS5h 分别完成浏览器 token exchange、模型目录与最小推理；SOCKS5h 证明域名在代理端解析；production 不注入自定义 CA |
 | RM-45 | Acceptance artifact | 登录取消 | browser callback wait、慢 callback header、token exchange 取消在两秒内终态；pre-commit 取消后 generation 与 Acceptance OAuth 文件状态不变；committing 返回 `commit_in_progress` |
 | RM-46 | Acceptance artifact + 本地 mock | 新 Provider 配置 | OpenCode Go 两种 transport、Grok、Gemini 分别完成 scratch discovery、显式选择/手填与保存；探测不写正式配置；OpenCode 已知模型不跨协议且上游只收到裸 ID |
-| RM-47 | 用户 key 后 live provider | 新 Provider 最小验收 | OpenCode Go、Grok、Gemini 分别记录 `/models`、标题、classifier、普通两轮工具与错误分类；每个结果按 provider/model 分栏，未提供 key 或账号不记通过 |
+| RM-47 | 用户 key 后 live provider | Provider 最小 Science E2E | 对每个已授权且 credential 非空的 profile，从 CSSwitch 一键切换贯通 packaged Gateway 与真实 Science，分别记录 selector、最小文本、必要的工具/搜索、provider 错误和停止；OpenCode Go、Grok、Gemini 仍另记 `/models`、标题、classifier 与普通两轮工具。每个 provider/model 独立分栏；缺 key、余额、Science compute 环境或 provider 瞬时错误不得借相邻 PASS 补齐，也禁止自动重试 |
 | RM-48 | Acceptance artifact + 用户 OAuth 后 installed Science | Codex 标题与记忆 | 三个标题入口保存普通文本而非 JSON 编码字符串；Sonnet classifier fallback 成功后用 Science SQLite 的新增行证明记忆真实写入；classifier 不可用时仍 fail closed |
 | RM-49 | Acceptance artifact + 用户 key 后 live provider | K3 多轮恢复 | 第一轮 reasoning + tool、第二轮 tool result 后继续；有效 opaque signature 可恢复，改动 reasoning/tool args/profile 后本地拒绝且不发上游 POST |
 | RM-50 | Acceptance artifact + 本地 fault mock；live provider 另授权 | Kimi / DeepSeek 会话失败 | Kimi 完整 envelope 保留 signed thinking、usage、stop reason 并压紧 index；畸形/截断只发一个 terminal error 且无 `message_stop`；DeepSeek native 与 DSML detect/rewrite/off 不触发 Kimi 规则 |
