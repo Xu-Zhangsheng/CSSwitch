@@ -91,6 +91,8 @@
         "selected dedupe reuses only the latest matching attempt; A-B-A appends a new B-A attempt while same-runtime restart and unfinished retry reuse the current attempt",
         "the production preflight records validated candidate observations while healthy Science remains running and only selects an adoption attempt on the normal stopped-to-started path",
         "fresh finalize replay requires the same attempt id in action, binding, current V2 receipt, and hydrated runtime before cleanup or commit; preflight requires receipt/runtime/binding equality",
+        "bounded compaction retains finalized attempts referenced only by runtime binding as well as live receipt, transaction, or active compensation references",
+        "the production one-click fixture changes the validated candidate under a healthy managed Science, invokes production preflight, observes deferred_healthy, and proves the exact PID, owner, and serve count remain unchanged",
         "canonical source-gate and clean-context independent review evidence are required before this change is accepted",
         "no real Science account, organization, conversation, project, environment, credential, Keychain, SSH private key, installed App, provider, signing, or public-release validation is claimed"
       ]

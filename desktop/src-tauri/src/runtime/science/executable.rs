@@ -266,6 +266,9 @@ fn official_updated_snapshot_for_home(
     snapshot_root: &Path,
     verify_local_identity: bool,
 ) -> Result<Option<PathBuf>, String> {
+    #[cfg(test)]
+    let verify_local_identity =
+        verify_local_identity && !fake_science_updater_identity_armed_for_current_thread();
     let candidate = home.join(OFFICIAL_UPDATED_RUNTIME_RELATIVE);
     if !candidate.exists() {
         return Ok(None);
@@ -942,6 +945,24 @@ fn runtime_probe_candidates(
         );
     }
     let mut candidates = Vec::new();
+    #[cfg(test)]
+    if fake_science_updater_identity_armed_for_current_thread() {
+        if let Some((record, _)) = read_managed_launch_snapshot_result()? {
+            if record.port == port
+                && record.runtime_source.as_deref()
+                    == Some(ScienceRuntimeSource::OfficialUpdated.code())
+            {
+                if let Some(runtime) = runtime_identity(
+                    record.runtime_path,
+                    ScienceRuntimeSource::OfficialUpdated,
+                    version_cache,
+                ) {
+                    candidates.push(runtime);
+                    return Ok(candidates);
+                }
+            }
+        }
+    }
     let snapshot_root = config::default_dir().join(OFFICIAL_UPDATED_SNAPSHOT_DIR);
     if let Some(snapshot) = official_updated_snapshot_for_listener(port, &snapshot_root, true)? {
         if let Some(runtime) = runtime_identity(

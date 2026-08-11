@@ -545,6 +545,36 @@ fn science_runtime_adoption_recovery_is_exact_and_retains_compensation_reference
     super::clear_managed_launch_identity(&v2_receipt_free_token, &runtime)?;
     assert!(managed_launch_path().symlink_metadata().is_err());
 
+    crate::config::save_to(
+        &config_dir,
+        &crate::config::Config {
+            runtime_binding: Some(exact_binding.clone()),
+            ..Default::default()
+        },
+    )?;
+    super::mutate_science_adoption_ledger(&store, |ledger| {
+        for _ in 0..(super::MAX_SCIENCE_ADOPTION_ATTEMPTS + 8) {
+            super::append_science_update_attempt(
+                ledger,
+                None,
+                None,
+                ScienceAdoptionDecision::Rejected,
+                Some(super::ScienceAdoptionRejectionCode::RuntimeUnavailable),
+                Some("installed_app".into()),
+            );
+        }
+        Ok(())
+    })?;
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(ledger.attempts.len(), super::MAX_SCIENCE_ADOPTION_ATTEMPTS);
+    assert!(
+        ledger
+            .attempts
+            .iter()
+            .any(|attempt| attempt.attempt_id == attempt_id),
+        "compaction must retain the finalized attempt referenced only by runtime binding"
+    );
+
     let compensation = crate::config::RuntimeCompensationJournal {
         schema_version: crate::config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2,
         compensation_id: "science-adoption-retention".into(),

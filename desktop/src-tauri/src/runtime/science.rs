@@ -58,6 +58,39 @@ pub(crate) fn test_arm_post_stop_result_failure(
     ScienceLifecycleTestSeamGuard
 }
 
+#[cfg(test)]
+static SCIENCE_UPDATER_IDENTITY_TEST_SEAM: std::sync::LazyLock<
+    std::sync::Mutex<Option<std::thread::ThreadId>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
+pub(crate) struct ScienceUpdaterIdentityTestSeamGuard;
+
+#[cfg(test)]
+impl Drop for ScienceUpdaterIdentityTestSeamGuard {
+    fn drop(&mut self) {
+        *SCIENCE_UPDATER_IDENTITY_TEST_SEAM
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_fake_science_updater_identity() -> ScienceUpdaterIdentityTestSeamGuard {
+    *SCIENCE_UPDATER_IDENTITY_TEST_SEAM
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(std::thread::current().id());
+    ScienceUpdaterIdentityTestSeamGuard
+}
+
+#[cfg(test)]
+fn fake_science_updater_identity_armed_for_current_thread() -> bool {
+    SCIENCE_UPDATER_IDENTITY_TEST_SEAM
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some_and(|thread_id| thread_id == std::thread::current().id())
+}
+
 // Keep include fragments on rustfmt's normal module-discovery path without
 // changing the runtime module or the historical visibility surface.
 #[cfg(any())]

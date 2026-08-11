@@ -48,10 +48,13 @@ fn test_listener_marker_matches(pid: &str, runtime: &ScienceRuntimeIdentity) -> 
     {
         return false;
     }
-    let Some(configured) = std::env::var_os("SCIENCE_BIN").map(PathBuf::from) else {
-        return false;
-    };
-    if configured.canonicalize().ok() != runtime.path.canonicalize().ok() {
+    let explicit_matches = std::env::var_os("SCIENCE_BIN")
+        .map(PathBuf::from)
+        .and_then(|configured| configured.canonicalize().ok())
+        == runtime.path.canonicalize().ok();
+    let updater_snapshot_matches = fake_science_updater_identity_armed_for_current_thread()
+        && runtime.source == ScienceRuntimeSource::OfficialUpdated;
+    if !explicit_matches && !updater_snapshot_matches {
         return false;
     }
     std::fs::read_to_string(sandbox_data_dir().join("fake-science/pid"))

@@ -474,6 +474,13 @@ fn referenced_science_adoption_attempt_ids() -> Result<BTreeSet<String>, String>
     }
     let cfg = config::load_from(&config::default_dir())
         .map_err(|error| format!("读取 Science adoption recovery 引用失败：{error}"))?;
+    if let Some(attempt_id) = cfg
+        .runtime_binding
+        .as_ref()
+        .and_then(|binding| binding.science_adoption_attempt_id.clone())
+    {
+        referenced.insert(attempt_id);
+    }
     if let Some(config::RuntimeTransactionRecord::V2(transaction)) = cfg.runtime_transaction {
         let recipe = match transaction.prior_stop {
             config::RuntimePriorStopState::Intent { recipe }
@@ -838,4 +845,12 @@ fn read_science_adoption_ledger_at(root: &Path) -> Result<ScienceAdoptionLedger,
     let root = secure_science_adoption_store_root(root)?;
     let _lock = acquire_science_adoption_ledger_lock(&root)?;
     read_science_adoption_ledger_snapshot(&root).map(|(ledger, _, _)| ledger)
+}
+
+#[cfg(test)]
+pub(crate) fn science_adoption_ledger_json_for_test() -> Result<Value, String> {
+    serde_json::to_value(read_science_adoption_ledger_at(
+        &science_adoption_store_root(),
+    )?)
+    .map_err(|error| format!("序列化 Science adoption 测试 ledger 失败：{error}"))
 }

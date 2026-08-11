@@ -419,6 +419,15 @@ fn write_executable(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+fn write_padded_test_updater(path: &Path, body: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_executable(path, body);
+    let mut updater = fs::OpenOptions::new().append(true).open(path).unwrap();
+    updater.write_all(b"\n#").unwrap();
+    updater.write_all(&vec![b' '; 1024 * 1024]).unwrap();
+    updater.sync_all().unwrap();
+}
+
 fn write_test_bins(dir: &Path) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
     write_executable(
@@ -3160,7 +3169,7 @@ fn r0_one_click_post_receipt_failure_restores_prior_runtime() {
 fn r0_one_click_cold_start_commits_runtime_and_receipts() {
     run_exact_ignored_runtime_characterization(
         "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
-        &[("CSSWITCH_TEST_R0_COLD_START_ONLY", "1")],
+        &[("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY", "1")],
     );
 }
 
@@ -7863,6 +7872,17 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
             bin_dir.to_string_lossy()
         ),
     );
+    let adoption_updater_bin = env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY")
+        .map(|_| {
+            let updater_bin = home.join(".claude-science/bin/claude-science");
+            let initial_updater = fs::read_to_string(&fake_science).unwrap();
+            write_padded_test_updater(&updater_bin, &initial_updater);
+            env::remove_var("SCIENCE_BIN");
+            updater_bin
+        });
+    let _updater_identity_guard = adoption_updater_bin
+        .as_ref()
+        .map(|_| science::test_arm_fake_science_updater_identity());
 
     let fake_key = "csswitch-isolated-fake-key-never-log";
     let profile = Profile {
@@ -8197,6 +8217,66 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         managed_launch["listener_pid"],
         first_pid.trim().parse::<u32>().unwrap()
     );
+    if env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY").is_some() {
+        let updater_bin = adoption_updater_bin
+            .as_ref()
+            .expect("healthy adoption fixture must seed the fixed updater path");
+        let updater_script = fs::read_to_string(&fake_science)
+            .unwrap()
+            .replace("0.0.0-csswitch-test", "0.0.1-csswitch-test");
+        write_padded_test_updater(updater_bin, &updater_script);
+        let (version_cache, confirmed_stopped, running_before) = {
+            let authority = lock(&state);
+            (
+                authority.science_version_cache.clone(),
+                authority.science_confirmed_stopped.clone(),
+                authority.science_runtime.clone(),
+            )
+        };
+        let preflight =
+            science::science_runtime_preflight(&version_cache, confirmed_stopped.as_ref())
+                .expect("healthy production preflight must record a deferred candidate");
+        assert_eq!(preflight["status"], "installed_ready");
+        assert_eq!(preflight["adoption_record_status"], "recorded");
+        assert_eq!(
+            lock(&state).science_runtime.as_ref(),
+            running_before.as_ref(),
+            "healthy preflight must not replace the running Science owner"
+        );
+        assert_eq!(
+            fs::read_to_string(fake_state_dir.join("pid")).unwrap(),
+            first_pid,
+            "healthy preflight must not replace the running Science process"
+        );
+        assert_eq!(
+            fs::read_to_string(fake_state_dir.join("serve-count")).unwrap(),
+            "1",
+            "healthy preflight must not restart Science"
+        );
+        let ledger = science::science_adoption_ledger_json_for_test()
+            .expect("healthy production preflight must publish the adoption ledger");
+        let deferred = ledger["attempts"]
+            .as_array()
+            .and_then(|attempts| {
+                attempts
+                    .iter()
+                    .rev()
+                    .find(|attempt| attempt["decision"] == "deferred_healthy")
+            })
+            .expect("healthy production preflight must persist deferred_healthy");
+        assert_eq!(
+            deferred["predecessor"]["version"],
+            "claude-science 0.0.0-csswitch-test"
+        );
+        assert_eq!(
+            deferred["candidate"]["version"],
+            "claude-science 0.0.1-csswitch-test"
+        );
+        cleanup
+            .finish()
+            .expect("healthy adoption preflight fixture must cleanly stop");
+        return;
+    }
     if env::var_os("CSSWITCH_TEST_R0_COLD_START_ONLY").is_some() {
         cleanup
             .finish()
