@@ -790,14 +790,16 @@
       "id": "SUITE-RUST-DESKTOP",
       "name": "desktop Cargo manifest",
       "kind": "rust",
-      "entrypoint": "cargo test --manifest-path desktop/src-tauri/Cargo.toml",
+      "entrypoint": "cargo test --manifest-path desktop/src-tauri/Cargo.toml -- --test-threads=1",
       "entrypoint_id": "ENTRY-SOURCE-RUST-DESKTOP",
       "command_argv": [
         "{CARGO}",
         "test",
         "--offline",
         "--manifest-path",
-        "desktop/src-tauri/Cargo.toml"
+        "desktop/src-tauri/Cargo.toml",
+        "--",
+        "--test-threads=1"
       ],
       "cwd_mode": "repo-root",
       "profiles": [
