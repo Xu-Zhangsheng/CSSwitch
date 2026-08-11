@@ -56,6 +56,14 @@ mod healthy_reopen;
 
 use compensation_replay::persist_compensation_replay_manifest;
 pub(super) use compensation_replay::replay_interrupted_one_click_compensation;
+#[cfg(test)]
+pub(super) fn test_replay_prior_restart_effect_without_outcome<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+) -> Result<config::RuntimeCompensationStepState, String> {
+    compensation_replay::test_replay_prior_restart_effect_without_outcome(app, state, lifecycle)
+}
 
 #[cfg(test)]
 pub(super) use cold::{
@@ -475,6 +483,7 @@ pub(super) fn test_begin_replayable_compensation(
     progress: &mut OneClickJournalProgress,
     launch_runtime: ScienceRuntimeIdentity,
     ssh_stub_transaction: Option<crate::runtime::settings::ManagedSshStubTransaction>,
+    prior_science_present: bool,
 ) -> Result<(), String> {
     let rollback = OneClickRollbackContext {
         proxy_action: ProxyAction::Reused,
@@ -490,7 +499,12 @@ pub(super) fn test_begin_replayable_compensation(
         current_kind: OneClickFailureKind::Prepare,
     };
     let (compensation_id, science_adoption_attempt_ids) = persist_compensation_replay_manifest(
-        authority, state, identity, &rollback, None, progress,
+        authority,
+        state,
+        identity,
+        &rollback,
+        prior_science_present,
+        progress,
     )?;
     begin_one_click_compensation_with_id(
         dir,

@@ -319,7 +319,7 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         state,
         transaction_identity,
         &failure.rollback,
-        prior_science,
+        prior_science.is_some(),
         journal_progress,
     ) {
         Ok(compensation_id) => compensation_id,

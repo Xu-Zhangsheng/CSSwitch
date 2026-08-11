@@ -52,7 +52,8 @@ use one_click::{
     healthy_reopen_transaction_matches, one_click_phase_exposure, publish_prior_stop_outcome,
     resolve_gateway_terminal_handoff, resolve_profile_switch_handoff, science_health_control_error,
     test_begin_replayable_compensation, test_compensate_one_click_failure,
-    write_one_click_checkpoint, OneClickJournalProgress, OneClickTransactionIdentity,
+    test_replay_prior_restart_effect_without_outcome, write_one_click_checkpoint,
+    OneClickJournalProgress, OneClickTransactionIdentity,
 };
 #[allow(unused_imports)]
 pub(crate) use one_click::{

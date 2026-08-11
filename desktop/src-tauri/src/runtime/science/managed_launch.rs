@@ -278,12 +278,23 @@ fn prior_restart_receipt_is_absent_at(
         )
 }
 
-pub(crate) fn managed_receipt_matches_launch_id(
+pub(crate) fn hydrate_runtime_from_v2_managed_launch(
     port: u16,
-    runtime: &ScienceRuntimeIdentity,
+    runtime: &mut ScienceRuntimeIdentity,
     launch_id: &str,
-) -> bool {
-    managed_launch_token(port, runtime).is_some_and(|token| token.record.launch_id == launch_id)
+) -> Result<(), String> {
+    let token = managed_launch_token(port, runtime)
+        .ok_or("Science prior restart managed launch receipt 不可用")?;
+    if token.record.schema_version != 2 || token.record.launch_id != launch_id {
+        return Err("Science prior restart managed launch V2 identity 不匹配".into());
+    }
+    hydrate_runtime_adoption_from_managed_launch(&token, runtime)?;
+    if runtime.adoption_attempt_id.is_none()
+        || !managed_launch_token_is_current_for_runtime(&token, runtime)
+    {
+        return Err("Science prior restart managed launch V2 provenance 已变化".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

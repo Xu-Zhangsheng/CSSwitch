@@ -111,6 +111,323 @@ fn record_successful_test_compensation(dir: &Path, progress: &mut OneClickJourna
     );
 }
 
+fn write_prior_restart_replay_science(path: &Path) {
+    std::fs::write(
+        path,
+        r#"#!/bin/sh
+set -eu
+cmd="${1:-}"
+if [ "$#" -gt 0 ]; then shift; fi
+if [ "$cmd" = "--version" ]; then
+  echo "claude-science prior-restart-replay-test"
+  exit 0
+fi
+data_dir=""
+port=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --data-dir) data_dir="$2"; shift 2 ;;
+    --port) port="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+state="$data_dir/fake-science"
+mkdir -p "$state"
+case "$cmd" in
+  serve)
+    printf '%s' "$port" > "$state/port"
+    /usr/bin/python3 - "$port" "$state/pid" >/dev/null 2>&1 <<'PY' &
+import http.server
+import os
+import socketserver
+import sys
+port = int(sys.argv[1])
+pidfile = sys.argv[2]
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_GET(self):
+        if self.path.startswith("/health"):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+socketserver.TCPServer.allow_reuse_address = True
+with open(pidfile, "w", encoding="utf-8") as f:
+    f.write(str(os.getpid()))
+with socketserver.TCPServer(("127.0.0.1", port), Handler) as server:
+    server.serve_forever()
+PY
+    ;;
+  status)
+    pid="$(cat "$state/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo '{"running":true}'
+    else
+      echo '{"running":false}'
+      exit 1
+    fi
+    ;;
+  url)
+    port="$(cat "$state/port")"
+    printf 'http://127.0.0.1:%s/\n' "$port"
+    ;;
+  stop)
+    pid="$(cat "$state/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+    rm -f "$state/pid"
+    ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+fn reserve_prior_restart_replay_port() -> u16 {
+    for _ in 0..128 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        if matches!(port, 8764 | 8765 | 65535) {
+            continue;
+        }
+        if let Ok(preview) = TcpListener::bind(("127.0.0.1", port + 1)) {
+            drop(preview);
+            drop(listener);
+            return port;
+        }
+    }
+    panic!("could not reserve a prior-restart replay port pair");
+}
+
+fn assert_v1_prior_restart_replay_hydrates_v2_receipt(env: &mut ScopedEnv) {
+    let tmp = isolated_tmpdir("o1-e3-v1-prior-v2-replay");
+    let home = tmp.join("home");
+    let bin_dir = tmp.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let science_bin = bin_dir.join("claude-science");
+    write_prior_restart_replay_science(&science_bin);
+    let science_bin = science_bin.canonicalize().unwrap();
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    env.set("HOME", &home);
+    env.set("CSSWITCH_REPO", &repo);
+    env.set("SCIENCE_BIN", &science_bin);
+    env.set("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+
+    let port = reserve_prior_restart_replay_port();
+    let dir = config::default_dir();
+    let sandbox_home = dir.join("sandbox/home");
+    let auth_dir = sandbox_home.join(".claude-science");
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    let mut initial = runtime_journal_test_config(None, None);
+    initial.sandbox_port = port;
+    initial.reuse_system_ssh = false;
+    config::save_to(&dir, &initial).unwrap();
+
+    let runtime = crate::runtime::science::test_runtime_identity(science_bin);
+    let recipe = config::RuntimePriorScienceRecipe {
+        port,
+        runtime_path: runtime.path.clone(),
+        runtime_source: runtime.source.code().to_string(),
+        runtime_version: runtime.version.clone(),
+        runtime_fingerprint: runtime.environment_transaction_id(),
+        runtime_adoption_attempt_id: None,
+        launch_receipt_digest: "a".repeat(64),
+    };
+    let intent = begin_prior_stop_intent(
+        &dir,
+        "target",
+        &runtime.environment_transaction_id(),
+        None,
+        None,
+        None,
+        recipe.clone(),
+    )
+    .unwrap();
+    let stopped =
+        publish_prior_stop_outcome(&dir, &intent, config::RuntimePriorStopOutcome::ExactStopped)
+            .unwrap();
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let stopped_cfg = config::load_from(&dir).unwrap();
+    let authority =
+        AuthorityTransaction::capture(&dir, &sandbox_home, &auth_dir, &stopped_cfg, &state)
+            .unwrap();
+    let ticket = authority.registered_snapshot_ticket().unwrap();
+    let identity = OneClickTransactionIdentity {
+        target_profile_id: "target".into(),
+        runtime_fingerprint: runtime.environment_transaction_id(),
+        snapshot_ticket: ticket.clone(),
+        previous_binding: None,
+        profile_switch_handoff: None,
+        gateway_terminal_handoff: None,
+        prior_stop: stopped.prior_stop.clone(),
+    };
+    let mut progress = OneClickJournalProgress::Journaled {
+        record: stopped,
+        registered_ticket: ticket,
+    };
+    write_one_click_checkpoint(
+        &dir,
+        &identity,
+        &mut progress,
+        config::RuntimeTransactionPhase::AuthoritySnapshotActive,
+    )
+    .unwrap();
+    test_begin_replayable_compensation(
+        &dir,
+        &authority,
+        &state,
+        &identity,
+        &mut progress,
+        runtime.clone(),
+        None,
+        true,
+    )
+    .unwrap();
+    record_compensation_step(
+        &dir,
+        &mut progress,
+        config::RuntimeCompensationStep::ScienceCleanup,
+        config::RuntimeCompensationStepState::Skipped {
+            cause: config::RuntimeCompensationSkipCause::NoScienceCandidate,
+        },
+    );
+    record_compensation_step(
+        &dir,
+        &mut progress,
+        config::RuntimeCompensationStep::SshCleanup,
+        config::RuntimeCompensationStepState::Succeeded,
+    );
+    record_compensation_step(
+        &dir,
+        &mut progress,
+        config::RuntimeCompensationStep::AuthorityRestore,
+        config::RuntimeCompensationStepState::Succeeded,
+    );
+    begin_one_click_compensation_step(
+        &dir,
+        &mut progress,
+        config::RuntimeCompensationStep::PriorScienceRestart,
+    )
+    .unwrap();
+
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let lifecycle = crate::lifecycle::Lifecycle::default();
+    assert_eq!(
+        test_replay_prior_restart_effect_without_outcome(app.handle(), &state, &lifecycle).unwrap(),
+        config::RuntimeCompensationStepState::Succeeded,
+        "fixture must execute the restart effect without publishing its durable outcome"
+    );
+    let receipt_path = dir.join("science-managed-launch.v1.json");
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+    let attempt_id = receipt["adoption_attempt_id"]
+        .as_str()
+        .expect("restart must emit managed launch V2 adoption provenance")
+        .to_string();
+    assert_eq!(receipt["schema_version"], 2);
+    assert!(recipe.runtime_adoption_attempt_id.is_none());
+    assert_eq!(
+        lock(&state)
+            .science_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.adoption_attempt_id()),
+        Some(attempt_id.as_str())
+    );
+    assert_eq!(
+        config::load_from(&dir)
+            .unwrap()
+            .runtime_compensation
+            .as_ref()
+            .unwrap()
+            .steps
+            .iter()
+            .find(|step| step.step == config::RuntimeCompensationStep::PriorScienceRestart)
+            .map(|step| step.outcome),
+        Some(config::RuntimeCompensationStepState::InProgress),
+        "fixture boundary must retain the pre-effect durable intent after the restart effect"
+    );
+
+    let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let interrupted = config::load_from(&dir).unwrap();
+    assert!(replay_interrupted_one_click_compensation(
+        app.handle(),
+        &fresh_state,
+        &lifecycle,
+        None,
+        &interrupted,
+    )
+    .unwrap());
+    let recovered_runtime = lock(&fresh_state)
+        .science_runtime
+        .clone()
+        .expect("fresh replay must publish the already-restarted runtime");
+    assert_eq!(
+        recovered_runtime.adoption_attempt_id(),
+        Some(attempt_id.as_str()),
+        "fresh replay must hydrate the V2 receipt before publishing AppState"
+    );
+    assert_eq!(
+        config::load_from(&dir)
+            .unwrap()
+            .runtime_compensation
+            .as_ref()
+            .unwrap()
+            .steps
+            .iter()
+            .find(|step| step.step == config::RuntimeCompensationStep::PriorScienceRestart)
+            .map(|step| step.outcome),
+        Some(config::RuntimeCompensationStepState::Succeeded)
+    );
+
+    for _ in 0..4 {
+        let current = config::load_from(&dir).unwrap();
+        if current.runtime_compensation.is_none() {
+            break;
+        }
+        assert!(replay_interrupted_one_click_compensation(
+            app.handle(),
+            &fresh_state,
+            &lifecycle,
+            None,
+            &current,
+        )
+        .unwrap());
+    }
+    assert!(config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .is_none());
+    let stop_result = {
+        let mut current = lock(&fresh_state);
+        let current = &mut *current;
+        crate::runtime::science::stop_sandbox(
+            app.handle(),
+            &mut current.sandbox,
+            &mut current.sandbox_url,
+            crate::runtime::science::ScienceStopRequest::recover(Some(&recovered_runtime)),
+        )
+    };
+    assert!(stop_result.is_ok());
+    assert!(!crate::proc::loopback_port_in_use(
+        port,
+        crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+    ));
+    assert!(!receipt_path.exists());
+    drop(authority);
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
 #[test]
 fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
     let dir = isolated_tmpdir("durable-compensation-journal");
@@ -1358,6 +1675,7 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
         &mut progress,
         launch_runtime,
         Some(ssh_stub_transaction),
+        false,
     )
     .unwrap();
     std::fs::write(&authority_file, b"candidate\n").unwrap();
@@ -1515,4 +1833,5 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
     );
     assert!(!recovery_root.exists());
     let _ = std::fs::remove_dir_all(tmp);
+    assert_v1_prior_restart_replay_hydrates_v2_receipt(&mut env);
 }

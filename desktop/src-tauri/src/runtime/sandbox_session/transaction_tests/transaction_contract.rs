@@ -1242,6 +1242,13 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
                 .contains("fresh replay after convergence must be an idempotent no-op"),
         "compensation/replay crash and idempotence fixtures must remain live"
     );
+    assert!(
+        runtime_journal_source.contains(
+            "fixture boundary must retain the pre-effect durable intent after the restart effect"
+        ) && runtime_journal_source
+            .contains("fresh replay must hydrate the V2 receipt before publishing AppState"),
+        "legacy prior restart replay must retain its crash boundary and V2 hydration fixture"
+    );
 }
 
 #[test]
@@ -1251,6 +1258,7 @@ fn o1_e3_compensation_replay_has_one_durable_pre_auth_owner() {
     let replay_source = include_str!("../one_click/compensation_replay.rs");
     let owner_source = include_str!("../one_click.rs");
     let recovery_source = include_str!("../recovery.rs");
+    let managed_launch_source = include_str!("../../science/managed_launch.rs");
     let settings_source = include_str!("../../settings.rs");
     let config_source = include_str!("../../../config.rs");
 
@@ -1308,7 +1316,9 @@ fn o1_e3_compensation_replay_has_one_durable_pre_auth_owner() {
             && replay_source.contains("transaction.compensate_durable")
             && settings_source.contains("fn compensate_durable")
             && replay_source.contains("prior_restart_launch_id")
-            && replay_source.contains("managed_receipt_matches_launch_id")
+            && replay_source.contains("hydrate_runtime_from_v2_managed_launch")
+            && managed_launch_source.contains("token.record.schema_version != 2")
+            && managed_launch_source.contains("managed_launch_token_is_current_for_runtime")
             && replay_source.contains("prior_restart_receipt_is_absent")
             && recovery_source.contains("let already_restored = current == restored_config")
             && config_source.contains("RUNTIME_COMPENSATION_AUTH_LOCK_FILE"),

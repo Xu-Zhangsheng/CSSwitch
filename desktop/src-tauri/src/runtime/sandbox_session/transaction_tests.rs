@@ -16,10 +16,10 @@ use super::{
     test_arm_authority_snapshot_directory_barrier,
     test_arm_authority_snapshot_fallback_create_failure,
     test_arm_authority_snapshot_parent_barrier, test_begin_replayable_compensation,
-    test_compensate_one_click_failure, validate_system_ssh_wrapper_path,
-    verify_gateway_model_catalog, write_one_click_checkpoint, AuthorityCleanupOutcome,
-    AuthorityCleanupPhase, AuthorityCopyBudget, AuthoritySnapshotCategory, AuthoritySnapshotScope,
-    AuthorityTransaction, AuthorityTreeSnapshot, OneClickAuthoritySnapshot,
+    test_compensate_one_click_failure, test_replay_prior_restart_effect_without_outcome,
+    validate_system_ssh_wrapper_path, verify_gateway_model_catalog, write_one_click_checkpoint,
+    AuthorityCleanupOutcome, AuthorityCleanupPhase, AuthorityCopyBudget, AuthoritySnapshotCategory,
+    AuthoritySnapshotScope, AuthorityTransaction, AuthorityTreeSnapshot, OneClickAuthoritySnapshot,
     OneClickJournalProgress, OneClickTransactionIdentity, PendingCleanupEntry,
     RegisteredAuthorityCleanup, TransactionScienceStopBoundary, MAX_AUTHORITY_FULL_COPY_FILE_BYTES,
     MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES, MAX_AUTHORITY_SNAPSHOT_ENTRIES,
@@ -29,7 +29,7 @@ use super::{
 use crate::config::{self, Config, RuntimeBindingCommit};
 use crate::provider_contracts::ModelPolicy;
 use crate::runtime::proxy::ProxyAction;
-use crate::{AppState, SharedAppState};
+use crate::{lock, AppState, SharedAppState};
 use csswitch_skill_install_core::AttachError;
 use std::collections::BTreeMap;
 use std::fs;

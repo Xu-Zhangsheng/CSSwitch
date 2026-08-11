@@ -103,7 +103,7 @@ pub(super) fn persist_compensation_replay_manifest(
     state: &SharedAppState,
     identity: &OneClickTransactionIdentity,
     rollback: &OneClickRollbackContext,
-    prior_science: Option<&PriorScienceContext>,
+    prior_science_present: bool,
     journal_progress: &OneClickJournalProgress,
 ) -> Result<(String, Vec<String>), String> {
     let compensation_id = config::new_id();
@@ -111,7 +111,7 @@ pub(super) fn persist_compensation_replay_manifest(
         config::RuntimePriorStopState::Intent { recipe }
         | config::RuntimePriorStopState::Outcome { recipe, .. } => Some(recipe.clone()),
         config::RuntimePriorStopState::NotRequired => {
-            if prior_science.is_some() {
+            if prior_science_present {
                 return Err("durable compensation replay lost the prior Science recipe".into());
             }
             None
@@ -738,16 +738,19 @@ fn replay_prior_restart<R: Runtime>(
     let Some(restart_launch_id) = manifest.prior_restart_launch_id.as_deref() else {
         return config::RuntimeCompensationStepState::Failed;
     };
-    let Ok(runtime) = crate::runtime::science::runtime_identity_from_prior_recipe(recipe) else {
+    let Ok(mut runtime) = crate::runtime::science::runtime_identity_from_prior_recipe(recipe)
+    else {
         return config::RuntimeCompensationStepState::Failed;
     };
-    if ScienceHostAdapter::probe_known(recipe.port, &runtime) == SandboxScienceState::RunningHealthy
-        && crate::runtime::science::managed_receipt_matches_launch_id(
-            recipe.port,
-            &runtime,
-            restart_launch_id,
-        )
-    {
+    let already_restarted = crate::runtime::science::hydrate_runtime_from_v2_managed_launch(
+        recipe.port,
+        &mut runtime,
+        restart_launch_id,
+    )
+    .is_ok()
+        && ScienceHostAdapter::probe_known(recipe.port, &runtime)
+            == SandboxScienceState::RunningHealthy;
+    if already_restarted {
         let mut current = lock(state);
         current.sandbox_port = recipe.port;
         current.sandbox_url = Some(ScienceHostAdapter::url(recipe.port, &runtime));
@@ -772,6 +775,37 @@ fn replay_prior_restart<R: Runtime>(
         Ok(()) => config::RuntimeCompensationStepState::Succeeded,
         Err(_) => config::RuntimeCompensationStepState::Failed,
     }
+}
+
+#[cfg(test)]
+pub(super) fn test_replay_prior_restart_effect_without_outcome<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+) -> Result<config::RuntimeCompensationStepState, String> {
+    let cfg = config::load_from(&config::default_dir()).map_err(|error| error.to_string())?;
+    let journal = cfg
+        .runtime_compensation
+        .as_ref()
+        .ok_or("test prior restart requires a durable compensation journal")?;
+    if step_outcome(
+        journal,
+        config::RuntimeCompensationStep::PriorScienceRestart,
+    ) != Some(config::RuntimeCompensationStepState::InProgress)
+    {
+        return Err("test prior restart requires an in-progress durable step".into());
+    }
+    let manifest =
+        serde_json::from_slice::<CompensationReplayManifest>(&read_registered_private_manifest(
+            state,
+            &journal.snapshot_ticket,
+            COMPENSATION_REPLAY_MANIFEST,
+        )?)
+        .map_err(|_| "test prior restart manifest format is invalid".to_string())?;
+    validate_replay_manifest(journal, &manifest)?;
+    Ok(replay_prior_restart(
+        app, state, lifecycle, None, journal, &manifest,
+    ))
 }
 
 fn replay_snapshot_cleanup(
