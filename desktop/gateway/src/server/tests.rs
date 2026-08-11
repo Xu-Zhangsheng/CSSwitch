@@ -1563,8 +1563,9 @@ fn kimi_complete_envelope_preserves_thinking_usage_terminal_and_compacts_indexes
     assert_eq!(termination, StreamTermination::NormalEof);
     assert!(text.contains("\"thinking\":\"plan\""));
     assert!(text.contains("\"signature\":\"opaque\""));
-    assert!(!text.contains("server_tool_use"));
+    assert!(text.contains("\"type\":\"server_tool_use\""));
     assert!(text.contains("\"index\":1"));
+    assert!(text.contains("\"index\":2"));
     assert!(text.contains("\"stop_reason\":\"end_turn\""));
     assert!(text.contains("\"output_tokens\":9"));
     assert_eq!(text.matches("event: message_stop").count(), 1);
