@@ -312,7 +312,7 @@
       "id": "REQ-083-SCIENCE-UPDATER",
       "version": "v0.8.3",
       "title": "Science check-only and CSSwitch updater boundary",
-      "description": "Science check-only behavior, standalone updater artifacts, and DMG-seeded installed-App artifacts remain distinct evidence. The fixed updater path may contain either of the two exact field-observed official executable identifiers; it must require the exact Team ID, fail closed on every other candidate, and commit only the exact same-open SHA-256 snapshot.",
+      "description": "Science check-only behavior, standalone updater artifacts, DMG-seeded installed-App artifacts, and runtime adoption records remain distinct evidence. The fixed updater path may contain either of the two exact field-observed official executable identifiers; it must require the exact Team ID, fail closed on every other candidate, commit only the exact same-open SHA-256 snapshot, and record only allowlisted executable metadata across predecessor, candidate, decision, and launch/finalize milestones.",
       "status": "active",
       "owner": "science-runtime",
       "depends_on": [
@@ -322,6 +322,8 @@
         "Record check-only, standalone updater, and DMG-seed behavior separately.",
         "Require one of the two exact field-observed updater-path identifiers and the exact Team ID without treating embedded metadata as cryptographic provenance.",
         "Bind official_updated selection to a stable same-open SHA-256 content-addressed snapshot and reject unsafe candidates without installed-App fallback.",
+        "Persist an owner-only bounded no-follow adoption ledger with normalized allowlisted diffs, healthy defer, rejected and selected outcomes, ordered launch/finalize milestones, and live/recovery reference retention.",
+        "Bind new managed launch receipt schema v2 to source, version, and adoption attempt while keeping schema v1 read-only compatible with provenance unknown.",
         "Prove installed_app selection separately against the DMG seed without mutating the Science data-dir.",
         "Do not promote source checks to installed or live Science proof."
       ],

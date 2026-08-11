@@ -242,7 +242,7 @@ signing 或 release 结论。
 
 - **Gateway 锁边界**：`06b630b` 已把 candidate log、命令与环境构造、Skill bridge 配置 staging、spawn 和 health poll 全部移出 `AppState`；锁内 reservation 与 generation + full candidate-owner CAS 守护接受，replacement 不被覆盖，不确定 child 由独立 registry 持有，destructive caller 对 typed uncertain stop fail closed。该 exact SHA 的 formal independent clean-context review 为 `PASS`（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`），canonical 15-suite 为 15/15 `PASS`。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
-- **Science adoption ledger**：已有受校验的内容寻址 snapshot、managed identity / receipt、healthy defer 和 cross-runtime rollback guard，但没有通用 predecessor / candidate / adoption diff ledger。
+- **Science adoption record**：当前源码已建立只含 allowlisted executable metadata 的 predecessor / candidate / normalized diff ledger，区分 `deferred_healthy`、`rejected` 与 `selected`，并把 managed receipt schema v2 绑定到 launch/finalize milestone；schema v1 只读兼容且 provenance unknown。该结论仍只属于 source/unit，尚未建立 exact artifact、installed/live、签名或 release 证据。
 
 ## 当前证据缺口
 

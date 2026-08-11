@@ -8,9 +8,10 @@
 // identity, and recovery disposition inside this module boundary.
 #![allow(clippy::result_large_err)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -60,6 +61,9 @@ pub(crate) fn test_arm_post_stop_result_failure(
 // Keep include fragments on rustfmt's normal module-discovery path without
 // changing the runtime module or the historical visibility surface.
 #[cfg(any())]
+#[path = "science/adoption.rs"]
+mod format_adoption;
+#[cfg(any())]
 #[path = "science/contracts.rs"]
 mod format_contracts;
 #[cfg(any())]
@@ -84,6 +88,7 @@ mod format_runtime_state;
 include!("science/contracts.rs");
 include!("science/control_runner.rs");
 include!("science/executable.rs");
+include!("science/adoption.rs");
 include!("science/runtime_state.rs");
 include!("science/managed_launch.rs");
 include!("science/lifecycle.rs");
@@ -97,6 +102,7 @@ pub(crate) fn test_runtime_identity(path: PathBuf) -> ScienceRuntimeIdentity {
         path,
         source: ScienceRuntimeSource::Explicit,
         version: Some("test-only".into()),
+        adoption_attempt_id: None,
     }
 }
 

@@ -4178,6 +4178,7 @@ mod tests {
             .unwrap(),
             state: config::RuntimeCompensationState::InProgress,
             steps: Vec::new(),
+            science_adoption_attempt_ids: Vec::new(),
         }
     }
 

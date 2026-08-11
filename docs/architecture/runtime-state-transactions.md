@@ -8,14 +8,15 @@
 |---|---|---|
 | Gateway child、launch ID、key fingerprint、launch context | Tauri `AppState` | 进程内 |
 | Science runtime identity、confirmed-stopped token、boot/history refs | Tauri `AppState` | 进程内；当前产品不保存 daemon child |
-| Science version observations | `AppState.science_version_cache` | 进程内缓存；不等于 daemon/runtime identity |
+| Science version probe cache | `AppState.science_version_cache` | 进程内缓存；不等于 daemon/runtime identity 或 adoption record |
+| Science executable observation / adoption | private `science-runtime-adoption/ledger.v1.json` | owner-only、bounded、no-follow、atomic/CAS；只含 allowlisted metadata 与 decision/milestone |
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
 | in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
-| in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1/V2 | 持久；V1 只兼容读取并阻断 mutation；当前 V2 只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket、aggregate state 与五个 typed step state；与 `runtime_transaction` 分离 |
+| in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1/V2 | 持久；V1 只兼容读取并阻断 mutation；当前 V2 只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket、aggregate state、五个 typed step state 与最多两个 adoption attempt retention id；与 `runtime_transaction` 分离 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
-| Science managed launch | `science-managed-launch.v1.json` + live listener identity | 持久 receipt 与 live 组合 |
+| Science managed launch | stable path `science-managed-launch.v1.json` + live listener identity | schema v2 绑定 source/version/adoption attempt；schema v1 只读兼容且 provenance unknown |
 | virtual login | Science credential files + CSSwitch `virtual-org.v1.json` marker | 分属 Science/CSSwitch |
 | Skill ownership | Skill 内 `.import-origin` | 单包持久 |
 | Skill bundle | CSSwitch bundle manifest/journal/locks | 跨操作持久 |

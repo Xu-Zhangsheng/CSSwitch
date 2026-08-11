@@ -828,6 +828,8 @@ pub struct RuntimeCompensationJournal {
     pub state: RuntimeCompensationState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<RuntimeCompensationStepProgress>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub science_adoption_attempt_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -851,6 +853,8 @@ pub struct RuntimePriorScienceRecipe {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_version: Option<String>,
     pub runtime_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_adoption_attempt_id: Option<String>,
     pub launch_receipt_digest: String,
 }
 
@@ -880,7 +884,11 @@ pub enum RuntimePriorStopState {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeFinalizeAction {
     ClearJournal,
-    CommitBinding { binding: RuntimeBindingCommit },
+    CommitBinding {
+        binding: RuntimeBindingCommit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        science_adoption_attempt_id: Option<String>,
+    },
     ResumeOneClick,
 }
 
@@ -1116,6 +1124,15 @@ fn valid_prior_science_recipe(recipe: &RuntimePriorScienceRecipe) -> bool {
         && recipe.runtime_path.is_absolute()
         && !recipe.runtime_source.is_empty()
         && valid_runtime_fingerprint(&recipe.runtime_fingerprint)
+        && recipe
+            .runtime_adoption_attempt_id
+            .as_deref()
+            .is_none_or(|value| {
+                value.len() == 32
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            })
         && valid_hex_digest(&recipe.launch_receipt_digest)
 }
 
@@ -1266,8 +1283,20 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
             action: RuntimeFinalizeAction::ClearJournal,
         } => true,
         RuntimeFinalizeState::Intent {
-            action: RuntimeFinalizeAction::CommitBinding { binding },
-        } => valid_runtime_binding(binding),
+            action:
+                RuntimeFinalizeAction::CommitBinding {
+                    binding,
+                    science_adoption_attempt_id,
+                },
+        } => {
+            valid_runtime_binding(binding)
+                && science_adoption_attempt_id.as_deref().is_none_or(|value| {
+                    value.len() == 32
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                })
+        }
         RuntimeFinalizeState::Intent {
             action: RuntimeFinalizeAction::ResumeOneClick,
         } => true,
@@ -2972,9 +3001,25 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
             RuntimeCompensationState::NotStarted => false,
         };
         let schema_valid = match compensation.schema_version {
-            RUNTIME_COMPENSATION_SCHEMA_VERSION_V1 => compensation.steps.is_empty(),
+            RUNTIME_COMPENSATION_SCHEMA_VERSION_V1 => {
+                compensation.steps.is_empty()
+                    && compensation.science_adoption_attempt_ids.is_empty()
+            }
             RUNTIME_COMPENSATION_SCHEMA_VERSION_V2 => {
                 valid_runtime_compensation_steps(compensation)
+                    && compensation.science_adoption_attempt_ids.len() <= 2
+                    && compensation
+                        .science_adoption_attempt_ids
+                        .iter()
+                        .enumerate()
+                        .all(|(index, value)| {
+                            value.len() == 32
+                                && value.bytes().all(|byte| {
+                                    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+                                })
+                                && !compensation.science_adoption_attempt_ids[..index]
+                                    .contains(value)
+                        })
             }
             _ => false,
         };
@@ -4179,6 +4224,7 @@ mod tests {
             .unwrap(),
             state: RuntimeCompensationState::InProgress,
             steps: Vec::new(),
+            science_adoption_attempt_ids: Vec::new(),
         };
         let mut prior_business = valid_one_click_v2(RuntimeTransactionPhase::StartGateway);
         prior_business.prior_stop = RuntimePriorStopState::Outcome {
@@ -4188,6 +4234,7 @@ mod tests {
                 runtime_source: "managed".into(),
                 runtime_version: Some("1.0".into()),
                 runtime_fingerprint: "b".repeat(64),
+                runtime_adoption_attempt_id: None,
                 launch_receipt_digest: "c".repeat(64),
             },
             outcome: RuntimePriorStopOutcome::ExactStopped,
@@ -4214,6 +4261,7 @@ mod tests {
             .unwrap(),
             state: RuntimeCompensationState::InProgress,
             steps: pending_one_click_compensation_steps(),
+            science_adoption_attempt_ids: Vec::new(),
         };
         let config_with_compensation = Config {
             runtime_transaction: Some(prior_transaction.clone()),
@@ -4384,6 +4432,7 @@ mod tests {
                 .unwrap(),
                 state: RuntimeCompensationState::NotStarted,
                 steps: Vec::new(),
+                science_adoption_attempt_ids: Vec::new(),
             }),
             ..Default::default()
         };
@@ -4403,6 +4452,7 @@ mod tests {
                 .unwrap(),
                 state: RuntimeCompensationState::InProgress,
                 steps: invalid_step_order,
+                science_adoption_attempt_ids: Vec::new(),
             }),
             ..Default::default()
         };

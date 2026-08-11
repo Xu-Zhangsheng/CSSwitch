@@ -396,6 +396,7 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         runtime_source: "installed_app".into(),
         runtime_version: Some("test-only".into()),
         runtime_fingerprint: "a".repeat(64),
+        runtime_adoption_attempt_id: None,
         launch_receipt_digest: "b".repeat(64),
     };
     let replacement = RuntimeBindingCommit {
@@ -502,6 +503,7 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         &mut progress,
         config::RuntimeFinalizeAction::CommitBinding {
             binding: committed.clone(),
+            science_adoption_attempt_id: None,
         },
     )
     .unwrap();
@@ -523,7 +525,11 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
             .and_then(config::RuntimeTransactionRecord::as_v2_mut)
             .unwrap();
         if let config::RuntimeFinalizeState::Intent {
-            action: config::RuntimeFinalizeAction::CommitBinding { binding },
+            action:
+                config::RuntimeFinalizeAction::CommitBinding {
+                    binding,
+                    science_adoption_attempt_id: None,
+                },
         } = &mut record.finalize
         {
             binding.binding_fp = "drifted-finalize-binding".into();

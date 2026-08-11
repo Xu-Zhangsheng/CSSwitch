@@ -7964,7 +7964,11 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         assert_eq!(pending_record.target_profile_id, "mock-relay");
         let pending_binding = match &pending_record.finalize {
             config::RuntimeFinalizeState::Intent {
-                action: config::RuntimeFinalizeAction::CommitBinding { binding },
+                action:
+                    config::RuntimeFinalizeAction::CommitBinding {
+                        binding,
+                        science_adoption_attempt_id: None,
+                    },
             } => binding,
             other => panic!("finalize failure retained the wrong action: {other:?}"),
         };
@@ -10151,6 +10155,7 @@ fn o1_e1_in_progress_compensation() -> config::RuntimeCompensationJournal {
         .unwrap(),
         state: config::RuntimeCompensationState::InProgress,
         steps: Vec::new(),
+        science_adoption_attempt_ids: Vec::new(),
     }
 }
 

@@ -158,6 +158,7 @@ fn success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows(
             &mut progress,
             config::RuntimeFinalizeAction::CommitBinding {
                 binding: committed.clone(),
+                science_adoption_attempt_id: None,
             },
         )
         .unwrap();

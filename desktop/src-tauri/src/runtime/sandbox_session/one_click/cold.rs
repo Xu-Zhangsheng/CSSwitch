@@ -569,7 +569,12 @@ pub(super) fn run_cold_one_click<R: Runtime>(
                 &dir,
                 &transaction_identity,
                 &mut journal_progress,
-                config::RuntimeFinalizeAction::CommitBinding { binding: committed },
+                config::RuntimeFinalizeAction::CommitBinding {
+                    binding: committed,
+                    science_adoption_attempt_id: launch_runtime
+                        .adoption_attempt_id()
+                        .map(str::to_string),
+                },
             ),
             &rollback_context,
         )?;
@@ -615,6 +620,19 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             preserve_interrupted_success_finalize(&mut authority_transaction, &mut value);
             trace.finish("degraded=success_finalize_pending");
             return Ok(value);
+        }
+        match mark_science_runtime_adoption_finalized(&launch_runtime) {
+            Ok(()) => {
+                value["adoption_record_status"] = json!("finalized");
+            }
+            Err(_) => {
+                value["status"] = json!("degraded");
+                value["adoption_record_status"] = json!("launch_committed");
+                value["adoption_record_message"] = json!(
+                    "Science 已启动且 binding 已提交，但 adoption finalize milestone 尚未收敛；下次 runtime preflight 会重试。"
+                );
+                trace.finish("degraded=science_adoption_finalize_pending");
+            }
         }
         Ok(value)
     })();

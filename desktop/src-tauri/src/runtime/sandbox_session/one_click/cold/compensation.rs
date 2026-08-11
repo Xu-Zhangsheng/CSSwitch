@@ -314,7 +314,7 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
     }
-    let compensation_id = match persist_compensation_replay_manifest(
+    let (compensation_id, science_adoption_attempt_ids) = match persist_compensation_replay_manifest(
         authority_transaction,
         state,
         transaction_identity,
@@ -341,6 +341,7 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         journal_progress,
         authority_transaction.captured_runtime_transaction(),
         compensation_id,
+        science_adoption_attempt_ids,
     ) {
         authority_transaction.preserve_recovery();
         trace.finish("error=compensation_intent_not_persisted");

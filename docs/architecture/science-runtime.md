@@ -67,6 +67,7 @@ façade；生产实现按独立维护原因分布为：
 | 基础类型、常量、receipt/runtime 合同 | `runtime/science/contracts.rs` |
 | `--version` / `status` / `url` 的 allowlisted bounded command runner | `runtime/science/control_runner.rs` |
 | executable 选择、安全读取、snapshot 与版本识别 | `runtime/science/executable.rs` |
+| predecessor / candidate observation、normalized diff、adoption decision 与 milestone ledger | `runtime/science/adoption.rs` |
 | live process/listener identity 与 runtime state | `runtime/science/runtime_state.rs` |
 | managed launch、receipt 与启动后身份提交 | `runtime/science/managed_launch.rs` |
 | preflight、probe、reuse、URL 与 stop lifecycle | `runtime/science/lifecycle.rs` |
@@ -129,12 +130,27 @@ starter Conda Python/R 环境、跨项目复用的 named task environment、sess
 
 `official_updated` 只读取并快照 updater 固定路径中的单个 executable；该路径已观察到 standalone updater 与 App-seeded 两种精确 identity，当前源码只接受枚举的 exact identifier + Team ID 组合。具体字符串、hash、版本与 `source-fixed-product-pending` 结论留在日期化 audit；它们不能写成 final artifact、installed/live 或公开 release 已证明。
 
-内容寻址 snapshot 只证明被采用 executable 的稳定字节身份，不等于一份可比较的 Science
-更新 provenance ledger。当前源码没有通用的 predecessor/candidate manifest、normalized
-CLI/route/capability diff 或 adoption decision record；历史版本的日期化兼容性调查不能替代该
-机制。未来差异记录只能读取受校验 executable 的版本、SHA-256、embedded identity、来源与
-所选 snapshot 等元数据，不能读取或 diff Science 用户账号、组织、对话、project 或其他
-opaque data。
+内容寻址 snapshot 只证明被采用 executable 的稳定字节身份；可比较的更新 provenance 由
+`science-runtime-adoption/ledger.v1.json` 单独维护。每条 `ScienceExecutableObservation` 只含
+固定来源、已验证版本、SHA-256、大小、embedded-identity 校验状态和可选 snapshot id，不保存
+executable 路径。`ScienceUpdateAttempt` 记录 predecessor、candidate、固定枚举字段组成的
+normalized diff，以及 `deferred_healthy`、`rejected` 或 `selected` 决策。安全校验在形成完整
+candidate observation 前失败时，rejected 记录只保留固定 source 与 rejection code，不读取或
+猜测候选内容。
+
+selected attempt 从 `observed` 只允许按 CAS 顺序进入 `launch_committed`、再进入 `finalized`；
+managed launch receipt schema v2 绑定 runtime source、version 与 attempt id。历史稳定文件名
+`science-managed-launch.v1.json` 不改名：其中 schema v1 继续只读兼容并明确视为 provenance
+unknown，新写入均为 schema v2。prior-stop 与 private compensation recovery identity 也携带可选
+attempt id；private manifest 中 candidate/prior attempt 的同值有界索引随 V2 compensation journal
+发布，避免 authority restore 后只剩 private replay 引用时对应记录被压缩。
+
+ledger 位于 CSSwitch 私有 data root，不在 Science data-dir 内；目录 / 文件分别收紧为 owner-only，
+读取有硬上限并使用 no-follow，更新由跨进程 writer lock、期望 identity / bytes 复核与原子替换
+保护。最多保留 64 条；live receipt、durable prior-stop、active compensation retention id 以及未完成 selected attempt 不能被压缩，
+至少保留最近 16 条。记录只比较上述 allowlist metadata，不能读取或 diff Science 用户账号、
+组织、对话、project、environment、runtime assets 或其他 opaque data。历史版本的日期化兼容性
+调查仍不能替代这份通用机制，也不能把本地 embedded metadata 写成官方来源的密码学证明。
 
 snapshot 位于 `<CSSwitch data root>/runtime-snapshots/science/`，不在 Science data-dir 内。CSSwitch 不扫描、复制或读取真实 Science 账号、组织、配置、`conda`、`runtime` 或 `seed-assets`，不下载 Science、不调用 updater，也不覆盖 Science cache。检测到候选但本地校验失败时会显式报错，不静默回退旧 App。
 
@@ -185,7 +201,7 @@ CSSwitch 自身重启后，只能在以下条件同时满足时接管已有 daem
 
 ## 升级合同
 
-官方模式 updater 写入新 runtime 后，下一次 stopped-to-started 启动生成并选择对应内容 snapshot；如果没有 updater runtime 而用户更新了 Claude Science App，则下一次启动重新选择 App 内的 executable。两条路径都继续复用原 CSSwitch data-dir。使用 updater snapshot 的已健康 daemon 保持其不可变 executable，不因 source 出现新版本而强制重启；正常停止后下一次启动才切换。CSSwitch 不迁移或覆盖组织、项目和 Skill 数据。
+官方模式 updater 写入新 runtime 后，下一次 stopped-to-started 启动生成并选择对应内容 snapshot；如果没有 updater runtime 而用户更新了 Claude Science App，则下一次启动重新选择 App 内的 executable。两条路径都继续复用原 CSSwitch data-dir。使用 updater snapshot 的已健康 daemon 保持其不可变 executable，不因 source 出现新版本而强制重启；preflight / healthy reopen 只写 `deferred_healthy` observation，正常停止后下一次启动才建立 `selected` attempt。managed receipt 提交后记录 `launch_committed`；receipt 已落盘但 milestone 尚未写入的崩溃窗口只能恢复到 `launch_committed`。one-click finalize intent 持久绑定 exact attempt id，binding/finalize CAS 成功后才记录 `finalized`；若其后 ledger 暂未收敛，下一次 preflight 也必须先证明当前 receipt 与已提交 binding 对同一 runtime 一致，不能只凭 receipt 提前 finalize。该 bookkeeping 重试不回滚已成功的 runtime transaction。CSSwitch 不迁移或覆盖组织、项目和 Skill 数据。
 
 每次上游 App 更新后，分别验证：
 

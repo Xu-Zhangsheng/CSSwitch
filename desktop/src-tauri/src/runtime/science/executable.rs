@@ -476,6 +476,7 @@ fn runtime_identity(
                 source,
                 version: Some(version),
                 fingerprint: after,
+                adoption_attempt_id: None,
             });
         }
         let _ = version_cache.force_refresh(&path);
@@ -495,6 +496,7 @@ pub(crate) fn runtime_identity_from_prior_recipe(
         &recipe.runtime_source,
         recipe.runtime_version.clone(),
         &recipe.runtime_fingerprint,
+        recipe.runtime_adoption_attempt_id.clone(),
     )
 }
 
@@ -503,6 +505,7 @@ pub(crate) fn runtime_identity_from_durable_parts(
     runtime_source: &str,
     runtime_version: Option<String>,
     runtime_fingerprint: &str,
+    recipe_adoption_attempt_id: Option<String>,
 ) -> Result<ScienceRuntimeIdentity, String> {
     let source = match runtime_source {
         "explicit" => ScienceRuntimeSource::Explicit,
@@ -519,11 +522,23 @@ pub(crate) fn runtime_identity_from_durable_parts(
     }
     let fingerprint = science_executable_fingerprint(&canonical)
         .ok_or("durable prior Science runtime identity is unavailable")?;
+    if recipe_adoption_attempt_id
+        .as_deref()
+        .is_some_and(|value| !valid_lower_hex(value, 32))
+    {
+        return Err("durable prior Science runtime adoption attempt id is invalid".into());
+    }
+    if source == ScienceRuntimeSource::OfficialUpdated
+        && (!file_is_macho(&canonical) || !official_updated_identity_metadata_matches(&canonical))
+    {
+        return Err("durable updater Science runtime embedded identity is unavailable".into());
+    }
     let runtime = ScienceRuntimeIdentity {
         path: canonical,
         source,
         version: runtime_version,
         fingerprint,
+        adoption_attempt_id: recipe_adoption_attempt_id,
     };
     if runtime.environment_transaction_id() != runtime_fingerprint {
         return Err("durable prior Science runtime fingerprint changed".into());
@@ -539,6 +554,76 @@ fn explicit_science_bin() -> Result<Option<PathBuf>, String> {
         return Err("显式 SCIENCE_BIN 不是安全的绝对可执行文件；已拒绝回退".into());
     }
     Ok(Some(path))
+}
+
+fn preferred_science_runtime_candidate(
+    version_cache: &ScienceVersionCache,
+) -> Result<Option<ScienceRuntimeIdentity>, ScienceCandidateRejection> {
+    if std::env::var_os("SCIENCE_BIN").is_some() {
+        let path = explicit_science_bin()
+            .map_err(|message| ScienceCandidateRejection {
+                source: ScienceRuntimeSource::Explicit,
+                code: ScienceAdoptionRejectionCode::PathValidationFailed,
+                message,
+            })?
+            .ok_or_else(|| ScienceCandidateRejection {
+                source: ScienceRuntimeSource::Explicit,
+                code: ScienceAdoptionRejectionCode::RuntimeUnavailable,
+                message: "显式 SCIENCE_BIN 不可用；已拒绝回退".into(),
+            })?;
+        return runtime_identity(path, ScienceRuntimeSource::Explicit, version_cache)
+            .map(Some)
+            .ok_or_else(|| ScienceCandidateRejection {
+                source: ScienceRuntimeSource::Explicit,
+                code: ScienceAdoptionRejectionCode::VersionProbeFailed,
+                message: "显式 SCIENCE_BIN 未通过版本预检；已拒绝回退".into(),
+            });
+    }
+
+    let updater_detected = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(OFFICIAL_UPDATED_RUNTIME_RELATIVE).exists())
+        .unwrap_or(false);
+    let official_updated =
+        official_updated_science_bin().map_err(|message| ScienceCandidateRejection {
+            source: ScienceRuntimeSource::OfficialUpdated,
+            code: ScienceAdoptionRejectionCode::LocalIdentityValidationFailed,
+            message,
+        })?;
+    if let Some(path) = official_updated {
+        return runtime_identity(path, ScienceRuntimeSource::OfficialUpdated, version_cache)
+            .map(Some)
+            .ok_or_else(|| ScienceCandidateRejection {
+                source: ScienceRuntimeSource::OfficialUpdated,
+                code: ScienceAdoptionRejectionCode::VersionProbeFailed,
+                message: "updater Science snapshot 未通过版本预检；已拒绝回退旧 App".into(),
+            });
+    }
+    if updater_detected {
+        return Err(ScienceCandidateRejection {
+            source: ScienceRuntimeSource::OfficialUpdated,
+            code: ScienceAdoptionRejectionCode::LocalIdentityValidationFailed,
+            message: "检测到 updater Science executable，但本地身份无法确认；已拒绝回退旧 App"
+                .into(),
+        });
+    }
+
+    let app = PathBuf::from(SCIENCE_BIN);
+    if let Some(runtime) = runtime_identity(
+        app.clone(),
+        ScienceRuntimeSource::InstalledApp,
+        version_cache,
+    ) {
+        return Ok(Some(runtime));
+    }
+    if app.exists() {
+        return Err(ScienceCandidateRejection {
+            source: ScienceRuntimeSource::InstalledApp,
+            code: ScienceAdoptionRejectionCode::VersionProbeFailed,
+            message: "Claude Science App executable 未通过版本预检".into(),
+        });
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -653,22 +738,60 @@ pub(crate) fn science_runtime_preflight(
         let (state, runtime) = ScienceHostAdapter::probe_cached(cfg.sandbox_port, version_cache)?;
         if state == SandboxScienceState::RunningHealthy {
             let runtime = runtime.ok_or("Science 状态为运行中，但无法确认其 binary 身份")?;
+            let binding_committed = cfg
+                .active_profile()
+                .and_then(|profile| {
+                    crate::runtime::provider::desired_runtime_binding(&cfg, profile, &runtime).ok()
+                })
+                .as_ref()
+                == cfg.runtime_binding.as_ref();
+            let adoption_record_status =
+                if reconcile_current_science_runtime_adoption(&runtime, binding_committed)
+                    .and_then(|_| {
+                        record_deferred_science_runtime_candidate(&runtime, version_cache)
+                    })
+                    .is_ok()
+                {
+                    "recorded"
+                } else {
+                    "degraded"
+                };
             return Ok(json!({
                 "status": "installed_ready",
                 "selected_source": runtime.source.code(),
                 "selected_version": runtime.version,
                 "cached_version": Value::Null,
                 "download_url": SCIENCE_DOWNLOAD_URL,
+                "adoption_record_status": adoption_record_status,
             }));
         }
     }
     let data_dir = sandbox_data_dir();
-    let explicit = explicit_science_bin()?;
-    let official_updated = official_updated_science_bin()?;
+    match preferred_science_runtime_candidate(version_cache) {
+        Ok(Some(runtime)) => {
+            return Ok(json!({
+                "status": "installed_ready",
+                "selected_source": runtime.source.code(),
+                "selected_version": runtime.version,
+                "cached_version": Value::Null,
+                "download_url": SCIENCE_DOWNLOAD_URL,
+                "adoption_record_status": "pending_selection",
+            }))
+        }
+        Err(rejection) if rejection.source == ScienceRuntimeSource::InstalledApp => {
+            let _ = record_rejected_science_runtime_attempt(None, rejection);
+        }
+        Err(rejection) => {
+            let message = rejection.message.clone();
+            let _ = record_rejected_science_runtime_attempt(None, rejection);
+            return Err(message);
+        }
+        Ok(None) => {}
+    }
     science_runtime_preflight_for_paths_cached(
         &data_dir,
-        explicit.as_deref(),
-        official_updated.as_deref(),
+        None,
+        None,
         Path::new(SCIENCE_BIN),
         version_cache,
     )
@@ -709,6 +832,7 @@ fn select_science_runtime_for_paths_with_updated(
     )
 }
 
+#[cfg(test)]
 fn select_science_runtime_for_paths_cached(
     data_dir: &Path,
     explicit_bin: Option<&Path>,
@@ -762,16 +886,55 @@ pub(crate) fn select_science_runtime_cached(
     version_cache: &ScienceVersionCache,
 ) -> Result<ScienceRuntimeIdentity, String> {
     let data_dir = sandbox_data_dir();
-    let explicit = explicit_science_bin()?;
-    let official_updated = official_updated_science_bin()?;
-    select_science_runtime_for_paths_cached(
-        &data_dir,
-        explicit.as_deref(),
-        official_updated.as_deref(),
-        Path::new(SCIENCE_BIN),
-        choice,
-        version_cache,
-    )
+    match preferred_science_runtime_candidate(version_cache) {
+        Ok(Some(mut runtime)) => {
+            bind_selected_science_runtime_attempt(&mut runtime)?;
+            return Ok(runtime);
+        }
+        Err(rejection) if rejection.source == ScienceRuntimeSource::InstalledApp => {
+            let _ = record_rejected_science_runtime_attempt(None, rejection);
+        }
+        Err(rejection) => {
+            let message = rejection.message.clone();
+            let _ = record_rejected_science_runtime_attempt(None, rejection);
+            return Err(message);
+        }
+        Ok(None) => {}
+    }
+    let cached = cached_science_bin(&data_dir);
+    let cached_version = version_cache.version(&cached);
+    if choice == Some(CACHED_ONCE_CHOICE) {
+        let _ = cached_version.ok_or_else(|| {
+            let rejection = ScienceCandidateRejection {
+                source: ScienceRuntimeSource::CachedOnce,
+                code: ScienceAdoptionRejectionCode::VersionProbeFailed,
+                message: "缓存 Science 版本无法确认；请安装或更新 Claude Science 后再试".into(),
+            };
+            let _ = record_rejected_science_runtime_attempt(None, rejection);
+            "缓存 Science 版本无法确认；请安装或更新 Claude Science 后再试"
+        })?;
+        let mut runtime = runtime_identity(cached, ScienceRuntimeSource::CachedOnce, version_cache)
+            .ok_or("缓存 Science 文件在版本确认期间发生变化；已拒绝启动")?;
+        bind_selected_science_runtime_attempt(&mut runtime)?;
+        return Ok(runtime);
+    }
+    if cached_version.is_some() {
+        let rejection = ScienceCandidateRejection {
+            source: ScienceRuntimeSource::CachedOnce,
+            code: ScienceAdoptionRejectionCode::CachedChoiceRequired,
+            message: "SCIENCE_RUNTIME_CHOICE_REQUIRED：请明确选择仅本次使用缓存版本，或安装/更新 Claude Science"
+                .into(),
+        };
+        let _ = record_rejected_science_runtime_attempt(None, rejection);
+        return Err("SCIENCE_RUNTIME_CHOICE_REQUIRED：请明确选择仅本次使用缓存版本，或安装/更新 Claude Science".into());
+    }
+    let rejection = ScienceCandidateRejection {
+        source: ScienceRuntimeSource::InstalledApp,
+        code: ScienceAdoptionRejectionCode::RuntimeUnavailable,
+        message: "找不到可用的 Claude Science App；请先安装或更新 Claude Science".into(),
+    };
+    let _ = record_rejected_science_runtime_attempt(None, rejection);
+    Err("找不到可用的 Claude Science App；请先安装或更新 Claude Science".into())
 }
 
 fn runtime_probe_candidates(

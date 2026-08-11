@@ -78,6 +78,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.runtime-transaction-v1",
     "record.runtime-transaction-v2",
     "record.sandbox-ssh-stub-v2",
+    "record.science-adoption-v1",
     "record.science-credential-v1",
     "record.science-receipt-v1",
     "record.science-ssh-bridge-v1",

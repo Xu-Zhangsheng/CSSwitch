@@ -3,6 +3,7 @@ fn managed_launch_record_for(
     listener_pid: u32,
     runtime: &ScienceRuntimeIdentity,
     launch_id: Option<&str>,
+    adoption_attempt_id: Option<&str>,
 ) -> Option<ScienceManagedLaunchRecord> {
     if !runtime.is_current() {
         return None;
@@ -14,8 +15,11 @@ fn managed_launch_record_for(
     let process_start = process_start_identity(listener_pid)?;
     let (data_dir, data_dir_device, data_dir_inode) = data_dir_identity()?;
     let fingerprint = &runtime.fingerprint;
+    if adoption_attempt_id.is_some_and(|value| !valid_lower_hex(value, 32)) {
+        return None;
+    }
     Some(ScienceManagedLaunchRecord {
-        schema_version: 1,
+        schema_version: if adoption_attempt_id.is_some() { 2 } else { 1 },
         launch_id: managed_launch_id(launch_id),
         port,
         listener_pid,
@@ -28,6 +32,9 @@ fn managed_launch_record_for(
         runtime_modified_nanoseconds: fingerprint.modified_nanoseconds,
         runtime_mode: fingerprint.mode,
         runtime_sha256: fingerprint_sha256_hex(fingerprint),
+        runtime_source: adoption_attempt_id.map(|_| runtime.source.code().to_string()),
+        runtime_version: adoption_attempt_id.and_then(|_| runtime.version.clone()),
+        adoption_attempt_id: adoption_attempt_id.map(str::to_string),
         data_dir,
         data_dir_device,
         data_dir_inode,
@@ -47,7 +54,27 @@ fn record_matches_runtime(
         return false;
     };
     let fingerprint = &runtime.fingerprint;
-    record.schema_version == 1
+    let provenance_matches = match record.schema_version {
+        1 => {
+            record.runtime_source.is_none()
+                && record.runtime_version.is_none()
+                && record.adoption_attempt_id.is_none()
+        }
+        2 => {
+            record.runtime_source.as_deref() == Some(runtime.source.code())
+                && record.runtime_version == runtime.version
+                && record
+                    .adoption_attempt_id
+                    .as_deref()
+                    .is_some_and(|value| valid_lower_hex(value, 32))
+                && runtime
+                    .adoption_attempt_id
+                    .as_ref()
+                    .is_none_or(|value| Some(value) == record.adoption_attempt_id.as_ref())
+        }
+        _ => false,
+    };
+    provenance_matches
         && record.launch_id.len() >= 16
         && record.launch_id.len() <= 128
         && record
@@ -269,14 +296,36 @@ fn record_managed_science_launch_with_id(
             message: "Science listener 身份在 managed launch 提交前无法确认".into(),
             token: None,
         })?;
-    let record =
-        managed_launch_record_for(port, listener_pid, runtime, launch_id).ok_or_else(|| {
-            ScienceManagedLaunchCommitError {
+    let uncommitted_record =
+        managed_launch_record_for(port, listener_pid, runtime, launch_id, None).ok_or_else(
+            || ScienceManagedLaunchCommitError {
                 message: "Science managed launch 身份无法建立".into(),
                 token: None,
+            },
+        )?;
+    let uncommitted_token = ScienceManagedLaunchToken {
+        record: uncommitted_record.clone(),
+        receipt_file: None,
+    };
+    let adoption_attempt_id =
+        ensure_selected_science_runtime_attempt(runtime).map_err(|message| {
+            ScienceManagedLaunchCommitError {
+                message,
+                token: Some(uncommitted_token.clone()),
             }
         })?;
-    let uncommitted_token = ScienceManagedLaunchToken {
+    let record = managed_launch_record_for(
+        port,
+        listener_pid,
+        runtime,
+        launch_id,
+        Some(&adoption_attempt_id),
+    )
+    .ok_or_else(|| ScienceManagedLaunchCommitError {
+        message: "Science managed launch v2 provenance 身份无法建立".into(),
+        token: Some(uncommitted_token.clone()),
+    })?;
+    let v2_uncommitted_token = ScienceManagedLaunchToken {
         record: record.clone(),
         receipt_file: None,
     };
@@ -294,7 +343,7 @@ fn record_managed_science_launch_with_id(
             }
             return Err(ScienceManagedLaunchCommitError {
                 message: "test-only managed launch commit failure after listener identity".into(),
-                token: Some(uncommitted_token),
+                token: Some(v2_uncommitted_token.clone()),
             });
         }
     }
@@ -303,19 +352,29 @@ fn record_managed_science_launch_with_id(
     {
         return Err(ScienceManagedLaunchCommitError {
             message: "Science listener 在 managed launch 提交前发生变化".into(),
-            token: Some(uncommitted_token),
+            token: Some(v2_uncommitted_token.clone()),
         });
     }
     if let Err(message) = write_managed_launch_record(&record) {
         return Err(ScienceManagedLaunchCommitError {
             message,
-            token: Some(uncommitted_token),
+            token: Some(v2_uncommitted_token.clone()),
         });
     }
-    managed_launch_token(port, runtime).ok_or_else(|| ScienceManagedLaunchCommitError {
-        message: "Science managed launch 记录提交后回读不一致".into(),
-        token: Some(uncommitted_token),
-    })
+    let committed =
+        managed_launch_token(port, runtime).ok_or_else(|| ScienceManagedLaunchCommitError {
+            message: "Science managed launch 记录提交后回读不一致".into(),
+            token: Some(v2_uncommitted_token),
+        })?;
+    if let Err(message) =
+        mark_science_runtime_adoption_launch_committed(&adoption_attempt_id, runtime)
+    {
+        return Err(ScienceManagedLaunchCommitError {
+            message,
+            token: Some(committed),
+        });
+    }
+    Ok(committed)
 }
 
 /// Capture an exact, receipt-free stop token for a newly spawned Science
@@ -327,7 +386,7 @@ pub(crate) fn uncommitted_managed_science_launch_token(
     runtime: &ScienceRuntimeIdentity,
 ) -> Option<ScienceManagedLaunchToken> {
     let listener_pid = listener_runtime_pid(port, runtime)?;
-    let record = managed_launch_record_for(port, listener_pid, runtime, None)?;
+    let record = managed_launch_record_for(port, listener_pid, runtime, None, None)?;
     let token = ScienceManagedLaunchToken {
         record,
         receipt_file: None,

@@ -15,6 +15,8 @@ struct DurableRuntimeIdentity {
     source: String,
     version: Option<String>,
     fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adoption_attempt_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -42,6 +44,7 @@ impl DurableRuntimeIdentity {
             source: runtime.source.code().to_string(),
             version: runtime.version.clone(),
             fingerprint: runtime.environment_transaction_id(),
+            adoption_attempt_id: runtime.adoption_attempt_id().map(str::to_string),
         }
     }
 
@@ -51,6 +54,7 @@ impl DurableRuntimeIdentity {
             &self.source,
             self.version.clone(),
             &self.fingerprint,
+            self.adoption_attempt_id.clone(),
         )
     }
 }
@@ -101,7 +105,7 @@ pub(super) fn persist_compensation_replay_manifest(
     rollback: &OneClickRollbackContext,
     prior_science: Option<&PriorScienceContext>,
     journal_progress: &OneClickJournalProgress,
-) -> Result<String, String> {
+) -> Result<(String, Vec<String>), String> {
     let compensation_id = config::new_id();
     let prior_science = match &identity.prior_stop {
         config::RuntimePriorStopState::Intent { recipe }
@@ -206,8 +210,26 @@ pub(super) fn persist_compensation_replay_manifest(
     };
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| format!("compensation replay manifest encode failed: {error}"))?;
+    let science_adoption_attempt_ids = compensation_manifest_adoption_attempt_ids(&manifest);
     authority.persist_private_manifest(COMPENSATION_REPLAY_MANIFEST, &bytes)?;
-    Ok(compensation_id)
+    Ok((compensation_id, science_adoption_attempt_ids))
+}
+
+fn compensation_manifest_adoption_attempt_ids(
+    manifest: &CompensationReplayManifest,
+) -> Vec<String> {
+    let mut attempt_ids = std::collections::BTreeSet::new();
+    if let Some(attempt_id) = manifest.launch_runtime.adoption_attempt_id.as_ref() {
+        attempt_ids.insert(attempt_id.clone());
+    }
+    if let Some(attempt_id) = manifest
+        .prior_science
+        .as_ref()
+        .and_then(|recipe| recipe.runtime_adoption_attempt_id.as_ref())
+    {
+        attempt_ids.insert(attempt_id.clone());
+    }
+    attempt_ids.into_iter().collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -403,6 +425,8 @@ fn validate_replay_manifest(
         || manifest.launch_runtime.fingerprint != journal.runtime_fingerprint
         || manifest.proxy_restarted != manifest.gateway_cleanup.is_some()
         || manifest.prior_science.as_ref() != active_prior_recipe
+        || journal.science_adoption_attempt_ids
+            != compensation_manifest_adoption_attempt_ids(manifest)
         || !restart_identity_valid
     {
         return Err("compensation replay manifest identity drifted or retargeted".into());

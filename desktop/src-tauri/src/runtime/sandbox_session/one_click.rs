@@ -16,6 +16,8 @@ use crate::runtime::proxy_lifecycle::{
     current_skill_install_bridge_key, skill_install_bridge_dir, GatewayController,
 };
 use crate::runtime::science::{
+    mark_science_runtime_adoption_finalized, mark_science_runtime_adoption_finalized_by_attempt,
+    reconcile_current_science_runtime_adoption, record_deferred_science_runtime_candidate,
     sandbox_home, select_science_runtime_cached, SandboxScienceState, ScienceEnvironmentExposure,
     ScienceHostAdapter, ScienceLaunchFailureKind, ScienceLaunchSpec, ScienceManagedLaunchToken,
     ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopFailureKind,
@@ -488,7 +490,7 @@ pub(super) fn test_begin_replayable_compensation(
         ssh_stub_transaction,
         current_kind: OneClickFailureKind::Prepare,
     };
-    let compensation_id = persist_compensation_replay_manifest(
+    let (compensation_id, science_adoption_attempt_ids) = persist_compensation_replay_manifest(
         authority, state, identity, &rollback, None, progress,
     )?;
     begin_one_click_compensation_with_id(
@@ -497,6 +499,7 @@ pub(super) fn test_begin_replayable_compensation(
         progress,
         authority.captured_runtime_transaction(),
         compensation_id,
+        science_adoption_attempt_ids,
     )
 }
 
@@ -1463,6 +1466,7 @@ pub(super) fn begin_one_click_compensation(
         progress,
         restored_runtime_transaction,
         config::new_id(),
+        Vec::new(),
     )
 }
 
@@ -1472,6 +1476,7 @@ fn begin_one_click_compensation_with_id(
     progress: &mut OneClickJournalProgress,
     restored_runtime_transaction: Option<config::RuntimeTransactionRecord>,
     compensation_id: String,
+    science_adoption_attempt_ids: Vec<String>,
 ) -> Result<(), String> {
     let registered_ticket = progress.registered_ticket().clone();
     let active_runtime_transaction = match progress {
@@ -1534,6 +1539,7 @@ fn begin_one_click_compensation_with_id(
             snapshot_ticket: identity.snapshot_ticket.clone(),
             state: config::RuntimeCompensationState::InProgress,
             steps: config::pending_one_click_compensation_steps(),
+            science_adoption_attempt_ids: science_adoption_attempt_ids.clone(),
         };
         current.runtime_compensation = Some(next.clone());
         Ok((next, true))
@@ -2584,7 +2590,7 @@ pub(super) fn complete_one_click_finalize(
                     .into(),
             );
         }
-        if let config::RuntimeFinalizeAction::CommitBinding { binding } = &action {
+        if let config::RuntimeFinalizeAction::CommitBinding { binding, .. } = &action {
             current.runtime_binding = Some(binding.clone());
         }
         current.runtime_transaction = None;
@@ -2830,7 +2836,7 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
     match (&expected.operation, &action) {
         (
             config::RuntimeTransactionOperation::OneClick,
-            config::RuntimeFinalizeAction::CommitBinding { binding },
+            config::RuntimeFinalizeAction::CommitBinding { binding, .. },
         ) if binding.profile_id != expected.target_profile_id => {
             return Err("interrupted finalize binding no longer matches its target profile".into())
         }
@@ -2872,7 +2878,7 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
             );
         }
         match &action {
-            config::RuntimeFinalizeAction::CommitBinding { binding } => {
+            config::RuntimeFinalizeAction::CommitBinding { binding, .. } => {
                 current.runtime_binding = Some(binding.clone());
                 current.runtime_transaction = None;
             }
@@ -2889,6 +2895,13 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
         }
         Ok(((), true))
     })?;
+    if let config::RuntimeFinalizeAction::CommitBinding {
+        science_adoption_attempt_id: Some(attempt_id),
+        ..
+    } = &action
+    {
+        let _ = mark_science_runtime_adoption_finalized_by_attempt(attempt_id);
+    }
     let _ = cleanup;
     Ok(())
 }
@@ -3065,6 +3078,22 @@ fn one_click_login_with_options<R: Runtime>(
             OneClickEntryDecision::HealthyReopen {
                 runtime: running_runtime,
             } => {
+                let version_cache = { lock(&state).science_version_cache.clone() };
+                let binding_committed = cfg
+                    .active_profile()
+                    .and_then(|profile| {
+                        crate::runtime::provider::desired_runtime_binding(
+                            &cfg,
+                            profile,
+                            &running_runtime,
+                        )
+                        .ok()
+                    })
+                    .as_ref()
+                    == cfg.runtime_binding.as_ref();
+                let _ =
+                    reconcile_current_science_runtime_adoption(&running_runtime, binding_committed);
+                let _ = record_deferred_science_runtime_candidate(&running_runtime, &version_cache);
                 if cfg.reuse_system_ssh {
                     validate_running_system_ssh_bridge(&app, &sbx_home).map_err(|message| {
                         typed_one_click_err(OneClickFailureKind::Prepare, message)

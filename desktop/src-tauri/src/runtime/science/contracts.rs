@@ -9,6 +9,12 @@ const OFFICIAL_SCIENCE_TEAM_ID: &str = "Q6L2SF6YDW";
 const MIN_SCIENCE_BINARY_SIZE: u64 = 1024 * 1024;
 const MAX_SCIENCE_BINARY_SIZE: u64 = 512 * 1024 * 1024;
 const OFFICIAL_UPDATED_SNAPSHOT_DIR: &str = "runtime-snapshots/science";
+const SCIENCE_ADOPTION_STORE_DIR: &str = "science-runtime-adoption";
+const SCIENCE_ADOPTION_LEDGER_FILE: &str = "ledger.v1.json";
+const SCIENCE_ADOPTION_LOCK_FILE: &str = ".writer.lock";
+const MAX_SCIENCE_ADOPTION_LEDGER_BYTES: u64 = 128 * 1024;
+const MAX_SCIENCE_ADOPTION_ATTEMPTS: usize = 64;
+const MIN_RECENT_SCIENCE_ADOPTION_ATTEMPTS: usize = 16;
 const SCIENCE_VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 const SCIENCE_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SCIENCE_CONTROL_OUTPUT_BYTES: u64 = 64 * 1024;
@@ -43,11 +49,16 @@ pub(crate) struct ScienceRuntimeIdentity {
     pub(crate) source: ScienceRuntimeSource,
     pub(crate) version: Option<String>,
     fingerprint: ScienceExecutableFingerprint,
+    adoption_attempt_id: Option<String>,
 }
 
 impl ScienceRuntimeIdentity {
     pub(crate) fn environment_transaction_id(&self) -> String {
         fingerprint_sha256_hex(&self.fingerprint)
+    }
+
+    pub(crate) fn adoption_attempt_id(&self) -> Option<&str> {
+        self.adoption_attempt_id.as_deref()
     }
 
     pub(crate) fn skill_install_host_context(
@@ -121,6 +132,12 @@ struct ScienceManagedLaunchRecord {
     runtime_modified_nanoseconds: i64,
     runtime_mode: u32,
     runtime_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adoption_attempt_id: Option<String>,
     data_dir: PathBuf,
     data_dir_device: u64,
     data_dir_inode: u64,
@@ -178,6 +195,7 @@ impl ScienceManagedLaunchToken {
             runtime_source: runtime.source.code().to_string(),
             runtime_version: runtime.version.clone(),
             runtime_fingerprint: runtime.environment_transaction_id(),
+            runtime_adoption_attempt_id: self.record.adoption_attempt_id.clone(),
             launch_receipt_digest,
         })
     }

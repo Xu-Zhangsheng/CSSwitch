@@ -8,23 +8,29 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::{
-    classify_known_runtime_state, classify_sandbox_state, fingerprint_sha256_hex, first_http_url,
-    managed_launch_id, managed_launch_path, official_updated_embedded_identity_metadata_matches,
-    official_updated_science_bin_for_home, official_updated_snapshot_for_home,
-    official_updated_snapshot_from_process_paths, parse_unique_listener_pid,
-    prior_restart_receipt_is_absent_at, probe_sandbox_runtime_cached, read_managed_launch_record,
-    restore_unmatched_managed_launch_tombstone, runtime_identity_is_current, runtime_status_value,
-    runtime_status_with_timeout, safe_science_version_with_timeout, sandbox_home,
+    bind_selected_science_runtime_attempt, classify_known_runtime_state, classify_sandbox_state,
+    fingerprint_sha256_hex, first_http_url, managed_launch_id, managed_launch_path,
+    managed_launch_record_for, mark_science_runtime_adoption_finalized,
+    mark_science_runtime_adoption_launch_committed,
+    official_updated_embedded_identity_metadata_matches, official_updated_science_bin_for_home,
+    official_updated_snapshot_for_home, official_updated_snapshot_from_process_paths,
+    parse_unique_listener_pid, prior_restart_receipt_is_absent_at, probe_sandbox_runtime_cached,
+    read_managed_launch_record, read_science_adoption_ledger_at,
+    record_deferred_science_runtime_candidate, restore_unmatched_managed_launch_tombstone,
+    runtime_identity, runtime_identity_is_current, runtime_status_value,
+    runtime_status_with_timeout, safe_science_version_with_timeout, sandbox_data_dir, sandbox_home,
     sandbox_running_ours, sandbox_url, sandbox_url_with_timeout, science_executable_fingerprint,
     science_post_term_action, science_runtime_preflight_for_paths,
     science_runtime_preflight_for_paths_cached, science_runtime_preflight_for_paths_with_updated,
     science_status_running, secure_runtime_snapshot_root, select_science_runtime_for_paths,
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
     settings_change_needs_teardown, stop_runtime_from_probe, test_process_start_identity_for_pid,
-    test_runtime_identity, trusted_science_status, SandboxScienceState, SciencePostTermAction,
-    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopCommandOutcome, ScienceStopFailure,
-    ScienceStopFailureKind, ScienceVersionCache, VerifiedScienceStop, CACHED_ONCE_CHOICE,
-    MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES,
+    test_runtime_identity, trusted_science_status, SandboxScienceState, ScienceAdoptionDecision,
+    ScienceAdoptionMilestone, SciencePostTermAction, ScienceRuntimeIdentity, ScienceRuntimeSource,
+    ScienceStopCommandOutcome, ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache,
+    VerifiedScienceStop, CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES,
+    MAX_MANAGED_LAUNCH_BYTES, MAX_SCIENCE_ADOPTION_LEDGER_BYTES, SCIENCE_ADOPTION_LEDGER_FILE,
+    SCIENCE_ADOPTION_STORE_DIR,
 };
 
 #[test]
@@ -85,6 +91,7 @@ fn o1_e3_prior_restart_requires_the_stopped_receipt_to_be_absent() {
         runtime_source: runtime.source.code().to_string(),
         runtime_version: runtime.version.clone(),
         runtime_fingerprint: runtime.environment_transaction_id(),
+        runtime_adoption_attempt_id: None,
         launch_receipt_digest: "a".repeat(64),
     };
     let receipt = root.join("science-managed-launch.v1.json");
@@ -121,6 +128,334 @@ fn official_updater_identity_parser_accepts_only_known_exact_variants() {
     assert!(!official_updated_embedded_identity_metadata_matches(
         "Identifier=com.anthropic.operon\nTeamIdentifier=Q6L2SF6YDW-suffix\n",
     ));
+}
+
+#[test]
+fn science_runtime_adoption_record_is_private_bounded_and_milestone_ordered(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD_ENV: &str = "CSSWITCH_TEST_SCIENCE_ADOPTION_RECORD_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let root = unique_temp_dir("science-adoption-record")?;
+        let home = root.join("home");
+        fs::create_dir_all(&home)?;
+        let output = Command::new(std::env::current_exe()?)
+            .arg("--exact")
+            .arg("runtime::science::tests::science_runtime_adoption_record_is_private_bounded_and_milestone_ordered")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .env("HOME", &home)
+            .env_remove("SCIENCE_BIN")
+            .output()?;
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "isolated Science adoption oracle failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    let config_dir = crate::config::default_dir();
+    fs::create_dir_all(&config_dir)?;
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))?;
+    let data_dir = sandbox_data_dir();
+    fs::create_dir_all(&data_dir)?;
+    fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
+    let running_bin = config_dir.join("running-science");
+    let candidate_bin = config_dir.join("candidate-science");
+    write_fake_version_bin(&running_bin, 0o700, "claude-science 1.0")?;
+    write_fake_version_bin(&candidate_bin, 0o700, "claude-science 2.0")?;
+    let cache = ScienceVersionCache::default();
+    let running = runtime_identity(
+        running_bin.clone(),
+        ScienceRuntimeSource::InstalledApp,
+        &cache,
+    )
+    .ok_or("running test runtime should be observable")?;
+
+    std::env::set_var("SCIENCE_BIN", &candidate_bin);
+    record_deferred_science_runtime_candidate(&running, &cache)?;
+    record_deferred_science_runtime_candidate(&running, &cache)?;
+    let store = config_dir.join(SCIENCE_ADOPTION_STORE_DIR);
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(
+        ledger.attempts.len(),
+        1,
+        "identical healthy defer must deduplicate"
+    );
+    assert_eq!(
+        ledger.attempts[0].decision,
+        ScienceAdoptionDecision::DeferredHealthy
+    );
+    assert_eq!(
+        ledger.attempts[0].predecessor.as_ref().unwrap().version,
+        "claude-science 1.0"
+    );
+    assert_eq!(
+        ledger.attempts[0].candidate.as_ref().unwrap().version,
+        "claude-science 2.0"
+    );
+
+    std::env::set_var("SCIENCE_BIN", "relative-science");
+    record_deferred_science_runtime_candidate(&running, &cache)?;
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(ledger.attempts.len(), 2);
+    assert_eq!(
+        ledger.attempts[1].decision,
+        ScienceAdoptionDecision::Rejected
+    );
+    assert!(ledger.attempts[1].candidate.is_none());
+    assert_eq!(
+        ledger.attempts[1].rejected_source.as_deref(),
+        Some("explicit")
+    );
+    std::env::remove_var("SCIENCE_BIN");
+
+    let mut selected_runtime = runtime_identity(
+        candidate_bin.clone(),
+        ScienceRuntimeSource::Explicit,
+        &cache,
+    )
+    .ok_or("selected test runtime should be observable")?;
+    bind_selected_science_runtime_attempt(&mut selected_runtime)?;
+    let attempt_id = selected_runtime
+        .adoption_attempt_id()
+        .ok_or("selected runtime should carry its adoption attempt")?
+        .to_string();
+    assert!(mark_science_runtime_adoption_finalized(&selected_runtime).is_err());
+    mark_science_runtime_adoption_launch_committed(&attempt_id, &selected_runtime)?;
+    mark_science_runtime_adoption_finalized(&selected_runtime)?;
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    let selected = ledger
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == attempt_id)
+        .ok_or("selected attempt should remain in the ledger")?;
+    assert_eq!(selected.decision, ScienceAdoptionDecision::Selected);
+    assert_eq!(selected.milestone, ScienceAdoptionMilestone::Finalized);
+    assert_eq!(
+        selected
+            .predecessor
+            .as_ref()
+            .map(|value| value.version.as_str()),
+        Some("claude-science 1.0"),
+        "selected adoption should carry forward the healthy-defer predecessor"
+    );
+
+    let receipt_v2 = managed_launch_record_for(
+        8990,
+        std::process::id(),
+        &selected_runtime,
+        Some("science-adoption-test-launch"),
+        Some(&attempt_id),
+    )
+    .ok_or("managed receipt v2 should be constructible")?;
+    assert_eq!(receipt_v2.schema_version, 2);
+    assert_eq!(receipt_v2.runtime_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        receipt_v2.runtime_version.as_deref(),
+        Some("claude-science 2.0")
+    );
+    assert_eq!(
+        receipt_v2.adoption_attempt_id.as_deref(),
+        Some(attempt_id.as_str())
+    );
+    assert!(super::record_matches_runtime(
+        &receipt_v2,
+        8990,
+        &selected_runtime
+    ));
+
+    let receipt_v1 = managed_launch_record_for(
+        8990,
+        std::process::id(),
+        &selected_runtime,
+        Some("science-adoption-test-launch"),
+        None,
+    )
+    .ok_or("legacy managed receipt should remain constructible")?;
+    let legacy_bytes = serde_json::to_vec(&receipt_v1)?;
+    let legacy_roundtrip: super::ScienceManagedLaunchRecord =
+        serde_json::from_slice(&legacy_bytes)?;
+    assert_eq!(legacy_roundtrip.schema_version, 1);
+    assert!(legacy_roundtrip.adoption_attempt_id.is_none());
+    assert!(super::record_matches_runtime(
+        &legacy_roundtrip,
+        8990,
+        &selected_runtime
+    ));
+
+    let ledger_path = store.join(SCIENCE_ADOPTION_LEDGER_FILE);
+    let ledger_bytes = fs::read(&ledger_path)?;
+    let ledger_text = String::from_utf8(ledger_bytes)?;
+    assert!(!ledger_text.contains(running_bin.to_string_lossy().as_ref()));
+    assert!(!ledger_text.contains(candidate_bin.to_string_lossy().as_ref()));
+    assert!(!ledger_text.contains("orgs/"));
+    assert_eq!(
+        store.metadata()?.permissions().mode() & 0o777,
+        0o700,
+        "adoption store must be owner-only"
+    );
+    assert_eq!(
+        ledger_path.metadata()?.permissions().mode() & 0o777,
+        0o600,
+        "adoption ledger must be owner-only"
+    );
+    assert!(ledger_path.metadata()?.len() <= MAX_SCIENCE_ADOPTION_LEDGER_BYTES);
+    Ok(())
+}
+
+#[test]
+fn science_runtime_adoption_store_rejects_symlink_and_oversized_ledger(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_temp_dir("science-adoption-store-guards")?;
+    let target = root.join("target");
+    fs::create_dir(&target)?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+    let linked = root.join("linked");
+    symlink(&target, &linked)?;
+    assert!(read_science_adoption_ledger_at(&linked).is_err());
+
+    let store = root.join("store");
+    fs::create_dir(&store)?;
+    fs::set_permissions(&store, fs::Permissions::from_mode(0o700))?;
+    let ledger = store.join(SCIENCE_ADOPTION_LEDGER_FILE);
+    fs::write(
+        &ledger,
+        vec![b' '; (MAX_SCIENCE_ADOPTION_LEDGER_BYTES + 1) as usize],
+    )?;
+    fs::set_permissions(&ledger, fs::Permissions::from_mode(0o600))?;
+    assert!(read_science_adoption_ledger_at(&store).is_err());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn science_runtime_adoption_recovery_is_exact_and_retains_compensation_references(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD_ENV: &str = "CSSWITCH_TEST_SCIENCE_ADOPTION_RECOVERY_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let root = unique_temp_dir("science-adoption-recovery")?;
+        let home = root.join("home");
+        fs::create_dir_all(&home)?;
+        let output = Command::new(std::env::current_exe()?)
+            .arg("--exact")
+            .arg("runtime::science::tests::science_runtime_adoption_recovery_is_exact_and_retains_compensation_references")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .env("HOME", &home)
+            .env_remove("SCIENCE_BIN")
+            .output()?;
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "isolated Science adoption recovery oracle failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    let config_dir = crate::config::default_dir();
+    fs::create_dir_all(&config_dir)?;
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))?;
+    let data_dir = sandbox_data_dir();
+    fs::create_dir_all(&data_dir)?;
+    fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
+    let runtime_bin = config_dir.join("recovery-science");
+    write_fake_version_bin(&runtime_bin, 0o700, "claude-science 3.0")?;
+    let cache = ScienceVersionCache::default();
+    let mut runtime = runtime_identity(runtime_bin, ScienceRuntimeSource::Explicit, &cache)
+        .ok_or("recovery test runtime should be observable")?;
+    bind_selected_science_runtime_attempt(&mut runtime)?;
+    let attempt_id = runtime
+        .adoption_attempt_id()
+        .ok_or("selected recovery runtime should carry an attempt")?
+        .to_string();
+    let receipt = managed_launch_record_for(
+        8991,
+        std::process::id(),
+        &runtime,
+        Some("science-adoption-recovery-launch"),
+        Some(&attempt_id),
+    )
+    .ok_or("recovery receipt should be constructible")?;
+    super::write_managed_launch_record(&receipt)?;
+
+    super::reconcile_current_science_runtime_adoption(&runtime, false)?;
+    let store = config_dir.join(SCIENCE_ADOPTION_STORE_DIR);
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(
+        ledger
+            .attempts
+            .iter()
+            .find(|attempt| attempt.attempt_id == attempt_id)
+            .map(|attempt| attempt.milestone),
+        Some(ScienceAdoptionMilestone::LaunchCommitted),
+        "receipt-only crash recovery must not finalize before binding commit"
+    );
+    super::reconcile_current_science_runtime_adoption(&runtime, true)?;
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(
+        ledger
+            .attempts
+            .iter()
+            .find(|attempt| attempt.attempt_id == attempt_id)
+            .map(|attempt| attempt.milestone),
+        Some(ScienceAdoptionMilestone::Finalized)
+    );
+
+    let v2_receipt_free_token = super::ScienceManagedLaunchToken {
+        record: receipt,
+        receipt_file: None,
+    };
+    super::clear_managed_launch_identity(&v2_receipt_free_token, &runtime)?;
+    assert!(managed_launch_path().symlink_metadata().is_err());
+
+    let compensation = crate::config::RuntimeCompensationJournal {
+        schema_version: crate::config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V2,
+        compensation_id: "science-adoption-retention".into(),
+        target_profile_id: "retention-profile".into(),
+        runtime_fingerprint: "a".repeat(64),
+        snapshot_ticket: crate::config::RuntimeSnapshotTicket::verified(format!(
+            ".one-click-rollback-{}",
+            "b".repeat(32)
+        ))?,
+        state: crate::config::RuntimeCompensationState::InProgress,
+        steps: crate::config::pending_one_click_compensation_steps(),
+        science_adoption_attempt_ids: vec![attempt_id.clone()],
+    };
+    crate::config::save_to(
+        &config_dir,
+        &crate::config::Config {
+            runtime_compensation: Some(compensation),
+            ..Default::default()
+        },
+    )?;
+    super::mutate_science_adoption_ledger(&store, |ledger| {
+        for _ in 0..(super::MAX_SCIENCE_ADOPTION_ATTEMPTS + 8) {
+            super::append_science_update_attempt(
+                ledger,
+                None,
+                None,
+                ScienceAdoptionDecision::Rejected,
+                Some(super::ScienceAdoptionRejectionCode::RuntimeUnavailable),
+                Some("installed_app".into()),
+            );
+        }
+        Ok(())
+    })?;
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(ledger.attempts.len(), super::MAX_SCIENCE_ADOPTION_ATTEMPTS);
+    assert!(
+        ledger
+            .attempts
+            .iter()
+            .any(|attempt| attempt.attempt_id == attempt_id),
+        "compaction must retain the finalized attempt referenced only by active compensation"
+    );
+    Ok(())
 }
 
 #[test]
@@ -852,6 +1187,7 @@ fn stop_probe_is_idempotent_only_for_confirmed_stopped_state() {
         source: ScienceRuntimeSource::InstalledApp,
         version: None,
         fingerprint: science_executable_fingerprint(&bin).unwrap(),
+        adoption_attempt_id: None,
     };
     let unproven = VerifiedScienceStop {
         runtime: None,
@@ -1332,6 +1668,7 @@ fn sandbox_url_falls_back_to_localhost_when_cli_absent() {
         source: ScienceRuntimeSource::InstalledApp,
         version: None,
         fingerprint: science_executable_fingerprint(&root.join("claude-science")).unwrap(),
+        adoption_attempt_id: None,
     };
     assert_eq!(sandbox_url(8990, &runtime), "http://127.0.0.1:8990");
     fs::remove_dir_all(root).unwrap();
@@ -1347,6 +1684,7 @@ fn sandbox_identity_does_not_trust_health_when_cli_absent() {
         source: ScienceRuntimeSource::InstalledApp,
         version: None,
         fingerprint: science_executable_fingerprint(&root.join("claude-science")).unwrap(),
+        adoption_attempt_id: None,
     };
     assert!(!sandbox_running_ours(9, &runtime));
     fs::remove_dir_all(root).unwrap();
