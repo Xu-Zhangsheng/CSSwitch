@@ -3134,6 +3134,28 @@ class RustGatewayLoopback(unittest.TestCase):
             upstream.close()
 
     def test_relay_kimi_stream_filters_server_tool_blocks(self):
+        models = MockUpstream(json.dumps({"data": [{"id": "kimi-k3"}]}).encode())
+        models_thread = threading.Thread(target=models.serve_forever, daemon=True)
+        models_thread.start()
+        scratch_proc, scratch_port = self.start_current_gateway(
+            provider="relay",
+            contract_id="kimi-anthropic-relay",
+            openai_base_url=f"http://127.0.0.1:{models.server_port}/anthropic",
+            gateway_intent="scratch-models",
+        )
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", scratch_port, timeout=5)
+            conn.request("GET", "/secret/v1/models")
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            conn.close()
+            self.assertEqual(models.requests[0]["path"], "/v1/models")
+        finally:
+            self.stop_gateway(scratch_proc)
+            models.shutdown()
+            models.server_close()
+
         payload = b"".join([
             b'event: message_start\ndata: {"type":"message_start","message":{"id":"m_kimi","type":"message","role":"assistant","model":"kimi-k2.7-code","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
             b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
@@ -3154,9 +3176,11 @@ class RustGatewayLoopback(unittest.TestCase):
             b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
         ])
 
+        captured = []
+
         def kimi_stream_handler(conn):
             with conn:
-                conn.recv(65536)
+                captured.append(conn.recv(65536))
                 head = (
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: text/event-stream\r\n"
@@ -3171,17 +3195,39 @@ class RustGatewayLoopback(unittest.TestCase):
                     pass
 
         upstream = RawUpstream(kimi_stream_handler)
-        proc, port = self.start_gateway(
+        proc, port = self.start_current_gateway(
             provider="relay",
-            upstream_url=upstream.url,
-            openai_base_url=f"http://127.0.0.1:{upstream.port}/up",
+            contract_id="kimi-anthropic-relay",
+            openai_base_url=f"http://127.0.0.1:{upstream.port}/anthropic",
             openai_model="kimi-k2.7-code",
+            relay_thinking="enabled",
         )
         try:
+            pdf_request = {
+                "model": "claude-opus-4-8",
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="},
+                    }],
+                }],
+            }
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("POST", "/secret/v1/messages", body=json.dumps(pdf_request).encode(), headers={"content-type": "application/json"})
+            response = conn.getresponse()
+            error = json.loads(response.read())
+            conn.close()
+            self.assertEqual(response.status, 400, error)
+            self.assertIn("preprocess the PDF locally", error["error"]["message"])
+            self.assertEqual(captured, [])
+
             request = {
                 "model": "claude-opus-4-8",
                 "stream": True,
                 "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+                "tool_choice": {"type": "auto"},
             }
             raw = self.raw_request(
                 port,
@@ -3204,6 +3250,10 @@ class RustGatewayLoopback(unittest.TestCase):
             self.assertIn(b'"index":1', body)
             self.assertIn(b'"index":2', body)
             self.assertIn(b'"text":"OK"', body)
+            upstream_body = captured[0].split(b"\r\n\r\n", 1)[1]
+            self.assertNotIn(b"web_search_20250305", upstream_body)
+            self.assertIn(b'"name":"web_search"', upstream_body)
+            self.assertIn(b'"query"', upstream_body)
         finally:
             self.stop_gateway(proc)
             upstream.close()
@@ -3316,7 +3366,7 @@ class RustGatewayLoopback(unittest.TestCase):
             self.stop_gateway(proc)
             upstream.close()
 
-    def test_v081_relay_kimi_nonstream_drops_only_zero_information_thinking(self):
+    def test_relay_kimi_nonstream_drops_unsigned_thinking(self):
         upstream = MockUpstream(json.dumps({
             "id": "msg_kimi_nonstream",
             "type": "message",
@@ -3382,8 +3432,9 @@ class RustGatewayLoopback(unittest.TestCase):
             }).encode()
             before = len(upstream.requests)
             status, body = post()
-            self.assertEqual(status, 502, body)
-            self.assertEqual(body["error"]["type"], "api_error")
+            self.assertEqual(status, 200, body)
+            self.assertEqual(body["content"], [])
+            self.assertEqual(body["stop_reason"], "end_turn")
             self.assertEqual(len(upstream.requests), before + 1)
         finally:
             self.stop_gateway(proc)

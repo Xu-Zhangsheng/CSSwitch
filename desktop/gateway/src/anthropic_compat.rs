@@ -4,6 +4,7 @@ const RULE_PROVIDER_KIMI_RELAY_THINKING_ENABLED: &str = "provider.kimi.relay-thi
 const RULE_TOOL_RELAY_INPUT_SCHEMA_NORMALIZE: &str = "tool.relay.input-schema-normalize";
 const RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER: &str =
     "tool.kimi.web_search.server-tool-filter";
+const RULE_TRANSPORT_KIMI_DOCUMENT_TEXT_NORMALIZE: &str = "transport.kimi.document-text-normalize";
 const RULE_HISTORY_KIMI_FAILED_TAIL_NORMALIZE: &str = "history.kimi.failed-tail-normalize";
 const RULE_TOOL_SILICONFLOW_FORCED_NAMED_TO_ANY: &str = "tool.siliconflow.forced-named-to-any";
 const SILICONFLOW_API_HOSTS: [&str; 2] = ["api.siliconflow.cn", "api.siliconflow.com"];
@@ -27,7 +28,7 @@ pub struct KimiServerToolFilter {
     next_output_index: u64,
     active_output_block: Option<(u64, u64)>,
     dropped_server_tools: usize,
-    dropped_empty_thinking: usize,
+    dropped_thinking: usize,
     dropped_server_block: Option<u64>,
     thinking: Option<BufferedThinkingBlock>,
 }
@@ -81,11 +82,11 @@ impl KimiServerToolFilter {
     }
 
     pub fn dropped(&self) -> usize {
-        self.dropped_server_tools + self.dropped_empty_thinking
+        self.dropped_server_tools + self.dropped_thinking
     }
 
-    pub fn dropped_empty_thinking(&self) -> usize {
-        self.dropped_empty_thinking
+    pub fn dropped_thinking(&self) -> usize {
+        self.dropped_thinking
     }
 
     fn validate_block_start(&self, idx: u64) -> Result<(), String> {
@@ -363,8 +364,8 @@ impl KimiServerToolFilter {
                 self.complete_upstream_block()?;
                 let has_valid_signature =
                     thinking.signature_structurally_valid && !thinking.signature.is_empty();
-                if thinking.thinking_bytes == 0 && !has_valid_signature {
-                    self.dropped_empty_thinking += 1;
+                if !has_valid_signature {
+                    self.dropped_thinking += 1;
                     let mut pings = Vec::new();
                     for (event, frame) in thinking.frames {
                         if frame.get("type").and_then(Value::as_str) == Some("ping") {
@@ -372,9 +373,6 @@ impl KimiServerToolFilter {
                         }
                     }
                     return Ok(pings);
-                }
-                if thinking.thinking_bytes > 0 && !has_valid_signature {
-                    return Err("Kimi nonempty thinking has no valid signature".into());
                 }
                 let mapped = self.allocate_output_index()?;
                 let mut out = Vec::new();
@@ -434,11 +432,8 @@ pub fn filter_kimi_nonstream_response(body: &[u8]) -> Result<Vec<u8>, String> {
         }
         let has_valid_signature =
             !signature.is_empty() && kimi_signature_fragment_is_valid(signature);
-        if thinking.is_empty() && !has_valid_signature {
+        if !has_valid_signature {
             continue;
-        }
-        if !thinking.is_empty() && !has_valid_signature {
-            return Err("Kimi nonempty thinking has no valid signature".into());
         }
         kept.push(block);
     }
@@ -640,6 +635,25 @@ fn is_anthropic_server_tool(tool: &Value) -> bool {
         || tool_type.starts_with("advisor_")
 }
 
+fn is_kimi_server_web_search(tool: &Value) -> bool {
+    tool.get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|tool_type| tool_type.starts_with("web_search_"))
+        && tool.get("name").and_then(Value::as_str) == Some("web_search")
+}
+
+fn kimi_local_web_search() -> Value {
+    json!({
+        "name": "web_search",
+        "description": "Search the web when current information is needed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"]
+        }
+    })
+}
+
 fn normalize_relay_tools(body: &mut Value, rule_ids: &mut Vec<String>) {
     let Some(tools) = body.get("tools") else {
         return;
@@ -694,22 +708,40 @@ fn normalize_relay_tools(body: &mut Value, rule_ids: &mut Vec<String>) {
 }
 
 fn filter_kimi_server_tools(body: &mut Value, target_model: &str, rule_ids: &mut Vec<String>) {
-    normalize_relay_tools(body, rule_ids);
     if !target_model.to_ascii_lowercase().contains("kimi") {
+        normalize_relay_tools(body, rule_ids);
         return;
     }
     let Some(tools) = body.get("tools").and_then(Value::as_array) else {
+        normalize_relay_tools(body, rule_ids);
         return;
     };
-    let filtered: Vec<Value> = tools
-        .iter()
-        .filter(|tool| !is_anthropic_server_tool(tool))
-        .cloned()
-        .collect();
-    if filtered.len() == tools.len() {
+    let has_local_search = tools.iter().any(|tool| {
+        tool.get("type")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+            && tool.get("name").and_then(Value::as_str) == Some("web_search")
+    });
+    let mut changed = false;
+    let mut added_local_search = has_local_search;
+    let mut filtered = Vec::with_capacity(tools.len());
+    for tool in tools {
+        if is_kimi_server_web_search(tool) {
+            changed = true;
+            if !added_local_search {
+                filtered.push(kimi_local_web_search());
+                added_local_search = true;
+            }
+        } else if is_anthropic_server_tool(tool) {
+            changed = true;
+        } else {
+            filtered.push(tool.clone());
+        }
+    }
+    if !changed {
+        normalize_relay_tools(body, rule_ids);
         return;
     }
-    append_rule_id(rule_ids, RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER);
     if filtered.is_empty() {
         if let Some(obj) = body.as_object_mut() {
             obj.remove("tools");
@@ -717,7 +749,84 @@ fn filter_kimi_server_tools(body: &mut Value, target_model: &str, rule_ids: &mut
     } else {
         body["tools"] = Value::Array(filtered);
     }
+    normalize_relay_tools(body, rule_ids);
+    append_rule_id(rule_ids, RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER);
     degrade_missing_tool_choice(body);
+}
+
+fn normalize_kimi_documents(
+    body: &mut Value,
+    target_model: &str,
+    rule_ids: &mut Vec<String>,
+) -> Result<(), String> {
+    if !target_model.to_ascii_lowercase().contains("kimi") {
+        return Ok(());
+    }
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    let mut changed = false;
+    for message in messages {
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let mut normalized = Vec::with_capacity(content.len());
+        for block in content.drain(..) {
+            if block.get("type").and_then(Value::as_str) != Some("document") {
+                normalized.push(block);
+                continue;
+            }
+            changed = true;
+            let source = block
+                .get("source")
+                .and_then(Value::as_object)
+                .ok_or("Kimi document source is invalid")?;
+            match source.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    let text = source
+                        .get("data")
+                        .and_then(Value::as_str)
+                        .ok_or("Kimi document text is invalid")?;
+                    normalized.push(json!({"type": "text", "text": text}));
+                }
+                Some("content") => {
+                    let blocks = source
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .ok_or("Kimi document content is invalid")?;
+                    if blocks.iter().any(|item| {
+                        !matches!(
+                            item.get("type").and_then(Value::as_str),
+                            Some("text" | "image")
+                        )
+                    }) {
+                        return Err(
+                            "Kimi document content must be preprocessed locally to text or images"
+                                .into(),
+                        );
+                    }
+                    normalized.extend(blocks.iter().cloned());
+                }
+                Some("base64")
+                    if source.get("media_type").and_then(Value::as_str)
+                        == Some("application/pdf") =>
+                {
+                    return Err("Kimi does not accept PDF document blocks; preprocess the PDF locally to text or images".into());
+                }
+                _ => {
+                    return Err(
+                        "Kimi document blocks must be preprocessed locally to text or images"
+                            .into(),
+                    );
+                }
+            }
+        }
+        *content = normalized;
+    }
+    if changed {
+        append_rule_id(rule_ids, RULE_TRANSPORT_KIMI_DOCUMENT_TEXT_NORMALIZE);
+    }
+    Ok(())
 }
 
 fn zero_information_kimi_block(block: &Value) -> bool {
@@ -952,6 +1061,7 @@ pub fn transform_relay_request(
         append_rule_id(&mut rule_ids, RULE_PROVIDER_KIMI_RELAY_THINKING_ENABLED);
     }
     obj.insert("model".to_string(), Value::String(target_model.clone()));
+    normalize_kimi_documents(&mut body, &target_model, &mut rule_ids)?;
     normalize_kimi_failed_history_tail(&mut body, &target_model, &mut rule_ids)?;
     validate_relay_tool_history(&body)?;
     normalize_relay_thinking(&mut body, relay_thinking);
@@ -1143,7 +1253,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_kimi_removed_tool_choice_degrades_to_auto_without_enabled_thinking() {
+    fn relay_kimi_server_web_search_downgrades_to_local_tool() {
         let (mapped, _metadata) = transform_relay_request(
             json!({
                 "model": "claude-opus-4-8",
@@ -1156,8 +1266,22 @@ mod tests {
             "",
         )
         .unwrap();
-        assert!(mapped.get("tools").is_none());
-        assert_eq!(mapped["tool_choice"], json!({"type": "auto"}));
+        assert_eq!(
+            mapped["tools"],
+            json!([{
+                "name": "web_search",
+                "description": "Search the web when current information is needed.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"]
+                }
+            }])
+        );
+        assert_eq!(
+            mapped["tool_choice"],
+            json!({"type": "tool", "name": "web_search"})
+        );
     }
 
     #[test]
@@ -1211,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_filters_server_tools_by_type_without_deleting_same_named_client_tool() {
+    fn kimi_request_compat_normalizes_server_tools_and_documents() {
         let (mapped, metadata) = transform_relay_request(
             json!({
                 "model": "claude-sonnet-5",
@@ -1244,6 +1368,50 @@ mod tests {
                 "tool.kimi.web_search.server-tool-filter".to_string(),
             ]
         );
+
+        let (documents, metadata) = transform_relay_request(
+            json!({
+                "model": "claude-sonnet-5",
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "document",
+                        "source": {"type": "text", "media_type": "text/plain", "data": "local OCR text"}
+                    }]
+                }]
+            }),
+            "kimi-k3",
+            None,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            documents["messages"][0]["content"],
+            json!([{"type": "text", "text": "local OCR text"}])
+        );
+        assert!(metadata
+            .rule_ids
+            .contains(&"transport.kimi.document-text-normalize".to_string()));
+
+        let pdf = transform_relay_request(
+            json!({
+                "model": "claude-sonnet-5",
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}
+                    }]
+                }]
+            }),
+            "kimi-k3",
+            None,
+            "",
+        );
+        assert_eq!(
+            pdf.unwrap_err(),
+            "Kimi does not accept PDF document blocks; preprocess the PDF locally to text or images"
+        );
     }
 
     #[test]
@@ -1274,7 +1442,7 @@ mod tests {
         assert!(text.contains("\"index\":1"));
         assert!(text.contains("\"text\":\"OK\""));
         assert_eq!(filter.dropped(), 3);
-        assert_eq!(filter.dropped_empty_thinking(), 1);
+        assert_eq!(filter.dropped_thinking(), 1);
     }
 
     #[test]
@@ -1305,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_stream_filter_drops_only_zero_information_thinking_and_fails_nonempty_unsigned() {
+    fn kimi_stream_filter_drops_unsigned_thinking() {
         let empty_invalid = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"bad signature\"}}\n\n",
             "event: ping\ndata: {\"type\":\"ping\"}\n\n",
@@ -1315,17 +1483,15 @@ mod tests {
         let output = filter.feed(empty_invalid.as_bytes()).unwrap();
         assert!(!String::from_utf8_lossy(&output).contains("thinking"));
         assert!(String::from_utf8_lossy(&output).contains("event: ping"));
-        assert_eq!(filter.dropped_empty_thinking(), 1);
+        assert_eq!(filter.dropped_thinking(), 1);
 
         let unsigned = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"secret\",\"signature\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
         );
         let mut filter = KimiServerToolFilter::new();
-        assert_eq!(
-            filter.feed(unsigned.as_bytes()).unwrap_err(),
-            "Kimi nonempty thinking has no valid signature"
-        );
+        assert!(filter.feed(unsigned.as_bytes()).unwrap().is_empty());
+        assert_eq!(filter.dropped_thinking(), 1);
     }
 
     #[test]
@@ -1418,7 +1584,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_nonstream_filter_preserves_signed_thinking_and_rejects_unsigned_content() {
+    fn kimi_nonstream_filter_preserves_signed_and_drops_unsigned_thinking() {
         let body = json!({
             "id": "msg",
             "type": "message",
@@ -1440,9 +1606,9 @@ mod tests {
         let invalid = json!({
             "content": [{"type": "thinking", "thinking": "secret", "signature": ""}]
         });
-        assert_eq!(
-            filter_kimi_nonstream_response(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(),
-            "Kimi nonempty thinking has no valid signature"
-        );
+        let filtered =
+            filter_kimi_nonstream_response(&serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let parsed: Value = serde_json::from_slice(&filtered).unwrap();
+        assert!(parsed["content"].as_array().unwrap().is_empty());
     }
 }

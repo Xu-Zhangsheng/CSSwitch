@@ -65,7 +65,7 @@
         "test/golden/relay_anthropic.json"
       ],
       "tests": [
-        "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_removed_tool_choice_degrades_to_auto_without_enabled_thinking",
+        "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_server_web_search_downgrades_to_local_tool",
         "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_thinking_and_tool_quirks_match_python_fixture",
         "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_filters_server_tool_blocks"
       ]
@@ -107,8 +107,8 @@
         "tool_name": "web_search"
       },
       "status": "limited",
-      "action": "drop",
-      "reason": "Kimi treats web_search as a provider server tool and may stream server_tool_use/web_search_tool_result blocks; CSSwitch keeps local known_tools but does not advertise web_search upstream and filters server-tool blocks.",
+      "action": "degrade",
+      "reason": "CSSwitch lowers Science's Kimi web_search server declaration to a normal client tool and still filters unsupported provider server-tool response blocks.",
       "evidence": [
         "desktop/gateway/src/anthropic_compat.rs",
         "desktop/gateway/src/anthropic_compat.rs",
@@ -246,6 +246,24 @@
   "skills": [],
   "science_versions": [],
   "transport_rules": [
+    {
+      "id": "transport.kimi.document-text-normalize",
+      "scope": "transport",
+      "match": {
+        "provider": "relay",
+        "model_contains": "kimi",
+        "content_type": "document"
+      },
+      "status": "limited",
+      "action": "degrade",
+      "reason": "Kimi does not accept Anthropic document blocks, so CSSwitch lowers locally extracted text or image content and rejects raw PDF blocks before upstream submission.",
+      "evidence": [
+        "desktop/gateway/src/anthropic_compat.rs"
+      ],
+      "tests": [
+        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_request_compat_normalizes_server_tools_and_documents"
+      ]
+    },
     {
       "id": "transport.connect.anthropic-fastfail-401",
       "scope": "transport",

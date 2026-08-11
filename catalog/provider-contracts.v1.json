@@ -75,7 +75,7 @@
       "default_credential_source": "api_key",
       "model_policies": ["saved_catalog"],
       "default_model_policy": "saved_catalog",
-      "model_discovery": "anthropic_models_or_manual",
+      "model_discovery": "openai_models_or_manual",
       "transport": "anthropic_messages",
       "endpoint_policy": "profile_required",
       "endpoint_join": "anthropic_v1",

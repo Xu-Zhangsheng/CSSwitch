@@ -152,6 +152,22 @@ pub fn openai_endpoint(base: &str, suffix: &str) -> String {
     root
 }
 
+fn kimi_models_endpoint(base: &str) -> String {
+    let mut root = base.trim().trim_end_matches('/').to_string();
+    for suffix in [
+        "/anthropic/v1/messages",
+        "/anthropic/v1/models",
+        "/anthropic/v1",
+        "/anthropic",
+    ] {
+        if root.ends_with(suffix) {
+            root.truncate(root.len() - suffix.len());
+            break;
+        }
+    }
+    openai_endpoint(&root, "/models")
+}
+
 fn normalize_anthropic_v1_base(base: &str) -> String {
     let mut root = base.trim().trim_end_matches('/').to_string();
     for suffix in ["/messages", "/models"] {
@@ -308,11 +324,14 @@ impl GatewayConfig {
                     !v.is_empty() && (v.starts_with("http://") || v.starts_with("https://"))
                 })
                 .ok_or_else(|| format!("{provider} 需要 {base_env}=http(s)://..."))?;
-            let (inference, discovered_models) = joined_endpoints(
+            let (inference, mut discovered_models) = joined_endpoints(
                 provider_contract.endpoint_join,
                 &provider_contract.transport,
                 &base,
             )?;
+            if provider_contract.contract_id == "kimi-anthropic-relay" {
+                discovered_models = Some(kimi_models_endpoint(&base));
+            }
             models_url = discovered_models;
             if provider_contract.transport == "anthropic_messages" {
                 relay_thinking = std::env::var("CSSWITCH_RELAY_THINKING")
@@ -444,8 +463,8 @@ impl GatewayConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_shim_mode, joined_endpoints, normalize_openai_base, openai_endpoint,
-        provider_supported, shim_mode, upstream_url_for,
+        canonical_shim_mode, joined_endpoints, kimi_models_endpoint, normalize_openai_base,
+        openai_endpoint, provider_supported, shim_mode, upstream_url_for,
     };
     use crate::provider_contracts::EndpointJoin;
 
@@ -577,6 +596,18 @@ mod tests {
                 "https://relay.example.test/anthropic/v1/messages".into(),
                 Some("https://relay.example.test/anthropic/v1/models".into())
             )
+        );
+        assert_eq!(
+            kimi_models_endpoint("https://api.moonshot.cn/anthropic"),
+            "https://api.moonshot.cn/v1/models"
+        );
+        assert_eq!(
+            kimi_models_endpoint("https://api.moonshot.cn/anthropic/v1/messages"),
+            "https://api.moonshot.cn/v1/models"
+        );
+        assert_eq!(
+            kimi_models_endpoint("http://127.0.0.1:1234/relay"),
+            "http://127.0.0.1:1234/relay/v1/models"
         );
     }
 

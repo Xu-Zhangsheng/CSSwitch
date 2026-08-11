@@ -1572,7 +1572,7 @@ fn kimi_complete_envelope_preserves_thinking_usage_terminal_and_compacts_indexes
 }
 
 #[test]
-fn kimi_invalid_thinking_emits_one_terminal_error_without_message_stop() {
+fn kimi_unsigned_thinking_is_dropped_without_failing_stream() {
     let first = concat!(
             "event: message_start\n",
             "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\"}}\n\n",
@@ -1595,10 +1595,10 @@ fn kimi_invalid_thinking_emits_one_terminal_error_without_message_stop() {
         Ok(())
     });
     let text = String::from_utf8(output).unwrap();
-    assert_eq!(termination, StreamTermination::ProtocolError);
+    assert_eq!(termination, StreamTermination::NormalEof);
     assert!(text.contains("event: message_start"));
-    assert_eq!(text.matches("event: error").count(), 1);
-    assert!(!text.contains("message_stop"));
+    assert!(!text.contains("event: error"));
+    assert_eq!(text.matches("event: message_stop").count(), 1);
     assert!(!text.contains("secret"));
 }
 
