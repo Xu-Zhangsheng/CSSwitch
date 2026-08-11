@@ -5,8 +5,10 @@
 ## 范围与身份
 
 本轮由用户明确授权真实 Provider 请求、隔离运行、必要构建、提交与精确清理。production
-code-bearing source 为 `next@e1832bd35e9384265df9911a42f841ed90c0f43c`；后续只补真实
-server-search ID 形态的 test fixture 和本文档，不改变 production 行为。目标为同源新构建且未安装的
+code-bearing source 为 `next@e1832bd35e9384265df9911a42f841ed90c0f43c`；最终 source/test
+closure 为 `0ecc7e2a105b2bb270d42f95a42148a6cd23bbca`，后续提交只补真实 server-search ID
+形态的 test fixture、修正一条过时的 stream integration 断言并更新文档，不改变 production 行为。
+目标为同源新构建且未安装的
 `CSSwitch Test.app`、packaged Rust Gateway 和只读固定的
 `/Applications/Claude Science.app` 0.1.25。
 
@@ -54,6 +56,10 @@ MiniMax 的早期 direct Gateway 探针曾遇到一次 502；随后直连与手�
 Science 文本也通过。该事件只记录为上游瞬时结果，不建立自动重试策略。OpenRouter 的 402 是
 配额证据，不应由 Gateway 静默压低模型、替换 provider 或伪装成 PASS。
 
+最终 clean packaged artifact 又对本轮后半段做了无自动重试复核：MiniMax、SiliconFlow 的精确
+文本标记与 Xiaomi 的自然问答均 PASS；OpenRouter 再次由 Science 到达真实上游并返回同一 402
+配额错误。DeepSeek、Qwen、GLM、Kimi 使用的 artifact Desktop / Gateway hash 与该最终复核相同。
+
 ## Kimi 根因与 PDF 边界
 
 旧实现把 Science 的 `web_search_20250305` server tool 降成普通 client `web_search`，又删除
@@ -91,9 +97,18 @@ Kimi server-search 行为参考官方说明：
 
 - Rust `anthropic_compat::tests`：17/17 PASS；
 - Kimi loopback targeted：3/3 PASS；
-- full source gate：`PENDING-FINAL-GATE`；
+- 当前工作区含受保护未跟踪文件和被忽略 runtime 内的未跟踪 `.gitignore`，可信 snapshot 会在
+  suite 前 fail closed；没有为过门禁删除这些用户数据，而是在 `/private/tmp` 创建同 commit 的
+  non-shallow clean clone。首次 clean-clone full gate 绑定 `12e39c2`，run
+  `59a782697fa3a571be84df417db02f80` 为 14/15 后 `FAIL`：唯一失败是旧 server integration
+  断言仍要求删除 `server_tool_use`。该断言在 `0ecc7e2` 对齐新合同，聚焦复验 PASS；
+- full source gate：`0ecc7e2a105b2bb270d42f95a42148a6cd23bbca`，run
+  `903ebd2e365ac12274639fc676ca9388`，15/15 suites、15/15 observations、runner exit 0，
+  completion seal SHA-256
+  `a7d31bb706ef8acb57e44abe640d3f24387cc76d7eb956fdad261c40f7d4f102`，`PASS`；
 - 最终 CSSwitch UI stop、guard、浏览器 run tabs 与 runtime/credential 临时根清理：
-  `PENDING-FINAL-CLEANUP`。
+  `PASS`；真实 8765 listener PID 保持不变，59704/59705 无残留监听，本轮 Chrome tabs 为 0，
+  隔离 HOME、临时 credential/config、合成 PDF、诊断响应、source-gate clone/output 均精确删除。
 
 本证据不建立 OpenCode/Grok/Gemini、OpenRouter 足额配额、Kimi PDF compute、installed app、
 签名、公证或 release PASS。

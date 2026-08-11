@@ -15,14 +15,20 @@
 新的唯一验收顺序是：**重要重构决策 → production source → exact artifact → isolated-live → authorized live**。当前映射、每层进入条件、授权边界和故障 fixture 边界只在[生产链路验收](../../docs/operations/real-machine-acceptance.md)维护；Science 运行细则见[Science 探针合同](../../docs/operations/science-probe-spec.md)。
 
 2026-08-11 最新 production code-bearing source 是
-`next@e1832bd35e9384265df9911a42f841ed90c0f43c`。它保留 Kimi 官方 server-search 声明和
+`next@e1832bd35e9384265df9911a42f841ed90c0f43c`，最终 source/test closure 是
+`0ecc7e2a105b2bb270d42f95a42148a6cd23bbca`；两者之间只有 test fixture、过时 integration
+断言和文档更新。production 保留 Kimi 官方 server-search 声明和
 响应块，不再把 `web_search` 降成 Science OPERON 无 executor 的普通 client tool；Rust
 compatibility tests 与 targeted loopback 已通过。授权 RM-47 已从隔离 Test app 贯通真实 Science：
 DeepSeek、Qwen、GLM、Kimi、MiniMax、SiliconFlow、Xiaomi 的最小文本/对应子项到达真实 Provider；
 OpenRouter 到达上游但因余额不足返回 402；OpenCode、Grok、Gemini 因 credential 缺失未运行。
 Kimi 搜索已 PASS，PDF 已到 Science 本地 Python 一次性授权，但 conda package environment 失败，
-因此 PDF compute 与 Kimi selector-display 仍是 `INCONCLUSIVE`。full source gate、最终 artifact hash
-与 cleanup 完成前不得把本段升级成整张 C-PROVIDER PASS；完整矩阵见
+因此 PDF compute 与 Kimi selector-display 仍是 `INCONCLUSIVE`。`0ecc7e2` 的 full source gate
+为 15/15 `PASS`（run `903ebd2e365ac12274639fc676ca9388`）；最终 Test app Desktop / packaged
+Gateway SHA-256 分别为 `98f24b69e40c2e238fbf18ae26539c44293a4f33c7d6c9b025008b840597566a` /
+`56a724832dc41dafd3d8bea6d5d67446d49393260336d4cd8aaf31152fca37a0`，最终 stop/guard/tab/runtime
+cleanup 也已 PASS。OpenRouter 足额配额、Kimi PDF compute/selector 与三家缺 credential 仍使整张
+C-PROVIDER 不能升级为全 PASS；完整矩阵见
 [RM-47 日期化证据](../../docs/evidence/investigations/2026-08-11-rm47-authorized-live-providers.md)。
 
 RM-46 的 `d74221e2948f32cd67db0aed8920af6122d0c798` source gate 与 exact-artifact
