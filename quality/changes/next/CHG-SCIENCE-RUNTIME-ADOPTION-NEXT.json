@@ -23,6 +23,7 @@
       "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click/compensation_replay.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/cleanup_recovery.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
