@@ -154,14 +154,15 @@ pub(crate) fn probe_sandbox_runtime_cached(
     let no_candidates = candidates.is_empty();
     let mut saw_stopped = false;
     let mut saw_running_unconfirmed = false;
-    for runtime in candidates {
+    for mut runtime in candidates {
         match runtime_status(&runtime) {
-            Some(true)
-                if health_ready
-                    && listener_uses_runtime(port, &runtime)
-                    && managed_launch_identity_matches(port, &runtime) =>
-            {
-                return Ok((SandboxScienceState::RunningHealthy, Some(runtime)))
+            Some(true) if health_ready && listener_uses_runtime(port, &runtime) => {
+                if let Some(token) = managed_launch_token(port, &runtime) {
+                    if hydrate_runtime_adoption_from_managed_launch(&token, &mut runtime).is_ok() {
+                        return Ok((SandboxScienceState::RunningHealthy, Some(runtime)));
+                    }
+                }
+                saw_running_unconfirmed = true;
             }
             Some(true) => saw_running_unconfirmed = true,
             Some(false) => saw_stopped = true,

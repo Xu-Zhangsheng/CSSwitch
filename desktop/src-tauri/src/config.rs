@@ -652,6 +652,8 @@ pub struct RuntimeBindingCommit {
     pub route_fp: String,
     pub catalog_fp: String,
     pub binding_fp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub science_adoption_attempt_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq)]
@@ -1141,6 +1143,15 @@ fn valid_runtime_binding(binding: &RuntimeBindingCommit) -> bool {
         && !binding.route_fp.is_empty()
         && !binding.catalog_fp.is_empty()
         && !binding.binding_fp.is_empty()
+        && binding
+            .science_adoption_attempt_id
+            .as_deref()
+            .is_none_or(|value| {
+                value.len() == 32
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            })
 }
 
 const LEGACY_SCIENCE_ENVIRONMENT_PENDING_STAGE_PREFIX: &str = "start_science_environment_pending:";
@@ -1289,6 +1300,14 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
                     science_adoption_attempt_id,
                 },
         } => {
+            let matching_adoption_provenance = match (
+                binding.science_adoption_attempt_id.as_deref(),
+                science_adoption_attempt_id.as_deref(),
+            ) {
+                (None, None) => true,
+                (Some(binding_id), Some(action_id)) => binding_id == action_id,
+                _ => false,
+            };
             valid_runtime_binding(binding)
                 && science_adoption_attempt_id.as_deref().is_none_or(|value| {
                     value.len() == 32
@@ -1296,6 +1315,7 @@ fn validate_runtime_transaction_v2(journal: &RuntimeTransactionV2) -> Result<(),
                             .bytes()
                             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
                 })
+                && matching_adoption_provenance
         }
         RuntimeFinalizeState::Intent {
             action: RuntimeFinalizeAction::ResumeOneClick,
@@ -3037,6 +3057,22 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
             ));
         }
     }
+    if cfg
+        .runtime_binding
+        .as_ref()
+        .and_then(|binding| binding.science_adoption_attempt_id.as_deref())
+        .is_some_and(|value| {
+            value.len() != 32
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "runtime_binding Science adoption attempt id is invalid",
+        ));
+    }
     for reserved in ["mode", "proxy_url"] {
         if cfg.codex_network.extra.contains_key(reserved) {
             return Err(io::Error::new(
@@ -3940,6 +3976,7 @@ mod tests {
                 route_fp: "route-fp".into(),
                 catalog_fp: "catalog-fp".into(),
                 binding_fp: "binding-fp".into(),
+                science_adoption_attempt_id: None,
             }),
             previous_gateway: Some(GatewayRuntimeJournalIdentity {
                 provider: "deepseek".into(),
@@ -4375,6 +4412,25 @@ mod tests {
         )
         .is_err());
 
+        let mut mismatched_adoption =
+            valid_one_click_v2(RuntimeTransactionPhase::VerifyScienceCatalog);
+        mismatched_adoption.finalize = RuntimeFinalizeState::Intent {
+            action: RuntimeFinalizeAction::CommitBinding {
+                binding: RuntimeBindingCommit {
+                    profile_id: mismatched_adoption.target_profile_id.clone(),
+                    route_fp: "route-fp".into(),
+                    catalog_fp: "catalog-fp".into(),
+                    binding_fp: "binding-fp".into(),
+                    science_adoption_attempt_id: None,
+                },
+                science_adoption_attempt_id: Some("a".repeat(32)),
+            },
+        };
+        assert!(serde_json::from_value::<RuntimeTransactionRecord>(
+            serde_json::to_value(RuntimeTransactionRecord::V2(mismatched_adoption)).unwrap()
+        )
+        .is_err());
+
         for failed_steps in [
             serde_json::json!([]),
             serde_json::json!(["ssh_cleanup", "ssh_cleanup"]),
@@ -4610,12 +4666,27 @@ mod tests {
             profiles: vec![p],
             active_id: "id1".into(),
             proxy_port: 12345,
+            runtime_binding: Some(RuntimeBindingCommit {
+                profile_id: "id1".into(),
+                route_fp: "route-fp".into(),
+                catalog_fp: "catalog-fp".into(),
+                binding_fp: "binding-fp".into(),
+                science_adoption_attempt_id: Some("a".repeat(32)),
+            }),
             ..Default::default()
         };
         save_to(&d, &cfg).unwrap();
         let got = load_from(&d).unwrap();
         assert_eq!(got, cfg);
         assert_eq!(got.active_profile().unwrap().api_key, "sk-abcdef1234");
+        let mut invalid = cfg.clone();
+        invalid
+            .runtime_binding
+            .as_mut()
+            .unwrap()
+            .science_adoption_attempt_id = Some("A".repeat(32));
+        assert!(save_to(&d, &invalid).is_err());
+        assert_eq!(load_from(&d).unwrap(), cfg);
     }
 
     #[test]

@@ -738,24 +738,17 @@ pub(crate) fn science_runtime_preflight(
         let (state, runtime) = ScienceHostAdapter::probe_cached(cfg.sandbox_port, version_cache)?;
         if state == SandboxScienceState::RunningHealthy {
             let runtime = runtime.ok_or("Science 状态为运行中，但无法确认其 binary 身份")?;
-            let binding_committed = cfg
-                .active_profile()
-                .and_then(|profile| {
-                    crate::runtime::provider::desired_runtime_binding(&cfg, profile, &runtime).ok()
-                })
-                .as_ref()
-                == cfg.runtime_binding.as_ref();
-            let adoption_record_status =
-                if reconcile_current_science_runtime_adoption(&runtime, binding_committed)
-                    .and_then(|_| {
-                        record_deferred_science_runtime_candidate(&runtime, version_cache)
-                    })
-                    .is_ok()
-                {
-                    "recorded"
-                } else {
-                    "degraded"
-                };
+            let adoption_record_status = if reconcile_current_science_runtime_adoption(
+                &runtime,
+                cfg.runtime_binding.as_ref(),
+            )
+            .and_then(|_| record_deferred_science_runtime_candidate(&runtime, version_cache))
+            .is_ok()
+            {
+                "recorded"
+            } else {
+                "degraded"
+            };
             return Ok(json!({
                 "status": "installed_ready",
                 "selected_source": runtime.source.code(),

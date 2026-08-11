@@ -12,7 +12,7 @@
 | Science executable observation / adoption | private `science-runtime-adoption/ledger.v1.json` | owner-only、bounded、no-follow、atomic/CAS；只含 allowlisted metadata 与 decision/milestone |
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
-| last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash |
+| last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash 与可选的 32-hex Science adoption attempt id；旧值缺失 id 时不能授权 adoption finalize |
 | in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
 | in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1/V2 | 持久；V1 只兼容读取并阻断 mutation；当前 V2 只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket、aggregate state、五个 typed step state 与最多两个 adoption attempt retention id；与 `runtime_transaction` 分离 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
@@ -113,6 +113,10 @@ owner/mode/device/inode/tombstone 与 bounded remove 合同不变。成功路径
 `RuntimeFinalizeState::Intent`，再把匹配 manifest 从 `ActiveRecovery` 转为 `CleanupOnly`，最后按
 完整 V2 record、active profile 与旧 binding authority 的同一 CAS 原子提交 binding 并清 journal。
 fresh process 会重放同一 finalize intent：
+带 Science adoption attempt id 的 `CommitBinding` 必须先 fresh probe 当前健康 runtime，并从 exact
+V2 managed receipt 回填同一 id；只有 action、binding、receipt、runtime 四方 id 相同且 receipt 在
+authority cleanup 后仍为 current，才允许提交 binding / 清 journal。receipt 缺失、V1、非法、不同
+attempt 或 runtime identity drift 均失败关闭并保留 journal。通过该 provenance gate 后，
 若 manifest 仍为 `ActiveRecovery` 则先精确转换；若已经是 `CleanupOnly` 则直接沿 cleanup retry
 合同继续；转换发布或最终 binding/journal 原子提交失败均返回 degraded 并保留 finalize journal，
 不进入旧 compensation，下一次 production command 会先重放再进入 healthy reopen。空的

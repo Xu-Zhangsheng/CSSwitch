@@ -116,36 +116,90 @@ fn private_managed_launch_file(metadata: &fs::Metadata) -> bool {
         && metadata.len() <= MAX_MANAGED_LAUNCH_BYTES
 }
 
-fn read_managed_launch_snapshot_at(
+fn valid_managed_launch_record_structure(record: &ScienceManagedLaunchRecord) -> bool {
+    let provenance_valid = match record.schema_version {
+        1 => {
+            record.runtime_source.is_none()
+                && record.runtime_version.is_none()
+                && record.adoption_attempt_id.is_none()
+        }
+        2 => {
+            record.runtime_source.as_deref().is_some_and(|source| {
+                matches!(
+                    source,
+                    "explicit" | "official_updated" | "installed_app" | "cached_once"
+                )
+            }) && record.runtime_version.as_deref().is_some_and(|version| {
+                !version.is_empty()
+                    && version.len() <= 1024
+                    && !version
+                        .bytes()
+                        .any(|byte| byte == 0 || byte == b'\n' || byte == b'\r')
+            }) && record
+                .adoption_attempt_id
+                .as_deref()
+                .is_some_and(|value| valid_lower_hex(value, 32))
+        }
+        _ => false,
+    };
+    provenance_valid
+        && record.launch_id.len() >= 16
+        && record.launch_id.len() <= 128
+        && record
+            .launch_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && record.port != 0
+        && record.listener_pid > 1
+        && !record.process_start.is_empty()
+        && record.process_start.len() <= 128
+        && record.runtime_path.is_absolute()
+        && record.runtime_size > 0
+        && valid_lower_hex(&record.runtime_sha256, 64)
+        && record.data_dir.is_absolute()
+}
+
+fn read_managed_launch_snapshot_at_result(
     path: &Path,
-) -> Option<(ScienceManagedLaunchRecord, ManagedLaunchFileIdentity)> {
-    let parent = path.parent()?;
-    let parent_metadata = parent.symlink_metadata().ok()?;
+) -> Result<Option<(ScienceManagedLaunchRecord, ManagedLaunchFileIdentity)>, String> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("无法读取 Science managed launch 记录身份：{error}")),
+    };
+    let parent = path
+        .parent()
+        .ok_or("Science managed launch 记录路径无父目录")?;
+    let parent_metadata = parent
+        .symlink_metadata()
+        .map_err(|error| format!("无法读取 Science managed launch 记录目录身份：{error}"))?;
     if !parent_metadata.file_type().is_dir()
         || parent_metadata.uid() != unsafe { libc::geteuid() }
         || parent_metadata.permissions().mode() & 0o022 != 0
     {
-        return None;
+        return Err("Science managed launch 记录目录身份不安全".into());
     }
-    let metadata = path.symlink_metadata().ok()?;
     if !private_managed_launch_file(&metadata) {
-        return None;
+        return Err("Science managed launch 记录不是安全私有普通文件或大小非法".into());
     }
     let expected_file = managed_launch_file_identity(&metadata);
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
-        .ok()?;
-    let after = file.metadata().ok()?;
+        .map_err(|error| format!("无法安全打开 Science managed launch 记录：{error}"))?;
+    let after = file
+        .metadata()
+        .map_err(|error| format!("无法复核 Science managed launch 记录身份：{error}"))?;
     if !private_managed_launch_file(&after) || managed_launch_file_identity(&after) != expected_file
     {
-        return None;
+        return Err("Science managed launch 记录在打开期间发生身份变化".into());
     }
     #[cfg(test)]
     if let Some(barrier_dir) = std::env::var_os("CSSWITCH_TEST_MANAGED_LAUNCH_READ_BARRIER") {
         let barrier_dir = PathBuf::from(barrier_dir);
-        fs::write(barrier_dir.join("ready"), b"ready").ok()?;
+        fs::write(barrier_dir.join("ready"), b"ready")
+            .map_err(|error| format!("无法发布 Science managed launch 测试读取屏障：{error}"))?;
         let mut released = false;
         for _ in 0..500 {
             if barrier_dir.join("continue").is_file() {
@@ -155,33 +209,51 @@ fn read_managed_launch_snapshot_at(
             std::thread::sleep(Duration::from_millis(10));
         }
         if !released {
-            return None;
+            return Err("Science managed launch 测试读取屏障未释放".into());
         }
     }
     let mut bytes = Vec::with_capacity(
-        usize::try_from(expected_file.size.min(MAX_MANAGED_LAUNCH_BYTES + 1)).ok()?,
+        usize::try_from(expected_file.size.min(MAX_MANAGED_LAUNCH_BYTES + 1))
+            .map_err(|_| "Science managed launch 记录大小无法表示")?,
     );
     (&mut file)
         .take(MAX_MANAGED_LAUNCH_BYTES + 1)
         .read_to_end(&mut bytes)
-        .ok()?;
+        .map_err(|error| format!("无法读取 Science managed launch 记录：{error}"))?;
     #[cfg(test)]
     MANAGED_LAUNCH_LAST_READ_BYTES.store(bytes.len() as u64, Ordering::SeqCst);
-    let final_metadata = file.metadata().ok()?;
+    let final_metadata = file
+        .metadata()
+        .map_err(|error| format!("无法完成 Science managed launch 记录身份复核：{error}"))?;
     if !private_managed_launch_file(&final_metadata)
         || managed_launch_file_identity(&final_metadata) != expected_file
         || bytes.len() as u64 != expected_file.size
         || bytes.len() as u64 > MAX_MANAGED_LAUNCH_BYTES
     {
-        return None;
+        return Err("Science managed launch 记录在读取期间发生变化或超过上限".into());
     }
-    let record = serde_json::from_slice(&bytes).ok()?;
-    Some((record, expected_file))
+    let record = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Science managed launch 记录无法解析：{error}"))?;
+    if !valid_managed_launch_record_structure(&record) {
+        return Err("Science managed launch 记录 schema 或字段语义非法".into());
+    }
+    Ok(Some((record, expected_file)))
+}
+
+fn read_managed_launch_snapshot_at(
+    path: &Path,
+) -> Option<(ScienceManagedLaunchRecord, ManagedLaunchFileIdentity)> {
+    read_managed_launch_snapshot_at_result(path).ok().flatten()
 }
 
 fn read_managed_launch_snapshot() -> Option<(ScienceManagedLaunchRecord, ManagedLaunchFileIdentity)>
 {
     read_managed_launch_snapshot_at(&managed_launch_path())
+}
+
+fn read_managed_launch_snapshot_result(
+) -> Result<Option<(ScienceManagedLaunchRecord, ManagedLaunchFileIdentity)>, String> {
+    read_managed_launch_snapshot_at_result(&managed_launch_path())
 }
 
 pub(crate) fn prior_restart_receipt_is_absent(
@@ -439,6 +511,17 @@ pub(crate) fn managed_launch_token_process_is_alive(token: &ScienceManagedLaunch
 
 fn managed_launch_identity_matches(port: u16, runtime: &ScienceRuntimeIdentity) -> bool {
     managed_launch_token(port, runtime).is_some()
+}
+
+fn hydrate_runtime_adoption_from_managed_launch(
+    token: &ScienceManagedLaunchToken,
+    runtime: &mut ScienceRuntimeIdentity,
+) -> Result<(), String> {
+    if !record_matches_runtime(&token.record, token.record.port, runtime) {
+        return Err("Science managed launch provenance 与 runtime 身份不匹配".into());
+    }
+    runtime.adoption_attempt_id = token.record.adoption_attempt_id.clone();
+    Ok(())
 }
 
 fn managed_launch_token_is_current(

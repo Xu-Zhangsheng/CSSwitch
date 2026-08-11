@@ -3190,6 +3190,19 @@ fn h3_finalize_failures_preserve_replayable_intent() {
             &[(fault, "1")],
         );
     }
+    for provenance_fault in ["absent", "v1", "wrong-attempt", "runtime-drift"] {
+        run_exact_ignored_runtime_characterization(
+            "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
+            &[
+                ("CSSWITCH_TEST_FINALIZE_COMPLETION_FAILURE", "1"),
+                ("CSSWITCH_TEST_R0_COLD_START_ONLY", "1"),
+                (
+                    "CSSWITCH_TEST_FINALIZE_REPLAY_PROVENANCE_FAULT",
+                    provenance_fault,
+                ),
+            ],
+        );
+    }
 }
 
 #[test]
@@ -4158,7 +4171,6 @@ fn isolated_r0_one_click_history_attention() {
     let finalize_prepare_failure = env::var_os("CSSWITCH_TEST_FINALIZE_PREPARE_FAILURE").is_some();
     let finalize_completion_failure =
         env::var_os("CSSWITCH_TEST_FINALIZE_COMPLETION_FAILURE").is_some();
-
     let mut env_guard = EnvGuard::new();
     env_guard.set("HOME", &home);
     env_guard.set("CSSWITCH_REPO", &root);
@@ -5212,6 +5224,7 @@ exit 23
         route_fp: "committed-route".into(),
         catalog_fp: "committed-catalog".into(),
         binding_fp: "committed-binding".into(),
+        science_adoption_attempt_id: None,
     };
     let journal = config::RuntimeTransactionJournal {
         transaction_id: "preexisting-transaction".into(),
@@ -5329,6 +5342,7 @@ fn isolated_r0_start_gateway_only_success_matrix() {
         route_fp: "r0-applied-route".into(),
         catalog_fp: "r0-applied-catalog".into(),
         binding_fp: "r0-applied-binding".into(),
+        science_adoption_attempt_id: None,
     };
     let journal = config::RuntimeTransactionJournal {
         transaction_id: "r0-start-gateway-success-prior-journal".into(),
@@ -5601,6 +5615,7 @@ exit 23
         route_fp: "failure-applied-route".into(),
         catalog_fp: "failure-applied-catalog".into(),
         binding_fp: "failure-applied-binding".into(),
+        science_adoption_attempt_id: None,
     };
     let journal = config::RuntimeTransactionJournal {
         transaction_id: format!("r0-start-gateway-{oracle}-journal"),
@@ -7880,6 +7895,8 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
     let finalize_prepare_failure = env::var_os("CSSWITCH_TEST_FINALIZE_PREPARE_FAILURE").is_some();
     let finalize_completion_failure =
         env::var_os("CSSWITCH_TEST_FINALIZE_COMPLETION_FAILURE").is_some();
+    let finalize_replay_provenance_fault =
+        env::var("CSSWITCH_TEST_FINALIZE_REPLAY_PROVENANCE_FAULT").ok();
     let mut cfg = Config {
         profiles: vec![profile],
         active_id: "mock-relay".into(),
@@ -7962,17 +7979,23 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
             config::RuntimeTransactionOperation::OneClick
         );
         assert_eq!(pending_record.target_profile_id, "mock-relay");
-        let pending_binding = match &pending_record.finalize {
+        let (pending_binding, pending_adoption_attempt_id) = match &pending_record.finalize {
             config::RuntimeFinalizeState::Intent {
                 action:
                     config::RuntimeFinalizeAction::CommitBinding {
                         binding,
-                        science_adoption_attempt_id: None,
+                        science_adoption_attempt_id: Some(attempt_id),
                     },
-            } => binding,
+            } if !attempt_id.is_empty() => (binding, attempt_id),
             other => panic!("finalize failure retained the wrong action: {other:?}"),
         };
         assert_eq!(pending_binding.profile_id, "mock-relay");
+        assert_eq!(pending_adoption_attempt_id.len(), 32);
+        assert_eq!(
+            pending_binding.science_adoption_attempt_id.as_deref(),
+            Some(pending_adoption_attempt_id.as_str()),
+            "binding and finalize intent must preserve the same exact adoption attempt"
+        );
         {
             let runtime = lock(&state);
             assert!(runtime.proxy.is_some());
@@ -7999,6 +8022,7 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
             route_fp: "replacement-route".into(),
             catalog_fp: "replacement-catalog".into(),
             binding_fp: "replacement-binding".into(),
+            science_adoption_attempt_id: None,
         };
         config::update(&config_dir, |current| {
             current.runtime_binding = Some(replacement.clone());
@@ -8021,6 +8045,53 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
             current.runtime_binding = None;
         })
         .unwrap();
+        if let Some(provenance_fault) = finalize_replay_provenance_fault.as_deref() {
+            let receipt_path = config_dir.join("science-managed-launch.v1.json");
+            let original_receipt = fs::read(&receipt_path)
+                .expect("pending finalize must retain its exact managed Science V2 receipt");
+            match provenance_fault {
+                "absent" => fs::remove_file(&receipt_path).unwrap(),
+                "v1" | "wrong-attempt" | "runtime-drift" => {
+                    let mut receipt: serde_json::Value =
+                        serde_json::from_slice(&original_receipt).unwrap();
+                    match provenance_fault {
+                        "v1" => {
+                            receipt["schema_version"] = serde_json::json!(1);
+                            let object = receipt.as_object_mut().unwrap();
+                            object.remove("runtime_source");
+                            object.remove("runtime_version");
+                            object.remove("adoption_attempt_id");
+                        }
+                        "wrong-attempt" => {
+                            receipt["adoption_attempt_id"] = serde_json::json!("f".repeat(32));
+                        }
+                        "runtime-drift" => {
+                            receipt["runtime_sha256"] = serde_json::json!("f".repeat(64));
+                        }
+                        _ => unreachable!(),
+                    }
+                    fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+                    fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600)).unwrap();
+                }
+                other => panic!("unknown finalize replay provenance fault: {other}"),
+            }
+            let before_rejected_replay = fs::read(config_dir.join("config.json")).unwrap();
+            let rejected =
+                super::one_click_login_cmd(handle.clone(), state.clone(), lifecycle.clone(), None)
+                    .expect("provenance rejection must use the frozen IPC failure DTO");
+            assert_eq!(rejected["status"], "error", "{rejected}");
+            assert_eq!(
+                rejected["recovery_status"], "manual_recovery_required",
+                "{rejected}"
+            );
+            assert_eq!(
+                fs::read(config_dir.join("config.json")).unwrap(),
+                before_rejected_replay,
+                "{provenance_fault} receipt must preserve the finalize journal and binding"
+            );
+            fs::write(&receipt_path, original_receipt).unwrap();
+            fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let replayed =
             super::one_click_login_cmd(handle.clone(), state.clone(), lifecycle.clone(), None)
                 .expect("next production command must replay finalize before healthy reopen");
@@ -8032,6 +8103,13 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
                 .as_ref()
                 .map(|binding| binding.profile_id.as_str()),
             Some("mock-relay")
+        );
+        assert_eq!(
+            finalized
+                .runtime_binding
+                .as_ref()
+                .and_then(|binding| binding.science_adoption_attempt_id.as_deref()),
+            Some(pending_adoption_attempt_id.as_str())
         );
         assert!(finalized.runtime_transaction.is_none());
         let manifest = config::read_pending_authority_cleanup_manifest(&config_dir)

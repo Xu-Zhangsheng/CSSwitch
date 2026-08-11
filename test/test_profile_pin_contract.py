@@ -46,8 +46,17 @@ class ProfilePinContractTests(unittest.TestCase):
             one_click,
             r"begin_one_click_finalize\(\s*&dir,\s*&transaction_identity,\s*"
             r"&mut journal_progress,\s*"
-            r"config::RuntimeFinalizeAction::CommitBinding\s*\{\s*binding:\s*committed\s*\},\s*\)"
+            r"config::RuntimeFinalizeAction::CommitBinding\s*\{\s*"
+            r"binding:\s*committed,\s*"
+            r"science_adoption_attempt_id:\s*Some\(adoption_attempt_id\),\s*\},\s*\)"
             r"[\s\S]*?complete_one_click_finalize\(\s*&dir,\s*&mut journal_progress\s*\)",
+        )
+        self.assertRegex(
+            one_click,
+            r"let adoption_attempt_id\s*=\s*committed\s*"
+            r"\.science_adoption_attempt_id\s*\.clone\(\)\s*"
+            r"\.filter\(\|attempt_id\|[\s\S]*?launch_runtime\.adoption_attempt_id\(\)\s*"
+            r"==\s*Some\(attempt_id\.as_str\(\)\)",
         )
         preset = profiles.split("fn apply_profile_preset_sync_inner_cmd", 1)[1].split(
             "// ---------- profile CRUD", 1

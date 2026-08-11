@@ -465,7 +465,9 @@ fn write_science_adoption_ledger_cas(
 
 fn referenced_science_adoption_attempt_ids() -> Result<BTreeSet<String>, String> {
     let mut referenced = BTreeSet::new();
-    if let Some((record, _)) = read_managed_launch_snapshot() {
+    if let Some((record, _)) = read_managed_launch_snapshot_result()
+        .map_err(|error| format!("读取 Science adoption live receipt 引用失败：{error}"))?
+    {
         if let Some(attempt_id) = record.adoption_attempt_id {
             referenced.insert(attempt_id);
         }
@@ -647,10 +649,13 @@ fn ensure_selected_science_runtime_attempt(
                 .ok_or("Science runtime adoption attempt id 不存在或候选身份不匹配")?;
             return Ok(expected.attempt_id.clone());
         }
-        if let Some(existing) = ledger.attempts.iter().rev().find(|attempt| {
-            attempt.decision == ScienceAdoptionDecision::Selected
-                && attempt.candidate.as_ref() == Some(&candidate)
-        }) {
+        if let Some(existing) = ledger
+            .attempts
+            .iter()
+            .rev()
+            .find(|attempt| attempt.decision == ScienceAdoptionDecision::Selected)
+            .filter(|attempt| attempt.candidate.as_ref() == Some(&candidate))
+        {
             return Ok(existing.attempt_id.clone());
         }
         let predecessor = selected_science_predecessor(ledger, &candidate);
@@ -798,17 +803,11 @@ pub(crate) fn mark_science_runtime_adoption_finalized(
     )
 }
 
-pub(crate) fn mark_science_runtime_adoption_finalized_by_attempt(
-    attempt_id: &str,
-) -> Result<(), String> {
-    advance_science_runtime_adoption_attempt(attempt_id, None, ScienceAdoptionMilestone::Finalized)
-}
-
 pub(crate) fn reconcile_current_science_runtime_adoption(
     runtime: &ScienceRuntimeIdentity,
-    binding_committed: bool,
+    committed_binding: Option<&config::RuntimeBindingCommit>,
 ) -> Result<(), String> {
-    let Some((record, _)) = read_managed_launch_snapshot() else {
+    let Some((record, _)) = read_managed_launch_snapshot_result()? else {
         return Ok(());
     };
     if !record_matches_runtime(&record, record.port, runtime) {
@@ -822,7 +821,9 @@ pub(crate) fn reconcile_current_science_runtime_adoption(
         Some(runtime),
         ScienceAdoptionMilestone::LaunchCommitted,
     )?;
-    if binding_committed {
+    if committed_binding.and_then(|binding| binding.science_adoption_attempt_id.as_deref())
+        == Some(attempt_id.as_str())
+    {
         advance_science_runtime_adoption_attempt(
             &attempt_id,
             Some(runtime),

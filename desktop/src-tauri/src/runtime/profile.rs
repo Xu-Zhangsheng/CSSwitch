@@ -1358,6 +1358,7 @@ mod tests {
                 route_fp: route_fp.clone(),
                 catalog_fp: catalog_fp.clone(),
                 binding_fp: "binding".into(),
+                science_adoption_attempt_id: None,
             });
         })
         .unwrap();

@@ -609,6 +609,7 @@ mod tests {
             route_fp: "route".into(),
             catalog_fp: "catalog".into(),
             binding_fp: "binding".into(),
+            science_adoption_attempt_id: None,
         }
     }
 
@@ -625,6 +626,7 @@ mod tests {
             ),
             catalog_fp: crate::runtime::provider::catalog_fingerprint(profile).unwrap(),
             binding_fp: "binding".into(),
+            science_adoption_attempt_id: None,
         }
     }
 

@@ -1167,6 +1167,7 @@ fn r0_interrupted_recovery_freezes_post_stage_stop_outcomes() {
             route_fp: "prior-route".into(),
             catalog_fp: "prior-catalog".into(),
             binding_fp: "prior-binding".into(),
+            science_adoption_attempt_id: None,
         };
         let legacy_journal = crate::config::RuntimeTransactionJournal {
             transaction_id: format!("tx-{label}"),

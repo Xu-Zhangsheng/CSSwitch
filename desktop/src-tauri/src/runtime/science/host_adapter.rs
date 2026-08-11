@@ -279,11 +279,16 @@ impl ScienceVerifiedLaunch {
 
 pub(crate) struct ScienceLaunchReceipt {
     ownership: ScienceManagedLaunchToken,
+    runtime: ScienceRuntimeIdentity,
 }
 
 impl ScienceLaunchReceipt {
     pub(crate) fn ownership(&self) -> &ScienceManagedLaunchToken {
         &self.ownership
+    }
+
+    pub(crate) fn runtime(&self) -> &ScienceRuntimeIdentity {
+        &self.runtime
     }
 }
 
@@ -555,8 +560,17 @@ impl ScienceHostAdapter {
             )
             .with_ownership(error.token().cloned())
         })?;
+        let mut runtime = verified.runtime;
+        if hydrate_runtime_adoption_from_managed_launch(&ownership, &mut runtime).is_err() {
+            return Err(ScienceLaunchFailure::new(
+                ScienceLaunchFailureKind::ReceiptIdentityDrift,
+                "fresh managed receipt adoption provenance 回读不一致",
+                ScienceEnvironmentExposure::Exposed,
+            )
+            .with_ownership(Some(ownership)));
+        }
         if verified.recheck_committed_receipt
-            && !managed_launch_token_is_current_for_runtime(&ownership, &verified.runtime)
+            && !managed_launch_token_is_current_for_runtime(&ownership, &runtime)
         {
             return Err(ScienceLaunchFailure::new(
                 ScienceLaunchFailureKind::ReceiptIdentityDrift,
@@ -565,7 +579,7 @@ impl ScienceHostAdapter {
             )
             .with_ownership(Some(ownership)));
         }
-        Ok(ScienceLaunchReceipt { ownership })
+        Ok(ScienceLaunchReceipt { ownership, runtime })
     }
 
     pub(crate) fn probe_known(port: u16, runtime: &ScienceRuntimeIdentity) -> SandboxScienceState {

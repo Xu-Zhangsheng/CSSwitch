@@ -103,6 +103,7 @@ fn success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows(
             route_fp: "prior-route".into(),
             catalog_fp: "prior-catalog".into(),
             binding_fp: "prior-binding".into(),
+            science_adoption_attempt_id: None,
         };
         let cfg = Config {
             profiles: vec![config::Profile {
@@ -151,6 +152,7 @@ fn success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows(
             route_fp: "committed-route".into(),
             catalog_fp: "committed-catalog".into(),
             binding_fp: "committed-binding".into(),
+            science_adoption_attempt_id: None,
         };
         begin_one_click_finalize(
             &config_dir,

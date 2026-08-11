@@ -138,16 +138,25 @@ normalized diff，以及 `deferred_healthy`、`rejected` 或 `selected` 决策�
 candidate observation 前失败时，rejected 记录只保留固定 source 与 rejection code，不读取或
 猜测候选内容。
 
-selected attempt 从 `observed` 只允许按 CAS 顺序进入 `launch_committed`、再进入 `finalized`；
+selected attempt 从 `observed` 只允许按 CAS 顺序进入 `launch_committed`、再进入 `finalized`。
+无 receipt provenance 的 stopped-to-started 选择只检查最新一条 selected attempt：candidate 相同的
+普通重启或未完成 crash retry 复用它；latest selected candidate 已变化时必须新建 attempt，并以
+latest finalized candidate 为 predecessor，因此 A→B→A 会记录新的 B→A normalized diff；
 managed launch receipt schema v2 绑定 runtime source、version 与 attempt id。历史稳定文件名
 `science-managed-launch.v1.json` 不改名：其中 schema v1 继续只读兼容并明确视为 provenance
-unknown，新写入均为 schema v2。prior-stop 与 private compensation recovery identity 也携带可选
+unknown，新写入均为 schema v2。新提交的 `runtime_binding` 与 finalize intent 都绑定同一个 exact
+attempt id；fresh probe 只从身份已验证的 V2 receipt 回填该 id，preflight 只有在 receipt、runtime 与
+持久 binding 三者 id 相同时才补记 `finalized`，旧 V1 或缺失/不同 id 只能补记
+`launch_committed`。带 provenance 的 fresh finalize replay 在 authority cleanup 前还必须重建同一
+健康 runtime，并证明 action、binding、V2 receipt、runtime 四方 attempt id 完全相同；receipt
+缺失、V1、非法、不同 attempt 或 runtime identity drift 都保留 journal。prior-stop 与 private compensation recovery identity 也携带可选
 attempt id；private manifest 中 candidate/prior attempt 的同值有界索引随 V2 compensation journal
 发布，避免 authority restore 后只剩 private replay 引用时对应记录被压缩。
 
 ledger 位于 CSSwitch 私有 data root，不在 Science data-dir 内；目录 / 文件分别收紧为 owner-only，
 读取有硬上限并使用 no-follow，更新由跨进程 writer lock、期望 identity / bytes 复核与原子替换
-保护。最多保留 64 条；live receipt、durable prior-stop、active compensation retention id 以及未完成 selected attempt 不能被压缩，
+保护。最多保留 64 条；live receipt、durable prior-stop、active compensation retention id 以及未完成 selected attempt 不能被压缩；
+receipt 文件存在但权限、类型、大小、读取竞态或 JSON 无法安全确认时，压缩直接失败关闭，不能按“无 live receipt”处理。
 至少保留最近 16 条。记录只比较上述 allowlist metadata，不能读取或 diff Science 用户账号、
 组织、对话、project、environment、runtime assets 或其他 opaque data。历史版本的日期化兼容性
 调查仍不能替代这份通用机制，也不能把本地 embedded metadata 写成官方来源的密码学证明。

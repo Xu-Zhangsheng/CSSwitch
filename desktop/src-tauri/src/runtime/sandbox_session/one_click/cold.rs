@@ -52,7 +52,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
     sbx_home: std::path::PathBuf,
     auth_dir: std::path::PathBuf,
     sport: u16,
-    launch_runtime: ScienceRuntimeIdentity,
+    mut launch_runtime: ScienceRuntimeIdentity,
     running_runtime_to_stop: Option<ScienceRuntimeIdentity>,
     science_state: SandboxScienceState,
     remembered_runtime_was_present: bool,
@@ -510,7 +510,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             &auth_dir,
             &sbx_home,
             &launch,
-            &launch_runtime,
+            &mut launch_runtime,
             &login_action,
             sport,
             pport,
@@ -564,6 +564,15 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             ),
             &rollback_context,
         )?;
+        let adoption_attempt_id = committed
+            .science_adoption_attempt_id
+            .clone()
+            .filter(|attempt_id| launch_runtime.adoption_attempt_id() == Some(attempt_id.as_str()))
+            .ok_or_else(|| {
+                rollback_context.failure(
+                    "Science managed receipt、runtime 与 binding adoption provenance 不一致",
+                )
+            })?;
         one_click_step(
             begin_one_click_finalize(
                 &dir,
@@ -571,9 +580,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
                 &mut journal_progress,
                 config::RuntimeFinalizeAction::CommitBinding {
                     binding: committed,
-                    science_adoption_attempt_id: launch_runtime
-                        .adoption_attempt_id()
-                        .map(str::to_string),
+                    science_adoption_attempt_id: Some(adoption_attempt_id),
                 },
             ),
             &rollback_context,

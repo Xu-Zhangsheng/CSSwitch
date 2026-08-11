@@ -81,6 +81,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.science-adoption-v1",
     "record.science-credential-v1",
     "record.science-receipt-v1",
+    "record.science-runtime-snapshot-v1",
     "record.science-ssh-bridge-v1",
     "record.skill-package-v1",
     "record.skill-bridge-mailbox-v1",
@@ -105,6 +106,7 @@ EXPECTED_OPERATIONS = {
     "op.one-click",
     "op.quit-command",
     "op.revoke-profile",
+    "op.science-runtime-preflight",
     "op.select-profile",
     "op.set-mode",
     "op.set-settings",
@@ -143,7 +145,7 @@ EXPECTED_SURFACE_CONTRACT = {
     "restore_history_choice": ("runtime-mutation", "op.history-restore"),
     "repair_skill_route": ("host-bridge-mutation", "op.skill-route-repair"),
     "run_doctor_read_only": ("read-only", "none"),
-    "science_runtime_preflight": ("transient-probe", "none"),
+    "science_runtime_preflight": ("runtime-mutation", "op.science-runtime-preflight"),
     "set_active_profile": ("intent-mutation", "op.select-profile"),
     "set_codex_network": ("runtime-mutation", "op.codex-network"),
     "set_experimental_codex_enabled": ("runtime-mutation", "op.codex-enable"),
@@ -264,6 +266,190 @@ def source_test_identities():
 def test_identity_resolves(identity):
     executable, _, _ = source_test_identities()
     return identity in executable
+
+
+def assert_science_inventory_contract(testcase, inventory):
+    owners = {item["id"]: item for item in inventory["state_owners"]}
+    records = {item["id"]: item for item in inventory["durable_records"]}
+    operations = {item["id"]: item for item in inventory["operations"]}
+
+    testcase.assertTrue(
+        {"science_adoption_ledger", "science_runtime_snapshot"}.issubset(
+            set(owners["authority.private"]["fields"])
+        )
+    )
+
+    adoption = records["record.science-adoption-v1"]
+    testcase.assertEqual(adoption["authority_owner"], "authority.private")
+    testcase.assertEqual(
+        set(adoption["fields"]),
+        {
+            "attempt_id",
+            "attempts",
+            "candidate",
+            "decision",
+            "embedded_identity",
+            "milestone",
+            "normalized_diff",
+            "observed_at_ms",
+            "predecessor",
+            "rejected_source",
+            "rejection_code",
+            "schema_version",
+            "sha256",
+            "size",
+            "snapshot_id",
+            "source",
+            "version",
+        },
+    )
+    testcase.assertEqual(
+        {item["symbol"] for item in adoption["writers"]},
+        {
+            "bind_selected_science_runtime_attempt",
+            "ensure_selected_science_runtime_attempt",
+            "mark_science_runtime_adoption_finalized",
+            "mark_science_runtime_adoption_launch_committed",
+            "reconcile_current_science_runtime_adoption",
+            "record_deferred_science_runtime_candidate",
+            "record_rejected_science_runtime_attempt",
+        },
+    )
+    testcase.assertEqual(
+        {item["symbol"] for item in adoption["readers"]},
+        {
+            "bind_selected_science_runtime_attempt",
+            "reconcile_current_science_runtime_adoption",
+        },
+    )
+    testcase.assertEqual(
+        adoption["source_anchor"],
+        {
+            "path": "desktop/src-tauri/src/runtime/science/adoption.rs",
+            "symbol": "ScienceAdoptionLedger",
+        },
+    )
+
+    snapshot = records["record.science-runtime-snapshot-v1"]
+    testcase.assertEqual(snapshot["authority_owner"], "authority.private")
+    testcase.assertEqual(
+        set(snapshot["fields"]),
+        {"content_sha256", "executable_bytes", "executable_mode"},
+    )
+    testcase.assertEqual(
+        {item["symbol"] for item in snapshot["writers"]},
+        {"fn official_updated_snapshot_for_home("},
+    )
+    testcase.assertEqual(
+        {item["symbol"] for item in snapshot["readers"]},
+        {
+            "fn official_updated_snapshot_for_home(",
+            "fn official_updated_snapshot_from_process_paths(",
+            "fn runtime_identity(",
+            "pub(crate) fn runtime_identity_from_durable_parts(",
+        },
+    )
+    testcase.assertEqual(
+        snapshot["source_anchor"],
+        {
+            "path": "desktop/src-tauri/src/runtime/science/contracts.rs",
+            "symbol": "const OFFICIAL_UPDATED_SNAPSHOT_DIR",
+        },
+    )
+
+    preflight = operations["op.science-runtime-preflight"]
+    testcase.assertEqual(preflight["mutation_kind"], "runtime")
+    testcase.assertEqual(preflight["serialization"], "none")
+    testcase.assertEqual(
+        set(preflight["state_owners"]),
+        {
+            "app.science",
+            "authority.private",
+            "config.binding",
+            "config.desired",
+            "process.science",
+        },
+    )
+    testcase.assertEqual(
+        {key: set(value) for key, value in preflight["durable_records"].items()},
+        {
+            "reads": {
+                "record.config-v4",
+                "record.runtime-binding-v1",
+                "record.science-adoption-v1",
+                "record.science-receipt-v1",
+                "record.science-runtime-snapshot-v1",
+            },
+            "writes": {
+                "record.science-adoption-v1",
+                "record.science-runtime-snapshot-v1",
+            },
+            "clears": set(),
+        },
+    )
+    testcase.assertEqual(
+        preflight["entrypoints"],
+        [
+            {
+                "kind": "tauri-command",
+                "name": "science_runtime_preflight",
+                "source_anchor": {
+                    "path": "desktop/src-tauri/src/commands/runtime.rs",
+                    "symbol": "science_runtime_preflight",
+                },
+                "bundled_callers": ["desktop/src/runtime-controller.js"],
+            }
+        ],
+    )
+    testcase.assertIn(
+        "for any updater candidate discovered while healthy/deferred or stopped, open the fixed no-follow executable, copy and hash it into a private 0500 temporary snapshot, fsync, revalidate source identity, hard-link the SHA-256 content-addressed snapshot, and recheck its fingerprint",
+        preflight["ordered_effects"],
+    )
+    testcase.assertIn(
+        "record a deferred healthy candidate or a rejected stopped candidate through the private ledger writer lock and byte-identity CAS",
+        preflight["ordered_effects"],
+    )
+    testcase.assertEqual(
+        {item["id"] for item in preflight["failure_points"]},
+        {
+            "science-runtime-preflight.adoption-record",
+            "science-runtime-preflight.runtime-snapshot",
+        },
+    )
+    testcase.assertEqual(preflight["compensation"]["kind"], "partial")
+    testcase.assertEqual(
+        preflight["compensation"]["source_anchor"],
+        {
+            "path": "desktop/src-tauri/src/runtime/science/executable.rs",
+            "symbol": "science_runtime_preflight",
+        },
+    )
+    testcase.assertEqual(
+        preflight["compensation"]["contract"],
+        "The command never starts, stops, or replaces Science. Temporary snapshot names are removed best effort, verified content-addressed snapshots are retained, and adoption ledger writes are serialized by their cross-process writer lock and identity/bytes CAS.",
+    )
+
+    one_click = operations["op.one-click"]
+    testcase.assertIn(
+        "record.science-runtime-snapshot-v1",
+        one_click["durable_records"]["reads"],
+    )
+    testcase.assertIn(
+        "record.science-runtime-snapshot-v1",
+        one_click["durable_records"]["writes"],
+    )
+    testcase.assertIn(
+        "recapture entry facts, validate or content-address and commit the selected/deferred updater runtime snapshot, and purely decide one recovery step",
+        one_click["ordered_effects"],
+    )
+    testcase.assertIn(
+        "one-click.runtime-snapshot",
+        {item["id"] for item in one_click["failure_points"]},
+    )
+    testcase.assertIn(
+        "Verified content-addressed Science runtime snapshots are immutable selection evidence outside rollback and are retained.",
+        one_click["compensation"]["contract"],
+    )
 
 
 class RuntimeMutationInventoryTests(unittest.TestCase):
@@ -417,6 +603,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         operations = {item["id"]: item for item in inventory["operations"]}
         records = {item["id"]: item for item in inventory["durable_records"]}
         surface = {item["name"]: item for item in inventory["registered_surface"]}
+        assert_science_inventory_contract(self, inventory)
 
         config_writers = {
             (item["path"], item["symbol"])
@@ -754,6 +941,108 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         self.assertFalse(
             source_anchor_resolves(bad["durable_records"][0]["writers"][0])
         )
+
+        science_mutations = []
+
+        def remove_adoption_field(candidate):
+            record = next(
+                item
+                for item in candidate["durable_records"]
+                if item["id"] == "record.science-adoption-v1"
+            )
+            record["fields"].remove("schema_version")
+
+        science_mutations.append(remove_adoption_field)
+
+        def remove_adoption_writer(candidate):
+            record = next(
+                item
+                for item in candidate["durable_records"]
+                if item["id"] == "record.science-adoption-v1"
+            )
+            record["writers"] = [
+                writer
+                for writer in record["writers"]
+                if writer["symbol"] != "ensure_selected_science_runtime_attempt"
+            ]
+
+        science_mutations.append(remove_adoption_writer)
+
+        def remove_private_snapshot_owner_field(candidate):
+            owner = next(
+                item for item in candidate["state_owners"] if item["id"] == "authority.private"
+            )
+            owner["fields"].remove("science_runtime_snapshot")
+
+        science_mutations.append(remove_private_snapshot_owner_field)
+
+        def remove_preflight_snapshot_write(candidate):
+            operation = next(
+                item
+                for item in candidate["operations"]
+                if item["id"] == "op.science-runtime-preflight"
+            )
+            operation["durable_records"]["writes"].remove(
+                "record.science-runtime-snapshot-v1"
+            )
+
+        science_mutations.append(remove_preflight_snapshot_write)
+
+        def remove_preflight_snapshot_effect(candidate):
+            operation = next(
+                item
+                for item in candidate["operations"]
+                if item["id"] == "op.science-runtime-preflight"
+            )
+            operation["ordered_effects"] = [
+                effect
+                for effect in operation["ordered_effects"]
+                if "hard-link the SHA-256 content-addressed snapshot" not in effect
+            ]
+
+        science_mutations.append(remove_preflight_snapshot_effect)
+
+        def remove_preflight_snapshot_failure(candidate):
+            operation = next(
+                item
+                for item in candidate["operations"]
+                if item["id"] == "op.science-runtime-preflight"
+            )
+            operation["failure_points"] = [
+                failure
+                for failure in operation["failure_points"]
+                if failure["id"] != "science-runtime-preflight.runtime-snapshot"
+            ]
+
+        science_mutations.append(remove_preflight_snapshot_failure)
+
+        def remove_one_click_snapshot_write(candidate):
+            operation = next(
+                item for item in candidate["operations"] if item["id"] == "op.one-click"
+            )
+            operation["durable_records"]["writes"].remove(
+                "record.science-runtime-snapshot-v1"
+            )
+
+        science_mutations.append(remove_one_click_snapshot_write)
+
+        def remove_one_click_snapshot_effect(candidate):
+            operation = next(
+                item for item in candidate["operations"] if item["id"] == "op.one-click"
+            )
+            operation["ordered_effects"] = [
+                effect
+                for effect in operation["ordered_effects"]
+                if "selected/deferred updater runtime snapshot" not in effect
+            ]
+
+        science_mutations.append(remove_one_click_snapshot_effect)
+
+        for mutate in science_mutations:
+            bad = copy.deepcopy(inventory)
+            mutate(bad)
+            with self.assertRaises((AssertionError, KeyError)):
+                assert_science_inventory_contract(self, bad)
 
         self.assertFalse(
             bundled_caller_resolves(

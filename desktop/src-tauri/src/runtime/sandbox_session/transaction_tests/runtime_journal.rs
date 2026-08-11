@@ -366,6 +366,7 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         route_fp: "prior-route".into(),
         catalog_fp: "prior-catalog".into(),
         binding_fp: "prior-binding".into(),
+        science_adoption_attempt_id: None,
     };
     let terminal = terminal_gateway_record(Some(previous.clone()));
     config::save_to(
@@ -404,6 +405,7 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         route_fp: "replacement-route".into(),
         catalog_fp: "replacement-catalog".into(),
         binding_fp: "replacement-binding".into(),
+        science_adoption_attempt_id: None,
     };
     assert!(resolve_gateway_terminal_handoff(
         config::load_from(&dir)
@@ -496,6 +498,7 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         route_fp: "new-route".into(),
         catalog_fp: "new-catalog".into(),
         binding_fp: "new-binding".into(),
+        science_adoption_attempt_id: None,
     };
     begin_one_click_finalize(
         &dir,
@@ -631,6 +634,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         route_fp: "route-fp".into(),
         catalog_fp: "catalog-fp".into(),
         binding_fp: "binding-fp".into(),
+        science_adoption_attempt_id: None,
     };
     let (model_catalog, default_model_route_id, role_bindings) =
         crate::model_catalog::new_profile_catalog(
@@ -821,6 +825,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
             route_fp: "new-route".into(),
             catalog_fp: "new-catalog".into(),
             binding_fp: "new-binding".into(),
+            science_adoption_attempt_id: None,
         },
     )
     .expect_err("binding commit must compare the complete last checkpoint");
@@ -1112,6 +1117,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         route_fp: "committed-route-fp".into(),
         catalog_fp: "committed-catalog-fp".into(),
         binding_fp: "committed-binding-fp".into(),
+        science_adoption_attempt_id: None,
     };
     let commit_error =
         commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), None, &committed_binding)

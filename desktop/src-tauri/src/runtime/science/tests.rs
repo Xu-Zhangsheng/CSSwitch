@@ -26,11 +26,11 @@ use super::{
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
     settings_change_needs_teardown, stop_runtime_from_probe, test_process_start_identity_for_pid,
     test_runtime_identity, trusted_science_status, SandboxScienceState, ScienceAdoptionDecision,
-    ScienceAdoptionMilestone, SciencePostTermAction, ScienceRuntimeIdentity, ScienceRuntimeSource,
-    ScienceStopCommandOutcome, ScienceStopFailure, ScienceStopFailureKind, ScienceVersionCache,
-    VerifiedScienceStop, CACHED_ONCE_CHOICE, MANAGED_LAUNCH_LAST_READ_BYTES,
-    MAX_MANAGED_LAUNCH_BYTES, MAX_SCIENCE_ADOPTION_LEDGER_BYTES, SCIENCE_ADOPTION_LEDGER_FILE,
-    SCIENCE_ADOPTION_STORE_DIR,
+    ScienceAdoptionMilestone, ScienceObservationField, SciencePostTermAction,
+    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopCommandOutcome, ScienceStopFailure,
+    ScienceStopFailureKind, ScienceVersionCache, VerifiedScienceStop, CACHED_ONCE_CHOICE,
+    MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES, MAX_SCIENCE_ADOPTION_LEDGER_BYTES,
+    SCIENCE_ADOPTION_LEDGER_FILE, SCIENCE_ADOPTION_STORE_DIR,
 };
 
 #[test]
@@ -267,6 +267,98 @@ fn science_runtime_adoption_record_is_private_bounded_and_milestone_ordered(
         &selected_runtime
     ));
 
+    let selected_count = ledger
+        .attempts
+        .iter()
+        .filter(|attempt| attempt.decision == ScienceAdoptionDecision::Selected)
+        .count();
+    let mut same_runtime_restart = runtime_identity(
+        candidate_bin.clone(),
+        ScienceRuntimeSource::Explicit,
+        &cache,
+    )
+    .ok_or("same-runtime restart should remain observable")?;
+    bind_selected_science_runtime_attempt(&mut same_runtime_restart)?;
+    assert_eq!(
+        same_runtime_restart.adoption_attempt_id(),
+        Some(attempt_id.as_str()),
+        "ordinary restart of the latest finalized runtime must reuse its adoption attempt"
+    );
+    assert_eq!(
+        read_science_adoption_ledger_at(&store)?
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.decision == ScienceAdoptionDecision::Selected)
+            .count(),
+        selected_count,
+        "same-runtime restart must not append a duplicate selected attempt"
+    );
+
+    let mut intermediate_runtime = runtime_identity(
+        running_bin.clone(),
+        ScienceRuntimeSource::InstalledApp,
+        &cache,
+    )
+    .ok_or("intermediate runtime should remain observable")?;
+    bind_selected_science_runtime_attempt(&mut intermediate_runtime)?;
+    let intermediate_attempt_id = intermediate_runtime
+        .adoption_attempt_id()
+        .ok_or("intermediate runtime should carry an adoption attempt")?
+        .to_string();
+    let mut crash_retry_runtime = runtime_identity(
+        running_bin.clone(),
+        ScienceRuntimeSource::InstalledApp,
+        &cache,
+    )
+    .ok_or("crash retry runtime should remain observable")?;
+    bind_selected_science_runtime_attempt(&mut crash_retry_runtime)?;
+    assert_eq!(
+        crash_retry_runtime.adoption_attempt_id(),
+        Some(intermediate_attempt_id.as_str()),
+        "unfinished retry of the latest selected runtime must reuse the same attempt"
+    );
+    mark_science_runtime_adoption_launch_committed(
+        &intermediate_attempt_id,
+        &intermediate_runtime,
+    )?;
+    mark_science_runtime_adoption_finalized(&intermediate_runtime)?;
+
+    let mut readopted_runtime = runtime_identity(
+        candidate_bin.clone(),
+        ScienceRuntimeSource::Explicit,
+        &cache,
+    )
+    .ok_or("re-adopted runtime should remain observable")?;
+    bind_selected_science_runtime_attempt(&mut readopted_runtime)?;
+    let readopted_attempt_id = readopted_runtime
+        .adoption_attempt_id()
+        .ok_or("re-adopted runtime should carry a new attempt")?
+        .to_string();
+    assert_ne!(
+        readopted_attempt_id, attempt_id,
+        "A→B→A must not reuse the historical finalized A attempt"
+    );
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    let readopted = ledger
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == readopted_attempt_id)
+        .ok_or("re-adoption attempt should be appended")?;
+    assert_eq!(
+        readopted
+            .predecessor
+            .as_ref()
+            .map(|value| value.version.as_str()),
+        Some("claude-science 1.0"),
+        "A→B→A must use the latest finalized B as predecessor"
+    );
+    assert!(
+        readopted
+            .normalized_diff
+            .contains(&ScienceObservationField::Version),
+        "A→B→A must retain the B→A normalized version diff"
+    );
+
     let receipt_v1 = managed_launch_record_for(
         8990,
         std::process::id(),
@@ -383,7 +475,20 @@ fn science_runtime_adoption_recovery_is_exact_and_retains_compensation_reference
     .ok_or("recovery receipt should be constructible")?;
     super::write_managed_launch_record(&receipt)?;
 
-    super::reconcile_current_science_runtime_adoption(&runtime, false)?;
+    let mut recovered_runtime = runtime.clone();
+    recovered_runtime.adoption_attempt_id = None;
+    let recovered_token = super::ScienceManagedLaunchToken {
+        record: receipt.clone(),
+        receipt_file: None,
+    };
+    super::hydrate_runtime_adoption_from_managed_launch(&recovered_token, &mut recovered_runtime)?;
+    assert_eq!(
+        recovered_runtime.adoption_attempt_id(),
+        Some(attempt_id.as_str()),
+        "fresh V2 receipt recovery must hydrate the exact adoption attempt"
+    );
+
+    super::reconcile_current_science_runtime_adoption(&recovered_runtime, None)?;
     let store = config_dir.join(SCIENCE_ADOPTION_STORE_DIR);
     let ledger = read_science_adoption_ledger_at(&store)?;
     assert_eq!(
@@ -395,7 +500,34 @@ fn science_runtime_adoption_recovery_is_exact_and_retains_compensation_reference
         Some(ScienceAdoptionMilestone::LaunchCommitted),
         "receipt-only crash recovery must not finalize before binding commit"
     );
-    super::reconcile_current_science_runtime_adoption(&runtime, true)?;
+    let legacy_binding = crate::config::RuntimeBindingCommit {
+        profile_id: "recovery-profile".into(),
+        route_fp: "recovery-route".into(),
+        catalog_fp: "recovery-catalog".into(),
+        binding_fp: "recovery-binding".into(),
+        science_adoption_attempt_id: None,
+    };
+    super::reconcile_current_science_runtime_adoption(&recovered_runtime, Some(&legacy_binding))?;
+    let wrong_binding = crate::config::RuntimeBindingCommit {
+        science_adoption_attempt_id: Some("f".repeat(32)),
+        ..legacy_binding.clone()
+    };
+    super::reconcile_current_science_runtime_adoption(&recovered_runtime, Some(&wrong_binding))?;
+    let ledger = read_science_adoption_ledger_at(&store)?;
+    assert_eq!(
+        ledger
+            .attempts
+            .iter()
+            .find(|attempt| attempt.attempt_id == attempt_id)
+            .map(|attempt| attempt.milestone),
+        Some(ScienceAdoptionMilestone::LaunchCommitted),
+        "absent or different binding provenance must not authorize finalize"
+    );
+    let exact_binding = crate::config::RuntimeBindingCommit {
+        science_adoption_attempt_id: Some(attempt_id.clone()),
+        ..legacy_binding
+    };
+    super::reconcile_current_science_runtime_adoption(&recovered_runtime, Some(&exact_binding))?;
     let ledger = read_science_adoption_ledger_at(&store)?;
     assert_eq!(
         ledger
@@ -407,7 +539,7 @@ fn science_runtime_adoption_recovery_is_exact_and_retains_compensation_reference
     );
 
     let v2_receipt_free_token = super::ScienceManagedLaunchToken {
-        record: receipt,
+        record: receipt.clone(),
         receipt_file: None,
     };
     super::clear_managed_launch_identity(&v2_receipt_free_token, &runtime)?;
@@ -455,6 +587,49 @@ fn science_runtime_adoption_recovery_is_exact_and_retains_compensation_reference
             .any(|attempt| attempt.attempt_id == attempt_id),
         "compaction must retain the finalized attempt referenced only by active compensation"
     );
+    let before_failed_compaction = fs::read(store.join(SCIENCE_ADOPTION_LEDGER_FILE))?;
+    let mut unknown_schema = serde_json::to_value(&receipt)?;
+    unknown_schema["schema_version"] = serde_json::json!(3);
+    let mut missing_attempt = serde_json::to_value(&receipt)?;
+    missing_attempt
+        .as_object_mut()
+        .unwrap()
+        .remove("adoption_attempt_id");
+    let mut invalid_attempt = serde_json::to_value(&receipt)?;
+    invalid_attempt["adoption_attempt_id"] = serde_json::json!("A".repeat(32));
+    let invalid_receipts = [
+        b"{invalid-managed-receipt".to_vec(),
+        serde_json::to_vec(&unknown_schema)?,
+        serde_json::to_vec(&missing_attempt)?,
+        serde_json::to_vec(&invalid_attempt)?,
+    ];
+    let receipt_path = managed_launch_path();
+    for invalid_receipt in invalid_receipts {
+        fs::write(&receipt_path, invalid_receipt)?;
+        fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600))?;
+        let failed_compaction = super::mutate_science_adoption_ledger(&store, |ledger| {
+            super::append_science_update_attempt(
+                ledger,
+                None,
+                None,
+                ScienceAdoptionDecision::Rejected,
+                Some(super::ScienceAdoptionRejectionCode::RuntimeUnavailable),
+                Some("installed_app".into()),
+            );
+            Ok(())
+        });
+        assert!(
+            failed_compaction
+                .as_ref()
+                .is_err_and(|error| error.contains("live receipt")),
+            "invalid present receipt must fail compaction closed: {failed_compaction:?}"
+        );
+        assert_eq!(
+            fs::read(store.join(SCIENCE_ADOPTION_LEDGER_FILE))?,
+            before_failed_compaction,
+            "failed closed compaction must preserve the previous ledger bytes"
+        );
+    }
     Ok(())
 }
 

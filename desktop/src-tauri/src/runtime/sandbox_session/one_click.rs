@@ -16,12 +16,11 @@ use crate::runtime::proxy_lifecycle::{
     current_skill_install_bridge_key, skill_install_bridge_dir, GatewayController,
 };
 use crate::runtime::science::{
-    mark_science_runtime_adoption_finalized, mark_science_runtime_adoption_finalized_by_attempt,
-    reconcile_current_science_runtime_adoption, record_deferred_science_runtime_candidate,
-    sandbox_home, select_science_runtime_cached, SandboxScienceState, ScienceEnvironmentExposure,
-    ScienceHostAdapter, ScienceLaunchFailureKind, ScienceLaunchSpec, ScienceManagedLaunchToken,
-    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopFailureKind,
-    ScienceStopOwnershipReceipt, ScienceStopRequest,
+    mark_science_runtime_adoption_finalized, reconcile_current_science_runtime_adoption,
+    record_deferred_science_runtime_candidate, sandbox_home, select_science_runtime_cached,
+    SandboxScienceState, ScienceEnvironmentExposure, ScienceHostAdapter, ScienceLaunchFailureKind,
+    ScienceLaunchSpec, ScienceManagedLaunchToken, ScienceRuntimeIdentity, ScienceRuntimeSource,
+    ScienceStopFailureKind, ScienceStopOwnershipReceipt, ScienceStopRequest,
 };
 use crate::runtime::skill_install_bridge::{
     inspect_while_science_running, register_before_science_start, RegistrationStatus,
@@ -2336,8 +2335,8 @@ fn restart_science_identity_with_budget<R: Runtime>(
         Some(launch_id) => ScienceHostAdapter::commit_launch_with_launch_id(verified, launch_id),
         None => ScienceHostAdapter::commit_launch(verified),
     };
-    let _token = match committed_launch {
-        Ok(receipt) => receipt.ownership().clone(),
+    let committed_runtime = match committed_launch {
+        Ok(receipt) => receipt.runtime().clone(),
         Err(error) => {
             let mut sandbox = None;
             let mut url = None;
@@ -2368,11 +2367,11 @@ fn restart_science_identity_with_budget<R: Runtime>(
             });
         }
     };
-    let url = ScienceHostAdapter::url(port, runtime);
+    let url = ScienceHostAdapter::url(port, &committed_runtime);
     let mut current = lock(state);
     current.sandbox_port = port;
     current.sandbox_url = Some(url);
-    current.science_runtime = Some(runtime.clone());
+    current.science_runtime = Some(committed_runtime);
     current.science_confirmed_stopped = None;
     Ok(())
 }
@@ -2820,6 +2819,25 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
         config::RuntimeFinalizeState::NotStarted => return Ok(()),
         config::RuntimeFinalizeState::Intent { action } => action.clone(),
     };
+    let replay_adoption_proof = if let config::RuntimeFinalizeAction::CommitBinding {
+        binding,
+        science_adoption_attempt_id,
+    } = &action
+    {
+        if binding.science_adoption_attempt_id.as_deref() != science_adoption_attempt_id.as_deref()
+        {
+            return Err(
+                "interrupted finalize binding/adoption provenance mismatch; preserved current state"
+                    .into(),
+            );
+        }
+        science_adoption_attempt_id
+            .as_deref()
+            .map(|attempt_id| prove_finalize_science_adoption_runtime(state, &cfg, attempt_id))
+            .transpose()?
+    } else {
+        None
+    };
     let initial_authority_matches =
         if expected.operation == config::RuntimeTransactionOperation::HistoryRecovery {
             super::history_recovery::history_config_authority_matches(&cfg, expected)
@@ -2857,6 +2875,15 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
         .as_ref()
         .ok_or("interrupted finalize intent has no authority snapshot ticket")?;
     let cleanup = replay_finalize_authority_cleanup(state, ticket).map_err(String::from)?;
+    if replay_adoption_proof
+        .as_ref()
+        .is_some_and(|(runtime, receipt)| !ScienceHostAdapter::receipt_is_current(receipt, runtime))
+    {
+        return Err(
+            "interrupted finalize Science adoption receipt drifted before config commit; preserved current state"
+                .into(),
+        );
+    }
     config::update_result(&dir, |current| {
         let authority_matches =
             if expected.operation == config::RuntimeTransactionOperation::HistoryRecovery {
@@ -2895,15 +2922,50 @@ pub(crate) fn replay_interrupted_one_click_finalize(state: &SharedAppState) -> R
         }
         Ok(((), true))
     })?;
-    if let config::RuntimeFinalizeAction::CommitBinding {
-        science_adoption_attempt_id: Some(attempt_id),
-        ..
-    } = &action
-    {
-        let _ = mark_science_runtime_adoption_finalized_by_attempt(attempt_id);
+    if let Some((runtime, _)) = replay_adoption_proof {
+        let _ = mark_science_runtime_adoption_finalized(&runtime);
     }
     let _ = cleanup;
     Ok(())
+}
+
+fn prove_finalize_science_adoption_runtime(
+    state: &SharedAppState,
+    cfg: &config::Config,
+    expected_attempt_id: &str,
+) -> Result<(ScienceRuntimeIdentity, ScienceManagedLaunchToken), String> {
+    let version_cache = { lock(state).science_version_cache.clone() };
+    let (science_state, runtime) =
+        ScienceHostAdapter::probe_cached(cfg.sandbox_port, &version_cache).map_err(|error| {
+            format!(
+                "interrupted finalize could not prove current Science adoption runtime: {error}"
+            )
+        })?;
+    if science_state != SandboxScienceState::RunningHealthy {
+        return Err(
+            "interrupted finalize requires a healthy current Science runtime with an exact V2 receipt; preserved current state"
+                .into(),
+        );
+    }
+    let runtime = runtime.ok_or(
+        "interrupted finalize lost the current Science runtime identity; preserved current state",
+    )?;
+    if runtime.adoption_attempt_id() != Some(expected_attempt_id) {
+        return Err(
+            "interrupted finalize Science runtime/receipt adoption provenance mismatch; preserved current state"
+                .into(),
+        );
+    }
+    let receipt = ScienceHostAdapter::managed_receipt(cfg.sandbox_port, &runtime).ok_or(
+        "interrupted finalize could not recover the exact current Science V2 receipt; preserved current state",
+    )?;
+    if !ScienceHostAdapter::receipt_is_current(&receipt, &runtime) {
+        return Err(
+            "interrupted finalize Science V2 receipt changed during proof; preserved current state"
+                .into(),
+        );
+    }
+    Ok((runtime, receipt))
 }
 
 fn history_recovery_choices(
@@ -3079,20 +3141,10 @@ fn one_click_login_with_options<R: Runtime>(
                 runtime: running_runtime,
             } => {
                 let version_cache = { lock(&state).science_version_cache.clone() };
-                let binding_committed = cfg
-                    .active_profile()
-                    .and_then(|profile| {
-                        crate::runtime::provider::desired_runtime_binding(
-                            &cfg,
-                            profile,
-                            &running_runtime,
-                        )
-                        .ok()
-                    })
-                    .as_ref()
-                    == cfg.runtime_binding.as_ref();
-                let _ =
-                    reconcile_current_science_runtime_adoption(&running_runtime, binding_committed);
+                let _ = reconcile_current_science_runtime_adoption(
+                    &running_runtime,
+                    cfg.runtime_binding.as_ref(),
+                );
                 let _ = record_deferred_science_runtime_candidate(&running_runtime, &version_cache);
                 if cfg.reuse_system_ssh {
                     validate_running_system_ssh_bridge(&app, &sbx_home).map_err(|message| {

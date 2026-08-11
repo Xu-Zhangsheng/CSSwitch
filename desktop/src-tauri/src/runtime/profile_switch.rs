@@ -613,6 +613,7 @@ mod tests {
             route_fp: "route-old".into(),
             catalog_fp: "catalog-old".into(),
             binding_fp: "binding-old".into(),
+            science_adoption_attempt_id: None,
         };
         let mut cfg = config::Config {
             active_id: "old".into(),

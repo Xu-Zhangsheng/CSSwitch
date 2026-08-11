@@ -12,7 +12,7 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
     auth_dir: &Path,
     sbx_home: &Path,
     launch: &Path,
-    launch_runtime: &ScienceRuntimeIdentity,
+    launch_runtime: &mut ScienceRuntimeIdentity,
     login_action: &oauth_forge::LoginAction,
     sport: u16,
     pport: u16,
@@ -184,7 +184,12 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
         }
     };
     match ScienceHostAdapter::commit_launch(verified) {
-        Ok(receipt) => rollback_context.launch_token = Some(receipt.ownership().clone()),
+        Ok(receipt) => {
+            *launch_runtime = receipt.runtime().clone();
+            rollback_context.launch_runtime = launch_runtime.clone();
+            rollback_context.launch_token = Some(receipt.ownership().clone());
+            lock(state).science_runtime = Some(launch_runtime.clone());
+        }
         Err(error) => {
             rollback_context.launch_token = error.ownership().cloned();
             return Err(rollback_context.failure(format!(
