@@ -27,7 +27,10 @@ sibling 越界拒绝、artifact v1/v2 lineage/diff/preview/provenance、两次 r
 pointer annotation 到下一消息传递，取得 scoped `PASS`。同一 tuple 的 `B-CONTEXT-01` canonical run
 `bcontext-a60c2ee-r13` 又完成 11/11 子门，150 个脱敏 request envelope 的四项跨域计数为 0，
 活动期 26/26 socket rows 为 loopback，UI stop/exit 与精确 cleanup 均为 `PASS`，179/179 evidence hashes
-复算 `OK`。Reviewer/Specialist 服务结果仍为 `UNVERIFIED`；完整 Provider、Skill/MCP、SSH、installed、
+复算 `OK`。同一 tuple 的 `B-PROVIDER-01` canonical run `provider-a60c2ee-r1` 又完成 11-case
+exact-artifact local-mock 矩阵：10 个 case 由 exact App 启动 packaged Gateway，SiliconFlow 由同一
+exact packaged Gateway 直启；99/99 observation/event、55/55 request 与 583/583 evidence closure
+均为 `PASS`。Reviewer/Specialist 服务结果仍为 `UNVERIFIED`；RM-46 新 Provider 配置 UX、Skill/MCP、SSH、installed、
 升级/rollback、签名与 release-ready 仍为 `NOT-RUN`。旧 `9e08924` 与 `06b630b` tuple 的对应 PASS
 只保留为历史日期化证据，不能继承给新 artifact。
 
@@ -54,6 +57,16 @@ stop/exit，owned process/port、合成 Memory、浏览器 tab 与临时 runtime
 evidence hash 全部复算 `OK`。前序 r9–r12 的 tab binding、marker/schema 与 Reviewer capture 错误均按原
 FAIL 保留，不是产品行为 FAIL。完整边界见
 [当前 B-CONTEXT 日期化验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-context-01.md)。
+
+`provider-a60c2ee-r1` 的 11/11 case decision 均为 PASS，每项 9 个 observation 与 9 个严格单调
+event，共 99/99；55 个严格 fixture request 均 protocol-complete/final-ok，64 个 active socket row
+全部 loopback。10 个 case 由 exact App 启动 packaged Gateway；SiliconFlow 因 production Desktop
+不转发 ambient HTTP proxy，继续限定为 exact packaged Gateway direct local-mock，不外推 Desktop
+E2E。完整 Provider loopback gate 从头重跑为 111/111 tests `OK`；最终 top closure 与 11 份 case
+closure 又经递归复算全部 `OK`，runtime parent 与 22 个 case runtime root 均不存在。真实 provider/
+model、账号、配额、计费与服务质量仍为 `NOT-RUN`；OpenCode Go 双协议、Grok 与 Gemini 的 RM-46
+scratch discovery / 显式选择或手填 / production save 配置 UX 也不由本矩阵外推。完整 identity、
+执行边界与 cleanup 见[当前 B-PROVIDER 日期化验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-provider-01.md)。
 
 此前 cold one-click prior Science stop 子阶段的历史 production source candidate 是
 `next@5cf3eb1670eec6dc58d5d1d873ca3834f9a76623`。cold one-click prior Science stop 保留
@@ -217,7 +230,7 @@ Science、SSH、signing 或 release 结论。
 | authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click transaction UI outcome `PASS`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | `a60c2ee` 闭合 acceptance host Gateway fixture 注入；comprehensive source review 未替代 Skill 专项能力审查 | 同一 `a60c2ee` G1 exact artifact `PASS`；只证明 bundle identity，不证明 Skill runtime | current tuple `B-SKILL-01=NOT-RUN`；旧 artifact 的安全停止/公共 GitHub 尝试只保留为历史问题证据 | 真实 Skill / domain execution分项 `NOT-RUN` |
-| provider protocol capabilities | source/test/fixture anchors mapped；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | current tuple `B-PROVIDER-01=NOT-RUN` | 真实 provider/model 的 Desktop E2E、配额、计费、服务质量与实际 stream/tools/reasoning/error 仍为 `NOT-RUN` |
+| provider protocol capabilities | source/test/fixture anchors mapped；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | current tuple `B-PROVIDER-01=PASS(scope=exact-artifact-local-mock,mixed-launch-boundary)`；10 exact App case + SiliconFlow exact packaged Gateway direct case；RM-46 新 Provider 配置 UX `NOT-RUN` | 真实 provider/model 的 Desktop E2E、配额、计费、服务质量与实际 stream/tools/reasoning/error 仍为 `NOT-RUN` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
 receipt、provider launch receipt 与 network isolation receipt。pre-run manifest SHA-256 为

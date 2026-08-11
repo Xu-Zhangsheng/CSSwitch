@@ -33,7 +33,11 @@ evidence hashes 与精确清理经 clean-context 独立复算通过。其 `B-CON
 `bcontext-a60c2ee-r13` 又完成 11/11 plan/delegation/fork/restore/Memory/compaction/Reviewer/
 Specialist/isolation 子门；150 个脱敏 request envelope 的四项跨域计数为 0，活动期 26/26 socket rows
 为 loopback，最终 UI stop/exit、Memory/browser/process/port/runtime cleanup 全部 `PASS`，179/179
-evidence hashes 复算 `OK`。Reviewer/Specialist 服务结果仍为 `UNVERIFIED`；完整 Provider、Skill/MCP、
+evidence hashes 复算 `OK`。其 `B-PROVIDER-01` canonical run `provider-a60c2ee-r1` 又完成 11-case
+exact-artifact local-mock 矩阵：10 个 case 由 exact App 启动 packaged Gateway，SiliconFlow 由同一
+exact packaged Gateway 直启；99/99 observation/event、55/55 request、64/64 loopback socket row
+与 583/583 top closure 全部通过，111/111 Provider loopback tests 从头重跑 `PASS`。Reviewer/
+Specialist 服务结果仍为 `UNVERIFIED`；RM-46 新 Provider 配置 UX、Skill/MCP、
 SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 仍为 `NOT-RUN`。
 旧 `9e08924` tuple 的 isolated-live 结论只保留为历史日期化证据，不能继承。
 
@@ -41,3 +45,5 @@ SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 relea
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
 [调查索引](../../docs/evidence/investigations/README.md)进入；当前 exact tuple 的上下文验收见
 [`B-CONTEXT-01`](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-context-01.md)。
+当前 exact tuple 的 Provider 本地矩阵见
+[`B-PROVIDER-01`](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-provider-01.md)。
