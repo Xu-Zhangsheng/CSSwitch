@@ -564,15 +564,18 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             ),
             &rollback_context,
         )?;
-        let adoption_attempt_id = committed
-            .science_adoption_attempt_id
-            .clone()
-            .filter(|attempt_id| launch_runtime.adoption_attempt_id() == Some(attempt_id.as_str()))
-            .ok_or_else(|| {
-                rollback_context.failure(
+        let adoption_attempt_id = match committed.science_adoption_attempt_id.clone() {
+            Some(attempt_id)
+                if launch_runtime.adoption_attempt_id() == Some(attempt_id.as_str()) =>
+            {
+                attempt_id
+            }
+            _ => {
+                return Err(rollback_context.failure(
                     "Science managed receipt、runtime 与 binding adoption provenance 不一致",
-                )
-            })?;
+                ));
+            }
+        };
         one_click_step(
             begin_one_click_finalize(
                 &dir,
