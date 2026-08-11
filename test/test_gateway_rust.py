@@ -3133,7 +3133,7 @@ class RustGatewayLoopback(unittest.TestCase):
             self.stop_gateway(proc)
             upstream.close()
 
-    def test_relay_kimi_stream_filters_server_tool_blocks(self):
+    def test_relay_kimi_stream_preserves_server_tool_blocks(self):
         models = MockUpstream(json.dumps({"data": [{"id": "kimi-k3"}]}).encode())
         models_thread = threading.Thread(target=models.serve_forever, daemon=True)
         models_thread.start()
@@ -3243,17 +3243,16 @@ class RustGatewayLoopback(unittest.TestCase):
             status, headers, body = parse_raw_response(raw)
             self.assertEqual(status, 200)
             self.assertEqual(headers["transfer-encoding"], "chunked")
-            self.assertNotIn(b"server_tool_use", body)
-            self.assertNotIn(b"web_search_tool_result", body)
+            self.assertIn(b"server_tool_use", body)
+            self.assertIn(b"web_search_tool_result", body)
             self.assertNotIn(b'"type":"thinking","thinking":"","signature":""', body)
             self.assertIn(b'"type":"thinking","thinking":"plan","signature":"opaque"', body)
             self.assertIn(b'"index":1', body)
             self.assertIn(b'"index":2', body)
             self.assertIn(b'"text":"OK"', body)
             upstream_body = captured[0].split(b"\r\n\r\n", 1)[1]
-            self.assertNotIn(b"web_search_20250305", upstream_body)
+            self.assertIn(b"web_search_20250305", upstream_body)
             self.assertIn(b'"name":"web_search"', upstream_body)
-            self.assertIn(b'"query"', upstream_body)
         finally:
             self.stop_gateway(proc)
             upstream.close()
@@ -3310,7 +3309,7 @@ class RustGatewayLoopback(unittest.TestCase):
             self.stop_gateway(proc)
             upstream.close()
 
-    def test_v081_relay_kimi_stream_rejects_malformed_dropped_delta(self):
+    def test_v081_relay_kimi_stream_rejects_malformed_preserved_delta(self):
         payload = b"".join([
             b'event: message_start\ndata: {"type":"message_start","message":{"id":"m_bad_hidden_delta","type":"message","role":"assistant","model":"kimi-k3","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
             b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","name":"web_search"}}\n\n',
@@ -3528,7 +3527,7 @@ class RustGatewayLoopback(unittest.TestCase):
             mapped = json.loads(upstream.requests[0]["body"])
             self.assertEqual(mapped["messages"][:4], complete_round)
             self.assertEqual(mapped["messages"][-1]["content"], "round two edited and resent")
-            self.assertFalse(any(
+            self.assertTrue(any(
                 block.get("type") in {"server_tool_use", "web_search_tool_result"}
                 for message in mapped["messages"]
                 for block in (message.get("content") if isinstance(message.get("content"), list) else [])

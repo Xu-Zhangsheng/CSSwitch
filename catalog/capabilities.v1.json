@@ -65,9 +65,9 @@
         "test/golden/relay_anthropic.json"
       ],
       "tests": [
-        "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_server_web_search_downgrades_to_local_tool",
+        "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_server_web_search_passthrough",
         "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_thinking_and_tool_quirks_match_python_fixture",
-        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_filters_server_tool_blocks"
+        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_preserves_server_tool_blocks"
       ]
     },
     {
@@ -106,9 +106,9 @@
         "model_contains": "kimi",
         "tool_name": "web_search"
       },
-      "status": "limited",
-      "action": "degrade",
-      "reason": "CSSwitch lowers Science's Kimi web_search server declaration to a normal client tool and still filters unsupported provider server-tool response blocks.",
+      "status": "supported",
+      "action": "none",
+      "reason": "CSSwitch preserves Science's Kimi web_search server declaration and the provider's server_tool_use/web_search_tool_result response blocks while filtering unrelated unsupported server tools and invalid unsigned thinking blocks.",
       "evidence": [
         "desktop/gateway/src/anthropic_compat.rs",
         "desktop/gateway/src/anthropic_compat.rs",
@@ -116,9 +116,9 @@
       ],
       "tests": [
         "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_thinking_and_tool_quirks_match_python_fixture",
-        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_drops_server_tool_blocks_and_compacts_indexes",
-        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_drops_server_tool_blocks_and_compacts_indexes",
-        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_filters_server_tool_blocks"
+        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_preserves_server_tool_blocks_and_compacts_indexes",
+        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_preserves_server_tool_blocks_and_compacts_indexes",
+        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_preserves_server_tool_blocks"
       ]
     },
     {

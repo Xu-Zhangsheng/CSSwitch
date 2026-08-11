@@ -27,9 +27,7 @@ pub struct KimiServerToolFilter {
     next_upstream_index: u64,
     next_output_index: u64,
     active_output_block: Option<(u64, u64)>,
-    dropped_server_tools: usize,
     dropped_thinking: usize,
-    dropped_server_block: Option<u64>,
     thinking: Option<BufferedThinkingBlock>,
 }
 
@@ -67,9 +65,6 @@ impl KimiServerToolFilter {
         if self.thinking.is_some() {
             return Err("Kimi thinking block ended before content_block_stop".into());
         }
-        if self.dropped_server_block.is_some() {
-            return Err("Kimi server tool block ended before content_block_stop".into());
-        }
         if self.active_output_block.is_some() {
             return Err("Kimi content block ended before content_block_stop".into());
         }
@@ -82,7 +77,7 @@ impl KimiServerToolFilter {
     }
 
     pub fn dropped(&self) -> usize {
-        self.dropped_server_tools + self.dropped_thinking
+        self.dropped_thinking
     }
 
     pub fn dropped_thinking(&self) -> usize {
@@ -140,9 +135,6 @@ impl KimiServerToolFilter {
         if self.thinking.is_some() {
             return self.rewrite_thinking_frame(event, obj, frame.len() + sep.len());
         }
-        if self.dropped_server_block.is_some() {
-            return self.rewrite_dropped_server_frame(event, obj);
-        }
         if self.active_output_block.is_some() {
             return self.rewrite_output_block_frame(event, obj);
         }
@@ -158,14 +150,6 @@ impl KimiServerToolFilter {
                 .and_then(Value::as_object)
                 .and_then(|block| block.get("type"))
                 .and_then(Value::as_str);
-            if matches!(
-                block_type,
-                Some("server_tool_use" | "web_search_tool_result")
-            ) {
-                self.dropped_server_block = Some(idx);
-                self.dropped_server_tools += 1;
-                return Ok(Vec::new());
-            }
             if block_type == Some("thinking") {
                 let block = obj
                     .get("content_block")
@@ -230,6 +214,9 @@ impl KimiServerToolFilter {
         if !matches!(kind.as_str(), "content_block_delta" | "content_block_stop") {
             return Err("Kimi content block ended before content_block_stop".into());
         }
+        if kind == "content_block_delta" && obj.get("delta").and_then(Value::as_object).is_none() {
+            return Err("Kimi content block delta is invalid".into());
+        }
         if let Some(obj_map) = obj.as_object_mut() {
             obj_map.insert("index".to_string(), Value::Number(mapped.into()));
         }
@@ -240,45 +227,6 @@ impl KimiServerToolFilter {
             debug_assert_eq!(allocated, mapped);
         }
         Ok(render_sse(event.as_deref(), &obj))
-    }
-
-    fn rewrite_dropped_server_frame(
-        &mut self,
-        event: Option<String>,
-        obj: Value,
-    ) -> Result<Vec<u8>, String> {
-        let kind = obj
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or("Kimi server tool block event type is missing")?;
-        if kind == "error" {
-            self.dropped_server_block = None;
-            return Ok(render_sse(event.as_deref(), &obj));
-        }
-        if kind == "ping" {
-            return Ok(render_sse(event.as_deref(), &obj));
-        }
-        let index = obj
-            .get("index")
-            .and_then(Value::as_u64)
-            .ok_or("Kimi server tool block index is missing")?;
-        if Some(index) != self.dropped_server_block {
-            return Err("Kimi server tool block index changed".into());
-        }
-        match kind {
-            "content_block_delta" => {
-                if obj.get("delta").and_then(Value::as_object).is_none() {
-                    return Err("Kimi server tool delta is invalid".into());
-                }
-                Ok(Vec::new())
-            }
-            "content_block_stop" => {
-                self.dropped_server_block = None;
-                self.complete_upstream_block()?;
-                Ok(Vec::new())
-            }
-            _ => Err("Kimi server tool block ended before content_block_stop".into()),
-        }
     }
 
     fn rewrite_thinking_frame(
@@ -642,18 +590,6 @@ fn is_kimi_server_web_search(tool: &Value) -> bool {
         && tool.get("name").and_then(Value::as_str) == Some("web_search")
 }
 
-fn kimi_local_web_search() -> Value {
-    json!({
-        "name": "web_search",
-        "description": "Search the web when current information is needed.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"]
-        }
-    })
-}
-
 fn normalize_relay_tools(body: &mut Value, rule_ids: &mut Vec<String>) {
     let Some(tools) = body.get("tools") else {
         return;
@@ -716,41 +652,32 @@ fn filter_kimi_server_tools(body: &mut Value, target_model: &str, rule_ids: &mut
         normalize_relay_tools(body, rule_ids);
         return;
     };
-    let has_local_search = tools.iter().any(|tool| {
-        tool.get("type")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-            && tool.get("name").and_then(Value::as_str) == Some("web_search")
-    });
     let mut changed = false;
-    let mut added_local_search = has_local_search;
+    let mut has_server_web_search = false;
     let mut filtered = Vec::with_capacity(tools.len());
     for tool in tools {
         if is_kimi_server_web_search(tool) {
-            changed = true;
-            if !added_local_search {
-                filtered.push(kimi_local_web_search());
-                added_local_search = true;
-            }
+            has_server_web_search = true;
+            filtered.push(tool.clone());
         } else if is_anthropic_server_tool(tool) {
             changed = true;
         } else {
             filtered.push(tool.clone());
         }
     }
-    if !changed {
-        normalize_relay_tools(body, rule_ids);
-        return;
-    }
-    if filtered.is_empty() {
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("tools");
+    if changed {
+        if filtered.is_empty() {
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("tools");
+            }
+        } else {
+            body["tools"] = Value::Array(filtered);
         }
-    } else {
-        body["tools"] = Value::Array(filtered);
     }
     normalize_relay_tools(body, rule_ids);
-    append_rule_id(rule_ids, RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER);
+    if has_server_web_search || changed {
+        append_rule_id(rule_ids, RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER);
+    }
     degrade_missing_tool_choice(body);
 }
 
@@ -831,7 +758,6 @@ fn normalize_kimi_documents(
 
 fn zero_information_kimi_block(block: &Value) -> bool {
     match block.get("type").and_then(Value::as_str) {
-        Some("server_tool_use" | "web_search_tool_result") => true,
         Some("text") => block.get("text").and_then(Value::as_str) == Some(""),
         Some("thinking") => {
             block.get("thinking").and_then(Value::as_str) == Some("")
@@ -1119,11 +1045,14 @@ mod tests {
         )
         .unwrap();
         let messages = mapped["messages"].as_array().unwrap();
-        assert_eq!(messages.len(), 6);
+        assert_eq!(messages.len(), 7);
         assert_eq!(messages[1]["content"][1]["id"], "toolu_1");
         assert_eq!(messages[2]["content"][0]["tool_use_id"], "toolu_1");
         assert_eq!(messages[3]["content"][0]["text"], "round one done");
-        assert_eq!(messages[5]["content"], "round two edited and resent");
+        assert_eq!(messages[5]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[5]["content"][0]["type"], "server_tool_use");
+        assert_eq!(messages[5]["content"][1]["type"], "web_search_tool_result");
+        assert_eq!(messages[6]["content"], "round two edited and resent");
         assert!(metadata
             .rule_ids
             .iter()
@@ -1253,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_kimi_server_web_search_downgrades_to_local_tool() {
+    fn relay_kimi_server_web_search_passthrough() {
         let (mapped, _metadata) = transform_relay_request(
             json!({
                 "model": "claude-opus-4-8",
@@ -1268,15 +1197,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             mapped["tools"],
-            json!([{
-                "name": "web_search",
-                "description": "Search the web when current information is needed.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"]
-                }
-            }])
+            json!([{"type": "web_search_20250305", "name": "web_search"}])
         );
         assert_eq!(
             mapped["tool_choice"],
@@ -1355,7 +1276,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             mapped["tools"],
-            json!([{"name": "web_search", "input_schema": {"type": "object", "properties": {}}}])
+            json!([
+                {"type": "web_search_20250305", "name": "web_search"},
+                {"name": "web_search", "input_schema": {"type": "object", "properties": {}}}
+            ])
         );
         assert_eq!(
             mapped["tool_choice"],
@@ -1415,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_stream_filter_drops_server_tool_blocks_and_compacts_indexes() {
+    fn kimi_stream_filter_preserves_server_tool_blocks_and_compacts_indexes() {
         let sse = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
@@ -1436,12 +1360,12 @@ mod tests {
         out.extend(filter.feed(&sse.as_bytes()[midpoint..]).unwrap());
         out.extend(filter.finalize().unwrap());
         let text = String::from_utf8(out).unwrap();
-        assert!(!text.contains("server_tool_use"));
-        assert!(!text.contains("web_search_tool_result"));
+        assert!(text.contains("server_tool_use"));
+        assert!(text.contains("web_search_tool_result"));
         assert!(!text.contains("\"type\":\"thinking\""));
-        assert!(text.contains("\"index\":1"));
+        assert!(text.contains("\"index\":3"));
         assert!(text.contains("\"text\":\"OK\""));
-        assert_eq!(filter.dropped(), 3);
+        assert_eq!(filter.dropped(), 1);
         assert_eq!(filter.dropped_thinking(), 1);
     }
 
@@ -1495,13 +1419,17 @@ mod tests {
     }
 
     #[test]
-    fn kimi_stream_filter_requires_dropped_server_tool_blocks_to_close() {
+    fn kimi_stream_filter_validates_preserved_server_tool_blocks() {
         let start = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"name\":\"web_search\"}}\n\n";
         let mut missing_stop = KimiServerToolFilter::new();
-        assert!(missing_stop.feed(start.as_bytes()).unwrap().is_empty());
+        assert!(
+            String::from_utf8(missing_stop.feed(start.as_bytes()).unwrap())
+                .unwrap()
+                .contains("server_tool_use")
+        );
         assert_eq!(
             missing_stop.finalize().unwrap_err(),
-            "Kimi server tool block ended before content_block_stop"
+            "Kimi content block ended before content_block_stop"
         );
 
         let mut wrong_index = KimiServerToolFilter::new();
@@ -1510,7 +1438,7 @@ mod tests {
             wrong_index
                 .feed(b"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":4}\n\n")
                 .unwrap_err(),
-            "Kimi server tool block index changed"
+            "Kimi content block index changed"
         );
 
         let mut early_terminal = KimiServerToolFilter::new();
@@ -1519,7 +1447,7 @@ mod tests {
             early_terminal
                 .feed(b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
                 .unwrap_err(),
-            "Kimi server tool block index is missing"
+            "Kimi content block index changed"
         );
 
         let mut malformed_delta = KimiServerToolFilter::new();
@@ -1528,7 +1456,7 @@ mod tests {
             malformed_delta
                 .feed(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0}\n\n")
                 .unwrap_err(),
-            "Kimi server tool delta is invalid"
+            "Kimi content block delta is invalid"
         );
     }
 
