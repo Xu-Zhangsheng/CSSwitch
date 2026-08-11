@@ -24,8 +24,11 @@ provider 下完成 normal one-click、reopen reuse、stop、restart、再次请�
 取得 scoped `PASS`。同一 tuple 的 `B-CORE-01` canonical run `bcore-a60c2ee-r1` 又在专用合成 project / Git
 fixture 下完成 permission request → exact `rw` grant → read/write → UI revoke → post-revoke denial、
 sibling 越界拒绝、artifact v1/v2 lineage/diff/preview/provenance、两次 runtime restart 后回读与真实
-pointer annotation 到下一消息传递，取得 scoped `PASS`。`B-CONTEXT-01`、完整 Provider、Skill/MCP、
-SSH、installed、升级/rollback、签名与 release-ready 仍为 `NOT-RUN`。旧 `9e08924` 与 `06b630b` tuple 的对应 PASS
+pointer annotation 到下一消息传递，取得 scoped `PASS`。同一 tuple 的 `B-CONTEXT-01` canonical run
+`bcontext-a60c2ee-r13` 又完成 11/11 子门，150 个脱敏 request envelope 的四项跨域计数为 0，
+活动期 26/26 socket rows 为 loopback，UI stop/exit 与精确 cleanup 均为 `PASS`，179/179 evidence hashes
+复算 `OK`。Reviewer/Specialist 服务结果仍为 `UNVERIFIED`；完整 Provider、Skill/MCP、SSH、installed、
+升级/rollback、签名与 release-ready 仍为 `NOT-RUN`。旧 `9e08924` 与 `06b630b` tuple 的对应 PASS
 只保留为历史日期化证据，不能继承给新 artifact。
 
 `ra60c2eec` 的 55 条事件严格单调，5/5 provider requests consumed；LaunchServices 重开保持同一
@@ -42,6 +45,15 @@ annotation-transfer envelope 的结构键、选区与 comment marker 全为 true
 全部复算 `OK`。正式 clean-context 独立审查为 `BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`、`PASS`。
 本轮不读取账号数据库、真实用户文件或凭证；完整 sub-gate、identity、network 与 cleanup 边界见
 [当前 B-CORE 日期化验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-core-01.md)。
+
+`bcontext-a60c2ee-r13` 的 11 份 observation 与 11 条 event 均为 PASS，event id 1–11 严格单调；
+150 个 request envelope 只保留结构、tool shape 与合成 marker，四项 project/session 跨域计数均为 0。
+Reviewer root 显示 `Inconclusive` / 7 checks，compaction 显示 850K full history → 64 working context / 1
+summary；活动期 26 条 socket rows 全部 loopback，8765 未使用。最终 CSSwitch Test 从产品 UI 正常
+stop/exit，owned process/port、合成 Memory、浏览器 tab 与临时 runtime/driver/cache 全部清零；179 项
+evidence hash 全部复算 `OK`。前序 r9–r12 的 tab binding、marker/schema 与 Reviewer capture 错误均按原
+FAIL 保留，不是产品行为 FAIL。完整边界见
+[当前 B-CONTEXT 日期化验收](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-context-01.md)。
 
 此前 cold one-click prior Science stop 子阶段的历史 production source candidate 是
 `next@5cf3eb1670eec6dc58d5d1d873ca3834f9a76623`。cold one-click prior Science stop 保留
@@ -200,7 +212,7 @@ Science、SSH、signing 或 release 结论。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `a60c2ee` exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `a60c2ee` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01=PASS`、`B-CORE-01=PASS`；`B-CONTEXT-01` 仍 `NOT-RUN` | 真实 provider/账号分项 `NOT-RUN` |
+| 一键入口、Gateway / Science 启动与 finalize | `a60c2ee` exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | `a60c2ee` 的 `CSSwitch Test.app`、packaged Rust Gateway 与 Science 0.1.25 exact tuple 已由递归 G1 receipt 绑定并 `PASS`；installed/signing/release 不外推 | current tuple `B-RUNTIME-01=PASS`、`B-CORE-01=PASS`、`B-CONTEXT-01=PASS(scope=isolated-request-shape)`；Reviewer/Specialist 服务结果仍 `UNVERIFIED` | 真实 provider/账号分项 `NOT-RUN` |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click / stop / restart lifecycle `PASS`；replacement/race/crash 仍由 source fixture 证明 | installed normal stop `NOT-RUN` |
 | authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | normal one-click transaction UI outcome `PASS`；durable compensation/replay 不由 happy path 外推 | installed happy path `NOT-RUN`；crash window 不要求 live |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |

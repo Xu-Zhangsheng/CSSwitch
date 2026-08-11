@@ -29,10 +29,15 @@ deny-egress sandbox、真实 Science 0.1.25 与 loopback fake provider 下取得
 cleanup 经 clean-context 独立复算通过。其 `B-CORE-01` run `bcore-a60c2ee-r1` 又完成合成 project、
 permission request/grant/revoke/denial、artifact v1→v2 lineage/diff/preview、两次 runtime restart 后回读及
 真实 pointer annotation 到下一消息传递；31/31 socket rows 为 loopback，22 条事件全 PASS，30/30
-evidence hashes 与精确清理经 clean-context 独立复算通过。`B-CONTEXT-01`、完整 Provider、Skill/MCP、
+evidence hashes 与精确清理经 clean-context 独立复算通过。其 `B-CONTEXT-01` canonical run
+`bcontext-a60c2ee-r13` 又完成 11/11 plan/delegation/fork/restore/Memory/compaction/Reviewer/
+Specialist/isolation 子门；150 个脱敏 request envelope 的四项跨域计数为 0，活动期 26/26 socket rows
+为 loopback，最终 UI stop/exit、Memory/browser/process/port/runtime cleanup 全部 `PASS`，179/179
+evidence hashes 复算 `OK`。Reviewer/Specialist 服务结果仍为 `UNVERIFIED`；完整 Provider、Skill/MCP、
 SSH、installed、升级/rollback、Developer ID 签名、公证、DMG 与 release-ready 仍为 `NOT-RUN`。
 旧 `9e08924` tuple 的 isolated-live 结论只保留为历史日期化证据，不能继承。
 
 完整证据与不能外推的边界见
 [v0.8.4 release evidence](../../docs/evidence/releases/v0.8.4.md)；日期化调查从
-[调查索引](../../docs/evidence/investigations/README.md)进入。
+[调查索引](../../docs/evidence/investigations/README.md)进入；当前 exact tuple 的上下文验收见
+[`B-CONTEXT-01`](../../docs/evidence/investigations/2026-08-11-claude-science-0.1.25-a60c2ee-b-context-01.md)。
