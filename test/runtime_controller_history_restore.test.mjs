@@ -22,6 +22,7 @@ const { createRuntimeController } = await import(
 );
 
 function makeController(calls, options = {}) {
+  let busy = false;
   const config = options.config || {
     active_id: "profile-a",
     applied_profile_id: "profile-a",
@@ -32,7 +33,11 @@ function makeController(calls, options = {}) {
   const els = {
     runtimeChoiceSec: { hidden: true },
     runtimeChoiceText: { textContent: "" },
+    runtimeActivateUpdateBtn: { hidden: true },
+    runtimeKeepActiveBtn: { hidden: true },
     runtimeUseCacheBtn: { hidden: true },
+    runtimeDownloadBtn: { hidden: false },
+    runtimeChoiceCancelBtn: { hidden: false },
     historyRecoverySec: { hidden: true },
     historyRecoveryText: { textContent: "" },
     historyRecoveryChoices: {
@@ -48,16 +53,17 @@ function makeController(calls, options = {}) {
     ltUpstream: {},
     brandDot: { className: "" },
   };
+  if (options.captureEls) options.captureEls(els);
   return createRuntimeController({
     els,
     getConfigState: () => config,
     getSkillPage: () => null,
-    isBusy: () => false,
+    isBusy: () => options.isBusy ? options.isBusy() : (options.trackBusy ? busy : false),
     getBusyOp: () => null,
     isActivationInFlight: () => false,
     getMode: () => "proxy",
     getOfficialRuntimeState: () => "gray",
-    setBusy() {},
+    setBusy(on) { if (options.trackBusy) busy = on; },
     setMsg: options.setMsg || (() => {}),
     setBrowserFallback() {},
     startOneClickFeedback() {},
@@ -72,6 +78,131 @@ function makeController(calls, options = {}) {
     proxyRecoveryMessage: () => "",
   });
 }
+
+test("pending Science update requires exact-hash user action and does not launch runtime", async () => {
+  const calls = [];
+  const messages = [];
+  const controller = makeController(calls, {
+    setMsg: (text, kind) => messages.push([text, kind]),
+  });
+  const pending = {
+    source: "official_updated",
+    version: "claude-science 2.0",
+    sha256: "b".repeat(64),
+  };
+  await controller.refreshScienceRuntimeUpdate({ pending_update: pending });
+
+  invokeHandler = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "science_runtime_update_action") {
+      return { status: "ready", pending_update: null };
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+  await controller.applyScienceRuntimeUpdate("activate_pending");
+
+  assert.deepEqual(calls, [[
+    "science_runtime_update_action",
+    { action: "activate_pending", expectedSha256: pending.sha256 },
+  ]]);
+  assert.equal(calls.some(([command]) => command === "one_click_login"), false);
+  assert.match(messages.at(-1)[0], /下次冷启动生效/);
+  assert.equal(messages.at(-1)[1], "ok");
+});
+
+test("failed pending action refreshes after busy state clears", async () => {
+  const calls = [];
+  let els;
+  const controller = makeController(calls, {
+    trackBusy: true,
+    captureEls: (value) => { els = value; },
+  });
+  const pending = {
+    source: "official_updated",
+    version: "claude-science 2.0",
+    sha256: "c".repeat(64),
+  };
+  await controller.refreshScienceRuntimeUpdate({ pending_update: pending });
+  invokeHandler = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "science_runtime_update_action") throw new Error("stale pending");
+    if (command === "science_runtime_update_status") return { status: "ready", pending_update: null };
+    throw new Error(`unexpected command: ${command}`);
+  };
+
+  await controller.applyScienceRuntimeUpdate("activate_pending");
+
+  assert.deepEqual(calls.map(([command]) => command), [
+    "science_runtime_update_action",
+    "science_runtime_update_status",
+  ]);
+  assert.equal(els.runtimeChoiceSec.hidden, true);
+});
+
+test("pending update event received while busy is refreshed after unlock", async () => {
+  const calls = [];
+  let busy = true;
+  let els;
+  const controller = makeController(calls, {
+    isBusy: () => busy,
+    captureEls: (value) => { els = value; },
+  });
+  const pending = {
+    source: "official_updated",
+    version: "claude-science 3.0",
+    sha256: "d".repeat(64),
+  };
+
+  await controller.refreshScienceRuntimeUpdate({ pending_update: pending });
+  assert.equal(els.runtimeChoiceSec.hidden, true);
+  busy = false;
+  invokeHandler = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "status") return { proxy: "stopped", sandbox: "stopped", upstream: "stopped" };
+    if (command === "science_runtime_update_status") return { status: "ready", pending_update: pending };
+    throw new Error(`unexpected command: ${command}`);
+  };
+
+  await controller.refreshStatus();
+
+  assert.deepEqual(calls.map(([command]) => command), [
+    "status",
+    "science_runtime_update_status",
+  ]);
+  assert.equal(els.runtimeChoiceSec.hidden, false);
+  assert.equal(els.runtimeActivateUpdateBtn.hidden, false);
+});
+
+test("starting the current active runtime does not lose a pending update choice", async () => {
+  const calls = [];
+  let els;
+  const controller = makeController(calls, {
+    trackBusy: true,
+    captureEls: (value) => { els = value; },
+  });
+  const pending = {
+    source: "official_updated",
+    version: "claude-science 4.0",
+    sha256: "e".repeat(64),
+  };
+  await controller.refreshScienceRuntimeUpdate({ pending_update: pending });
+  invokeHandler = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "one_click_login") return { status: "ok", msg: "started", fallback_url: null };
+    if (command === "finalize_consumer_state") {
+      return { disposition: "ready", selection_pending: false, applied_profile_id: "profile-a", cleanup_required: false };
+    }
+    if (command === "status") return { proxy: "healthy", sandbox: "healthy", upstream: "healthy" };
+    if (command === "science_runtime_update_status") return { status: "ready", pending_update: pending };
+    throw new Error(`unexpected command: ${command}`);
+  };
+
+  await controller.runOneClick(null);
+
+  assert.equal(calls.some(([command]) => command === "science_runtime_update_status"), true);
+  assert.equal(els.runtimeChoiceSec.hidden, false);
+  assert.equal(els.runtimeActivateUpdateBtn.hidden, false);
+});
 
 function projection(disposition, {
   journal = "cleared",

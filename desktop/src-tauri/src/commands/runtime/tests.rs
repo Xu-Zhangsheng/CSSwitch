@@ -8235,13 +8235,37 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         };
         let preflight =
             science::science_runtime_preflight(&version_cache, confirmed_stopped.as_ref())
-                .expect("healthy production preflight must record a deferred candidate");
+                .expect("healthy production preflight must reuse the fixed active runtime");
         assert_eq!(preflight["status"], "installed_ready");
         assert_eq!(preflight["adoption_record_status"], "recorded");
+        let before_update = science::science_runtime_update_status()
+            .expect("startup preflight must leave update status readable");
+        assert!(
+            before_update["pending_update"].is_null(),
+            "startup preflight must not discover a pending update"
+        );
+        let before_ledger = science::science_adoption_ledger_json_for_test()
+            .expect("startup preflight must leave the adoption ledger readable");
+        assert!(
+            before_ledger["attempts"]
+                .as_array()
+                .is_some_and(|attempts| attempts
+                    .iter()
+                    .all(|attempt| attempt["decision"] != "deferred_healthy")),
+            "startup preflight must not probe or defer an update candidate"
+        );
+        let update = science::check_science_runtime_update(&version_cache, running_before.as_ref())
+            .expect("due background check must publish the changed runtime as pending");
+        assert_eq!(update["check_status"], "checked");
+        assert_eq!(update["adoption_record_status"], "recorded");
+        assert_eq!(
+            update["pending_update"]["version"],
+            "claude-science 0.0.1-csswitch-test"
+        );
         assert_eq!(
             lock(&state).science_runtime.as_ref(),
             running_before.as_ref(),
-            "healthy preflight must not replace the running Science owner"
+            "preflight and background update check must not replace the running Science owner"
         );
         assert_eq!(
             fs::read_to_string(fake_state_dir.join("pid")).unwrap(),
@@ -8254,7 +8278,7 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
             "healthy preflight must not restart Science"
         );
         let ledger = science::science_adoption_ledger_json_for_test()
-            .expect("healthy production preflight must publish the adoption ledger");
+            .expect("background update check must publish the adoption ledger");
         let deferred = ledger["attempts"]
             .as_array()
             .and_then(|attempts| {
@@ -8263,7 +8287,7 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
                     .rev()
                     .find(|attempt| attempt["decision"] == "deferred_healthy")
             })
-            .expect("healthy production preflight must persist deferred_healthy");
+            .expect("background update check must persist deferred_healthy");
         assert_eq!(
             deferred["predecessor"]["version"],
             "claude-science 0.0.0-csswitch-test"
@@ -8274,7 +8298,7 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         );
         cleanup
             .finish()
-            .expect("healthy adoption preflight fixture must cleanly stop");
+            .expect("healthy background update fixture must cleanly stop");
         return;
     }
     if env::var_os("CSSWITCH_TEST_R0_COLD_START_ONLY").is_some() {

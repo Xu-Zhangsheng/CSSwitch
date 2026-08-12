@@ -44,7 +44,7 @@
     "native_hooks": {
       "type": "array",
       "minItems": 8,
-      "maxItems": 8,
+      "maxItems": 9,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/NativeHook" }
     }

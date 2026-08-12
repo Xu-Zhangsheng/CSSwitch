@@ -34,6 +34,7 @@ EXPECTED_NATIVE_HOOKS = {
     "app_state_drop",
     "window_close_requested",
     "reopen",
+    "science_runtime_update_scheduler",
 }
 EXPECTED_STATE_OWNERS = {
     "app.boot",
@@ -81,6 +82,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.science-adoption-v1",
     "record.science-credential-v1",
     "record.science-receipt-v1",
+    "record.science-runtime-selection-v1",
     "record.science-runtime-snapshot-v1",
     "record.science-ssh-bridge-v1",
     "record.skill-package-v1",
@@ -107,6 +109,8 @@ EXPECTED_OPERATIONS = {
     "op.quit-command",
     "op.revoke-profile",
     "op.science-runtime-preflight",
+    "op.science-runtime-update-action",
+    "op.science-runtime-update-check",
     "op.select-profile",
     "op.set-mode",
     "op.set-settings",
@@ -146,6 +150,8 @@ EXPECTED_SURFACE_CONTRACT = {
     "repair_skill_route": ("host-bridge-mutation", "op.skill-route-repair"),
     "run_doctor_read_only": ("read-only", "none"),
     "science_runtime_preflight": ("runtime-mutation", "op.science-runtime-preflight"),
+    "science_runtime_update_action": ("intent-mutation", "op.science-runtime-update-action"),
+    "science_runtime_update_status": ("read-only", "none"),
     "set_active_profile": ("intent-mutation", "op.select-profile"),
     "set_codex_network": ("runtime-mutation", "op.codex-network"),
     "set_experimental_codex_enabled": ("runtime-mutation", "op.codex-enable"),
@@ -173,6 +179,7 @@ EXPECTED_NATIVE_CONTRACT = {
     "exit_cleanup": ("terminal-mutation", "op.native-exit"),
     "exit_requested_cleanup": ("terminal-mutation", "op.native-exit"),
     "reopen": ("ui-only", "none"),
+    "science_runtime_update_scheduler": ("runtime-mutation", "op.science-runtime-update-check"),
     "setup_boot": ("runtime-mutation", "op.one-click"),
     "setup_config_load": ("startup-mutation", "op.startup-config-migration"),
     "single_instance_boot": ("runtime-mutation", "op.one-click"),
@@ -274,7 +281,11 @@ def assert_science_inventory_contract(testcase, inventory):
     operations = {item["id"]: item for item in inventory["operations"]}
 
     testcase.assertTrue(
-        {"science_adoption_ledger", "science_runtime_snapshot"}.issubset(
+        {
+            "science_adoption_ledger",
+            "science_runtime_selection",
+            "science_runtime_snapshot",
+        }.issubset(
             set(owners["authority.private"]["fields"])
         )
     )
@@ -311,7 +322,7 @@ def assert_science_inventory_contract(testcase, inventory):
             "mark_science_runtime_adoption_finalized",
             "mark_science_runtime_adoption_launch_committed",
             "reconcile_current_science_runtime_adoption",
-            "record_deferred_science_runtime_candidate",
+            "record_deferred_science_runtime_observation",
             "record_rejected_science_runtime_attempt",
         },
     )
@@ -338,7 +349,7 @@ def assert_science_inventory_contract(testcase, inventory):
     )
     testcase.assertEqual(
         {item["symbol"] for item in snapshot["writers"]},
-        {"fn official_updated_snapshot_for_home("},
+        {"fn snapshot_science_executable("},
     )
     testcase.assertEqual(
         {item["symbol"] for item in snapshot["readers"]},
@@ -347,6 +358,42 @@ def assert_science_inventory_contract(testcase, inventory):
             "fn official_updated_snapshot_from_process_paths(",
             "fn runtime_identity(",
             "pub(crate) fn runtime_identity_from_durable_parts(",
+            "runtime_from_pinned_selection",
+        },
+    )
+
+    selection = records["record.science-runtime-selection-v1"]
+    testcase.assertEqual(selection["authority_owner"], "authority.private")
+    testcase.assertEqual(
+        set(selection["fields"]),
+        {
+            "active",
+            "dismissed_sha256s",
+            "last_checked_at_ms",
+            "pending",
+            "schema_version",
+            "sha256",
+            "size",
+            "source",
+            "update_check_id",
+            "version",
+        },
+    )
+    testcase.assertEqual(
+        {item["symbol"] for item in selection["writers"]},
+        {
+            "mutate_science_runtime_selection",
+            "resolve_active_or_bootstrap_science_runtime",
+            "science_runtime_update_action",
+            "check_science_runtime_update",
+        },
+    )
+    testcase.assertEqual(
+        {item["symbol"] for item in selection["readers"]},
+        {
+            "active_science_runtime",
+            "resolve_active_or_bootstrap_science_runtime",
+            "science_runtime_update_status",
         },
     )
     testcase.assertEqual(
@@ -378,10 +425,12 @@ def assert_science_inventory_contract(testcase, inventory):
                 "record.runtime-binding-v1",
                 "record.science-adoption-v1",
                 "record.science-receipt-v1",
+                "record.science-runtime-selection-v1",
                 "record.science-runtime-snapshot-v1",
             },
             "writes": {
                 "record.science-adoption-v1",
+                "record.science-runtime-selection-v1",
                 "record.science-runtime-snapshot-v1",
             },
             "clears": set(),
@@ -402,11 +451,11 @@ def assert_science_inventory_contract(testcase, inventory):
         ],
     )
     testcase.assertIn(
-        "for any updater candidate discovered while healthy/deferred or stopped, open the fixed no-follow executable, copy and hash it into a private 0500 temporary snapshot, fsync, revalidate source identity, hard-link the SHA-256 content-addressed snapshot, and recheck its fingerprint",
+        "for stopped startup resolve and validate only the fixed active content-addressed snapshot",
         preflight["ordered_effects"],
     )
     testcase.assertIn(
-        "record a deferred healthy candidate or a rejected stopped candidate through the private ledger writer lock and byte-identity CAS",
+        "only when no selection exists, perform one bootstrap discovery, content-address the updater or installed-App executable, and atomically publish active selection",
         preflight["ordered_effects"],
     )
     testcase.assertEqual(
@@ -426,7 +475,20 @@ def assert_science_inventory_contract(testcase, inventory):
     )
     testcase.assertEqual(
         preflight["compensation"]["contract"],
-        "The command never starts, stops, or replaces Science. Temporary snapshot names are removed best effort, verified content-addressed snapshots are retained, and adoption ledger writes are serialized by their cross-process writer lock and identity/bytes CAS.",
+        "The command never starts, stops, or replaces Science. Normal startup validates only fixed active state; one-time bootstrap temporary names are removed best effort, verified snapshots are retained, and selection/adoption writes share the private cross-process writer lock.",
+    )
+
+    update_action = operations["op.science-runtime-update-action"]
+    testcase.assertEqual(
+        set(update_action["durable_records"]["reads"]),
+        {
+            "record.science-runtime-selection-v1",
+            "record.science-runtime-snapshot-v1",
+        },
+    )
+    testcase.assertEqual(
+        set(update_action["durable_records"]["writes"]),
+        {"record.science-runtime-selection-v1"},
     )
 
     one_click = operations["op.one-click"]
@@ -435,11 +497,19 @@ def assert_science_inventory_contract(testcase, inventory):
         one_click["durable_records"]["reads"],
     )
     testcase.assertIn(
+        "record.science-runtime-selection-v1",
+        one_click["durable_records"]["reads"],
+    )
+    testcase.assertIn(
         "record.science-runtime-snapshot-v1",
         one_click["durable_records"]["writes"],
     )
     testcase.assertIn(
-        "recapture entry facts, validate or content-address and commit the selected/deferred updater runtime snapshot, and purely decide one recovery step",
+        "record.science-runtime-selection-v1",
+        one_click["durable_records"]["writes"],
+    )
+    testcase.assertIn(
+        "recapture entry facts, resolve only the fixed active Science snapshot or perform one initial bootstrap when selection is absent, and purely decide one recovery step",
         one_click["ordered_effects"],
     )
     testcase.assertIn(
@@ -997,7 +1067,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             operation["ordered_effects"] = [
                 effect
                 for effect in operation["ordered_effects"]
-                if "hard-link the SHA-256 content-addressed snapshot" not in effect
+                if "content-address the updater or installed-App executable" not in effect
             ]
 
         science_mutations.append(remove_preflight_snapshot_effect)
@@ -1033,7 +1103,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             operation["ordered_effects"] = [
                 effect
                 for effect in operation["ordered_effects"]
-                if "selected/deferred updater runtime snapshot" not in effect
+                if "fixed active Science snapshot" not in effect
             ]
 
         science_mutations.append(remove_one_click_snapshot_effect)

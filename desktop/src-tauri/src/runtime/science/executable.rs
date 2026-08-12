@@ -22,6 +22,29 @@ fn is_explicit_executable_file(path: &Path) -> bool {
     is_executable_file(path)
 }
 
+fn fixed_path_entry_exists(path: &Path, label: &str) -> Result<bool, String> {
+    if !path.is_absolute() {
+        return Err(format!("{label} 固定路径不是绝对路径"));
+    }
+    let components = path.components().count();
+    let mut current = PathBuf::new();
+    for (index, component) in path.components().enumerate() {
+        current.push(component.as_os_str());
+        match current.symlink_metadata() {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!("{label} 固定路径包含 symlink"))
+            }
+            Ok(metadata) if index + 1 < components && !metadata.file_type().is_dir() => {
+                return Err(format!("{label} 固定路径上级包含非目录文件"))
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(format!("检查 {label} 固定路径失败：{error}")),
+        }
+    }
+    Ok(true)
+}
+
 fn embedded_identity_metadata_matches(details: &str, identifier: &str, team_id: &str) -> bool {
     details
         .lines()
@@ -261,33 +284,28 @@ fn official_updated_snapshot_for_listener(
     )
 }
 
-fn official_updated_snapshot_for_home(
-    home: &Path,
+fn snapshot_science_executable(
+    candidate: &Path,
     snapshot_root: &Path,
-    verify_local_identity: bool,
-) -> Result<Option<PathBuf>, String> {
-    #[cfg(test)]
-    let verify_local_identity =
-        verify_local_identity && !fake_science_updater_identity_armed_for_current_thread();
-    let candidate = home.join(OFFICIAL_UPDATED_RUNTIME_RELATIVE);
-    if !candidate.exists() {
-        return Ok(None);
-    }
-    let candidate = official_updated_science_bin_for_home(home, false).ok_or(
-        "检测到 updater Science executable，但固定路径、属主或权限校验未通过；已拒绝静默回退旧 App",
-    )?;
+    source_label: &str,
+    expected_source: Option<&ScienceExecutableFingerprint>,
+    verify_current_source: impl Fn() -> bool,
+    verify_snapshot_identity: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
     let mut source = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(&candidate)
-        .map_err(|error| format!("打开 updater Science executable 失败：{error}"))?;
+        .map_err(|error| format!("打开 {source_label} Science executable 失败：{error}"))?;
     let source_before = source
         .metadata()
-        .map_err(|error| format!("读取 updater Science executable 失败：{error}"))?;
+        .map_err(|error| format!("读取 {source_label} Science executable 失败：{error}"))?;
     if !source_before.file_type().is_file()
         || !(MIN_SCIENCE_BINARY_SIZE..=MAX_SCIENCE_BINARY_SIZE).contains(&source_before.len())
     {
-        return Err("updater Science executable 大小或文件类型不安全；已拒绝静默回退旧 App".into());
+        return Err(format!(
+            "{source_label} Science executable 大小或文件类型不安全"
+        ));
     }
 
     let snapshot_root = secure_runtime_snapshot_root(snapshot_root)?;
@@ -312,7 +330,7 @@ fn official_updated_snapshot_for_home(
         loop {
             let count = source
                 .read(&mut buffer)
-                .map_err(|error| format!("读取 updater Science executable 失败：{error}"))?;
+                .map_err(|error| format!("读取 {source_label} Science executable 失败：{error}"))?;
             if count == 0 {
                 break;
             }
@@ -328,10 +346,10 @@ fn official_updated_snapshot_for_home(
 
         let source_after = source
             .metadata()
-            .map_err(|error| format!("复核 updater Science executable 失败：{error}"))?;
+            .map_err(|error| format!("复核 {source_label} Science executable 失败：{error}"))?;
         let current = candidate
             .symlink_metadata()
-            .map_err(|error| format!("复核 updater Science executable 路径失败：{error}"))?;
+            .map_err(|error| format!("复核 {source_label} Science executable 路径失败：{error}"))?;
         if source_before.dev() != source_after.dev()
             || source_before.ino() != source_after.ino()
             || source_before.size() != source_after.size()
@@ -340,32 +358,70 @@ fn official_updated_snapshot_for_home(
             || source_before.mode() != source_after.mode()
             || source_after.dev() != current.dev()
             || source_after.ino() != current.ino()
-            || official_updated_science_bin_for_home(home, false).as_deref()
-                != Some(candidate.as_path())
+            || !verify_current_source()
         {
-            return Err("updater Science executable 在快照期间发生变化；已拒绝启动，请重试".into());
+            return Err(format!(
+                "{source_label} Science executable 在快照期间发生变化；请重试"
+            ));
         }
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o500))
             .map_err(|error| format!("收紧 Science runtime snapshot 权限失败：{error}"))?;
-        if verify_local_identity
-            && (!file_is_macho(&temporary)
-                || !official_updated_identity_metadata_matches(&temporary))
-        {
-            return Err(
-                "updater Science executable 未通过 Mach-O/embedded metadata 本地校验；已拒绝静默回退旧 App"
-                    .into(),
-            );
+        if !verify_snapshot_identity(&temporary) {
+            return Err(format!(
+                "{source_label} Science executable 未通过 snapshot 身份校验"
+            ));
         }
 
         let sha256: [u8; 32] = digest.finalize().into();
+        if expected_source.is_some_and(|expected| {
+            expected.device != source_after.dev()
+                || expected.inode != source_after.ino()
+                || expected.size != source_after.size()
+                || expected.modified_seconds != source_after.mtime()
+                || expected.modified_nanoseconds != source_after.mtime_nsec()
+                || expected.mode != source_after.mode()
+                || expected.sha256 != sha256
+        }) {
+            return Err(format!(
+                "{source_label} Science executable 与版本探测时的完整身份不一致"
+            ));
+        }
         let name: String = sha256.iter().map(|byte| format!("{byte:02x}")).collect();
         let snapshot = snapshot_root.join(format!("claude-science-{name}"));
-        match fs::hard_link(&temporary, &snapshot) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        let created = match fs::hard_link(&temporary, &snapshot) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
             Err(error) => {
                 return Err(format!("提交 Science runtime snapshot 失败：{error}"));
             }
+        };
+        if created {
+            match fs::remove_file(&temporary) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "清理 Science runtime snapshot 临时链接失败：{error}"
+                    ))
+                }
+            }
+        }
+        let mut snapshot_metadata = snapshot
+            .symlink_metadata()
+            .map_err(|error| format!("复核 Science runtime snapshot 身份失败：{error}"))?;
+        if snapshot_metadata.nlink() != 1 {
+            remove_science_snapshot_temp_links(&snapshot_root, &snapshot)?;
+            snapshot_metadata = snapshot
+                .symlink_metadata()
+                .map_err(|error| format!("复核 Science runtime snapshot 身份失败：{error}"))?;
+        }
+        if !snapshot_metadata.file_type().is_file()
+            || snapshot_metadata.uid() != unsafe { libc::geteuid() }
+            || snapshot_metadata.permissions().mode() & 0o777 != 0o500
+            || snapshot_metadata.nlink() != 1
+            || snapshot_metadata.len() != source_after.size()
+        {
+            return Err("Science runtime snapshot 不是私有 0500 单链接文件".into());
         }
         let fingerprint = science_executable_fingerprint(&snapshot)
             .ok_or("Science runtime snapshot 无法重新确认")?;
@@ -375,10 +431,113 @@ fn official_updated_snapshot_for_home(
         {
             return Err("Science runtime snapshot 内容或权限与已验证候选不一致".into());
         }
+        File::open(&snapshot_root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("持久化 Science runtime snapshot 目录失败：{error}"))?;
         Ok(snapshot)
     })();
     let _ = fs::remove_file(&temporary);
-    result.map(Some)
+    result
+}
+
+fn remove_science_snapshot_temp_links(root: &Path, snapshot: &Path) -> Result<(), String> {
+    let snapshot_metadata = snapshot
+        .symlink_metadata()
+        .map_err(|error| format!("读取 Science runtime snapshot 失败：{error}"))?;
+    let mut entries = fs::read_dir(root)
+        .map_err(|error| format!("枚举 Science runtime snapshot 临时文件失败：{error}"))?;
+    while let Some(entry) = entries
+        .next()
+        .transpose()
+        .map_err(|error| format!("读取 Science runtime snapshot 临时文件失败：{error}"))?
+    {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(".claude-science-") || !name.ends_with(".tmp") {
+            continue;
+        }
+        let metadata = match entry.path().symlink_metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "检查 Science runtime snapshot 临时文件失败：{error}"
+                ))
+            }
+        };
+        if metadata.file_type().is_file()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.dev() == snapshot_metadata.dev()
+            && metadata.ino() == snapshot_metadata.ino()
+        {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "清理 Science runtime snapshot 临时链接失败：{error}"
+                    ))
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn official_updated_snapshot_for_home(
+    home: &Path,
+    snapshot_root: &Path,
+    verify_local_identity: bool,
+) -> Result<Option<PathBuf>, String> {
+    #[cfg(test)]
+    let verify_local_identity =
+        verify_local_identity && !fake_science_updater_identity_armed_for_current_thread();
+    let candidate = home.join(OFFICIAL_UPDATED_RUNTIME_RELATIVE);
+    if !fixed_path_entry_exists(&candidate, "updater Science executable")? {
+        return Ok(None);
+    }
+    let candidate = official_updated_science_bin_for_home(home, false).ok_or(
+        "检测到 updater Science executable，但固定路径、属主或权限校验未通过；已拒绝静默回退旧 App",
+    )?;
+    snapshot_science_executable(
+        &candidate,
+        snapshot_root,
+        "updater",
+        None,
+        || {
+            official_updated_science_bin_for_home(home, false).as_deref()
+                == Some(candidate.as_path())
+        },
+        |snapshot| {
+            !verify_local_identity
+                || (file_is_macho(snapshot) && official_updated_identity_metadata_matches(snapshot))
+        },
+    )
+    .map(Some)
+}
+
+fn installed_app_snapshot(
+    candidate: &Path,
+    expected_source: &ScienceExecutableFingerprint,
+    snapshot_root: &Path,
+) -> Result<Option<PathBuf>, String> {
+    if !fixed_path_entry_exists(candidate, "Claude Science App executable")? {
+        return Ok(None);
+    }
+    if !is_executable_file(candidate) {
+        return Err("Claude Science App executable 路径不安全".into());
+    }
+    snapshot_science_executable(
+        candidate,
+        snapshot_root,
+        "installed App",
+        Some(expected_source),
+        || is_executable_file(candidate),
+        |_| true,
+    )
+    .map(Some)
 }
 
 fn official_updated_science_bin() -> Result<Option<PathBuf>, String> {
@@ -561,6 +720,7 @@ fn explicit_science_bin() -> Result<Option<PathBuf>, String> {
 
 fn preferred_science_runtime_candidate(
     version_cache: &ScienceVersionCache,
+    allow_installed_app_fallback: bool,
 ) -> Result<Option<ScienceRuntimeIdentity>, ScienceCandidateRejection> {
     if std::env::var_os("SCIENCE_BIN").is_some() {
         let path = explicit_science_bin()
@@ -583,10 +743,6 @@ fn preferred_science_runtime_candidate(
             });
     }
 
-    let updater_detected = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(OFFICIAL_UPDATED_RUNTIME_RELATIVE).exists())
-        .unwrap_or(false);
     let official_updated =
         official_updated_science_bin().map_err(|message| ScienceCandidateRejection {
             source: ScienceRuntimeSource::OfficialUpdated,
@@ -602,13 +758,8 @@ fn preferred_science_runtime_candidate(
                 message: "updater Science snapshot 未通过版本预检；已拒绝回退旧 App".into(),
             });
     }
-    if updater_detected {
-        return Err(ScienceCandidateRejection {
-            source: ScienceRuntimeSource::OfficialUpdated,
-            code: ScienceAdoptionRejectionCode::LocalIdentityValidationFailed,
-            message: "检测到 updater Science executable，但本地身份无法确认；已拒绝回退旧 App"
-                .into(),
-        });
+    if !allow_installed_app_fallback {
+        return Ok(None);
     }
 
     let app = PathBuf::from(SCIENCE_BIN);
@@ -619,12 +770,22 @@ fn preferred_science_runtime_candidate(
     ) {
         return Ok(Some(runtime));
     }
-    if app.exists() {
-        return Err(ScienceCandidateRejection {
-            source: ScienceRuntimeSource::InstalledApp,
-            code: ScienceAdoptionRejectionCode::VersionProbeFailed,
-            message: "Claude Science App executable 未通过版本预检".into(),
-        });
+    match fixed_path_entry_exists(&app, "Claude Science App executable") {
+        Ok(true) => {
+            return Err(ScienceCandidateRejection {
+                source: ScienceRuntimeSource::InstalledApp,
+                code: ScienceAdoptionRejectionCode::VersionProbeFailed,
+                message: "Claude Science App executable 未通过版本预检".into(),
+            })
+        }
+        Ok(false) => {}
+        Err(message) => {
+            return Err(ScienceCandidateRejection {
+                source: ScienceRuntimeSource::InstalledApp,
+                code: ScienceAdoptionRejectionCode::LocalIdentityValidationFailed,
+                message,
+            })
+        }
     }
     Ok(None)
 }
@@ -745,7 +906,6 @@ pub(crate) fn science_runtime_preflight(
                 &runtime,
                 cfg.runtime_binding.as_ref(),
             )
-            .and_then(|_| record_deferred_science_runtime_candidate(&runtime, version_cache))
             .is_ok()
             {
                 "recorded"
@@ -762,8 +922,27 @@ pub(crate) fn science_runtime_preflight(
             }));
         }
     }
-    let data_dir = sandbox_data_dir();
-    match preferred_science_runtime_candidate(version_cache) {
+    if std::env::var_os("SCIENCE_BIN").is_some() {
+        match preferred_science_runtime_candidate(version_cache, true) {
+            Ok(Some(runtime)) => {
+                return Ok(json!({
+                    "status": "installed_ready",
+                    "selected_source": runtime.source.code(),
+                    "selected_version": runtime.version,
+                    "cached_version": Value::Null,
+                    "download_url": SCIENCE_DOWNLOAD_URL,
+                    "adoption_record_status": "explicit_override",
+                }))
+            }
+            Err(rejection) => {
+                let message = rejection.message.clone();
+                let _ = record_rejected_science_runtime_attempt(None, rejection);
+                return Err(message);
+            }
+            Ok(None) => {}
+        }
+    }
+    match resolve_active_or_bootstrap_science_runtime(version_cache) {
         Ok(Some(runtime)) => {
             return Ok(json!({
                 "status": "installed_ready",
@@ -771,19 +950,13 @@ pub(crate) fn science_runtime_preflight(
                 "selected_version": runtime.version,
                 "cached_version": Value::Null,
                 "download_url": SCIENCE_DOWNLOAD_URL,
-                "adoption_record_status": "pending_selection",
+                "adoption_record_status": "active_selection",
             }))
         }
-        Err(rejection) if rejection.source == ScienceRuntimeSource::InstalledApp => {
-            let _ = record_rejected_science_runtime_attempt(None, rejection);
-        }
-        Err(rejection) => {
-            let message = rejection.message.clone();
-            let _ = record_rejected_science_runtime_attempt(None, rejection);
-            return Err(message);
-        }
         Ok(None) => {}
+        Err(error) => return Err(error),
     }
+    let data_dir = sandbox_data_dir();
     science_runtime_preflight_for_paths_cached(
         &data_dir,
         None,
@@ -882,20 +1055,22 @@ pub(crate) fn select_science_runtime_cached(
     version_cache: &ScienceVersionCache,
 ) -> Result<ScienceRuntimeIdentity, String> {
     let data_dir = sandbox_data_dir();
-    match preferred_science_runtime_candidate(version_cache) {
-        Ok(Some(mut runtime)) => {
-            bind_selected_science_runtime_attempt(&mut runtime)?;
-            return Ok(runtime);
+    if std::env::var_os("SCIENCE_BIN").is_some() {
+        match preferred_science_runtime_candidate(version_cache, true) {
+            Ok(Some(mut runtime)) => {
+                bind_selected_science_runtime_attempt(&mut runtime)?;
+                return Ok(runtime);
+            }
+            Err(rejection) => {
+                let message = rejection.message.clone();
+                let _ = record_rejected_science_runtime_attempt(None, rejection);
+                return Err(message);
+            }
+            Ok(None) => {}
         }
-        Err(rejection) if rejection.source == ScienceRuntimeSource::InstalledApp => {
-            let _ = record_rejected_science_runtime_attempt(None, rejection);
-        }
-        Err(rejection) => {
-            let message = rejection.message.clone();
-            let _ = record_rejected_science_runtime_attempt(None, rejection);
-            return Err(message);
-        }
-        Ok(None) => {}
+    } else if let Some(mut runtime) = resolve_active_or_bootstrap_science_runtime(version_cache)? {
+        bind_selected_science_runtime_attempt(&mut runtime)?;
+        return Ok(runtime);
     }
     let cached = cached_science_bin(&data_dir);
     let cached_version = version_cache.version(&cached);
@@ -943,6 +1118,27 @@ fn runtime_probe_candidates(
                 .into_iter()
                 .collect(),
         );
+    }
+    if let Some((record, _)) = read_managed_launch_snapshot_result()? {
+        if record.port == port {
+            if let (Some(source), Some(version)) = (
+                record.runtime_source.as_deref(),
+                record.runtime_version.clone(),
+            ) {
+                if let Ok(runtime) = runtime_identity_from_durable_parts(
+                    &record.runtime_path,
+                    source,
+                    Some(version),
+                    &record.runtime_sha256,
+                    record.adoption_attempt_id.clone(),
+                ) {
+                    return Ok(vec![runtime]);
+                }
+            }
+        }
+    }
+    if let Some(active) = active_science_runtime()? {
+        return Ok(vec![active]);
     }
     let mut candidates = Vec::new();
     #[cfg(test)]

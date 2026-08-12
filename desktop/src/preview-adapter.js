@@ -343,6 +343,10 @@ export function mockInvoke(cmd, args) {
       return Promise.resolve(PREVIEW_RUNTIME_CACHE
         ? { status: "cached_choice_required", selected_source: null, selected_version: null, cached_version: "0.0.0-preview-cache", download_url: "https://claude.com/download" }
         : { status: "installed_ready", selected_source: "installed_app", selected_version: "0.0.0-preview", cached_version: null, download_url: "https://claude.com/download" });
+    case "science_runtime_update_status":
+      return Promise.resolve({ schema_version: 1, status: "ready", active_source: "installed_app", active_version: "0.0.0-preview", pending_update: null, last_checked_at_ms: null, activation_policy: "next_cold_start" });
+    case "science_runtime_update_action":
+      return Promise.resolve({ schema_version: 1, status: "ready", active_source: "installed_app", active_version: "0.0.0-preview", pending_update: null, last_checked_at_ms: Date.now(), activation_policy: "next_cold_start" });
     case "install_local_skill_package":
       if (!mockImportedSkills.some((item) => item.skill_id === "demo-reader")) {
         mockImportedSkills.push({ skill_id: "demo-reader", display_name: "Demo reader", description: "刚刚从本地包导入的示例 Skill。", source_kind: "csswitch_local", bundle_name: "demo-bundle", attachment_state: "attached" });

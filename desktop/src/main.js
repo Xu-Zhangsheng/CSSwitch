@@ -242,6 +242,7 @@ function setBusy(on, op) {
   [
     els.oneClickBtn, els.stopBtn, els.importSkillBtn, els.newBtn,
     els.doctorBtn, els.repairSkillRouteBtn,
+    els.runtimeActivateUpdateBtn, els.runtimeKeepActiveBtn,
     els.runtimeUseCacheBtn, els.runtimeDownloadBtn, els.runtimeChoiceCancelBtn,
     els.wizSaveBtn, els.wizFetchBtn, els.wizCancelBtn,
     els.connSaveBtn, els.connFetchBtn, els.connClearBtn, els.connCancelBtn,
@@ -406,7 +407,7 @@ runtimeController = createRuntimeController({
 function wire() {
   [
     "oneClickBtn", "stopBtn", "importSkillBtn", "refreshSkillsBtn", "ltProxy", "ltSandbox", "ltUpstream",
-    "runtimeChoiceSec", "runtimeChoiceText", "runtimeUseCacheBtn", "runtimeDownloadBtn", "runtimeChoiceCancelBtn",
+    "runtimeChoiceSec", "runtimeChoiceText", "runtimeActivateUpdateBtn", "runtimeKeepActiveBtn", "runtimeUseCacheBtn", "runtimeDownloadBtn", "runtimeChoiceCancelBtn",
     "historyRecoverySec", "historyRecoveryText", "historyRecoveryChoices", "historyRecoveryCancelBtn",
     "msg", "browserFallback", "browserFallbackUrl", "browserFallbackCopyBtn", "browserFallbackRetryBtn", "brandDot", "openBrowserBtn", "doctorBtn", "repairSkillRouteBtn", "updateBtn", "verLabel",
     "reportBtn", "logsBtn", "quitBtn", "modeSeg", "proxyPort", "sandboxPort", "reuseSystemSsh", "advSec",
@@ -503,6 +504,8 @@ function wire() {
   els.metaCancelBtn.addEventListener("click", cancelForm);
 
   els.oneClickBtn.addEventListener("click", profileController.heroClick);
+  els.runtimeActivateUpdateBtn.addEventListener("click", () => runtimeController.applyScienceRuntimeUpdate("activate_pending"));
+  els.runtimeKeepActiveBtn.addEventListener("click", () => runtimeController.applyScienceRuntimeUpdate("keep_active"));
   els.runtimeUseCacheBtn.addEventListener("click", () => runtimeController.runOneClick("cached_once"));
   els.runtimeDownloadBtn.addEventListener("click", runtimeController.openScienceDownload);
   els.runtimeChoiceCancelBtn.addEventListener("click", runtimeController.cancelRuntimeChoice);
@@ -587,9 +590,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     setMsg("无法订阅自动启动状态：" + e, "err");
   }
   try {
+    await listen("science-runtime://update", (event) => runtimeController.refreshScienceRuntimeUpdate(event.payload));
+  } catch (e) {}
+  try {
     applyBootPublication(await call("boot_snapshot"));
   } catch (e) {}
   try { els.verLabel.textContent = "v" + (await call("app_version")); } catch (e) {}
+  await runtimeController.refreshScienceRuntimeUpdate();
   await runtimeController.refreshStatus();
   if (!PREVIEW) statusTimer = setInterval(() => runtimeController.refreshStatus(), 2500);
 });

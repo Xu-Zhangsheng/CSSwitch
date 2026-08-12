@@ -860,6 +860,31 @@ fn run_second_instance_callback(app: &tauri::AppHandle) {
     );
 }
 
+fn start_science_runtime_update_scheduler(app: tauri::AppHandle) {
+    let _ = std::thread::Builder::new()
+        .name("science-runtime-update".into())
+        .spawn(move || {
+            // Startup gets first ownership of bootstrap. The hourly wake-up is
+            // cheap; the durable timestamp enforces one source check per 24h.
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            loop {
+                let (version_cache, running) = {
+                    let state = app.state::<SharedAppState>();
+                    let st = lock(state.inner());
+                    (st.science_version_cache.clone(), st.science_runtime.clone())
+                };
+                if let Ok(value) =
+                    runtime::science::check_science_runtime_update(&version_cache, running.as_ref())
+                {
+                    if !value["pending_update"].is_null() {
+                        let _ = app.emit("science-runtime://update", value);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(60 * 60));
+            }
+        });
+}
+
 // ---------- 入口 ----------
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -900,6 +925,8 @@ pub fn run() {
             commands::runtime::finalize_consumer_state,
             commands::runtime::restore_history_choice,
             commands::runtime::science_runtime_preflight,
+            commands::runtime::science_runtime_update_status,
+            commands::runtime::science_runtime_update_action,
             commands::runtime::open_science_download_page,
             commands::runtime::status,
             commands::runtime::boot_snapshot,
@@ -934,6 +961,7 @@ pub fn run() {
                 },
                 || run_boot_coordinator(app.handle().clone()),
             );
+            start_science_runtime_update_scheduler(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())

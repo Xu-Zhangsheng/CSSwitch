@@ -68,6 +68,7 @@ façade；生产实现按独立维护原因分布为：
 | `--version` / `status` / `url` 的 allowlisted bounded command runner | `runtime/science/control_runner.rs` |
 | executable 选择、安全读取、snapshot 与版本识别 | `runtime/science/executable.rs` |
 | predecessor / candidate observation、normalized diff、adoption decision 与 milestone ledger | `runtime/science/adoption.rs` |
+| 固定 active、pending update、每日节流与用户选择 | `runtime/science/selection.rs` |
 | live process/listener identity 与 runtime state | `runtime/science/runtime_state.rs` |
 | managed launch、receipt 与启动后身份提交 | `runtime/science/managed_launch.rs` |
 | preflight、probe、reuse、URL 与 stop lifecycle | `runtime/science/lifecycle.rs` |
@@ -91,7 +92,8 @@ artifact、memory、environment 和 official entitlement 仍由 Science 或外�
 
 | 阶段 | production caller | 当前 owner | 输出 / 失败边界 |
 |---|---|---|---|
-| runtime 预检 | `desktop/src/runtime-controller.js::oneClick` → registered `science_runtime_preflight` | `commands/runtime/status.rs` | 返回 `installed_ready` / `cached_choice_required` / missing / error；只决定是否允许继续，不启动进程 |
+| runtime 预检 | `desktop/src/runtime-controller.js::oneClick` → registered `science_runtime_preflight` | `commands/runtime/status.rs` | 正常路径只验证 fixed active；首次无 selection 才 bootstrap。返回 `installed_ready` / `cached_choice_required` / missing / error，不启动进程 |
+| update 检查 / 选择 | setup scheduler → `check_science_runtime_update`；前端 → `science_runtime_update_status/action` | `runtime/science/selection.rs` | 每 24 小时最多探查一次并发布 pending；接受只切换下次 cold start active，不重启健康 runtime |
 | 启动 IPC | `desktop/src/runtime-controller.js::oneClick` → `runOneClick` → registered `one_click_login` | `commands/runtime/one_click.rs` | 锁外 auth preflight 与 backend failure 投影；不直接启动 OS 进程 |
 | 入口决策 | command → `runtime/sandbox_session/one_click.rs::one_click_login_entry` | `runtime/sandbox_session/one_click.rs` | recovery / healthy reopen / cold 三路分派，以 typed journal 与 generation 拒绝漂移 |
 | cold coordinator | cold branch → `run_cold_one_click` | `one_click/cold.rs` | 顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与 finalize |
@@ -120,13 +122,14 @@ launch receipt；Science 启动后的 provider/model 请求再进入 packaged Ru
 
 starter Conda Python/R 环境、跨项目复用的 named task environment、session 内 Python/R kernel 与 inline package 都是不同生命周期。CSSwitch 不拥有这些环境，也不从 opaque root 推断功能可用；Node 的上游所有权/scope 仍为 `UNKNOWN`。
 
-## 新启动选择顺序
+## active runtime 与新启动
 
-1. 如果设置了 `SCIENCE_BIN`，它必须是绝对、非 symlink、可执行且能安全读取版本的开发 override；无效时 fail closed，不继续猜其他 binary。
-2. 否则检查固定的 `~/.claude-science/bin/claude-science`。只有路径无 symlink、目录与文件由当前用户拥有且不可被 group/world 写入、文件是大小有界的 Mach-O、embedded identifier / Team ID 精确匹配当前源码枚举的 Science identity，才把同一次安全打开读取到的字节原子提交到 CSSwitch 私有、只读、SHA-256 内容寻址的 runtime snapshot；snapshot 在隔离 HOME 下版本可确认时才选择为 `official_updated`。
-3. 官方 updater runtime 不可用时，使用当前安装在 `/Applications/Claude Science.app` 中的官方 executable。
-4. 只有以上来源都不可用、`<CSSwitch data-dir>/bin/claude-science` 可执行且版本可确认时，preflight 才返回 `cached_choice_required`；用户可授权 `cached_once`。
-5. cache 授权只在本次启动的内存中生效，不写成偏好。未知版本或缺失 cache 不可启动。
+1. 如果设置了 `SCIENCE_BIN`，它必须是绝对、非 symlink、可执行且能安全读取版本的开发 override；无效时 fail closed，不读取 selection 或继续猜其他 binary。
+2. 普通启动只读取私有 `selection.v1.json` 的 active source、version、SHA-256 与 size，从固定 snapshot 目录派生唯一 path，并复核 canonical path、完整内容指纹、权限和来源要求。文件一旦存在就必须包含 active；缺少 active、仅有 pending、无法解析或 snapshot 不可证都 fail closed，不能重新进入 bootstrap 或探查 updater、App、cache。
+3. selection 尚不存在时允许一次 bootstrap：先检查固定的 `~/.claude-science/bin/claude-science`；其路径、属主、权限、大小、Mach-O 与 embedded identifier / Team ID 全部通过后，安全读取并提交 0500 内容寻址 snapshot。没有 updater 时再检查 `/Applications/Claude Science.app` executable，并同样先形成 snapshot。snapshot 在 selection writer lock 之外以私有临时文件、fsync、内容寻址 hard-link 和目录 fsync 独立发布；崩溃遗留的同 inode 临时链接会在复用前清理，随后强制复核 owner、0500、单链接、size/hash。active selection 再由私有 writer lock / identity-bytes CAS 原子发布，且提交前后都以 exact snapshot identity 失败关闭。
+4. 只有 bootstrap 来源都不可用、`<CSSwitch data-dir>/bin/claude-science` 可执行且版本可确认时，preflight 才返回 `cached_choice_required`；用户可授权 `cached_once`。cache 授权只在本次启动内存中生效，不写成 active。
+
+已安装 App 是 snapshot 的来源而不是可变 active path。版本探测得到的 source fingerprint 必须与随后安全读取形成的 snapshot 内容/大小完全相同；两步间 App 被替换时 bootstrap/update check fail closed，不能把旧版本标签绑定到新字节。这样 App/updater 后续替换不会让日常启动切换 binary，也不要求为获得旧字节回读已变化的来源。
 
 `official_updated` 只读取并快照 updater 固定路径中的单个 executable；该路径已观察到 standalone updater 与 App-seeded 两种精确 identity，当前源码只接受枚举的 exact identifier + Team ID 组合。具体字符串、hash、版本与 `source-fixed-product-pending` 结论留在日期化 audit；它们不能写成 final artifact、installed/live 或公开 release 已证明。
 
@@ -161,9 +164,9 @@ receipt 文件存在但权限、类型、大小、读取竞态或 JSON 无法安
 组织、对话、project、environment、runtime assets 或其他 opaque data。历史版本的日期化兼容性
 调查仍不能替代这份通用机制，也不能把本地 embedded metadata 写成官方来源的密码学证明。
 
-snapshot 位于 `<CSSwitch data root>/runtime-snapshots/science/`，不在 Science data-dir 内。CSSwitch 不扫描、复制或读取真实 Science 账号、组织、配置、`conda`、`runtime` 或 `seed-assets`，不下载 Science、不调用 updater，也不覆盖 Science cache。检测到候选但本地校验失败时会显式报错，不静默回退旧 App。
+snapshot 位于 `<CSSwitch data root>/runtime-snapshots/science/`，不在 Science data-dir 内。`selection.v1.json` 与 adoption ledger 共用 CSSwitch 私有 store 和跨进程 writer lock，但分别原子发布；selection 不保存 executable path，只保存 active、可选 pending、有界且不逐次覆盖的被拒绝候选 SHA-256 集合、最近一次检查时间与临时检查 claim id。拒绝集合最多 64 条，满载时新拒绝失败关闭而不是遗忘旧选择。CSSwitch 不扫描、复制或读取真实 Science 账号、组织、配置、`conda`、`runtime` 或 `seed-assets`，不下载 Science、不调用 updater，也不覆盖 Science cache。bootstrap 检测到 updater 但本地校验失败时会显式报错，不静默回退旧 App 或 cache；后台检查失败保留 active，预探查 claim 已推进本次检查时间，下一持久间隔再试。
 
-embedded identifier / Team ID 只作为格式与误选防护，不声称密码学证明文件来自 Anthropic。该路径沿用 CSSwitch 已有的“信任当前用户安装的本地 Science”边界；复制前后复核同一 source inode/metadata，snapshot 以完整 SHA-256 命名并进入 host-context fingerprint。启动、恢复和停止等强控制路径会重新验证 snapshot，内容变化时 fail closed；高频 UI `status` 是下文明确的轻量例外，只投影 HTTP health 与已有 metadata。`sandbox_url()` 也不是独立的强身份边界：runtime 不再 current 或 CLI URL 获取失败时，它会回退到裸 `http://127.0.0.1:<port>`；手动打开入口会先验证 listener/runtime，但冷启动与 reuse 路径依赖调用它之前已经完成的身份检查。updater 随后替换 source 不会改变已运行 daemon 的 executable 身份。为支持 CSSwitch 自身重启后的接管，恢复探测会在私有 snapshot 目录中重新验证已有的内容寻址 executable；历史 snapshot 只参与现有 daemon 的身份恢复，不改变 stopped-to-started 的新启动选择顺序。
+embedded identifier / Team ID 只作为格式与误选防护，不声称密码学证明文件来自 Anthropic。该路径沿用 CSSwitch 已有的“信任当前用户安装的本地 Science”边界；复制前后复核同一 source inode/metadata，installed App snapshot 还必须匹配版本探测所得完整 source fingerprint（device、inode、size、mtime、mode、SHA-256），即使替换文件字节相同也不能混用旧探测结果。snapshot 以完整 SHA-256 命名并进入 host-context fingerprint。启动、恢复和停止等强控制路径会重新验证 snapshot，内容变化时 fail closed；高频 UI `status` 是下文明确的轻量例外，只投影 HTTP health 与已有 metadata。`sandbox_url()` 也不是独立的强身份边界：runtime 不再 current 或 CLI URL 获取失败时，它会回退到裸 `http://127.0.0.1:<port>`；手动打开入口会先验证 listener/runtime，但冷启动与 reuse 路径依赖调用它之前已经完成的身份检查。updater 随后替换 source 不会改变已运行 daemon 的 executable 身份。为支持 CSSwitch 自身重启后的接管，恢复探测会在私有 snapshot 目录中重新验证已有的内容寻址 executable；历史 snapshot 只参与现有 daemon 的身份恢复，不改变 stopped-to-started 的新启动选择顺序。
 
 ## 启动与网络参数
 
@@ -210,7 +213,9 @@ CSSwitch 自身重启后，只能在以下条件同时满足时接管已有 daem
 
 ## 升级合同
 
-官方模式 updater 写入新 runtime 后，下一次 stopped-to-started 启动生成并选择对应内容 snapshot；如果没有 updater runtime 而用户更新了 Claude Science App，则下一次启动重新选择 App 内的 executable。两条路径都继续复用原 CSSwitch data-dir。使用 updater snapshot 的已健康 daemon 保持其不可变 executable，不因 source 出现新版本而强制重启；preflight / healthy reopen 只写 `deferred_healthy` observation，正常停止后下一次启动才建立 `selected` attempt。managed receipt 提交后记录 `launch_committed`；receipt 已落盘但 milestone 尚未写入的崩溃窗口只能恢复到 `launch_committed`。one-click finalize intent 持久绑定 exact attempt id，binding/finalize CAS 成功后才记录 `finalized`；若其后 ledger 暂未收敛，下一次 preflight 也必须先证明当前 receipt 与已提交 binding 对同一 runtime 一致，不能只凭 receipt 提前 finalize。该 bookkeeping 重试不回滚已成功的 runtime transaction。CSSwitch 不迁移或覆盖组织、项目和 Skill 数据。
+后台线程可以每小时唤醒；真正到期时先在私有 writer lock 下原子写入随机 claim id 与本次时间，再到锁外探查，因此并发进程或探查中崩溃都不会在 24 小时内触发第二次来源探查。已有 pending 时不再探查，也不因来源暂时缺失、当前 active 或低优先级候选自动清除，必须等待用户的精确选择。到期检查仍按安全 updater → installed App 的顺序读取单一 executable 并形成内容 snapshot；active 已来自 updater 时不会因 updater 暂时缺失而探查或提示低优先级 installed App。与 active 内容/版本不同且未被用户拒绝的同级或更高优先级候选只写为 pending，并在 UI 提供“下次启动使用新版本”或“继续当前版本”。接受以 expected pending SHA-256 做 CAS；接受或拒绝都会在 selection 写入前后复核 active snapshot 的目录、0500/owner/nlink 与完整指纹。写后复核失败，或 selection 已 rename 可见但目录持久化确认失败，都会以刚提交的 exact identity/bytes 做 CAS 回滚；bootstrap 的首条 selection 失败时删除该条记录，已有 selection 则恢复原 active/pending。成功接受只改变下次 cold start 的 active；成功拒绝的 SHA-256 累积在有界集合中，后续拒绝不能让旧内容再次提示。两种选择都不停止或重启当前健康 daemon。
+
+后台检查发现健康 runtime 与候选不同时写 `deferred_healthy` observation；日常 preflight / healthy reopen 不再探查更新源。正常 cold start 解析新的 active 后才建立或复用 `selected` attempt。managed receipt 提交后记录 `launch_committed`；receipt 已落盘但 milestone 尚未写入的崩溃窗口只能恢复到 `launch_committed`。one-click finalize intent 持久绑定 exact attempt id，binding/finalize CAS 成功后才记录 `finalized`；若其后 ledger 暂未收敛，下一次 preflight 也必须先证明当前 receipt 与已提交 binding 对同一 runtime 一致，不能只凭 receipt 提前 finalize。该 bookkeeping 重试不回滚已成功的 runtime transaction。CSSwitch 不迁移或覆盖组织、项目和 Skill 数据。
 
 每次上游 App 更新后，分别验证：
 

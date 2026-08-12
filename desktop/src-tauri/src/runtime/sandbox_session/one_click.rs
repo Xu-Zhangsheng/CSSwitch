@@ -17,10 +17,10 @@ use crate::runtime::proxy_lifecycle::{
 };
 use crate::runtime::science::{
     mark_science_runtime_adoption_finalized, reconcile_current_science_runtime_adoption,
-    record_deferred_science_runtime_candidate, sandbox_home, select_science_runtime_cached,
-    SandboxScienceState, ScienceEnvironmentExposure, ScienceHostAdapter, ScienceLaunchFailureKind,
-    ScienceLaunchSpec, ScienceManagedLaunchToken, ScienceRuntimeIdentity, ScienceRuntimeSource,
-    ScienceStopFailureKind, ScienceStopOwnershipReceipt, ScienceStopRequest,
+    sandbox_home, select_science_runtime_cached, SandboxScienceState, ScienceEnvironmentExposure,
+    ScienceHostAdapter, ScienceLaunchFailureKind, ScienceLaunchSpec, ScienceManagedLaunchToken,
+    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopFailureKind,
+    ScienceStopOwnershipReceipt, ScienceStopRequest,
 };
 use crate::runtime::skill_install_bridge::{
     inspect_while_science_running, register_before_science_start, RegistrationStatus,
@@ -3161,12 +3161,10 @@ fn one_click_login_with_options<R: Runtime>(
             OneClickEntryDecision::HealthyReopen {
                 runtime: running_runtime,
             } => {
-                let version_cache = { lock(&state).science_version_cache.clone() };
                 let _ = reconcile_current_science_runtime_adoption(
                     &running_runtime,
                     cfg.runtime_binding.as_ref(),
                 );
-                let _ = record_deferred_science_runtime_candidate(&running_runtime, &version_cache);
                 if cfg.reuse_system_ssh {
                     validate_running_system_ssh_bridge(&app, &sbx_home).map_err(|message| {
                         typed_one_click_err(OneClickFailureKind::Prepare, message)

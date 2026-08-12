@@ -1,37 +1,599 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{symlink, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Command, ExitStatus, Output};
-use std::sync::atomic::Ordering;
+use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::{
-    bind_selected_science_runtime_attempt, classify_known_runtime_state, classify_sandbox_state,
-    fingerprint_sha256_hex, first_http_url, managed_launch_id, managed_launch_path,
-    managed_launch_record_for, mark_science_runtime_adoption_finalized,
-    mark_science_runtime_adoption_launch_committed,
+    apply_discovered_science_update, apply_discovered_science_update_if_current,
+    bind_selected_science_runtime_attempt, claim_science_runtime_update,
+    classify_known_runtime_state, classify_sandbox_state, fingerprint_sha256_hex, first_http_url,
+    managed_launch_id, managed_launch_path, managed_launch_record_for,
+    mark_science_runtime_adoption_finalized, mark_science_runtime_adoption_launch_committed,
     official_updated_embedded_identity_metadata_matches, official_updated_science_bin_for_home,
     official_updated_snapshot_for_home, official_updated_snapshot_from_process_paths,
     parse_unique_listener_pid, prior_restart_receipt_is_absent_at, probe_sandbox_runtime_cached,
-    read_managed_launch_record, read_science_adoption_ledger_at,
+    read_managed_launch_record, read_science_adoption_ledger_at, read_science_runtime_selection_at,
     record_deferred_science_runtime_candidate, restore_unmatched_managed_launch_tombstone,
     runtime_identity, runtime_identity_is_current, runtime_status_value,
     runtime_status_with_timeout, safe_science_version_with_timeout, sandbox_data_dir, sandbox_home,
     sandbox_running_ours, sandbox_url, sandbox_url_with_timeout, science_executable_fingerprint,
     science_post_term_action, science_runtime_preflight_for_paths,
     science_runtime_preflight_for_paths_cached, science_runtime_preflight_for_paths_with_updated,
-    science_status_running, secure_runtime_snapshot_root, select_science_runtime_for_paths,
+    science_runtime_update_action, science_runtime_update_due, science_status_running,
+    secure_runtime_snapshot_root, select_science_runtime_for_paths,
     select_science_runtime_for_paths_cached, select_science_runtime_for_paths_with_updated,
-    settings_change_needs_teardown, stop_runtime_from_probe, test_process_start_identity_for_pid,
-    test_runtime_identity, trusted_science_status, SandboxScienceState, ScienceAdoptionDecision,
-    ScienceAdoptionMilestone, ScienceObservationField, SciencePostTermAction,
-    ScienceRuntimeIdentity, ScienceRuntimeSource, ScienceStopCommandOutcome, ScienceStopFailure,
+    settings_change_needs_teardown, snapshot_science_executable, stop_runtime_from_probe,
+    test_process_start_identity_for_pid, test_runtime_identity, trusted_science_status,
+    SandboxScienceState, ScienceAdoptionDecision, ScienceAdoptionMilestone,
+    ScienceObservationField, SciencePinnedRuntime, SciencePostTermAction, ScienceRuntimeIdentity,
+    ScienceRuntimeSource, ScienceRuntimeUpdateClaim, ScienceStopCommandOutcome, ScienceStopFailure,
     ScienceStopFailureKind, ScienceVersionCache, VerifiedScienceStop, CACHED_ONCE_CHOICE,
     MANAGED_LAUNCH_LAST_READ_BYTES, MAX_MANAGED_LAUNCH_BYTES, MAX_SCIENCE_ADOPTION_LEDGER_BYTES,
-    SCIENCE_ADOPTION_LEDGER_FILE, SCIENCE_ADOPTION_STORE_DIR,
+    SCIENCE_ADOPTION_LEDGER_FILE, SCIENCE_ADOPTION_STORE_DIR, SCIENCE_RUNTIME_UPDATE_INTERVAL_MS,
 };
+
+#[test]
+fn fixed_active_runtime_and_pending_actions_are_durable_and_probe_free(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD_ENV: &str = "CSSWITCH_TEST_SCIENCE_FIXED_ACTIVE_CHILD";
+    const CLAIM_CHILD_ENV: &str = "CSSWITCH_TEST_SCIENCE_UPDATE_CLAIM_CHILD";
+    const CHECK_CHILD_ENV: &str = "CSSWITCH_TEST_SCIENCE_UPDATE_ERROR_CHILD";
+    if std::env::var_os(CLAIM_CHILD_ENV).is_some() {
+        let now_ms: i64 = std::env::var("CSSWITCH_TEST_SCIENCE_UPDATE_CLAIM_NOW")?.parse()?;
+        let claim_id = crate::config::new_id();
+        let claim = super::mutate_science_runtime_selection(|selection| {
+            Ok(claim_science_runtime_update(selection, now_ms, &claim_id))
+        })?;
+        println!(
+            "CLAIM={}",
+            if matches!(claim, ScienceRuntimeUpdateClaim::Claimed(_)) {
+                "claimed"
+            } else {
+                "not_due"
+            }
+        );
+        return Ok(());
+    }
+    if std::env::var_os(CHECK_CHILD_ENV).is_some() {
+        match super::check_science_runtime_update(&ScienceVersionCache::default(), None) {
+            Ok(value) => println!(
+                "CHECK_STATUS={}",
+                value["check_status"].as_str().unwrap_or("unknown")
+            ),
+            Err(error) => println!("CHECK_ERROR={error}"),
+        }
+        return Ok(());
+    }
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let root = unique_temp_dir("science-fixed-active")?;
+        let home = root.join("home");
+        fs::create_dir_all(&home)?;
+        let output = Command::new(std::env::current_exe()?)
+            .arg("--exact")
+            .arg("runtime::science::tests::fixed_active_runtime_and_pending_actions_are_durable_and_probe_free")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .env("HOME", &home)
+            .env_remove("SCIENCE_BIN")
+            .output()?;
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "isolated fixed-active oracle failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    let config_dir = crate::config::default_dir();
+    let store = config_dir.join(SCIENCE_ADOPTION_STORE_DIR);
+    let skipped = super::check_science_runtime_update(&ScienceVersionCache::default(), None)?;
+    assert_eq!(skipped["check_status"], "uninitialized_skipped");
+    let initial_status = super::science_runtime_update_status()?;
+    assert_eq!(initial_status["status"], "uninitialized");
+    assert!(
+        !store.exists(),
+        "read-only status must not create its store"
+    );
+
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or("isolated HOME is required")?;
+    let invalid_updater = home.join(super::OFFICIAL_UPDATED_RUNTIME_RELATIVE);
+    fs::create_dir_all(
+        invalid_updater
+            .parent()
+            .ok_or("invalid updater parent is required")?,
+    )?;
+    fs::write(
+        &invalid_updater,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' 'claude-science invalid-updater'\n#{}",
+            " ".repeat(super::MIN_SCIENCE_BINARY_SIZE as usize)
+        ),
+    )?;
+    fs::set_permissions(&invalid_updater, fs::Permissions::from_mode(0o700))?;
+    let cache = super::cached_science_bin(&super::sandbox_data_dir());
+    write_fake_version_bin(&cache, 0o700, "claude-science cache-must-not-win")?;
+    let bootstrap_error = super::science_runtime_preflight(&ScienceVersionCache::default(), None)
+        .expect_err("invalid updater bootstrap must fail closed before App/cache fallback");
+    assert!(bootstrap_error.contains("updater Science executable"));
+    fs::remove_file(&invalid_updater)?;
+    symlink(home.join("missing-updater-target"), &invalid_updater)?;
+    let dangling_error = super::science_runtime_preflight(&ScienceVersionCache::default(), None)
+        .expect_err("dangling updater path must fail closed before App/cache fallback");
+    assert!(dangling_error.contains("updater Science executable"));
+    fs::remove_file(&invalid_updater)?;
+    let science_root = home.join(".claude-science");
+    fs::remove_dir(science_root.join("bin"))?;
+    fs::remove_dir(&science_root)?;
+    symlink(home.join("missing-science-root"), &science_root)?;
+    let dangling_ancestor_error =
+        super::science_runtime_preflight(&ScienceVersionCache::default(), None)
+            .expect_err("dangling updater ancestor must fail closed before App/cache fallback");
+    assert!(dangling_ancestor_error.contains("固定路径包含 symlink"));
+    fs::remove_file(&science_root)?;
+    fs::create_dir_all(
+        invalid_updater
+            .parent()
+            .ok_or("invalid updater parent is required")?,
+    )?;
+
+    fs::create_dir_all(&store)?;
+    fs::set_permissions(&store, fs::Permissions::from_mode(0o700))?;
+    let corrupt_selection_path = store.join(super::SCIENCE_RUNTIME_SELECTION_FILE);
+    fs::write(
+        &corrupt_selection_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "pending": {
+                "source": "installed_app",
+                "version": "claude-science must-wait-for-user",
+                "sha256": "a".repeat(64),
+                "size": super::MIN_SCIENCE_BINARY_SIZE,
+            }
+        }))?,
+    )?;
+    fs::set_permissions(&corrupt_selection_path, fs::Permissions::from_mode(0o600))?;
+    let corrupt_selection_error =
+        super::science_runtime_preflight(&ScienceVersionCache::default(), None)
+            .expect_err("an on-disk selection without active must fail closed");
+    assert!(corrupt_selection_error.contains("合同无效"));
+    fs::remove_file(&corrupt_selection_path)?;
+
+    fs::create_dir_all(&config_dir)?;
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))?;
+    let snapshot_root = config_dir.join(super::OFFICIAL_UPDATED_SNAPSHOT_DIR);
+    let version_probe_marker = config_dir.join("version-probe-must-not-run");
+    let make_pinned = |name: &str, version: &str| -> Result<SciencePinnedRuntime, String> {
+        let source = config_dir.join(name);
+        fs::write(
+            &source,
+            format!(
+                "#!/bin/sh\nif [ \"${{1:-}}\" = \"--version\" ]; then : > \"$CSSWITCH_TEST_VERSION_PROBE_MARKER\"; printf '%s\\n' '{}'; fi\nexit 0\n#{}",
+                version,
+                " ".repeat(super::MIN_SCIENCE_BINARY_SIZE as usize)
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755))
+            .map_err(|error| error.to_string())?;
+        let snapshot = snapshot_science_executable(
+            &source,
+            &snapshot_root,
+            "test active",
+            None,
+            || source.is_file(),
+            |_| true,
+        )?;
+        let fingerprint = science_executable_fingerprint(&snapshot)
+            .ok_or("test active snapshot fingerprint is missing")?;
+        Ok(SciencePinnedRuntime {
+            source: "installed_app".into(),
+            version: version.into(),
+            sha256: fingerprint_sha256_hex(&fingerprint),
+            size: fingerprint.size,
+        })
+    };
+    let race_source = config_dir.join("installed-app-race-source");
+    let write_race_source = |version: &str| -> Result<(), Box<dyn std::error::Error>> {
+        fs::write(
+            &race_source,
+            format!(
+                "#!/bin/sh\nif [ \"${{1:-}}\" = \"--version\" ]; then printf '%s\\n' '{}'; fi\nexit 0\n#{}",
+                version,
+                " ".repeat(super::MIN_SCIENCE_BINARY_SIZE as usize)
+            ),
+        )?;
+        fs::set_permissions(&race_source, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    };
+    write_race_source("claude-science race-v1")?;
+    let probed_race_runtime = runtime_identity(
+        race_source.clone(),
+        ScienceRuntimeSource::InstalledApp,
+        &ScienceVersionCache::default(),
+    )
+    .ok_or("installed App race fixture must pass its first version probe")?;
+    let byte_identical_replacement = config_dir.join("installed-app-byte-identical-replacement");
+    fs::write(&byte_identical_replacement, fs::read(&race_source)?)?;
+    fs::set_permissions(
+        &byte_identical_replacement,
+        fs::Permissions::from_mode(0o755),
+    )?;
+    fs::rename(&byte_identical_replacement, &race_source)?;
+    assert!(super::snapshot_candidate_runtime(probed_race_runtime)
+        .unwrap_err()
+        .contains("完整身份不一致"));
+    let orphan_source = config_dir.join("orphan-snapshot-source");
+    fs::rename(&race_source, &orphan_source)?;
+    let orphan_snapshot = snapshot_science_executable(
+        &orphan_source,
+        &snapshot_root,
+        "orphan recovery",
+        None,
+        || orphan_source.is_file(),
+        |_| true,
+    )?;
+    let orphan_temp = snapshot_root.join(".claude-science-999-999.tmp");
+    fs::hard_link(&orphan_snapshot, &orphan_temp)?;
+    assert_eq!(orphan_snapshot.metadata()?.nlink(), 2);
+    let recovered_snapshot = snapshot_science_executable(
+        &orphan_source,
+        &snapshot_root,
+        "orphan recovery",
+        None,
+        || orphan_source.is_file(),
+        |_| true,
+    )?;
+    assert_eq!(recovered_snapshot, orphan_snapshot);
+    assert_eq!(recovered_snapshot.metadata()?.nlink(), 1);
+    assert!(!orphan_temp.exists());
+    let active = make_pinned("active-source", "claude-science 1.0")?;
+    let active_path = snapshot_root.join(format!("claude-science-{}", active.sha256));
+    super::test_fail_next_science_selection_directory_sync();
+    let bootstrap_sync_error = super::mutate_science_runtime_selection_checked(
+        |selection| {
+            selection.active = Some(active.clone());
+            Ok(())
+        },
+        super::validate_active_science_runtime_snapshot,
+    )
+    .expect_err("a post-rename directory sync failure must roll initial bootstrap back");
+    assert!(bootstrap_sync_error.contains("持久化确认失败，已回滚"));
+    assert!(
+        !store.join(super::SCIENCE_RUNTIME_SELECTION_FILE).exists(),
+        "post-rename bootstrap failure must not leave a visible active selection"
+    );
+    let bootstrap_validation_calls = AtomicUsize::new(0);
+    let bootstrap_rollback_error = super::mutate_science_runtime_selection_checked(
+        |selection| {
+            selection.active = Some(active.clone());
+            Ok(())
+        },
+        |selection| {
+            if bootstrap_validation_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                fs::set_permissions(&active_path, fs::Permissions::from_mode(0o700))
+                    .map_err(|error| error.to_string())?;
+            }
+            super::validate_active_science_runtime_snapshot(selection)
+        },
+    )
+    .expect_err("a post-publication snapshot drift must roll initial bootstrap back");
+    assert!(bootstrap_rollback_error.contains("已回滚"));
+    assert!(
+        !store.join(super::SCIENCE_RUNTIME_SELECTION_FILE).exists(),
+        "failed initial bootstrap must remove the newly published selection"
+    );
+    fs::set_permissions(&active_path, fs::Permissions::from_mode(0o500))?;
+    super::mutate_science_runtime_selection_at(&store, |selection| {
+        selection.active = Some(active.clone());
+        Ok(())
+    })?;
+
+    // The source is no longer available and the active snapshot would leave a
+    // marker if startup invoked --version. Selection must use stored version.
+    fs::remove_file(config_dir.join("active-source"))?;
+    std::env::set_var("CSSWITCH_TEST_VERSION_PROBE_MARKER", &version_probe_marker);
+    let selected = super::select_science_runtime_cached(None, &ScienceVersionCache::default())?;
+    assert_eq!(selected.version.as_deref(), Some("claude-science 1.0"));
+    assert_eq!(selected.source, ScienceRuntimeSource::InstalledApp);
+    assert!(!version_probe_marker.exists());
+
+    let exact_test =
+        "runtime::science::tests::fixed_active_runtime_and_pending_actions_are_durable_and_probe_free";
+    let claim_now = SCIENCE_RUNTIME_UPDATE_INTERVAL_MS * 10;
+    let build_claim_child = || {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg(exact_test)
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .env(CLAIM_CHILD_ENV, "1")
+            .env(
+                "CSSWITCH_TEST_SCIENCE_UPDATE_CLAIM_NOW",
+                claim_now.to_string(),
+            )
+            .env("HOME", &home)
+            .env_remove("SCIENCE_BIN")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    let first_claim = build_claim_child().spawn()?;
+    let second_claim = build_claim_child().spawn()?;
+    let first_claim = first_claim.wait_with_output()?;
+    let second_claim = second_claim.wait_with_output()?;
+    assert!(first_claim.status.success(), "{:?}", first_claim);
+    assert!(second_claim.status.success(), "{:?}", second_claim);
+    let claim_outputs = [
+        String::from_utf8_lossy(&first_claim.stdout),
+        String::from_utf8_lossy(&second_claim.stdout),
+    ];
+    assert_eq!(
+        claim_outputs
+            .iter()
+            .filter(|output| output.contains("CLAIM=claimed"))
+            .count(),
+        1,
+        "exactly one competing process may durably claim a due source probe: {claim_outputs:?}"
+    );
+    let crashed_claim_retry = build_claim_child().output()?;
+    assert!(crashed_claim_retry.status.success());
+    assert!(
+        String::from_utf8_lossy(&crashed_claim_retry.stdout).contains("CLAIM=not_due"),
+        "a process exit after claiming must keep the next process throttled"
+    );
+    super::mutate_science_runtime_selection_at(&store, |selection| {
+        selection.last_checked_at_ms = None;
+        selection.update_check_id = None;
+        Ok(())
+    })?;
+
+    symlink(home.join("missing-update-check-target"), &invalid_updater)?;
+    let build_error_check_child = || {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg(exact_test)
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .env(CHECK_CHILD_ENV, "1")
+            .env("HOME", &home)
+            .env_remove("SCIENCE_BIN");
+        command
+    };
+    let failed_check = build_error_check_child().output()?;
+    assert!(failed_check.status.success());
+    assert!(String::from_utf8_lossy(&failed_check.stdout).contains("CHECK_ERROR="));
+    let failed_check_state = read_science_runtime_selection_at(&store)?;
+    assert!(failed_check_state.last_checked_at_ms.is_some());
+    assert!(failed_check_state.update_check_id.is_none());
+    let failed_check_retry = build_error_check_child().output()?;
+    assert!(failed_check_retry.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed_check_retry.stdout).contains("CHECK_STATUS=not_due"),
+        "a failed source probe must remain throttled across process restart"
+    );
+    fs::remove_file(&invalid_updater)?;
+    super::mutate_science_runtime_selection_at(&store, |selection| {
+        selection.last_checked_at_ms = None;
+        selection.update_check_id = None;
+        Ok(())
+    })?;
+
+    fs::set_permissions(&active_path, fs::Permissions::from_mode(0o700))?;
+    assert!(
+        super::select_science_runtime_cached(None, &ScienceVersionCache::default())
+            .unwrap_err()
+            .contains("0500")
+    );
+    fs::set_permissions(&active_path, fs::Permissions::from_mode(0o500))?;
+    let extra_link = config_dir.join("active-snapshot-extra-link");
+    fs::hard_link(&active_path, &extra_link)?;
+    assert!(
+        super::select_science_runtime_cached(None, &ScienceVersionCache::default())
+            .unwrap_err()
+            .contains("单链接")
+    );
+    fs::remove_file(extra_link)?;
+    fs::set_permissions(&snapshot_root, fs::Permissions::from_mode(0o755))?;
+    assert!(
+        super::select_science_runtime_cached(None, &ScienceVersionCache::default())
+            .unwrap_err()
+            .contains("目录身份或权限不安全")
+    );
+    fs::set_permissions(&snapshot_root, fs::Permissions::from_mode(0o700))?;
+
+    let pending = make_pinned("pending-source", "claude-science 2.0")?;
+    super::mutate_science_runtime_selection_at(&store, |selection| {
+        selection.pending = Some(pending.clone());
+        Ok(())
+    })?;
+    let pending_path = snapshot_root.join(format!("claude-science-{}", pending.sha256));
+    fs::set_permissions(&pending_path, fs::Permissions::from_mode(0o700))?;
+    assert!(
+        science_runtime_update_action("activate_pending", &pending.sha256)
+            .unwrap_err()
+            .contains("snapshot 无法确认")
+    );
+    let unchanged = read_science_runtime_selection_at(&store)?;
+    assert_eq!(unchanged.active.as_ref(), Some(&active));
+    assert_eq!(unchanged.pending.as_ref(), Some(&pending));
+    fs::set_permissions(&pending_path, fs::Permissions::from_mode(0o500))?;
+    let action_validation_calls = AtomicUsize::new(0);
+    let action_rollback_error = super::mutate_science_runtime_selection_checked(
+        |selection| {
+            let promoted = selection.pending.clone().ok_or("test pending is missing")?;
+            selection.active = Some(promoted);
+            selection.pending = None;
+            Ok(())
+        },
+        |selection| {
+            if action_validation_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                fs::set_permissions(&pending_path, fs::Permissions::from_mode(0o700))
+                    .map_err(|error| error.to_string())?;
+            }
+            super::validate_active_science_runtime_snapshot(selection)
+        },
+    )
+    .expect_err("a post-publication promotion drift must restore active and pending");
+    assert!(action_rollback_error.contains("已回滚"));
+    let rolled_back = read_science_runtime_selection_at(&store)?;
+    assert_eq!(rolled_back.active.as_ref(), Some(&active));
+    assert_eq!(rolled_back.pending.as_ref(), Some(&pending));
+    fs::set_permissions(&pending_path, fs::Permissions::from_mode(0o500))?;
+    science_runtime_update_action("activate_pending", &pending.sha256)?;
+    let selection = read_science_runtime_selection_at(&store)?;
+    assert_eq!(selection.active.as_ref(), Some(&pending));
+    assert!(selection.pending.is_none());
+
+    let dismissed = make_pinned("dismissed-source", "claude-science 3.0")?;
+    super::mutate_science_runtime_selection_at(&store, |selection| {
+        selection.pending = Some(dismissed.clone());
+        Ok(())
+    })?;
+    science_runtime_update_action("keep_active", &dismissed.sha256)?;
+    let selection = read_science_runtime_selection_at(&store)?;
+    assert_eq!(selection.active.as_ref(), Some(&pending));
+    assert!(selection.pending.is_none());
+    assert_eq!(selection.dismissed_sha256s, vec![dismissed.sha256.clone()]);
+    let second_dismissed = make_pinned("second-dismissed-source", "claude-science 4.0")?;
+    super::mutate_science_runtime_selection_at(&store, |selection| {
+        selection.pending = Some(second_dismissed.clone());
+        Ok(())
+    })?;
+    science_runtime_update_action("keep_active", &second_dismissed.sha256)?;
+    let mut selection = read_science_runtime_selection_at(&store)?;
+    let mut expected_dismissed = vec![dismissed.sha256.clone(), second_dismissed.sha256];
+    expected_dismissed.sort();
+    assert_eq!(selection.dismissed_sha256s, expected_dismissed);
+    apply_discovered_science_update(
+        &mut selection,
+        Some(dismissed.clone()),
+        SCIENCE_RUNTIME_UPDATE_INTERVAL_MS * 20,
+    );
+    assert!(
+        selection.pending.is_none(),
+        "B must stay dismissed after a later C dismissal and durable reload"
+    );
+    let selection_path = store.join(super::SCIENCE_RUNTIME_SELECTION_FILE);
+    assert_eq!(
+        selection_path.metadata()?.permissions().mode() & 0o777,
+        0o600
+    );
+    let serialized = fs::read_to_string(selection_path)?;
+    assert!(!serialized.contains(config_dir.to_string_lossy().as_ref()));
+    Ok(())
+}
+
+#[test]
+fn background_science_update_check_is_due_once_per_day() {
+    let interval = SCIENCE_RUNTIME_UPDATE_INTERVAL_MS;
+    assert!(science_runtime_update_due(None, interval));
+    assert!(!science_runtime_update_due(Some(100), 100 + interval - 1));
+    assert!(science_runtime_update_due(Some(100), 100 + interval));
+    assert!(
+        !science_runtime_update_due(Some(1000), 999),
+        "clock rollback must not permit a second source probe"
+    );
+
+    let active = SciencePinnedRuntime {
+        source: "installed_app".into(),
+        version: "claude-science 1.0".into(),
+        sha256: "a".repeat(64),
+        size: super::MIN_SCIENCE_BINARY_SIZE,
+    };
+    let candidate = SciencePinnedRuntime {
+        source: "official_updated".into(),
+        version: "claude-science 2.0".into(),
+        sha256: "b".repeat(64),
+        size: super::MIN_SCIENCE_BINARY_SIZE,
+    };
+    let mut selection = super::ScienceRuntimeSelection {
+        active: Some(active.clone()),
+        ..Default::default()
+    };
+    apply_discovered_science_update(&mut selection, Some(candidate.clone()), interval);
+    assert_eq!(selection.pending.as_ref(), Some(&candidate));
+    let before_user_choice = selection.clone();
+    selection.pending = None;
+    selection.dismissed_sha256s = vec![candidate.sha256.clone()];
+    assert!(
+        !apply_discovered_science_update_if_current(
+            &mut selection,
+            &before_user_choice,
+            Some(candidate.clone()),
+            interval + 1,
+        ),
+        "a discovery result must not overwrite a concurrent exact user choice"
+    );
+    assert_eq!(selection.dismissed_sha256s, vec![candidate.sha256.clone()]);
+    apply_discovered_science_update(&mut selection, Some(candidate), interval * 2);
+    assert!(selection.pending.is_none());
+    selection.dismissed_sha256s.clear();
+    apply_discovered_science_update(&mut selection, Some(active), interval * 3);
+    assert!(selection.pending.is_none());
+
+    let official_active = SciencePinnedRuntime {
+        source: "official_updated".into(),
+        version: "claude-science 4.0".into(),
+        sha256: "c".repeat(64),
+        size: super::MIN_SCIENCE_BINARY_SIZE,
+    };
+    let lower_priority_app = SciencePinnedRuntime {
+        source: "installed_app".into(),
+        version: "claude-science 5.0".into(),
+        sha256: "d".repeat(64),
+        size: super::MIN_SCIENCE_BINARY_SIZE,
+    };
+    selection.active = Some(official_active);
+    apply_discovered_science_update(&mut selection, Some(lower_priority_app), interval * 4);
+    assert!(
+        selection.pending.is_none(),
+        "an absent updater must not turn the lower-priority installed App into a downgrade offer"
+    );
+
+    let waiting = SciencePinnedRuntime {
+        source: "official_updated".into(),
+        version: "claude-science 6.0".into(),
+        sha256: "e".repeat(64),
+        size: super::MIN_SCIENCE_BINARY_SIZE,
+    };
+    selection.pending = Some(waiting.clone());
+    apply_discovered_science_update(&mut selection, None, interval * 5);
+    assert_eq!(
+        selection.pending.as_ref(),
+        Some(&waiting),
+        "a missing source must not clear a durable pending user choice"
+    );
+    assert!(matches!(
+        claim_science_runtime_update(&mut selection, interval * 6, &"f".repeat(32)),
+        ScienceRuntimeUpdateClaim::PendingChoice(_)
+    ));
+    selection.pending = None;
+    selection.last_checked_at_ms = None;
+    let claim_id = "1".repeat(32);
+    assert!(matches!(
+        claim_science_runtime_update(&mut selection, interval * 7, &claim_id),
+        ScienceRuntimeUpdateClaim::Claimed(_)
+    ));
+    assert_eq!(selection.last_checked_at_ms, Some(interval * 7));
+    assert_eq!(
+        selection.update_check_id.as_deref(),
+        Some(claim_id.as_str())
+    );
+    assert!(matches!(
+        claim_science_runtime_update(&mut selection, interval * 7 + 1, &"2".repeat(32)),
+        ScienceRuntimeUpdateClaim::NotDue(_)
+    ));
+}
 
 #[test]
 fn managed_process_start_identity_preserves_the_legacy_receipt_format() {

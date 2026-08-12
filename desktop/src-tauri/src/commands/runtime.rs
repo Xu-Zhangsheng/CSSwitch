@@ -19,7 +19,9 @@ use crate::runtime::provider::{
     status_upstream_endpoint,
 };
 use crate::runtime::science::{
-    science_runtime_preflight as runtime_preflight, settings_change_needs_teardown,
+    science_runtime_preflight as runtime_preflight,
+    science_runtime_update_action as runtime_update_action,
+    science_runtime_update_status as runtime_update_status, settings_change_needs_teardown,
     ScienceHostAdapter, SCIENCE_DOWNLOAD_URL,
 };
 use crate::runtime::settings::{
@@ -122,6 +124,19 @@ pub(crate) async fn science_runtime_preflight(
     state: State<'_, SharedAppState>,
 ) -> Result<Value, String> {
     status::science_runtime_preflight_command(state).await
+}
+
+#[tauri::command]
+pub(crate) async fn science_runtime_update_status() -> Result<Value, String> {
+    run_blocking(runtime_update_status).await
+}
+
+#[tauri::command]
+pub(crate) async fn science_runtime_update_action(
+    action: String,
+    expected_sha256: String,
+) -> Result<Value, String> {
+    run_blocking(move || runtime_update_action(&action, &expected_sha256)).await
 }
 
 #[tauri::command]

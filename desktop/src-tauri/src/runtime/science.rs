@@ -117,11 +117,15 @@ mod format_managed_launch;
 #[cfg(any())]
 #[path = "science/runtime_state.rs"]
 mod format_runtime_state;
+#[cfg(any())]
+#[path = "science/selection.rs"]
+mod format_selection;
 
 include!("science/contracts.rs");
 include!("science/control_runner.rs");
 include!("science/executable.rs");
 include!("science/adoption.rs");
+include!("science/selection.rs");
 include!("science/runtime_state.rs");
 include!("science/managed_launch.rs");
 include!("science/lifecycle.rs");

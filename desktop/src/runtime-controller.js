@@ -26,22 +26,79 @@ export function createRuntimeController({
   let browserOpenInFlight = false;
   let doctorIntentInFlight = false;
   let runtimeChoiceActiveId = null;
+  let runtimePendingSha256 = null;
+  let scienceRuntimeUpdateRefreshPending = false;
 
 function hideRuntimeChoice() {
   els.runtimeChoiceSec.hidden = true;
   els.runtimeChoiceText.textContent = "";
   runtimeChoiceActiveId = null;
+  runtimePendingSha256 = null;
 }
 
 function showRuntimeChoice(preflight) {
+  const pending = preflight && preflight.pending_update;
+  const canActivateUpdate = !!(pending && pending.sha256 && pending.version);
+  els.runtimeActivateUpdateBtn.hidden = !canActivateUpdate;
+  els.runtimeKeepActiveBtn.hidden = !canActivateUpdate;
+  if (canActivateUpdate) {
+    els.runtimeUseCacheBtn.hidden = true;
+    els.runtimeDownloadBtn.hidden = true;
+    els.runtimeChoiceCancelBtn.hidden = true;
+    els.runtimeChoiceText.textContent =
+      "后台检测到 Claude Science " + pending.version + "。当前运行不会被打断；你可以固定它供下次冷启动使用，或继续当前 active 版本。";
+    els.runtimeChoiceSec.hidden = false;
+    runtimePendingSha256 = pending.sha256;
+    runtimeChoiceActiveId = getConfigState().active_id || null;
+    return;
+  }
   const cachedVersion = preflight && preflight.cached_version;
   const canUseCache = preflight && preflight.status === "cached_choice_required" && !!cachedVersion;
+  els.runtimeActivateUpdateBtn.hidden = true;
+  els.runtimeKeepActiveBtn.hidden = true;
   els.runtimeUseCacheBtn.hidden = !canUseCache;
+  els.runtimeDownloadBtn.hidden = false;
+  els.runtimeChoiceCancelBtn.hidden = false;
   els.runtimeChoiceText.textContent = canUseCache
     ? "未找到通过安全预检的 Claude Science App。发现可确认版本的历史缓存：" + cachedVersion + "。你可以仅本次使用它，或前往官方页面安装 / 更新 Science。此选择不会保存。"
     : "未找到通过安全预检的 Claude Science App，历史缓存也无法确认版本。请先从官方页面安装 / 更新 Science。";
   els.runtimeChoiceSec.hidden = false;
   runtimeChoiceActiveId = getConfigState().active_id || null;
+}
+
+async function refreshScienceRuntimeUpdate(status = null) {
+  if (isBusy()) {
+    scienceRuntimeUpdateRefreshPending = true;
+    return;
+  }
+  try {
+    const current = status || await call("science_runtime_update_status");
+    if (current && current.pending_update) showRuntimeChoice(current);
+    else if (runtimePendingSha256) hideRuntimeChoice();
+    scienceRuntimeUpdateRefreshPending = false;
+  } catch (_) {
+    scienceRuntimeUpdateRefreshPending = true;
+  }
+}
+
+async function applyScienceRuntimeUpdate(action) {
+  if (isBusy() || !runtimePendingSha256) return;
+  const expectedSha256 = runtimePendingSha256;
+  let refreshAfterFailure = false;
+  setBusy(true, { kind: "scienceRuntimeUpdate" });
+  try {
+    await call("science_runtime_update_action", { action, expectedSha256 });
+    hideRuntimeChoice();
+    setMsg(action === "activate_pending"
+      ? "已固定新的 Science active runtime；当前健康进程不会重启，下次冷启动生效。"
+      : "已继续使用当前 Science active runtime；同一候选不会重复提示。", "ok");
+  } catch (e) {
+    setMsg("Science runtime 更新选择失败：" + runtimeCommandErrorText(e), "err");
+    refreshAfterFailure = true;
+  } finally {
+    setBusy(false);
+  }
+  if (refreshAfterFailure) await refreshScienceRuntimeUpdate();
 }
 
 function hideHistoryRecovery() {
@@ -176,6 +233,7 @@ async function runOneClick(runtimeChoice) {
   }
   if (!(await checkOneClickBoundary())) return;
   getSkillPage()?.invalidate();
+  if (runtimePendingSha256) scienceRuntimeUpdateRefreshPending = true;
   hideRuntimeChoice();
   setBusy(true, { kind: "oneClick" });
   setBrowserFallback("");
@@ -236,6 +294,7 @@ async function runOneClick(runtimeChoice) {
     setMsg("一键开始失败：" + runtimeCommandErrorText(e), "err");
   } finally {
     setBusy(false);
+    if (scienceRuntimeUpdateRefreshPending) await refreshScienceRuntimeUpdate();
     await getSkillPage()?.refreshIfLoaded();
   }
 }
@@ -438,6 +497,9 @@ async function refreshStatus() {
     ["proxyStateText", "sandboxStateText", "upstreamStateText"].forEach((id) => setStatusText(id, "unknown"));
     els.brandDot.className = "dot gray";
   }
+  if (scienceRuntimeUpdateRefreshPending && !isBusy()) {
+    await refreshScienceRuntimeUpdate();
+  }
 }
 
   return {
@@ -445,6 +507,8 @@ async function refreshStatus() {
     isDoctorInFlight: () => doctorIntentInFlight,
     hideRuntimeChoice,
     showRuntimeChoice,
+    refreshScienceRuntimeUpdate,
+    applyScienceRuntimeUpdate,
     hideHistoryRecovery,
     showHistoryRecovery,
     publishFinalizeUnknown,

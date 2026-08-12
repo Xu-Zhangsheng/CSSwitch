@@ -191,6 +191,37 @@ fn secure_science_adoption_store_root(root: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn existing_secure_science_adoption_store_root(root: &Path) -> Result<Option<PathBuf>, String> {
+    if !root.is_absolute() {
+        return Err("Science runtime adoption 存储目录不是绝对路径".into());
+    }
+    let root_metadata = match root.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("检查 Science runtime adoption 存储失败：{error}")),
+    };
+    let mut cursor = Some(root);
+    while let Some(path) = cursor {
+        let metadata = path
+            .symlink_metadata()
+            .map_err(|error| format!("检查 Science runtime adoption 存储失败：{error}"))?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err("Science runtime adoption 存储路径身份不安全".into());
+        }
+        cursor = path.parent();
+    }
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| format!("确认 Science runtime adoption 存储失败：{error}"))?;
+    if canonical != root
+        || root_metadata.uid() != unsafe { libc::geteuid() }
+        || root_metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err("Science runtime adoption 存储目录身份或权限不安全".into());
+    }
+    Ok(Some(canonical))
+}
+
 fn acquire_science_adoption_ledger_lock(root: &Path) -> Result<ScienceAdoptionLedgerLock, String> {
     let path = root.join(SCIENCE_ADOPTION_LOCK_FILE);
     let file = OpenOptions::new()
@@ -713,16 +744,25 @@ pub(super) fn record_rejected_science_runtime_attempt(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn record_deferred_science_runtime_candidate(
     running: &ScienceRuntimeIdentity,
     version_cache: &ScienceVersionCache,
 ) -> Result<(), String> {
-    let predecessor = science_executable_observation(running)?;
-    let candidate = match preferred_science_runtime_candidate(version_cache) {
-        Ok(Some(candidate)) => science_executable_observation(&candidate)?,
+    let candidate = match preferred_science_runtime_candidate(version_cache, true) {
+        Ok(Some(candidate)) => candidate,
         Ok(None) => return Ok(()),
         Err(rejection) => return record_rejected_science_runtime_attempt(Some(running), rejection),
     };
+    record_deferred_science_runtime_observation(running, &candidate)
+}
+
+fn record_deferred_science_runtime_observation(
+    running: &ScienceRuntimeIdentity,
+    candidate: &ScienceRuntimeIdentity,
+) -> Result<(), String> {
+    let predecessor = science_executable_observation(running)?;
+    let candidate = science_executable_observation(candidate)?;
     if predecessor == candidate {
         return Ok(());
     }
