@@ -16,8 +16,9 @@
 
 当前 Science background update managed-health / full-owner 修复的 production-code-bearing commit 是
 `next@9476be5cd23ff7d78d01b59a4aa392af00bba904`；其上的本次 Context refresh 只更新当前状态，
-不改变 production / test。当前 worktree 基于 `next@dfb6f59114cd54aacae91a0c94a7baaf69a71895`，
-又含未提交的 Rust 1.96.1 clippy hygiene 修复。绑定 base `9c91bec` + tracked binary diff `61542943…6612` 的正式独立
+不改变 production / test。Rust 1.96.1 clippy hygiene 修复已提交为
+`next@76616ff085610dabf0112202324cc97d20fcbec6`；包含本段的后续 Context refresh 仍只更新文档状态。
+绑定 base `9c91bec` + tracked binary diff `61542943…6612` 的正式独立
 candidate reviews 均为 `PASS`、四级 finding 全 0，608-test Desktop Rust suite、frontend、metadata、
 inventory 与文档治理 checks 均为 `PASS`；当前新增 diff 的 `bash test/run-rust.sh` 也为 `PASS`。
 当前新增 diff 的 fresh independent code / test / documentation candidate reviews 均为 `PASS`、
@@ -293,7 +294,7 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
 - **Science adoption record**：`18a6788` 已建立只含 allowlisted executable metadata 的 predecessor / candidate / normalized diff ledger，区分 `deferred_healthy`、`rejected` 与 `selected`，并把 managed receipt schema v2 绑定到 launch/finalize milestone；schema v1 只读兼容且 provenance unknown。对应 ChangeRecord、正式 source clean-context review 和 canonical 15-suite 均已 `PASS`；同 SHA 的独立 Acceptance G1 与 adoption G2 又建立 exact-artifact isolated-live scoped `PASS`，normal artifact 已 exact 安装并完成 installed/runtime 与真实 Provider 分项。Signing、公证与 release 仍未建立。
 - **Science update observation**：`9c91bec` review 证明 background selection 曾直接消费 source probe 前克隆的 `science_runtime`，无法证明 daemon、receipt、listener 或 full owner 仍健康。`9476be5` 已把 pending publication 与 observation 解耦，并要求 lifecycle observed-context、managed-health proof、generation + full-owner CAS 以及 ledger writer-lock 内最终重验。完整 608-test Desktop Rust suite 已 `PASS`（567 passed / 41 approved ignored），frontend、metadata、inventory 与文档治理 checks 已 `PASS`；绑定 base + exact tracked diff 的正式独立 candidate reviews 均为 `PASS`、四级 finding 全 0，clean exact-SHA GATE-SOURCE 仍为 `NOT-RUN`。
-- **Rust source-gate hygiene candidate**：当前未提交 diff 已在不改变 product behavior / test identity 的边界内修复 Rust 1.96.1 warnings；`bash test/run-rust.sh` 为 `PASS`，Desktop 567 passed / 41 approved ignored、Gateway 290 library + 1 CLI integration passed，两套 fmt 与 `clippy --all-targets -- -D warnings` 全绿。绑定当前 base + diff 的 fresh independent code / test / documentation candidate reviews 均为 `PASS`、四级 finding 全 0；clean exact-SHA completion review 与 15-suite GATE-SOURCE 仍为 `NOT-RUN`。
+- **Rust source-gate hygiene candidate**：`76616ff` 已在不改变 product behavior / test identity 的边界内修复 Rust 1.96.1 warnings；`bash test/run-rust.sh` 为 `PASS`，Desktop 567 passed / 41 approved ignored、Gateway 290 library + 1 CLI integration passed，两套 fmt 与 `clippy --all-targets -- -D warnings` 全绿。绑定 `dfb6f59` + exact diff 的 fresh independent code / test / documentation candidate reviews 均为 `PASS`、四级 finding 全 0；当前 docs-only descendant 的 clean exact-SHA completion review 与 15-suite GATE-SOURCE 仍为 `NOT-RUN`。
 - **旧 Skill Manager negative refactor**：未注册、未编译的 `desktop/src-tauri/src/commands/skills.rs`（2,052 行）与 `desktop/src-tauri/src/skill_manager/`（13,485 行）仍保留；`commands/mod.rs`、crate module 与 invoke surface 均不接入它们，但 `test_skill_runtime_boundary.py` 仍把 `commands/skills.rs` 纳入 `production_paths`。需要删除该死源码，或重新接入并建立真实 production 合同；同时修正测试/映射失真。
 - **Profile-switch dead writer 映射**：`runtime/profile_switch.rs::set_active_profile_txn` 仍标记 `#[allow(dead_code)]`，当前唯一直接 caller 在 Rust test，production profile action 走 pin / one-click apply；mutation inventory 却仍把它列作 current production durable reader/writer。需要删除、接回 production，或明确降为 test-only 并修正 inventory。
 
