@@ -143,9 +143,10 @@ load/trigger、Reviewer/Specialist 等能力继续由 Science 原生管理；CSS
 仍须保证 `SCIENCE-NATIVE` 包络不破坏它们，并验证第三方模型路径所需的底层协议
 能力。官方账号、
 entitlement、catalog/hosted connectors、通用 MCP/Plugin 管理、云服务、组织管理
-和真实付费计算当前不是 CSSwitch 第三方模式的托管目标。未来若明确授权受管的
-Skill/MCP/Plugin 子集，必须先建立独立功能合同与对应证据；在此之前不得改写表中的
-production ownership、可达性或证据层。
+和真实付费计算当前不是 CSSwitch 第三方模式的托管目标。受管 Skill / MCP / Plugin
+子集的[目标架构合同](../architecture/skill-mcp-plugin-control-plane.md)已经接受；其
+implementation、exact artifact 与 runtime evidence 仍为 `NOT-RUN`。在各组件真正实现并
+取得对应证据前，不得改写表中的 production ownership、可达性或证据层。
 
 ## 维护规则
 
@@ -157,7 +158,8 @@ production ownership、可达性或证据层。
 - mock、fake、fixture、source、test、package-static、artifact 与 installed-live
   必须保持分层；
 - 不因能力存在于 Science UI、route 或字符串中，就承诺第三方模式 current live；
-- 未来获授权的 Skill/MCP/Plugin 扩展必须先冻结支持类型、来源、权限、生命周期、
-  故障/日志合同与 Science ownership，再按实际证据更新本表；
+- 已接受的 Skill/MCP/Plugin 目标合同只冻结支持类型、来源、权限、生命周期、
+  故障/日志与 Science ownership；inspect-only 实现、apply 能力及各证据层开始或完成推进时，
+  必须分别复核目标合同与本表，未取得对应证据前不得改写为当前能力；
 - 不为本表新增 handoff 流水线、探针执行、GATE-SOURCE、schema、lint 或 lifecycle
   合同。

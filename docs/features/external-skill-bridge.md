@@ -1,6 +1,10 @@
 # 外部 Skill 安装桥
 
-公开 GitHub URL 路线自 v0.5.0 起提供，v0.6.0 扩展本地包、bundle 与恢复语义；当前 v0.7.0 继续使用本合同。
+公开 GitHub URL 路线自 v0.5.0 起提供，v0.6.0 扩展本地包、bundle 与恢复语义；当前 v0.8.4 继续使用本合同。
+
+多平台 Plugin / Agent Skills / generic MCP 的未来兼容边界已经在
+[Science Skill / MCP / Plugin 扩展控制面](../architecture/skill-mcp-plugin-control-plane.md)
+冻结；该目标设计尚未实现，不改变本文的当前入口、状态码、支持范围或证据层。
 
 CSSwitch 只提供两个窄入口，不启用 Skill Manager：
 

@@ -12,7 +12,7 @@ CSSwitch 是 Claude Science 的 provider 配置转换器、本地 inference Gate
 - 提供默认关闭的 Codex browser-only OAuth、动态模型目录与 Responses bridge；
 - 提供两个窄 bridge：外部 Skill 安装/卸载，以及用户 opt-in 的系统 SSH 配置复用。
 
-Science 仍拥有 project/session/artifact、组织、原生 Skills/connectors/Plugin 上游面、environments/kernels、Reviewer/Specialist、remote compute、updater 与 UI 语义。当前已验证的 CSSwitch 产品范围不模拟 Anthropic OAuth/catalog，不包含通用 Skill/MCP/Plugin 管理器、Science 下载器或远程访问服务。任何新增受管扩展面都必须先在独立功能合同中冻结支持类型、所有权和生命周期，且不能在实现、测试、artifact 或 installed runtime 证据建立前写成当前能力。
+Science 仍拥有 project/session/artifact、组织、原生 Skills/connectors/Plugin 上游面、environments/kernels、Reviewer/Specialist、remote compute、updater 与 UI 语义。当前已验证的 CSSwitch 产品范围不模拟 Anthropic OAuth/catalog，不包含通用 Skill/MCP/Plugin 管理器、Science 下载器或远程访问服务。未来受管扩展面的[已接受目标合同](skill-mcp-plugin-control-plane.md)已经冻结支持类型、所有权和生命周期；其实现、测试、artifact 与 runtime 证据仍为 `NOT-RUN`，不得提前写成当前能力。
 
 ## 当前可达性
 

@@ -265,7 +265,9 @@ CSSwitch 不托管：
 - analytics/Admin API、offboarding、compliance 和组织策略；
 - 用户 SSH key、远端 server、scheduler 或主机安全状态。
 
-这些项目的 `UNKNOWN` 用来限制结论，不构成 CSSwitch 的默认 backlog。
+这些项目的 `UNKNOWN` 用来限制结论，不构成 CSSwitch 的默认 backlog。未来受管的
+Skill / MCP / Plugin 子集已在[扩展控制面目标合同](skill-mcp-plugin-control-plane.md)
+中冻结；在各组件实现与证据建立前，上述 current-production non-target 不变。
 
 ## 6. 故障归属
 
