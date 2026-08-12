@@ -28,6 +28,8 @@ export function createRuntimeController({
   let runtimeChoiceActiveId = null;
   let runtimePendingSha256 = null;
   let scienceRuntimeUpdateRefreshPending = false;
+  let scienceRuntimeUpdateRefreshEpoch = 0;
+  let scienceRuntimeUpdateRefreshInFlight = 0;
 
 function hideRuntimeChoice() {
   els.runtimeChoiceSec.hidden = true;
@@ -67,17 +69,29 @@ function showRuntimeChoice(preflight) {
 }
 
 async function refreshScienceRuntimeUpdate(status = null) {
+  const refreshEpoch = ++scienceRuntimeUpdateRefreshEpoch;
   if (isBusy()) {
     scienceRuntimeUpdateRefreshPending = true;
     return;
   }
+  const readsDurableStatus = !status;
+  if (readsDurableStatus) scienceRuntimeUpdateRefreshInFlight += 1;
   try {
     const current = status || await call("science_runtime_update_status");
+    if (refreshEpoch !== scienceRuntimeUpdateRefreshEpoch) return;
+    if (isBusy()) {
+      scienceRuntimeUpdateRefreshPending = true;
+      return;
+    }
     if (current && current.pending_update) showRuntimeChoice(current);
     else if (runtimePendingSha256) hideRuntimeChoice();
     scienceRuntimeUpdateRefreshPending = false;
   } catch (_) {
-    scienceRuntimeUpdateRefreshPending = true;
+    if (refreshEpoch === scienceRuntimeUpdateRefreshEpoch) {
+      scienceRuntimeUpdateRefreshPending = true;
+    }
+  } finally {
+    if (readsDurableStatus) scienceRuntimeUpdateRefreshInFlight -= 1;
   }
 }
 
@@ -85,6 +99,7 @@ async function applyScienceRuntimeUpdate(action) {
   if (isBusy() || !runtimePendingSha256) return;
   const expectedSha256 = runtimePendingSha256;
   let refreshAfterFailure = false;
+  scienceRuntimeUpdateRefreshEpoch += 1;
   setBusy(true, { kind: "scienceRuntimeUpdate" });
   try {
     await call("science_runtime_update_action", { action, expectedSha256 });
@@ -233,7 +248,10 @@ async function runOneClick(runtimeChoice) {
   }
   if (!(await checkOneClickBoundary())) return;
   getSkillPage()?.invalidate();
-  if (runtimePendingSha256) scienceRuntimeUpdateRefreshPending = true;
+  if (runtimePendingSha256 || scienceRuntimeUpdateRefreshInFlight > 0) {
+    scienceRuntimeUpdateRefreshPending = true;
+  }
+  scienceRuntimeUpdateRefreshEpoch += 1;
   hideRuntimeChoice();
   setBusy(true, { kind: "oneClick" });
   setBrowserFallback("");

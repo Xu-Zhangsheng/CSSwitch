@@ -714,31 +714,54 @@ pub(crate) fn science_runtime_update_action(
     Ok(science_runtime_selection_value(&selection))
 }
 
+pub(crate) struct ScienceRuntimeUpdateCheck {
+    value: Value,
+    candidate_runtime: Option<ScienceRuntimeIdentity>,
+}
+
+impl ScienceRuntimeUpdateCheck {
+    fn without_candidate(mut value: Value) -> Self {
+        value["adoption_record_status"] = json!("not_needed");
+        Self {
+            value,
+            candidate_runtime: None,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Value, Option<ScienceRuntimeIdentity>) {
+        (self.value, self.candidate_runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_value(self) -> Value {
+        self.value
+    }
+}
+
 pub(crate) fn check_science_runtime_update(
     version_cache: &ScienceVersionCache,
-    running: Option<&ScienceRuntimeIdentity>,
-) -> Result<Value, String> {
+) -> Result<ScienceRuntimeUpdateCheck, String> {
     if std::env::var_os("SCIENCE_BIN").is_some() {
         let mut value = science_runtime_update_status()?;
         value["check_status"] = json!("explicit_override_skipped");
-        return Ok(value);
+        return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
     }
     let now_ms = config::now_ms();
     let observed = read_science_runtime_selection()?;
     if observed.active.is_none() {
         let mut value = science_runtime_selection_value(&observed);
         value["check_status"] = json!("uninitialized_skipped");
-        return Ok(value);
+        return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
     }
     if observed.pending.is_some() {
         let mut value = science_runtime_selection_value(&observed);
         value["check_status"] = json!("pending_choice_waiting");
-        return Ok(value);
+        return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
     }
     if !science_runtime_update_due(observed.last_checked_at_ms, now_ms) {
         let mut value = science_runtime_selection_value(&observed);
         value["check_status"] = json!("not_due");
-        return Ok(value);
+        return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
     }
     let claim_id = config::new_id();
     let claim = mutate_science_runtime_selection(|selection| {
@@ -748,17 +771,17 @@ pub(crate) fn check_science_runtime_update(
         ScienceRuntimeUpdateClaim::Uninitialized(selection) => {
             let mut value = science_runtime_selection_value(&selection);
             value["check_status"] = json!("uninitialized_skipped");
-            return Ok(value);
+            return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
         }
         ScienceRuntimeUpdateClaim::PendingChoice(selection) => {
             let mut value = science_runtime_selection_value(&selection);
             value["check_status"] = json!("pending_choice_waiting");
-            return Ok(value);
+            return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
         }
         ScienceRuntimeUpdateClaim::NotDue(selection) => {
             let mut value = science_runtime_selection_value(&selection);
             value["check_status"] = json!("not_due");
-            return Ok(value);
+            return Ok(ScienceRuntimeUpdateCheck::without_candidate(value));
         }
         ScienceRuntimeUpdateClaim::Claimed(selection) => selection,
     };
@@ -771,7 +794,7 @@ pub(crate) fn check_science_runtime_update(
             Ok(value) => value,
             Err(rejection) => {
                 let message = rejection.message.clone();
-                let _ = record_rejected_science_runtime_attempt(running, rejection);
+                let _ = record_rejected_science_runtime_attempt(None, rejection);
                 mutate_science_runtime_selection(|selection| {
                     if *selection == before {
                         selection.update_check_id = None;
@@ -796,26 +819,25 @@ pub(crate) fn check_science_runtime_update(
         );
         Ok(selection.clone())
     })?;
-    let adoption_record_status = match (stale_result, running, candidate_runtime.as_ref()) {
-        (true, _, _) => "not_needed",
-        (false, Some(running), Some(candidate))
-            if fingerprint_sha256_hex(&running.fingerprint)
-                != fingerprint_sha256_hex(&candidate.fingerprint) =>
-        {
-            record_deferred_science_runtime_observation(running, candidate)
-                .map(|_| "recorded")
-                .unwrap_or("degraded")
-        }
-        _ => "not_needed",
-    };
+    let candidate_runtime = (!stale_result)
+        .then_some(candidate_runtime)
+        .flatten()
+        .filter(|candidate| {
+            selection.pending.as_ref().is_some_and(|pending| {
+                pending.sha256 == fingerprint_sha256_hex(&candidate.fingerprint)
+            })
+        });
     let mut value = science_runtime_selection_value(&selection);
     value["check_status"] = json!(if stale_result {
         "stale_result_discarded"
     } else {
         "checked"
     });
-    value["adoption_record_status"] = json!(adoption_record_status);
-    Ok(value)
+    value["adoption_record_status"] = json!("not_needed");
+    Ok(ScienceRuntimeUpdateCheck {
+        value,
+        candidate_runtime,
+    })
 }
 
 #[cfg(test)]

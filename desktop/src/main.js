@@ -590,7 +590,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     setMsg("无法订阅自动启动状态：" + e, "err");
   }
   try {
-    await listen("science-runtime://update", (event) => runtimeController.refreshScienceRuntimeUpdate(event.payload));
+    await listen("science-runtime://update", () => runtimeController.refreshScienceRuntimeUpdate());
   } catch (e) {}
   try {
     applyBootPublication(await call("boot_snapshot"));

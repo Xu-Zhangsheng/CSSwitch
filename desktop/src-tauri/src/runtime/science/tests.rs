@@ -5,6 +5,7 @@ use std::os::unix::fs::{symlink, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{
@@ -59,11 +60,14 @@ fn fixed_active_runtime_and_pending_actions_are_durable_and_probe_free(
         return Ok(());
     }
     if std::env::var_os(CHECK_CHILD_ENV).is_some() {
-        match super::check_science_runtime_update(&ScienceVersionCache::default(), None) {
-            Ok(value) => println!(
-                "CHECK_STATUS={}",
-                value["check_status"].as_str().unwrap_or("unknown")
-            ),
+        match super::check_science_runtime_update(&ScienceVersionCache::default()) {
+            Ok(check) => {
+                let value = check.into_value();
+                println!(
+                    "CHECK_STATUS={}",
+                    value["check_status"].as_str().unwrap_or("unknown")
+                )
+            }
             Err(error) => println!("CHECK_ERROR={error}"),
         }
         return Ok(());
@@ -92,7 +96,8 @@ fn fixed_active_runtime_and_pending_actions_are_durable_and_probe_free(
 
     let config_dir = crate::config::default_dir();
     let store = config_dir.join(SCIENCE_ADOPTION_STORE_DIR);
-    let skipped = super::check_science_runtime_update(&ScienceVersionCache::default(), None)?;
+    let skipped =
+        super::check_science_runtime_update(&ScienceVersionCache::default())?.into_value();
     assert_eq!(skipped["check_status"], "uninitialized_skipped");
     let initial_status = super::science_runtime_update_status()?;
     assert_eq!(initial_status["status"], "uninitialized");
@@ -375,6 +380,16 @@ fn fixed_active_runtime_and_pending_actions_are_durable_and_probe_free(
     let failed_check_state = read_science_runtime_selection_at(&store)?;
     assert!(failed_check_state.last_checked_at_ms.is_some());
     assert!(failed_check_state.update_check_id.is_none());
+    let failed_check_ledger = read_science_adoption_ledger_at(&store)?;
+    let rejected = failed_check_ledger
+        .attempts
+        .last()
+        .filter(|attempt| attempt.decision == ScienceAdoptionDecision::Rejected)
+        .ok_or("failed source check must record a rejection")?;
+    assert!(
+        rejected.predecessor.is_none(),
+        "source rejection must not inherit a cached runtime without the same managed-health proof"
+    );
     let failed_check_retry = build_error_check_child().output()?;
     assert!(failed_check_retry.status.success());
     assert!(
@@ -510,6 +525,27 @@ fn background_science_update_check_is_due_once_per_day() {
     assert!(crate::should_emit_science_runtime_update_event(
         &pending_projection
     ));
+    let action_consumed_projection =
+        crate::reconcile_science_runtime_update_projection_with(pending_projection.clone(), || {
+            Ok(serde_json::json!({
+                "check_status": "ready",
+                "pending_update": null,
+            }))
+        })
+        .unwrap();
+    assert_eq!(
+        action_consumed_projection["check_status"],
+        "stale_result_discarded"
+    );
+    assert!(action_consumed_projection["pending_update"].is_null());
+    assert_eq!(
+        action_consumed_projection["adoption_record_status"],
+        "not_needed"
+    );
+    assert!(
+        !crate::should_emit_science_runtime_update_event(&action_consumed_projection),
+        "an exact user action completed after publication must suppress the stale scheduler event"
+    );
     for quiet_projection in [
         serde_json::json!({
             "check_status": "pending_choice_waiting",
@@ -616,6 +652,139 @@ fn background_science_update_check_is_due_once_per_day() {
         claim_science_runtime_update(&mut selection, interval * 7 + 1, &"2".repeat(32)),
         ScienceRuntimeUpdateClaim::NotDue(_)
     ));
+
+    let root = unique_temp_dir("science-update-owner-proof").unwrap();
+    let running_bin = root.join("running-science");
+    let candidate_bin = root.join("candidate-science");
+    write_fake_version_bin(&running_bin, 0o700, "claude-science owner-a").unwrap();
+    write_fake_version_bin(&candidate_bin, 0o700, "claude-science owner-b").unwrap();
+    let cache = ScienceVersionCache::default();
+    let running = runtime_identity(running_bin, ScienceRuntimeSource::Explicit, &cache).unwrap();
+    let candidate =
+        runtime_identity(candidate_bin, ScienceRuntimeSource::Explicit, &cache).unwrap();
+    let mut same_bytes_new_version = running.clone();
+    same_bytes_new_version.version = Some("claude-science owner-a-relabelled".into());
+
+    for drift in [
+        "generation",
+        "runtime",
+        "confirmed_stopped",
+        "sandbox_child_pid",
+        "sandbox_port",
+        "sandbox_url",
+    ] {
+        let mut authority = crate::AppState::default();
+        authority.science_runtime = Some(running.clone());
+        authority.sandbox_port = 8990;
+        authority.sandbox_url = Some("http://127.0.0.1:8990".into());
+        let state: crate::SharedAppState = Arc::new(Mutex::new(authority));
+        let lifecycle: crate::SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let recorded = AtomicUsize::new(0);
+        let before_generation = lifecycle.current_generation();
+        let status = crate::observe_science_runtime_update_with(
+            &state,
+            &lifecycle,
+            &candidate,
+            |_, _| {
+                match drift {
+                    "generation" => {
+                        lifecycle.bump_generation();
+                    }
+                    "runtime" => crate::lock(&state).science_runtime = Some(candidate.clone()),
+                    "confirmed_stopped" => {
+                        crate::lock(&state).science_confirmed_stopped = Some(running.clone())
+                    }
+                    "sandbox_child_pid" => {
+                        crate::lock(&state).sandbox =
+                            Some(Command::new("sleep").arg("60").spawn().unwrap())
+                    }
+                    "sandbox_port" => crate::lock(&state).sandbox_port = 8991,
+                    "sandbox_url" => {
+                        crate::lock(&state).sandbox_url = Some("http://127.0.0.1:8991".into())
+                    }
+                    _ => unreachable!(),
+                }
+                Some(())
+            },
+            |_| true,
+            |_, _| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert_eq!(status, "degraded", "owner drift {drift} must fail closed");
+        assert_eq!(recorded.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            lifecycle.current_generation(),
+            before_generation + u64::from(drift == "generation"),
+            "observation itself must not bump lifecycle generation"
+        );
+        let child = crate::lock(&state).sandbox.take();
+        if let Some(mut child) = child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    let mut authority = crate::AppState::default();
+    authority.science_runtime = Some(running);
+    authority.sandbox_port = 8990;
+    authority.sandbox_url = Some("http://127.0.0.1:8990".into());
+    let state: crate::SharedAppState = Arc::new(Mutex::new(authority));
+    let lifecycle: crate::SharedLifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+    let before_generation = lifecycle.current_generation();
+    for (proof, revalidated) in [(false, true), (true, false)] {
+        let recorded = AtomicUsize::new(0);
+        let status = crate::observe_science_runtime_update_with(
+            &state,
+            &lifecycle,
+            &candidate,
+            |_, _| proof.then_some(()),
+            |_| revalidated,
+            |_, _| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert_eq!(status, "degraded");
+        assert_eq!(recorded.load(Ordering::SeqCst), 0);
+    }
+    let recorded = AtomicUsize::new(0);
+    assert_eq!(
+        crate::observe_science_runtime_update_with(
+            &state,
+            &lifecycle,
+            &candidate,
+            |_, _| Some(()),
+            |_| true,
+            |_, _| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        ),
+        "recorded"
+    );
+    assert_eq!(recorded.load(Ordering::SeqCst), 1);
+    assert_eq!(lifecycle.current_generation(), before_generation);
+
+    let recorded = AtomicUsize::new(0);
+    assert_eq!(
+        crate::observe_science_runtime_update_with(
+            &state,
+            &lifecycle,
+            &same_bytes_new_version,
+            |_, _| Some(()),
+            |_| true,
+            |_, _| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        ),
+        "recorded",
+        "selection treats equal bytes with a changed validated version as a pending candidate, so observation must use the same identity boundary"
+    );
+    assert_eq!(recorded.load(Ordering::SeqCst), 1);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1472,6 +1641,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
     def do_GET(self):
         if self.path.startswith("/health"):
+            if os.path.exists(os.path.join(os.path.dirname(pidfile), "http-unhealthy")):
+                self.send_response(503)
+                self.end_headers()
+                return
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
@@ -1487,6 +1660,10 @@ PY
     ;;
   status)
     pid="$(cat "$state/pid" 2>/dev/null || true)"
+    if [ -f "$state/status-unhealthy" ]; then
+      echo '{"running":false}'
+      exit 1
+    fi
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       echo '{"running":true}'
     else
@@ -1511,6 +1688,16 @@ esac
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     drop(listener);
+    let runtime = runtime_identity(
+        bin.clone(),
+        ScienceRuntimeSource::Explicit,
+        &ScienceVersionCache::default(),
+    )
+    .ok_or("fake Science runtime must be observable")?;
+    assert!(
+        super::ScienceHostAdapter::prove_managed_healthy(port, &runtime).is_none(),
+        "a cached executable without a listener or managed receipt is not a health proof"
+    );
     let launch = Command::new(&bin)
         .arg("serve")
         .arg("--data-dir")
@@ -1525,15 +1712,63 @@ esac
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+    assert!(
+        super::ScienceHostAdapter::prove_managed_healthy(port, &runtime).is_none(),
+        "a healthy listener without an exact managed receipt is not a health proof"
+    );
 
     let observed = probe_sandbox_runtime_cached(port, &ScienceVersionCache::default())?;
     let listener_still_alive = TcpStream::connect(("127.0.0.1", port)).is_ok();
+    let listener_pid = fs::read_to_string(state_dir.join("pid"))?
+        .trim()
+        .parse::<u32>()?;
+    let launch_id = "a".repeat(32);
+    let receipt = managed_launch_record_for(port, listener_pid, &runtime, Some(&launch_id), None)
+        .ok_or("healthy fake Science must produce a managed launch record")?;
+    super::write_managed_launch_record(&receipt)?;
+    let proof = super::ScienceHostAdapter::prove_managed_healthy(port, &runtime)
+        .ok_or("exact receipt and healthy listener must produce a managed-health proof")?;
+    fs::write(state_dir.join("status-unhealthy"), b"1")?;
+    assert!(
+        super::ScienceHostAdapter::prove_managed_healthy(port, &runtime).is_none(),
+        "an exact live receipt and healthy HTTP listener cannot bypass a non-running CLI status"
+    );
+    assert!(
+        !super::ScienceHostAdapter::revalidate_managed_healthy(&proof),
+        "a proof must be invalidated when the same listener reports non-running CLI status"
+    );
+    fs::remove_file(state_dir.join("status-unhealthy"))?;
+    fs::write(state_dir.join("http-unhealthy"), b"1")?;
+    assert!(
+        super::ScienceHostAdapter::prove_managed_healthy(port, &runtime).is_none(),
+        "an exact live receipt and running CLI status cannot bypass an unhealthy HTTP listener"
+    );
+    assert!(
+        !super::ScienceHostAdapter::revalidate_managed_healthy(&proof),
+        "a proof must be invalidated when the same listener loses HTTP health"
+    );
+    fs::remove_file(state_dir.join("http-unhealthy"))?;
+    assert!(
+        super::ScienceHostAdapter::prove_managed_healthy(port, &runtime).is_some(),
+        "removing the health fault requires a fresh proof"
+    );
     let stopped = Command::new(&bin)
         .arg("stop")
         .arg("--data-dir")
         .arg(&data_dir)
         .status()?;
     assert!(stopped.success());
+    for _ in 0..100 {
+        if TcpStream::connect(("127.0.0.1", port)).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(managed_launch_path().is_file());
+    assert!(
+        super::ScienceHostAdapter::prove_managed_healthy(port, &runtime).is_none(),
+        "a retained exact receipt without its listener is not a health proof"
+    );
 
     assert_eq!(
             observed,

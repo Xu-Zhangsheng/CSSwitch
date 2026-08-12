@@ -9,18 +9,21 @@
 
 | 层 | 当前可声明的事实 |
 |---|---|
-| Frozen production source / test | `next@18a67881c7e7d760fa8deb7f53e6ba246a32d94d`；canonical run `8db59abb85f6c7d5f8d5694626ee61dc` 为 15/15 suites、15/15 observations、exit 0；completion seal `7c36a8ef…c9c6e0`；正式 source review `PASS` |
-| Acceptance artifact / G1 | 同 source 新构建 `com.csswitch.test` 0.8.4；canonical `bb19a7e6…6e9109`，Desktop `56f0bde9…bec612`，Gateway `b8e96803…57819b`；G1 `PASS`；临时 App 在正式 review 后已删除，receipt 保留 |
-| Science adoption isolated-live | Claude Science 0.1.25 / CLI `63b0f57a…9c03f`；healthy → `deferred_healthy` 不重启、cold candidate selected、v2 binding/finalize/reopen 一致；scoped G2 `PASS`，outer seal `09f72713…80286` |
+| Current source candidate | 当前工作区基于 `next@9c91bec611f98f2d87e44db9edd5b5f51210240c`，含未提交的 Science managed-health proof / full-owner CAS 与合同修复；608-test Desktop Rust suite `PASS`（567 passed / 41 approved ignored），metadata/inventory focused checks `PASS`；修复后 fresh review 与 clean exact-SHA canonical GATE-SOURCE 均为 `NOT-RUN`，下游 artifact / installed / live 不得继承 |
+| Latest exact tested source | `next@9c91bec611f98f2d87e44db9edd5b5f51210240c` 的 canonical run `85a71ae64d72aeddb935a6b17a077c95` 为 15/15 suites、15/15 observations、exit 0，completion seal `98b3bc14…95517`；但正式 source review 发现 1 个 MEDIUM runtime observation 缺口和 2 个 HIGH evidence/contract 漂移，结论为 `FAIL`，不是 production source closure |
+| Last accepted source / test lineage | 历史 `next@18a67881c7e7d760fa8deb7f53e6ba246a32d94d`；canonical run `8db59abb85f6c7d5f8d5694626ee61dc` 为 15/15 suites、15/15 observations、exit 0；completion seal `7c36a8ef…c9c6e0`；正式 source review `PASS`；只绑定该历史 tuple |
+| Historical Acceptance artifact / G1 | 从 `18a67881` 新构建 `com.csswitch.test` 0.8.4；canonical `bb19a7e6…6e9109`，Desktop `56f0bde9…bec612`，Gateway `b8e96803…57819b`；G1 `PASS`；临时 App 在正式 review 后已删除，receipt 保留 |
+| Historical Science adoption isolated-live | `18a67881` artifact + Claude Science 0.1.25 / CLI `63b0f57a…9c03f`；healthy → `deferred_healthy` 不重启、cold candidate selected、v2 binding/finalize/reopen 一致；scoped G2 `PASS`，outer seal `09f72713…80286` |
 | Current installed test artifact | 标准安装根与本任务已知临时构建根只剩 `/Applications/CSSwitch.app`；`com.csswitch.menubar` 0.8.4；canonical `24f542d1…f1c2`，tree `301508ed…5120`，Desktop `1a75a29f…fe6e`，Gateway `8a619b94…5540`；与 reviewed normal artifact exact match；installed smoke `PASS` |
 | Authorized Provider live | 10 个显式请求、0 自动重试；DeepSeek / SiliconFlow 的 text + Science UI incremental + tools `PASS`；Qwen text + UI incremental `PASS`、tool `INCONCLUSIVE(400)`；Kimi text + UI incremental `PASS`，完整 tools / reasoning / native search 保持 `INCONCLUSIVE`；Xiaomi / Zhipu / MiniMax text + UI incremental `PASS`；OpenRouter `INCONCLUSIVE(quota_402)`；Codex / OpenCode 未发请求 |
 | Final runtime cleanup | CSSwitch Desktop、Gateway、Science process count 均为 0；TCP 8765 listener 为 0；10 个本轮 Science tabs 已关闭；当前选择恢复 DeepSeek |
 | Current installed signing | 仅 linker ad-hoc；无 Team ID / sealed resources，strict/deep verify exit 1；Developer ID、notarization、Gatekeeper 均未建立 |
 | Public v0.8.4 release | 公开 DMG SHA-256 `23471daf…f2b2`、peeled tag、Release source 与旧公开 evidence 保持原结论；当前 installed test artifact 不是该公开 DMG artifact，本轮没有刷新或改变 public layer |
 
-执行开始时 `next` HEAD 为 `4d0a87f29f145727ab8a5450968b71cef79ed00d`；它只比
-`18a67881` 多 evidence-only 的 `.agents/context/known-issues.md`，不能冒充受测 production
-source。本轮新增文档仍是未提交工作区变化，也不改变 frozen source identity。
+本轮开始时实时复核 `next` HEAD 为 `9c91bec611f98f2d87e44db9edd5b5f51210240c`，tracked
+worktree clean，另有受保护的未跟踪 `.tmp-bskill-r9-driver.py`，本轮不读取、不修改。随后形成的
+managed-health proof、owner race fixture、inventory 与本文档修改仍是未提交工作区候选；它们使
+`9c91bec` 的旧 gate 不能继承为当前 candidate 的 source PASS，也不会改写 `18a67881` 的历史证据。
 
 Provider 结果必须按 operation 分项解释：`Science UI incremental` 只证明真实 Science 页面出现
 多次增量状态，不等于 Gateway / Provider protocol-level stream + nonstream 双模式；
@@ -29,7 +32,8 @@ Provider 结果必须按 operation 分项解释：`Science UI incremental` 只�
 PASS。Codex 在 `catalog_verify` 500 前停下；OpenCode Science selector 没有配置要求的可用模型，
 二者均未发 Provider 请求。
 
-正式 clean-context final review 为 `PASS`、`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`。Provider receipt
+历史 `18a67881` tuple 的 clean-context final review 为
+`PASS`、`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`。Provider receipt
 SHA-256 为 `c30342f5…a01ea`，review receipt 为 `bb649e6a…f6944`，12 项 evidence manifest
 为 `0302d8c3…9ac38`，final acceptance seal 为 `b1c26987…080ce`。
 
@@ -38,7 +42,8 @@ SHA-256 为 `c30342f5…a01ea`，review receipt 为 `bb649e6a…f6944`，12 项 
 历史，但没有运行中的 Gateway / Science。旧安装 backup 与四个已审临时 App bundle 已精确删除，
 不可恢复。
 
-仍不是当前 PASS：完整 protocol-level stream/nonstream 双模式、Kimi reasoning/native search、
+仍不是当前 PASS：当前 worktree candidate 的 clean exact-SHA source review / canonical source gate
+及全部下游 artifact/runtime 层；完整 protocol-level stream/nonstream 双模式、Kimi reasoning/native search、
 Qwen/Kimi 完整 tools card、OpenRouter 足额配额、Codex/OpenCode 请求、真实 SSH server、
 Skill/MCP 新功能、Science 全领域行为、Intel/Windows/WSL、Developer ID/notarization/Gatekeeper、
 新 DMG 或公开 Release。

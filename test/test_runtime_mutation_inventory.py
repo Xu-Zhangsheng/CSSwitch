@@ -436,6 +436,28 @@ def assert_science_inventory_contract(testcase, inventory):
             "clears": set(),
         },
     )
+
+    update_check = operations["op.science-runtime-update-check"]
+    testcase.assertEqual(update_check["serialization"], "lifecycle-observation-only")
+    testcase.assertIn("lifecycle.global", update_check["state_owners"])
+    testcase.assertIn(
+        "record.science-receipt-v1", update_check["durable_records"]["reads"]
+    )
+    update_effects = " ".join(update_check["ordered_effects"])
+    testcase.assertIn("generation plus full-owner CAS", update_effects)
+    testcase.assertIn("same exact pending choice", update_effects)
+    testcase.assertIn("typed managed-health proof", update_effects)
+    testcase.assertIn(
+        "science-runtime-update-check.managed-observation",
+        {failure["id"] for failure in update_check["failure_points"]},
+    )
+    testcase.assertTrue(
+        {
+            "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::background_science_update_check_is_due_once_per_day",
+            "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::fresh_restart_rejects_listener_without_managed_launch_identity",
+            "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_cold_start_commits_runtime_and_receipts",
+        }.issubset(update_check["characterization_tests"])
+    )
     testcase.assertEqual(
         preflight["entrypoints"],
         [

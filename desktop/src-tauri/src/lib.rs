@@ -864,6 +864,109 @@ fn should_emit_science_runtime_update_event(value: &serde_json::Value) -> bool {
     value["check_status"] == "checked" && !value["pending_update"].is_null()
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ScienceRuntimeUpdateOwner {
+    generation: u64,
+    runtime: Option<runtime::science::ScienceRuntimeIdentity>,
+    confirmed_stopped: Option<runtime::science::ScienceRuntimeIdentity>,
+    sandbox_child_pid: Option<u32>,
+    sandbox_port: u16,
+    sandbox_url: Option<String>,
+}
+
+impl ScienceRuntimeUpdateOwner {
+    fn claim(state: &AppState, generation: u64) -> Self {
+        Self {
+            generation,
+            runtime: state.science_runtime.clone(),
+            confirmed_stopped: state.science_confirmed_stopped.clone(),
+            sandbox_child_pid: state.sandbox.as_ref().map(Child::id),
+            sandbox_port: state.sandbox_port,
+            sandbox_url: state.sandbox_url.clone(),
+        }
+    }
+}
+
+fn observe_science_runtime_update_with<Proof>(
+    state: &SharedAppState,
+    lifecycle: &SharedLifecycle,
+    candidate: &runtime::science::ScienceRuntimeIdentity,
+    prove: impl FnOnce(u16, &runtime::science::ScienceRuntimeIdentity) -> Option<Proof>,
+    revalidate: impl FnOnce(&Proof) -> bool,
+    record: impl FnOnce(Proof, &runtime::science::ScienceRuntimeIdentity) -> Result<(), String>,
+) -> &'static str {
+    lifecycle.with_observed_context(|| {
+        let owner = {
+            let authority = lock(state);
+            ScienceRuntimeUpdateOwner::claim(&authority, lifecycle.current_generation())
+        };
+        let Some(running) = owner.runtime.as_ref() else {
+            return "not_needed";
+        };
+        if owner.confirmed_stopped.is_some() {
+            return "degraded";
+        }
+        if running.environment_transaction_id() == candidate.environment_transaction_id()
+            && running.version == candidate.version
+        {
+            return "not_needed";
+        }
+        let Some(proof) = prove(owner.sandbox_port, running) else {
+            return "degraded";
+        };
+        let still_owned = {
+            let authority = lock(state);
+            ScienceRuntimeUpdateOwner::claim(&authority, lifecycle.current_generation()) == owner
+        };
+        if !still_owned || !revalidate(&proof) {
+            return "degraded";
+        }
+        record(proof, candidate)
+            .map(|_| "recorded")
+            .unwrap_or("degraded")
+    })
+}
+
+fn reconcile_science_runtime_update_projection_with(
+    mut value: serde_json::Value,
+    status: impl FnOnce() -> Result<serde_json::Value, String>,
+) -> Result<serde_json::Value, String> {
+    if value["check_status"] == "checked" {
+        let current = status()?;
+        if current["pending_update"] != value["pending_update"] {
+            value = current;
+            value["check_status"] = serde_json::json!("stale_result_discarded");
+            value["adoption_record_status"] = serde_json::json!("not_needed");
+        }
+    }
+    Ok(value)
+}
+
+fn run_science_runtime_update_once<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+    let state = app.state::<SharedAppState>().inner().clone();
+    let lifecycle = app.state::<SharedLifecycle>().inner().clone();
+    let version_cache = lock(&state).science_version_cache.clone();
+    let check = runtime::science::check_science_runtime_update(&version_cache)?;
+    let (mut value, candidate) = check.into_parts();
+    if let Some(candidate) = candidate.as_ref() {
+        let status = observe_science_runtime_update_with(
+            &state,
+            &lifecycle,
+            candidate,
+            runtime::science::ScienceHostAdapter::prove_managed_healthy,
+            runtime::science::ScienceHostAdapter::revalidate_managed_healthy,
+            runtime::science::record_deferred_science_runtime_observation,
+        );
+        value["adoption_record_status"] = serde_json::json!(status);
+    }
+    reconcile_science_runtime_update_projection_with(
+        value,
+        runtime::science::science_runtime_update_status,
+    )
+}
+
 fn start_science_runtime_update_scheduler(app: tauri::AppHandle) {
     let _ = std::thread::Builder::new()
         .name("science-runtime-update".into())
@@ -872,14 +975,7 @@ fn start_science_runtime_update_scheduler(app: tauri::AppHandle) {
             // cheap; the durable timestamp enforces one source check per 24h.
             std::thread::sleep(std::time::Duration::from_secs(30));
             loop {
-                let (version_cache, running) = {
-                    let state = app.state::<SharedAppState>();
-                    let st = lock(state.inner());
-                    (st.science_version_cache.clone(), st.science_runtime.clone())
-                };
-                if let Ok(value) =
-                    runtime::science::check_science_runtime_update(&version_cache, running.as_ref())
-                {
+                if let Ok(value) = run_science_runtime_update_once(&app) {
                     if should_emit_science_runtime_update_event(&value) {
                         let _ = app.emit("science-runtime://update", value);
                     }

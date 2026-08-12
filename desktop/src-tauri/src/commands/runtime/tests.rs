@@ -3171,6 +3171,10 @@ fn r0_one_click_cold_start_commits_runtime_and_receipts() {
         "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
         &[("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY", "1")],
     );
+    run_exact_ignored_runtime_characterization(
+        "commands::runtime::tests::isolated_one_click_reuse_status_smoke_with_fake_science",
+        &[("CSSWITCH_TEST_SCIENCE_ADOPTION_UNPROVEN_PENDING_ONLY", "1")],
+    );
 }
 
 #[test]
@@ -7872,14 +7876,16 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
             bin_dir.to_string_lossy()
         ),
     );
-    let adoption_updater_bin = env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY")
-        .map(|_| {
-            let updater_bin = home.join(".claude-science/bin/claude-science");
-            let initial_updater = fs::read_to_string(&fake_science).unwrap();
-            write_padded_test_updater(&updater_bin, &initial_updater);
-            env::remove_var("SCIENCE_BIN");
-            updater_bin
-        });
+    let adoption_update_fixture = env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY")
+        .is_some()
+        || env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_UNPROVEN_PENDING_ONLY").is_some();
+    let adoption_updater_bin = adoption_update_fixture.then(|| {
+        let updater_bin = home.join(".claude-science/bin/claude-science");
+        let initial_updater = fs::read_to_string(&fake_science).unwrap();
+        write_padded_test_updater(&updater_bin, &initial_updater);
+        env::remove_var("SCIENCE_BIN");
+        updater_bin
+    });
     let _updater_identity_guard = adoption_updater_bin
         .as_ref()
         .map(|_| science::test_arm_fake_science_updater_identity());
@@ -8217,7 +8223,31 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         managed_launch["listener_pid"],
         first_pid.trim().parse::<u32>().unwrap()
     );
-    if env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_HEALTHY_DEFER_ONLY").is_some() {
+    let managed_launch_bytes = fs::read(&managed_launch_path).unwrap();
+    let proof = science::ScienceHostAdapter::prove_managed_healthy(sandbox_port, &running_runtime)
+        .expect("fresh exact managed receipt and healthy listener must produce a typed proof");
+    let replaced_receipt = managed_launch_path.with_extension("replacement");
+    fs::write(&replaced_receipt, b"{}").unwrap();
+    fs::set_permissions(&replaced_receipt, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::rename(&replaced_receipt, &managed_launch_path).unwrap();
+    assert!(
+        !science::ScienceHostAdapter::revalidate_managed_healthy(&proof),
+        "receipt replacement after proof must fail closed"
+    );
+    let restored_receipt = managed_launch_path.with_extension("restored");
+    fs::write(&restored_receipt, &managed_launch_bytes).unwrap();
+    fs::set_permissions(&restored_receipt, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::rename(&restored_receipt, &managed_launch_path).unwrap();
+    assert!(
+        !science::ScienceHostAdapter::revalidate_managed_healthy(&proof),
+        "restoring equal receipt bytes must not revive the replaced token identity"
+    );
+    assert!(
+        science::ScienceHostAdapter::prove_managed_healthy(sandbox_port, &running_runtime)
+            .is_some(),
+        "restored exact receipt must be reproved instead of reviving the stale token"
+    );
+    if adoption_update_fixture {
         let updater_bin = adoption_updater_bin
             .as_ref()
             .expect("healthy adoption fixture must seed the fixed updater path");
@@ -8254,14 +8284,31 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
                     .all(|attempt| attempt["decision"] != "deferred_healthy")),
             "startup preflight must not probe or defer an update candidate"
         );
-        let update = science::check_science_runtime_update(&version_cache, running_before.as_ref())
+        let unproven =
+            env::var_os("CSSWITCH_TEST_SCIENCE_ADOPTION_UNPROVEN_PENDING_ONLY").is_some();
+        if unproven {
+            fs::write(&managed_launch_path, b"{}").unwrap();
+            fs::set_permissions(&managed_launch_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let update = crate::run_science_runtime_update_once(&handle)
             .expect("due background check must publish the changed runtime as pending");
         assert_eq!(update["check_status"], "checked");
-        assert_eq!(update["adoption_record_status"], "recorded");
+        assert_eq!(
+            update["adoption_record_status"],
+            if unproven { "degraded" } else { "recorded" }
+        );
         assert_eq!(
             update["pending_update"]["version"],
             "claude-science 0.0.1-csswitch-test"
         );
+        if unproven {
+            fs::write(&managed_launch_path, &managed_launch_bytes).unwrap();
+            fs::set_permissions(&managed_launch_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let repeated = crate::run_science_runtime_update_once(&handle)
+            .expect("repeated scheduler pass must preserve the pending user choice");
+        assert_eq!(repeated["check_status"], "pending_choice_waiting");
+        assert_eq!(repeated["adoption_record_status"], "not_needed");
         assert_eq!(
             lock(&state).science_runtime.as_ref(),
             running_before.as_ref(),
@@ -8279,15 +8326,23 @@ fn isolated_one_click_reuse_status_smoke_with_fake_science() {
         );
         let ledger = science::science_adoption_ledger_json_for_test()
             .expect("background update check must publish the adoption ledger");
-        let deferred = ledger["attempts"]
-            .as_array()
-            .and_then(|attempts| {
-                attempts
-                    .iter()
-                    .rev()
-                    .find(|attempt| attempt["decision"] == "deferred_healthy")
-            })
-            .expect("background update check must persist deferred_healthy");
+        let deferred = ledger["attempts"].as_array().and_then(|attempts| {
+            attempts
+                .iter()
+                .rev()
+                .find(|attempt| attempt["decision"] == "deferred_healthy")
+        });
+        if unproven {
+            assert!(
+                deferred.is_none(),
+                "an unproven pending candidate must not inherit a running predecessor"
+            );
+            cleanup
+                .finish()
+                .expect("unproven pending fixture must cleanly stop after receipt restoration");
+            return;
+        }
+        let deferred = deferred.expect("background update check must persist deferred_healthy");
         assert_eq!(
             deferred["predecessor"]["version"],
             "claude-science 0.0.0-csswitch-test"

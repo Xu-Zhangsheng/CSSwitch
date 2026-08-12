@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 let invokeHandler = async () => {
@@ -108,6 +109,153 @@ test("pending Science update requires exact-hash user action and does not launch
   assert.equal(calls.some(([command]) => command === "one_click_login"), false);
   assert.match(messages.at(-1)[0], /下次冷启动生效/);
   assert.equal(messages.at(-1)[1], "ok");
+  invokeHandler = async (command) => {
+    calls.push([command]);
+    if (command === "science_runtime_update_status") {
+      return { status: "ready", pending_update: null };
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+  await controller.refreshScienceRuntimeUpdate();
+  assert.equal(calls.at(-1)[0], "science_runtime_update_status");
+
+  const mainSource = readFileSync(new URL("../desktop/src/main.js", import.meta.url), "utf8");
+  assert.match(
+    mainSource,
+    /listen\("science-runtime:\/\/update", \(\) => runtimeController\.refreshScienceRuntimeUpdate\(\)\)/,
+    "the production event listener must discard its payload and request durable status",
+  );
+
+  {
+    const raceCalls = [];
+    let raceEls;
+    const raceController = makeController(raceCalls, {
+      trackBusy: true,
+      captureEls: (value) => { raceEls = value; },
+    });
+    const racePending = {
+      source: "official_updated",
+      version: "claude-science 2.1",
+      sha256: "f".repeat(64),
+    };
+    await raceController.refreshScienceRuntimeUpdate({ pending_update: racePending });
+    let resolveStatus;
+    const lateStatus = new Promise((resolve) => { resolveStatus = resolve; });
+    invokeHandler = async (command, args) => {
+      raceCalls.push([command, args]);
+      if (command === "science_runtime_update_status") return await lateStatus;
+      if (command === "science_runtime_update_action") {
+        return { status: "ready", pending_update: null };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    };
+    const refresh = raceController.refreshScienceRuntimeUpdate();
+    await Promise.resolve();
+    await raceController.applyScienceRuntimeUpdate("keep_active");
+    assert.equal(raceEls.runtimeChoiceSec.hidden, true);
+    resolveStatus({ status: "ready", pending_update: racePending });
+    await refresh;
+    assert.equal(raceEls.runtimeChoiceSec.hidden, true);
+    assert.deepEqual(raceCalls.map(([command]) => command), [
+      "science_runtime_update_status",
+      "science_runtime_update_action",
+    ]);
+  }
+
+  {
+    const busyCalls = [];
+    let busy = false;
+    let busyEls;
+    const busyController = makeController(busyCalls, {
+      isBusy: () => busy,
+      captureEls: (value) => { busyEls = value; },
+    });
+    const busyPending = {
+      source: "official_updated",
+      version: "claude-science 2.2",
+      sha256: "a".repeat(64),
+    };
+    let resolveStatus;
+    const lateStatus = new Promise((resolve) => { resolveStatus = resolve; });
+    invokeHandler = async (command) => {
+      busyCalls.push([command]);
+      if (command === "science_runtime_update_status") return await lateStatus;
+      if (command === "status") {
+        return { proxy: "stopped", sandbox: "stopped", upstream: "stopped" };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    };
+    const refresh = busyController.refreshScienceRuntimeUpdate();
+    await Promise.resolve();
+    busy = true;
+    resolveStatus({ status: "ready", pending_update: busyPending });
+    await refresh;
+    assert.equal(busyEls.runtimeChoiceSec.hidden, true);
+    busy = false;
+    await busyController.refreshStatus();
+    assert.equal(busyEls.runtimeChoiceSec.hidden, false);
+    assert.equal(busyEls.runtimeActivateUpdateBtn.hidden, false);
+    assert.deepEqual(busyCalls.map(([command]) => command), [
+      "science_runtime_update_status",
+      "status",
+      "science_runtime_update_status",
+    ]);
+  }
+
+  {
+    const firstReadCalls = [];
+    let firstReadEls;
+    const firstReadController = makeController(firstReadCalls, {
+      trackBusy: true,
+      captureEls: (value) => { firstReadEls = value; },
+    });
+    const firstPending = {
+      source: "official_updated",
+      version: "claude-science 2.3",
+      sha256: "1".repeat(64),
+    };
+    let resolveFirstStatus;
+    const firstStatus = new Promise((resolve) => { resolveFirstStatus = resolve; });
+    let scienceStatusCalls = 0;
+    invokeHandler = async (command) => {
+      firstReadCalls.push([command]);
+      if (command === "science_runtime_update_status") {
+        scienceStatusCalls += 1;
+        return scienceStatusCalls === 1
+          ? await firstStatus
+          : { status: "ready", pending_update: firstPending };
+      }
+      if (command === "one_click_login") {
+        return { status: "ok", msg: "started", fallback_url: null };
+      }
+      if (command === "finalize_consumer_state") {
+        return {
+          disposition: "ready",
+          selection_pending: false,
+          applied_profile_id: "profile-a",
+          cleanup_required: false,
+        };
+      }
+      if (command === "status") {
+        return { proxy: "healthy", sandbox: "healthy", upstream: "healthy" };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    };
+    const firstRefresh = firstReadController.refreshScienceRuntimeUpdate();
+    await Promise.resolve();
+    await firstReadController.runOneClick(null);
+    assert.equal(firstReadEls.runtimeChoiceSec.hidden, false);
+    assert.equal(firstReadEls.runtimeActivateUpdateBtn.hidden, false);
+    resolveFirstStatus({ status: "ready", pending_update: firstPending });
+    await firstRefresh;
+    assert.deepEqual(firstReadCalls.map(([command]) => command), [
+      "science_runtime_update_status",
+      "one_click_login",
+      "finalize_consumer_state",
+      "status",
+      "science_runtime_update_status",
+    ]);
+  }
 });
 
 test("failed pending action refreshes after busy state clears", async () => {

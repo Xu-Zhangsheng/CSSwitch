@@ -7,6 +7,24 @@
 /// policy; they do not interpret shell exit codes or reconstruct host identity.
 pub(crate) struct ScienceHostAdapter;
 
+/// Process-local proof that an exact CSSwitch-managed Science runtime was
+/// healthy while its managed launch receipt still named the same owner.
+///
+/// The fields intentionally stay private: callers may carry and revalidate
+/// the proof, but cannot synthesize one from a cached executable identity.
+#[must_use]
+pub(crate) struct ScienceManagedHealthyProof {
+    runtime: ScienceRuntimeIdentity,
+    port: u16,
+    ownership: ScienceManagedLaunchToken,
+}
+
+impl ScienceManagedHealthyProof {
+    pub(crate) fn runtime(&self) -> &ScienceRuntimeIdentity {
+        &self.runtime
+    }
+}
+
 const SCIENCE_LAUNCH_ENVIRONMENT_EXPOSED_EXIT_CODE: i32 = 70;
 
 #[cfg(test)]
@@ -584,6 +602,31 @@ impl ScienceHostAdapter {
 
     pub(crate) fn probe_known(port: u16, runtime: &ScienceRuntimeIdentity) -> SandboxScienceState {
         probe_known_runtime(port, runtime)
+    }
+
+    pub(crate) fn prove_managed_healthy(
+        port: u16,
+        runtime: &ScienceRuntimeIdentity,
+    ) -> Option<ScienceManagedHealthyProof> {
+        let ownership = Self::managed_receipt(port, runtime)?;
+        if !Self::receipt_is_current(&ownership, runtime)
+            || Self::probe_known(port, runtime) != SandboxScienceState::RunningHealthy
+            || !Self::receipt_is_current(&ownership, runtime)
+        {
+            return None;
+        }
+        Some(ScienceManagedHealthyProof {
+            runtime: runtime.clone(),
+            port,
+            ownership,
+        })
+    }
+
+    pub(crate) fn revalidate_managed_healthy(proof: &ScienceManagedHealthyProof) -> bool {
+        proof.runtime.is_current()
+            && Self::receipt_is_current(&proof.ownership, &proof.runtime)
+            && Self::probe_known(proof.port, &proof.runtime) == SandboxScienceState::RunningHealthy
+            && Self::receipt_is_current(&proof.ownership, &proof.runtime)
     }
 
     pub(crate) fn probe_cached(

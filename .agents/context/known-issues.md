@@ -14,14 +14,24 @@
 
 新的唯一验收顺序是：**重要重构决策 → production source → exact artifact → isolated-live → authorized live**。当前映射、每层进入条件、授权边界和故障 fixture 边界只在[生产链路验收](../../docs/operations/real-machine-acceptance.md)维护；Science 运行细则见[Science 探针合同](../../docs/operations/science-probe-spec.md)。
 
-2026-08-12 当前最新 production source closure 固定为
-`next@18a67881c7e7d760fa8deb7f53e6ba246a32d94d`。Science runtime adoption 的 owner / caller /
-recovery / failure fixtures 已完成正式 clean-context 独立审查，结果为 `PASS`
-（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`）；受检 SHA 的 canonical GATE-SOURCE run
-`8db59abb85f6c7d5f8d5694626ee61dc` 为 15/15 suites、15/15 observations、runner exit 0。
-completion seal SHA-256 为 `7c36a8ef19d9c8000e93cd53beed565eb2c94da858d274eaf6285e9a40c9c6e0`，
-source snapshot manifest SHA-256 为 `259c2b18732bc4d128484b041d6927537d6ed3dbd6957e5bfcfc76f91cf68085`，
-且 snapshot HEAD 与上述 exact source SHA 一致。该 SHA 内的
+当前 worktree candidate 基于
+`next@9c91bec611f98f2d87e44db9edd5b5f51210240c`，正在修复 Science background update 将陈旧
+`science_runtime` 写成 `deferred_healthy` 的问题，并同步 active/pending 验收合同。由于候选含未提交
+源码和文档修改，没有可绑定的 clean exact SHA；正式 source review 与 canonical GATE-SOURCE 均为
+`NOT-RUN`，不得继承 `9c91bec` 或更早 SHA 的 source、artifact、installed 或 live PASS。
+
+`next@9c91bec611f98f2d87e44db9edd5b5f51210240c` 是最近一个 exact tested source：canonical
+GATE-SOURCE run `85a71ae64d72aeddb935a6b17a077c95` 为 15/15 suites、15/15 observations、runner exit 0，
+completion seal SHA-256 为 `98b3bc140dc00fbe5d4fad5b52d396246063ce314e5a124071939e9095295517`。
+但随后正式 source review 发现 1 个 MEDIUM runtime observation 缺口，以及本文已修正的 2 个 HIGH
+current-source / RM-21 evidence 漂移，因此结论为 `FAIL`；该 SHA 不是 production source closure。
+
+最近一条 source review 与 source gate 同时 `PASS` 的完整历史 tuple 是
+`next@18a67881c7e7d760fa8deb7f53e6ba246a32d94d`。其 canonical GATE-SOURCE run
+`8db59abb85f6c7d5f8d5694626ee61dc` 为 15/15 suites、15/15 observations、runner exit 0；completion
+seal SHA-256 为 `7c36a8ef19d9c8000e93cd53beed565eb2c94da858d274eaf6285e9a40c9c6e0`，source snapshot
+manifest SHA-256 为 `259c2b18732bc4d128484b041d6927537d6ed3dbd6957e5bfcfc76f91cf68085`。
+该 SHA 内的
 [ChangeRecord](../../quality/changes/next/CHG-SCIENCE-RUNTIME-ADOPTION-NEXT.json)
 已纳入 healthy/deferred 不重启、binding-only retention、legacy V1 → V2 fresh replay provenance
 hydration，以及 live/fresh compensation 共用 executable fingerprint 的修复与 fixture。该 `PASS`
@@ -49,14 +59,14 @@ cleanup 也已 PASS。因此有 credential 的 RM-47 最小 Provider/Science sco
 足额配额、三家缺 credential 与更深的逐 Provider capability card 仍未闭合，PDF 不再属于这些阻塞项。
 完整矩阵见
 [RM-47 日期化证据](../../docs/evidence/investigations/2026-08-11-rm47-authorized-live-providers.md)。
-该段只绑定 `0ecc7e2` 的历史 live tuple；当前 `18a6788` installed matrix 不继承其 Kimi
+该段只绑定 `0ecc7e2` 的历史 live tuple；`18a6788` installed matrix 不继承其 Kimi
 server-search PASS，并以 2026-08-12 日期化证据的逐项判定为准。
 
 RM-46 的 `d74221e2948f32cd67db0aed8920af6122d0c798` source gate 与 exact-artifact
 local-mock UI PASS 继续作为独立历史层；它不包含真实 Science/provider。完整边界见
 [RM-46 日期化证据](../../docs/evidence/investigations/2026-08-11-rm46-provider-configuration-ux.md)。
 
-当前最新 Science adoption / installed tuple 为
+当前已安装 artifact 与最近一条完整 Science adoption artifact/live 历史 tuple 仍绑定
 `next@18a67881c7e7d760fa8deb7f53e6ba246a32d94d`：Acceptance artifact 的 canonical / Desktop /
 Gateway identity 为 `bb19a7e6…6e9109` / `56f0bde9…bec612` / `b8e96803…57819b`，递归 G1
 为 `PASS`；Science 0.1.25 adoption isolated-live 完成 healthy `deferred_healthy`、cold selected、
@@ -267,15 +277,17 @@ Provider compatibility slice 的 2026-08-11 code-bearing source 为
 只补 test fixture 和过时 integration 断言，`2136803ced6a4c45a9ba6ce7910110fdf49ce053`
 只补日期化 evidence。`0ecc7e2` 的 canonical run `903ebd2e365ac12274639fc676ca9388` 为
 15/15 suites、15/15 observations、runner exit 0，completion seal SHA-256 为
-`a7d31bb706ef8acb57e44abe640d3f24387cc76d7eb956fdad261c40f7d4f102`。整体当前 frozen production
-source 已前进到上文 `18a67881`。旧 slice 曾重新回读
+`a7d31bb706ef8acb57e44abe640d3f24387cc76d7eb956fdad261c40f7d4f102`。该历史线之后先由
+`18a67881` 形成完整 accepted tuple，再前进到上文 `9c91bec` exact tested / current worktree candidate。
+旧 slice 曾重新回读
 `6b1b999..e1832bd` production diff 与 live evidence，未发现漏提交的 tracked 源码；该回读不是
-formal independent clean-context review。当前 installed / live 结论必须绑定 `18a67881` 的独立
+formal independent clean-context review。已安装 artifact / live 结论仍只绑定 `18a67881` 的独立
 artifact receipt；SSH、signing 与 release 仍未建立。
 
 - **Gateway 锁边界**：`06b630b` 已把 candidate log、命令与环境构造、Skill bridge 配置 staging、spawn 和 health poll 全部移出 `AppState`；锁内 reservation 与 generation + full candidate-owner CAS 守护接受，replacement 不被覆盖，不确定 child 由独立 registry 持有，destructive caller 对 typed uncertain stop fail closed。该 exact SHA 的 formal independent clean-context review 为 `PASS`（`BLOCK/HIGH/MEDIUM/LOW=0/0/0/0`），canonical 15-suite 为 15/15 `PASS`。
 - **跨文件恢复边界**：history full-snapshot restore 已有 typed complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable outcome；其他 sibling full-snapshot restore / multi-file crash boundary 尚未统一。
 - **Science adoption record**：`18a6788` 已建立只含 allowlisted executable metadata 的 predecessor / candidate / normalized diff ledger，区分 `deferred_healthy`、`rejected` 与 `selected`，并把 managed receipt schema v2 绑定到 launch/finalize milestone；schema v1 只读兼容且 provenance unknown。对应 ChangeRecord、正式 source clean-context review 和 canonical 15-suite 均已 `PASS`；同 SHA 的独立 Acceptance G1 与 adoption G2 又建立 exact-artifact isolated-live scoped `PASS`，normal artifact 已 exact 安装并完成 installed/runtime 与真实 Provider 分项。Signing、公证与 release 仍未建立。
+- **Science update observation**：`9c91bec` review 证明 background selection 曾直接消费 source probe 前克隆的 `science_runtime`，无法证明 daemon、receipt、listener 或 full owner 仍健康。当前未提交 candidate 已把 pending publication 与 observation 解耦，并要求 lifecycle observed-context、managed-health proof、generation + full-owner CAS 以及 ledger writer-lock 内最终重验。完整 608-test Desktop Rust suite 已 `PASS`（567 passed / 41 approved ignored），metadata 与 inventory focused checks 已 `PASS`；修复前 formal clean-context review 的 2 个 MEDIUM 后续修改尚待 fresh review，clean exact-SHA GATE-SOURCE 仍为 `NOT-RUN`。
 
 ## 当前证据缺口
 
@@ -283,12 +295,13 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| 一键入口、Gateway / Science 启动与 finalize | `18a6788` adoption exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合；Provider compatibility source 见 `e1832bd` / `0ecc7e2` | `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；Test / normal 不能互相替代，Developer ID / release 不外推 | 当前 tuple adoption G2 `PASS(scope=science-adoption-isolated-live)`；`a60c2ee` 的完整 B-RUNTIME/B-CORE/B-CONTEXT 只保留历史 | installed normal product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
-| runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；`18a6788` 的 adoption review 与 canonical 15-suite `PASS` | 当前 `18a6788` Test G1 / normal identity `PASS` | healthy deferred 不重启、cold selected、reopen same owner、最终 exact cleanup `PASS`；replacement/race/crash 仍由 source fixture 证明 | installed normal 每个 Provider case 的产品 Stop 与最终 Desktop / Gateway / Science 清理 `PASS` |
-| authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；`18a6788` 闭合 receipt/action/binding/runtime provenance 与 live/fresh compensation 语义，正式 review 与 canonical 15-suite `PASS` | 当前 `18a6788` G1 exact artifact `PASS` | receipt v2 / action / binding / finalize / reopen exact association `PASS`；通用 manifest 的 INCONCLUSIVE 不覆盖专项 result | installed happy path `PASS`；crash window 仍不由 live happy path 外推 |
+| 一键入口、Gateway / Science 启动与 finalize | 历史 `18a6788` adoption exact-source review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合；当前 worktree 的完整 source closure `NOT-RUN` | 历史 `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；当前 candidate artifact `NOT-RUN` | 历史 `18a6788` adoption G2 `PASS(scope=science-adoption-isolated-live)`；当前 candidate `NOT-RUN` | installed normal 历史 product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
+| runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、profile-switch rollback、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；历史 `18a6788` review/gate `PASS`，当前 worktree closure `NOT-RUN` | 历史 `18a6788` Test G1 / normal identity `PASS`；当前 candidate `NOT-RUN` | 历史 healthy deferred/cold selected/reopen/cleanup `PASS`；replacement/race/crash 由 source fixture 证明，当前 candidate live `NOT-RUN` | installed normal 历史 Provider Stop/cleanup `PASS` |
+| Science fixed active / pending update adoption | 当前 worktree 已实现 managed-health proof + generation/full-owner CAS；608-test Desktop Rust suite `PASS`，metadata/inventory focused checks `PASS`；fresh clean-context review 与 clean exact-SHA gate `NOT-RUN`，`9c91bec` 旧 gate/review不可继承 | `NOT-RUN`；不得继承 `18a6788` artifact | `NOT-RUN`；RM-21 必须按 active/pending 与 next-cold-start 合同重跑 | `NOT-RUN`；真实 updater/Science 需另行授权 |
+| authority finalize、compensation 与 replay | durable step intent/effect/outcome、lease、crash/idempotence fixture 与共享 transaction stop executor 已映射；历史 `18a6788` 闭合 receipt/action/binding/runtime provenance 与 live/fresh compensation 语义，review/gate `PASS`；当前 worktree closure `NOT-RUN` | 历史 `18a6788` G1 exact artifact `PASS`；当前 candidate `NOT-RUN` | 历史 receipt v2 / action / binding / finalize / reopen exact association `PASS`；当前 candidate `NOT-RUN` | 历史 installed happy path `PASS`；crash window仍不由 live happy path外推 |
 | history full-snapshot recovery | history durable intent/effect/outcome、effect lease 与共享 transaction prior-stop executor 已映射；`a60c2ee` canonical 15-suite `PASS` | 同一 `a60c2ee` G1 exact artifact `PASS` | production IPC + synthetic history `NOT-RUN` | 真实用户历史不作默认 gate |
 | Science host adapter 与 Skill host bridge | `a60c2ee` 闭合 acceptance host Gateway fixture 注入；comprehensive source review 未替代 Skill 专项能力审查 | 同一 `a60c2ee` G1 exact artifact `PASS`；只证明 bundle identity，不证明 Skill runtime | current tuple `B-SKILL-01=NOT-RUN`；旧 artifact 的安全停止/公共 GitHub 尝试只保留为历史问题证据 | 真实 Skill / domain execution分项 `NOT-RUN` |
-| provider protocol capabilities | `e1832bd` Kimi server-search compatibility + targeted tests；`0ecc7e2` canonical 15-suite `PASS`；`a60c2ee` protocol matrix 与 `d74221e` RM-46 保留各自历史 gate；当前 adoption source 为 `18a6788` | 当前 normal / installed Gateway identity `8a619b94…5540` 已固定；Test 与 normal artifact 分层，不继承旧 G1/RM-46 artifact | `a60c2ee` `B-PROVIDER-01` 与 `d74221e` RM-46 只保留历史 local-mock gate | 当前 installed live：DeepSeek / SiliconFlow text + UI incremental + tools `PASS`；Qwen text + UI incremental `PASS`、tool `INCONCLUSIVE(400)`；Kimi text + UI incremental `PASS`，完整 tools / reasoning / native search `INCONCLUSIVE`；Xiaomi / Zhipu / MiniMax text + UI incremental `PASS`；OpenRouter `INCONCLUSIVE(quota_402)`；Codex / OpenCode 未发请求；stop/tab/runtime cleanup `PASS` |
+| provider protocol capabilities | `e1832bd` Kimi server-search compatibility + targeted tests；`0ecc7e2` canonical 15-suite `PASS`；`a60c2ee` protocol matrix 与 `d74221e` RM-46 保留各自历史 gate；installed adoption source 仍为历史 `18a6788`，当前 worktree source closure `NOT-RUN` | installed Gateway identity `8a619b94…5540` 已固定；当前 candidate artifact `NOT-RUN` | `a60c2ee` `B-PROVIDER-01` 与 `d74221e` RM-46 只保留历史 local-mock gate | installed live 历史结果：DeepSeek / SiliconFlow text + UI incremental + tools `PASS`；Qwen text + UI incremental `PASS`、tool `INCONCLUSIVE(400)`；Kimi text + UI incremental `PASS`，完整 tools / reasoning / native search `INCONCLUSIVE`；Xiaomi / Zhipu / MiniMax text + UI incremental `PASS`；OpenRouter `INCONCLUSIVE(quota_402)`；Codex / OpenCode 未发请求；stop/tab/runtime cleanup `PASS` |
 
 2026-08-07 的 `c531006` controller 闭环已固定完整 artifact / Science tree manifest、fixture
 receipt、provider launch receipt 与 network isolation receipt。pre-run manifest SHA-256 为

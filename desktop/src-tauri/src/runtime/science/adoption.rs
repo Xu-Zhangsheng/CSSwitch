@@ -754,36 +754,70 @@ pub(crate) fn record_deferred_science_runtime_candidate(
         Ok(None) => return Ok(()),
         Err(rejection) => return record_rejected_science_runtime_attempt(Some(running), rejection),
     };
-    record_deferred_science_runtime_observation(running, &candidate)
+    record_deferred_science_runtime_observations(running, &candidate)
 }
 
-fn record_deferred_science_runtime_observation(
+pub(crate) fn record_deferred_science_runtime_observation(
+    proof: ScienceManagedHealthyProof,
+    candidate: &ScienceRuntimeIdentity,
+) -> Result<(), String> {
+    let root = science_adoption_store_root();
+    mutate_science_adoption_ledger(&root, |ledger| {
+        let pending = pinned_runtime_from_identity(candidate)?;
+        let (selection, _, _) = read_science_runtime_selection_snapshot(&root)?;
+        if selection.pending.as_ref() != Some(&pending) {
+            return Err("Science pending update 在 adoption 记账前已变化".into());
+        }
+        if !ScienceHostAdapter::revalidate_managed_healthy(&proof) {
+            return Err("Science managed healthy proof 在 adoption 记账前已失效".into());
+        }
+        let predecessor = science_executable_observation(proof.runtime())?;
+        let candidate = science_executable_observation(candidate)?;
+        append_deferred_science_runtime_observations(ledger, predecessor, candidate);
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn record_deferred_science_runtime_observations(
     running: &ScienceRuntimeIdentity,
     candidate: &ScienceRuntimeIdentity,
 ) -> Result<(), String> {
     let predecessor = science_executable_observation(running)?;
     let candidate = science_executable_observation(candidate)?;
-    if predecessor == candidate {
-        return Ok(());
-    }
     mutate_science_adoption_ledger(&science_adoption_store_root(), |ledger| {
-        if ledger.attempts.last().is_some_and(|attempt| {
-            attempt.decision == ScienceAdoptionDecision::DeferredHealthy
-                && attempt.predecessor.as_ref() == Some(&predecessor)
-                && attempt.candidate.as_ref() == Some(&candidate)
-        }) {
-            return Ok(());
-        }
-        append_science_update_attempt(
+        append_deferred_science_runtime_observations(
             ledger,
-            Some(predecessor),
-            Some(candidate),
-            ScienceAdoptionDecision::DeferredHealthy,
-            None,
-            None,
+            predecessor.clone(),
+            candidate.clone(),
         );
         Ok(())
     })
+}
+
+fn append_deferred_science_runtime_observations(
+    ledger: &mut ScienceAdoptionLedger,
+    predecessor: ScienceExecutableObservation,
+    candidate: ScienceExecutableObservation,
+) {
+    if predecessor == candidate {
+        return;
+    }
+    if ledger.attempts.last().is_some_and(|attempt| {
+        attempt.decision == ScienceAdoptionDecision::DeferredHealthy
+            && attempt.predecessor.as_ref() == Some(&predecessor)
+            && attempt.candidate.as_ref() == Some(&candidate)
+    }) {
+        return;
+    }
+    append_science_update_attempt(
+        ledger,
+        Some(predecessor),
+        Some(candidate),
+        ScienceAdoptionDecision::DeferredHealthy,
+        None,
+        None,
+    );
 }
 
 fn advance_science_runtime_adoption_attempt(
