@@ -26,6 +26,7 @@ use super::pending_cleanup::{
 use super::recovery::RuntimeTransactionRestoreExpectation;
 use super::transaction_science_stop::{
     execute_transaction_science_stop_with, TransactionScienceStopBoundary,
+    TransactionScienceStopTarget,
 };
 
 const HISTORY_RECOVERY_MANIFEST_FILE: &str = ".csswitch-history-recovery.v1.json";
@@ -1005,9 +1006,11 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
         let stop_result = execute_transaction_science_stop_with(
             &state,
             lifecycle,
-            TransactionScienceStopBoundary::HistoryRecoveryPriorStop,
-            runtime,
-            expected_port,
+            TransactionScienceStopTarget::new(
+                TransactionScienceStopBoundary::HistoryRecoveryPriorStop,
+                runtime,
+                expected_port,
+            ),
             || {
                 Ok(ScienceStopRequest::exact(
                     runtime,

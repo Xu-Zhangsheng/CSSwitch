@@ -21,10 +21,10 @@ use super::{
     AuthorityCleanupOutcome, AuthorityCleanupPhase, AuthorityCopyBudget, AuthoritySnapshotCategory,
     AuthoritySnapshotScope, AuthorityTransaction, AuthorityTreeSnapshot, OneClickAuthoritySnapshot,
     OneClickJournalProgress, OneClickTransactionIdentity, PendingCleanupEntry,
-    RegisteredAuthorityCleanup, TransactionScienceStopBoundary, MAX_AUTHORITY_FULL_COPY_FILE_BYTES,
-    MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES, MAX_AUTHORITY_SNAPSHOT_ENTRIES,
-    MAX_AUTHORITY_SNAPSHOT_FILE_BYTES, MAX_AUTHORITY_SNAPSHOT_TOTAL_BYTES,
-    PENDING_CLEANUP_MARKER_FILE, SCIENCE_OWNED_OPAQUE_ROOTS,
+    RegisteredAuthorityCleanup, TransactionScienceStopBoundary, TransactionScienceStopTarget,
+    MAX_AUTHORITY_FULL_COPY_FILE_BYTES, MAX_AUTHORITY_FULL_COPY_TOTAL_BYTES,
+    MAX_AUTHORITY_SNAPSHOT_ENTRIES, MAX_AUTHORITY_SNAPSHOT_FILE_BYTES,
+    MAX_AUTHORITY_SNAPSHOT_TOTAL_BYTES, PENDING_CLEANUP_MARKER_FILE, SCIENCE_OWNED_OPAQUE_ROOTS,
 };
 use crate::config::{self, Config, RuntimeBindingCommit};
 use crate::provider_contracts::ModelPolicy;
@@ -166,9 +166,7 @@ fn transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publica
                 execute_transaction_science_stop_with(
                     &worker_state,
                     worker_lifecycle.as_ref(),
-                    boundary,
-                    &claimed_runtime,
-                    18765,
+                    TransactionScienceStopTarget::new(boundary, &claimed_runtime, 18765),
                     || Ok(ScienceStopRequest::recover(Some(&claimed_runtime))),
                     move |_request| {
                         stop_started_tx.send(()).unwrap();
@@ -230,9 +228,7 @@ fn transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publica
         let failed = execute_transaction_science_stop_with(
             &state,
             &lifecycle,
-            boundary,
-            &prior,
-            18765,
+            TransactionScienceStopTarget::new(boundary, &prior, 18765),
             || Ok(ScienceStopRequest::recover(Some(&prior))),
             |_request| {
                 (
@@ -259,9 +255,7 @@ fn transaction_scoped_science_stop_boundaries_release_read_model_and_cas_publica
         let stopped = execute_transaction_science_stop_with(
             &state,
             &lifecycle,
-            boundary,
-            &prior,
-            18765,
+            TransactionScienceStopTarget::new(boundary, &prior, 18765),
             || Ok(ScienceStopRequest::recover(Some(&prior))),
             |_request| {
                 (
@@ -315,9 +309,11 @@ fn transaction_science_stop_probe_is_lock_free_and_rechecks_owner_before_effect(
         execute_transaction_science_stop_with(
             &worker_state,
             worker_lifecycle.as_ref(),
-            TransactionScienceStopBoundary::ColdPriorStop,
-            &claimed_runtime,
-            18765,
+            TransactionScienceStopTarget::new(
+                TransactionScienceStopBoundary::ColdPriorStop,
+                &claimed_runtime,
+                18765,
+            ),
             || {
                 probe_started_tx.send(()).unwrap();
                 release_probe_rx.recv().unwrap();

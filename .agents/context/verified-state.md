@@ -9,7 +9,7 @@
 
 | 层 | 当前可声明的事实 |
 |---|---|
-| Current production-code candidate | Science managed-health proof / full-owner CAS 与合同修复的 production-code-bearing commit 为 `next@9476be5cd23ff7d78d01b59a4aa392af00bba904`；608-test Desktop Rust suite `PASS`（567 passed / 41 approved ignored），frontend、metadata、inventory 与文档治理 checks `PASS`；绑定 `9c91bec` + tracked binary diff `61542943…6612` 的正式独立 candidate reviews 均为 `PASS`、四级 finding 全 0；clean exact-SHA canonical GATE-SOURCE 仍为 `NOT-RUN`，下游 artifact / installed / live 不得继承 |
+| Current source candidate | 当前 worktree 基于 `next@dfb6f59114cd54aacae91a0c94a7baaf69a71895`，含未提交的 Rust 1.96.1 clippy hygiene 修复；`bash test/run-rust.sh` 为 `PASS`：Desktop 567 passed / 41 approved ignored、Gateway 290 library + 1 CLI integration passed，两套 fmt 与 strict clippy 全绿；绑定当前 base + diff 的 fresh independent code / test / documentation candidate reviews 均为 `PASS`、四级 finding 全 0；clean exact-SHA completion review 与 canonical GATE-SOURCE 仍为 `NOT-RUN`，下游 artifact / installed / live 不得继承 |
 | Latest canonical-gated source | `next@9c91bec611f98f2d87e44db9edd5b5f51210240c` 的 canonical run `85a71ae64d72aeddb935a6b17a077c95` 为 15/15 suites、15/15 observations、exit 0，completion seal `98b3bc14…95517`；但正式 source review 发现 1 个 MEDIUM runtime observation 缺口和 2 个 HIGH evidence/contract 漂移，结论为 `FAIL`，不是 production source closure |
 | Last accepted source / test lineage | 历史 `next@18a67881c7e7d760fa8deb7f53e6ba246a32d94d`；canonical run `8db59abb85f6c7d5f8d5694626ee61dc` 为 15/15 suites、15/15 observations、exit 0；completion seal `7c36a8ef…c9c6e0`；正式 source review `PASS`；只绑定该历史 tuple |
 | Historical Acceptance artifact / G1 | 从 `18a67881` 新构建 `com.csswitch.test` 0.8.4；canonical `bb19a7e6…6e9109`，Desktop `56f0bde9…bec612`，Gateway `b8e96803…57819b`；G1 `PASS`；临时 App 在正式 review 后已删除，receipt 保留 |
@@ -22,11 +22,13 @@
 
 本轮开始时实时复核 `next` HEAD 为 `9c91bec611f98f2d87e44db9edd5b5f51210240c`。随后形成的
 managed-health proof、owner race fixture、inventory 与合同修改已提交为
-`9476be5cd23ff7d78d01b59a4aa392af00bba904`；其上的本次 Context refresh 只更新当前状态，不改变
-production / test。另有受保护的未跟踪 `.tmp-bskill-r9-driver.py`，本轮未读取、未修改。
-candidate reviews 精确绑定 base `9c91bec` 与 tracked binary diff
+`9476be5cd23ff7d78d01b59a4aa392af00bba904`；其上的 Context refresh
+`dfb6f59114cd54aacae91a0c94a7baaf69a71895` 只更新当时状态，不改变 production / test。当前
+worktree 又形成未提交的 Rust 1.96.1 clippy hygiene source candidate；另有受保护的未跟踪
+`.tmp-bskill-r9-driver.py`，本轮未读取、未修改。Science candidate reviews 精确绑定 base `9c91bec` 与 tracked binary diff
 `61542943a9865b7ab3db61f31246f0dbc1ce4bbdb1db494a190ccfd5a37a6612`；这不允许继承
-`9c91bec` 的旧 gate，也不会改写 `18a67881` 的历史证据。当前 HEAD 与 worktree 仍须在使用前实时复核。
+`9c91bec` 的旧 gate，也不会改写 `18a67881` 的历史证据；它们也不替代当前新增 diff 的 fresh
+clean exact-SHA completion review / canonical gate。当前 HEAD 与 worktree 仍须在使用前实时复核。
 
 Provider 结果必须按 operation 分项解释：`Science UI incremental` 只证明真实 Science 页面出现
 多次增量状态，不等于 Gateway / Provider protocol-level stream + nonstream 双模式；
@@ -45,9 +47,8 @@ SHA-256 为 `c30342f5…a01ea`，review receipt 为 `bb649e6a…f6944`，12 项 
 历史，但没有运行中的 Gateway / Science。旧安装 backup 与四个已审临时 App bundle 已精确删除，
 不可恢复。
 
-仍不是当前 PASS：`9476be5` candidate 的 clean exact-SHA checkout completion review / canonical source
-gate 及全部下游 artifact/runtime 层；当前 Rust 1.96.1 下 `bash test/run-rust.sh` 仍因 base 已存在的
-clippy `-D warnings` 债务为 `FAIL`；完整 protocol-level stream/nonstream 双模式、Kimi reasoning/native search、
+仍不是当前 PASS：当前 worktree candidate 的 clean exact-SHA completion review / canonical source
+gate 及全部下游 artifact/runtime 层；完整 protocol-level stream/nonstream 双模式、Kimi reasoning/native search、
 Qwen/Kimi 完整 tools card、OpenRouter 足额配额、Codex/OpenCode 请求、真实 SSH server、
 Skill/MCP 新功能、Science 全领域行为、Intel/Windows/WSL、Developer ID/notarization/Gatekeeper、
 新 DMG 或公开 Release。

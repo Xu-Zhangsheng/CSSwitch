@@ -80,6 +80,7 @@ use ssh_preflight::*;
 #[cfg(test)]
 use transaction_science_stop::{
     execute_transaction_science_stop_with, TransactionScienceStopBoundary,
+    TransactionScienceStopTarget,
 };
 
 #[cfg(test)]

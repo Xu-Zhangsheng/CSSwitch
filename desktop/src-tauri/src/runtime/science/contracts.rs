@@ -260,7 +260,7 @@ pub(crate) enum ScienceStopFailureKind {
 pub(crate) struct ScienceStopFailure {
     kind: ScienceStopFailureKind,
     message: String,
-    confirmed_runtime: Option<ScienceRuntimeIdentity>,
+    confirmed_runtime: Option<Box<ScienceRuntimeIdentity>>,
 }
 
 impl ScienceStopFailure {
@@ -273,7 +273,7 @@ impl ScienceStopFailure {
     }
 
     pub(super) fn with_confirmed_runtime(mut self, runtime: ScienceRuntimeIdentity) -> Self {
-        self.confirmed_runtime = Some(runtime);
+        self.confirmed_runtime = Some(Box::new(runtime));
         self
     }
 
@@ -310,7 +310,7 @@ impl ScienceStopFailure {
     }
 
     pub(crate) fn confirmed_runtime(&self) -> Option<&ScienceRuntimeIdentity> {
-        self.confirmed_runtime.as_ref()
+        self.confirmed_runtime.as_deref()
     }
 
     #[cfg(test)]

@@ -40,9 +40,9 @@ mod one_click;
 mod status;
 
 pub(crate) use gateway::FetchModelsReq;
-pub(crate) use lifecycle::{
-    execute_process_local_science_stop_with, stop_sandbox_state, UiSettings,
-};
+#[cfg(test)]
+pub(crate) use lifecycle::stop_sandbox_state;
+pub(crate) use lifecycle::{execute_process_local_science_stop_with, UiSettings};
 pub(crate) use one_click::one_click_login_cmd;
 
 #[tauri::command]

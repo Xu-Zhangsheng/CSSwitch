@@ -28,9 +28,11 @@ where
     execute_transaction_science_stop_with(
         state,
         lifecycle,
-        TransactionScienceStopBoundary::ColdPriorStop,
-        prior_runtime,
-        prior_port,
+        TransactionScienceStopTarget::new(
+            TransactionScienceStopBoundary::ColdPriorStop,
+            prior_runtime,
+            prior_port,
+        ),
         || Ok(claim()),
         execute,
         |_state, _confirmed_runtime| {},

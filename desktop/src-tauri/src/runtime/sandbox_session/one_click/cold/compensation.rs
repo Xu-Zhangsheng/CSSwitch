@@ -417,9 +417,11 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         execute_transaction_science_stop_with(
             state,
             lifecycle,
-            TransactionScienceStopBoundary::LiveCompensationCleanup,
-            &failure.rollback.launch_runtime,
-            failure.rollback.sandbox_port,
+            TransactionScienceStopTarget::new(
+                TransactionScienceStopBoundary::LiveCompensationCleanup,
+                &failure.rollback.launch_runtime,
+                failure.rollback.sandbox_port,
+            ),
             || {
                 let ownership = match failure.rollback.launch_token.as_ref() {
                     Some(token) => ScienceStopOwnershipReceipt::from_managed_launch(token),

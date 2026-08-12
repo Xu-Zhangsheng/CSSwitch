@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::runtime::operation::{self, OperationStage, OperationTrace};
 
-#[cfg(any(test, feature = "acceptance-build"))]
+#[cfg(feature = "acceptance-build")]
 const ACCEPTANCE_PROVIDER_BASE_URL_ENV: &str = "CSSWITCH_ACCEPTANCE_PROVIDER_BASE_URL";
 
 #[cfg(any(test, feature = "acceptance-build"))]

@@ -35,6 +35,27 @@ impl TransactionScienceStopBoundary {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TransactionScienceStopTarget<'a> {
+    boundary: TransactionScienceStopBoundary,
+    expected_runtime: &'a ScienceRuntimeIdentity,
+    expected_port: u16,
+}
+
+impl<'a> TransactionScienceStopTarget<'a> {
+    pub(super) fn new(
+        boundary: TransactionScienceStopBoundary,
+        expected_runtime: &'a ScienceRuntimeIdentity,
+        expected_port: u16,
+    ) -> Self {
+        Self {
+            boundary,
+            expected_runtime,
+            expected_port,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct TransactionScienceStopOwner {
     generation: u64,
@@ -87,13 +108,10 @@ impl TransactionScienceStopOwner {
 /// The caller commits durable intent first. AppState protects only owner
 /// snapshots and CAS publication. Request probing and stop/TERM/KILL/wait are
 /// external work and therefore execute without the AppState mutex.
-#[allow(clippy::result_large_err)]
 pub(super) fn execute_transaction_science_stop_with<Claim, Execute, AfterPublish>(
     state: &SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
-    boundary: TransactionScienceStopBoundary,
-    expected_runtime: &ScienceRuntimeIdentity,
-    expected_port: u16,
+    target: TransactionScienceStopTarget<'_>,
     claim_exact_request: Claim,
     execute: Execute,
     after_publish: AfterPublish,
@@ -103,6 +121,11 @@ where
     Execute: FnOnce(ScienceStopRequest) -> (ScienceStopOutcome, bool),
     AfterPublish: FnOnce(&mut AppState, Option<&ScienceRuntimeIdentity>),
 {
+    let TransactionScienceStopTarget {
+        boundary,
+        expected_runtime,
+        expected_port,
+    } = target;
     let owner = {
         let current = lock(state);
         TransactionScienceStopOwner::claim(&current, lifecycle.current_generation())

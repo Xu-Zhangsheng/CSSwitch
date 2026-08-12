@@ -558,9 +558,11 @@ fn replay_science_cleanup<R: Runtime>(
     let result = execute_transaction_science_stop_with(
         state,
         lifecycle,
-        TransactionScienceStopBoundary::CompensationReplayCleanup,
-        &runtime,
-        manifest.sandbox_port,
+        TransactionScienceStopTarget::new(
+            TransactionScienceStopBoundary::CompensationReplayCleanup,
+            &runtime,
+            manifest.sandbox_port,
+        ),
         || {
             let receipt = ScienceHostAdapter::managed_receipt(manifest.sandbox_port, &runtime)
                 .ok_or_else(|| {

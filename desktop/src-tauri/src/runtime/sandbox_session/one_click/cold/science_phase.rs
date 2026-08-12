@@ -225,9 +225,11 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
                 execute_transaction_science_stop_with(
                     state,
                     lifecycle,
-                    TransactionScienceStopBoundary::ManagedDbRestart,
-                    launch_runtime,
-                    sport,
+                    TransactionScienceStopTarget::new(
+                        TransactionScienceStopBoundary::ManagedDbRestart,
+                        launch_runtime,
+                        sport,
+                    ),
                     || {
                         Ok(ScienceStopRequest::exact(
                             launch_runtime,

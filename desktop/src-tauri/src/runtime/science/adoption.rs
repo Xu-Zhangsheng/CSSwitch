@@ -544,8 +544,8 @@ fn compact_science_adoption_ledger(ledger: &mut ScienceAdoptionLedger) -> Result
             .enumerate()
             .take(recent_start)
             .find(|(_, attempt)| {
-                !referenced.contains(&attempt.attempt_id)
-                    && !(attempt.decision == ScienceAdoptionDecision::Selected
+                !(referenced.contains(&attempt.attempt_id)
+                    || attempt.decision == ScienceAdoptionDecision::Selected
                         && attempt.milestone != ScienceAdoptionMilestone::Finalized)
             })
             .map(|(index, _)| index);

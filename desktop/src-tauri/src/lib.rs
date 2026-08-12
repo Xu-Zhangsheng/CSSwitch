@@ -522,6 +522,10 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "native-exit cleanup keeps independently injected cancel/wait/signal and Science/Gateway effects so ordering and failure tests exercise the production boundary"
+)]
 fn cleanup_for_exit_with<R, Cancel, Wait, Term, Kill, ClaimScience, ExecuteScience, StopGateway>(
     app: &tauri::AppHandle<R>,
     mut cancel_codex: Cancel,

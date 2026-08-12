@@ -1,20 +1,5 @@
 use super::*;
 
-#[allow(clippy::result_large_err)]
-pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    st: &mut AppState,
-) -> crate::runtime::science::ScienceStopOutcome {
-    let runtime = st.science_runtime.clone();
-    let request = crate::runtime::science::ScienceStopRequest::recover(runtime.as_ref());
-    let result = ScienceHostAdapter::stop(app, &mut st.sandbox, &mut st.sandbox_url, request);
-    if let Ok(verified) = result.as_ref() {
-        st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
-        st.science_runtime = None;
-    }
-    result
-}
-
 fn require_confirmed_gateway_stop(
     outcome: crate::GatewayStopOutcome,
     context: &str,
@@ -508,4 +493,19 @@ pub(super) fn exit_after_stop_success(
     stopped?;
     exit();
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn stop_sandbox_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    st: &mut AppState,
+) -> crate::runtime::science::ScienceStopOutcome {
+    let runtime = st.science_runtime.clone();
+    let request = crate::runtime::science::ScienceStopRequest::recover(runtime.as_ref());
+    let result = ScienceHostAdapter::stop(app, &mut st.sandbox, &mut st.sandbox_url, request);
+    if let Ok(verified) = result.as_ref() {
+        st.science_confirmed_stopped = verified.confirmed_runtime().cloned();
+        st.science_runtime = None;
+    }
+    result
 }

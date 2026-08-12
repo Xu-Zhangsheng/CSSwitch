@@ -295,7 +295,7 @@ fn snapshot_science_executable(
     let mut source = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(&candidate)
+        .open(candidate)
         .map_err(|error| format!("打开 {source_label} Science executable 失败：{error}"))?;
     let source_before = source
         .metadata()

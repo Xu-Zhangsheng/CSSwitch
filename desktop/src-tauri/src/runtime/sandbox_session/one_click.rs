@@ -48,6 +48,7 @@ use super::route_reconcile::configure_third_party_best_effort;
 use super::ssh_preflight::*;
 use super::transaction_science_stop::{
     execute_transaction_science_stop_with, TransactionScienceStopBoundary,
+    TransactionScienceStopTarget,
 };
 
 mod cold;
@@ -482,6 +483,10 @@ pub(crate) fn interrupted_compensation_requires_pre_auth_replay() -> Result<bool
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "test-only fixture exposes each durable compensation input explicitly so crash-replay tests cannot inherit hidden ambient state"
+)]
 pub(super) fn test_begin_replayable_compensation(
     dir: &Path,
     authority: &AuthorityTransaction,
@@ -726,9 +731,11 @@ pub(crate) fn force_restart_science_for_active<R: Runtime>(
                 execute_transaction_science_stop_with(
                     &state,
                     lifecycle,
-                    TransactionScienceStopBoundary::ProfileSwitchRollback,
-                    &runtime,
-                    cfg.sandbox_port,
+                    TransactionScienceStopTarget::new(
+                        TransactionScienceStopBoundary::ProfileSwitchRollback,
+                        &runtime,
+                        cfg.sandbox_port,
+                    ),
                     || {
                         let receipt =
                             ScienceHostAdapter::managed_receipt(cfg.sandbox_port, &runtime)
