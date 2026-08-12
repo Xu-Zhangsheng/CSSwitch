@@ -860,6 +860,10 @@ fn run_second_instance_callback(app: &tauri::AppHandle) {
     );
 }
 
+fn should_emit_science_runtime_update_event(value: &serde_json::Value) -> bool {
+    value["check_status"] == "checked" && !value["pending_update"].is_null()
+}
+
 fn start_science_runtime_update_scheduler(app: tauri::AppHandle) {
     let _ = std::thread::Builder::new()
         .name("science-runtime-update".into())
@@ -876,7 +880,7 @@ fn start_science_runtime_update_scheduler(app: tauri::AppHandle) {
                 if let Ok(value) =
                     runtime::science::check_science_runtime_update(&version_cache, running.as_ref())
                 {
-                    if !value["pending_update"].is_null() {
+                    if should_emit_science_runtime_update_event(&value) {
                         let _ = app.emit("science-runtime://update", value);
                     }
                 }

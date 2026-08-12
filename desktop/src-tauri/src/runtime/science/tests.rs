@@ -503,6 +503,29 @@ fn background_science_update_check_is_due_once_per_day() {
         !science_runtime_update_due(Some(1000), 999),
         "clock rollback must not permit a second source probe"
     );
+    let pending_projection = serde_json::json!({
+        "check_status": "checked",
+        "pending_update": {"sha256": "a".repeat(64)},
+    });
+    assert!(crate::should_emit_science_runtime_update_event(
+        &pending_projection
+    ));
+    for quiet_projection in [
+        serde_json::json!({
+            "check_status": "pending_choice_waiting",
+            "pending_update": {"sha256": "a".repeat(64)},
+        }),
+        serde_json::json!({"check_status": "checked", "pending_update": null}),
+        serde_json::json!({
+            "check_status": "stale_result_discarded",
+            "pending_update": {"sha256": "a".repeat(64)},
+        }),
+    ] {
+        assert!(
+            !crate::should_emit_science_runtime_update_event(&quiet_projection),
+            "only the transition that creates a new pending choice may emit an update event"
+        );
+    }
 
     let active = SciencePinnedRuntime {
         source: "installed_app".into(),
