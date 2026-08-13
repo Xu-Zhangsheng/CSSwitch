@@ -1,6 +1,7 @@
 mod archive;
 mod bundle;
 mod github;
+mod inspection;
 mod install;
 mod listing;
 mod science;
@@ -16,6 +17,12 @@ pub use bundle::{
 pub use github::{
     install_github_package, install_github_package_with_progress, install_github_skill,
     parse_github_package_source, parse_github_source, GithubPackageSource, GithubSource,
+};
+pub use inspection::{
+    inspect_github_skill_archive, CompatibilityStatus, ComponentEdge, ComponentGraph,
+    ComponentKind, ComponentNode, GithubInspectionSource, GithubSourceClaim, InspectionEffects,
+    InspectionError, InspectionFinding, InspectionLimits, InspectionOutcome, InspectionReportV1,
+    InspectionSeverity, PackageSummary,
 };
 pub use install::{
     active_org, install_local_package, install_local_skill, verify_csswitch_import_origin,

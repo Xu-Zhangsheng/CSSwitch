@@ -74,6 +74,23 @@ class SkillRuntimeBoundary(unittest.TestCase):
         github = (
             ROOT / "desktop/skill-package/src/github.rs"
         ).read_text()
+        inspection = (
+            ROOT / "desktop/skill-package/src/inspection.rs"
+        ).read_text()
+        skill_package_lib = (
+            ROOT / "desktop/skill-package/src/lib.rs"
+        ).read_text()
+        gateway_skill_host = (
+            ROOT / "desktop/gateway/src/skill_install.rs"
+        ).read_text()
+        gateway_sources = "\n".join(
+            path.read_text()
+            for path in sorted((ROOT / "desktop/gateway/src").rglob("*.rs"))
+        )
+        tauri_sources = "\n".join(
+            path.read_text()
+            for path in sorted((ROOT / "desktop/src-tauri/src").rglob("*.rs"))
+        )
 
         self.assertIn(
             "acceptance-build = []",
@@ -93,6 +110,33 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertIn('#[cfg(feature = "acceptance-build")]', github)
         self.assertIn("GithubEndpoints::production()?", github)
+        self.assertIn("mod inspection;", skill_package_lib)
+        self.assertIn("inspect_github_skill_archive", skill_package_lib)
+        self.assertIn('"csswitch.package-inspection.v1"', inspection)
+        self.assertIn('"caller_asserted_unverified"', inspection)
+        self.assertIn("serde_saphyr::from_str::<SkillFrontmatter>", inspection)
+        self.assertIn("pub const SCHEMA_VERSION: u64 = 2;", skill_package_lib)
+        self.assertIn(
+            "install_github_package_with_progress(", gateway_skill_host
+        )
+        self.assertNotIn("inspect_github_skill_archive", gateway_sources)
+        self.assertNotIn("inspect_github_skill_archive", tauri_sources)
+        for forbidden_effect in (
+            "commit_package(",
+            "install_validated_bundle(",
+            "attach_skill(",
+            "update_agent_skills(",
+            "Command::new(",
+            "Client::builder(",
+            "quarantine_bundle(",
+            "std::fs",
+            "std::net",
+            "std::process",
+            "reqwest::",
+            "unicode_normalization",
+            "Keychain",
+        ):
+            self.assertNotIn(forbidden_effect, inspection)
         self.assertNotIn(
             "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL",
             (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text(),

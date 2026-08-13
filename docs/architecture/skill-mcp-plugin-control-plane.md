@@ -1,6 +1,6 @@
 # Science Skill / MCP / Plugin 扩展控制面
 
-状态：已接受目标设计；实现、artifact 与 runtime 验证均为 `NOT-RUN`
+状态：已接受目标设计；inspect-only source adapter 已存在但尚无产品 caller；plan / apply、artifact 与 runtime 验证均为 `NOT-RUN`
 
 适用范围：CSSwitch 对 Agent Skills、OpenAI Plugin、Claude Plugin 与 local / remote MCP 输入的识别、规划、受控安装、Science 投影、验证、更新和卸载目标架构。
 
@@ -8,9 +8,11 @@
 
 失效条件：Agent Skills、OpenAI Plugin、Claude Plugin 或 MCP 的上游合同发生不兼容变化；Science 建立新的公开稳定扩展 API；CSSwitch 明确改变扩展控制面的 ownership、安全边界或兼容策略；或本文任一未实现部分开始实现、完成实现或推进证据层时，对应状态与段落立即失效，并须在同一候选中重新评审。
 
-本文冻结尚未实现的目标合同，不描述当前产品已经具备这些能力。当前已实现的
-GitHub / 本地包窄桥、状态码和用户行为只以[外部 Skill 安装桥](../features/external-skill-bridge.md)
-为准；逐能力当前 ownership / non-target / 证据层只以
+本文冻结尚未实现的目标合同，不描述当前产品已经具备这些能力。源码当前另有一个仅接收
+调用方已取得 archive bytes、无 Gateway / Tauri / Agent caller 的 inspect-only adapter；
+它只产生 quarantine inspection report，不构成 plan、apply、安装或 runtime 能力。
+当前已实现的 GitHub / 本地包窄桥、状态码和用户行为只以
+[外部 Skill 安装桥](../features/external-skill-bridge.md)为准；逐能力当前 ownership / non-target / 证据层只以
 [产品与 Claude Science 能力地图](../features/product-science-capability-map.md)为准；
 probe 与真实结果分别留在
 [Science 探针合同](../operations/science-probe-spec.md)和日期化 evidence。
@@ -246,7 +248,9 @@ inspect-only 晋级到 apply：
    可变路径重新打开。
 2. **文件类型与碰撞**：默认只接受普通文件和目录；拒绝 symlink、hardlink、device、
    FIFO、socket 与其他特殊 entry。拒绝重复路径、文件/父目录冲突、Unicode NFC、
-   case-fold 与目标文件系统会合并的名称碰撞。adapter 不得用“最后一个 wins”。owner、
+   case-fold 与目标文件系统会合并的名称碰撞。adapter 不得用“最后一个 wins”。当前最小
+   source-only adapter 不声称已实现完整跨平台 Unicode identity；它保留非 ASCII 资源并
+   返回 `Partial` / `Unsupported`，不得把这项目标不变量写成已满足。owner、
    setuid/setgid/sticky、ACL、xattr、resource fork 与其他未建模 metadata 不得继承到目标；
    允许的 mode/metadata 必须规范化、进入 digest，并在 inspection report 中明确。
 3. **资源限额**：每个 source profile 必须有版本化、数值化并由 fixture 锁定的 raw
@@ -433,5 +437,7 @@ HTTP OAuth 与 stdio credential 必须分开：
 - 新 source、artifact、isolated-live 和需要授权的 live evidence 各自绑定 exact identity；
 - unsupported vendor component 不被静默遗漏或错误命名为完整兼容。
 
-截至本文冻结时，以上 implementation、source change、artifact、installed、Skill/MCP
-runtime 与真实服务证据均为 `NOT-RUN`。本文的通过只代表设计边界已接受。
+截至本次复核，inspect-only parser、component graph、limits 与 fixtures 已进入 source；
+它们没有产品 caller，不打开 plan / apply。artifact、installed、Skill/MCP runtime 与真实服务
+证据仍为 `NOT-RUN`；source 验证状态只由 exact-SHA gate 记录判定。本文的通过只代表设计
+边界及该 source-only 范围已复核。

@@ -1,0 +1,6 @@
+{
+  "name": "unsupported-host-fixture",
+  "hooks": {
+    "post-install": "inspection-secret-sentinel"
+  }
+}

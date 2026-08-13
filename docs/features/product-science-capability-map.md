@@ -15,8 +15,9 @@ exact HEAD、版本、package、URL、hash、route 与日期化调查只留在
 [2026-07-30 架构调研](../audits/2026-07-30-v084-architecture-reconnaissance.md)。
 本表不是 release PASS，也不把 source、test、package-static 或 fixture 写成 live。
 本表中的 `non-target` 是当前第三方模式托管决策，不是永久产品禁令。受管
-Skill/MCP/Plugin 扩展控制面已经进入逻辑重构的设计输入，但在独立合同冻结并建立
-对应实现与证据前，仍按下表的当前结论报告；规划意图不是能力证据。
+Skill/MCP/Plugin 扩展控制面的目标合同已经冻结，源码现有一个无产品 caller 的
+inspect-only adapter；它不是 plan、apply、artifact 或 runtime 能力，仍按下表的当前结论
+报告。规划意图和 runtime-orphan source 都不是当前用户能力证据。
 
 ## 判定词
 
@@ -144,9 +145,10 @@ load/trigger、Reviewer/Specialist 等能力继续由 Science 原生管理；CSS
 能力。官方账号、
 entitlement、catalog/hosted connectors、通用 MCP/Plugin 管理、云服务、组织管理
 和真实付费计算当前不是 CSSwitch 第三方模式的托管目标。受管 Skill / MCP / Plugin
-子集的[目标架构合同](../architecture/skill-mcp-plugin-control-plane.md)已经接受；其
-implementation、exact artifact 与 runtime evidence 仍为 `NOT-RUN`。在各组件真正实现并
-取得对应证据前，不得改写表中的 production ownership、可达性或证据层。
+子集的[目标架构合同](../architecture/skill-mcp-plugin-control-plane.md)已经接受；inspect-only
+source adapter 已存在但没有产品 caller，plan / apply、exact artifact 与 runtime evidence
+仍为 `NOT-RUN`。在各组件真正形成产品可达性并取得对应证据前，不得改写表中的
+production ownership、可达性或证据层。
 
 ## 维护规则
 

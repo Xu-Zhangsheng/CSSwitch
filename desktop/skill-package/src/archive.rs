@@ -21,6 +21,7 @@ pub(crate) struct EntryMeta {
     pub index: usize,
     pub path: String,
     pub size: u64,
+    pub compressed_size: u64,
     pub mode: Option<u32>,
     pub directory: bool,
 }
@@ -776,6 +777,7 @@ pub(crate) fn inspect_archive(bytes: &[u8]) -> Result<Vec<EntryMeta>, InstallErr
             index,
             path,
             size: file.size(),
+            compressed_size: file.compressed_size(),
             mode: file.unix_mode(),
             directory,
         });
