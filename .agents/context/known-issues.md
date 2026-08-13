@@ -284,26 +284,32 @@ observation 与 23 项 evidence closure 不得继承到当前 `a60c2ee` artifact
 ## Phase 5 one-click durable-journal owner
 
 Phase 4 基线是 production source `139f6ee235b67284e2edc852521f24b3f501d467`。其后的
-behavior-preserving Phase 5 owner 变更已提交为 exact commit
-`8687e79bb85303c27a1f0d7137bf9dca87a482be`：private
-`runtime/sandbox_session/one_click/transaction.rs` 现在拥有 one-click durable-journal
-identity/transition；root `one_click.rs` 仍保留 façade/coordinator、entry/recovery policy、
-success-finalize replay/effect/read-model/failure glue。History、`config.rs` wire schema、private replay
-manifest 与 live/fresh compensation effect/replay owner 均未移动。
+behavior-preserving Phase 5 owner 物理移动在
+`8687e79bb85303c27a1f0d7137bf9dca87a482be` 完成：private
+`runtime/sandbox_session/one_click/transaction.rs` 拥有 one-click durable-journal
+identity/transition；root `one_click.rs` 保留 façade/coordinator、entry/recovery policy、
+success-finalize replay/effect/read-model/failure glue。其 production/test-bearing final candidate
+`f60a55ec1be3d101702c4b710ea8bfd3bd5be0d9` 修复 fixture、关闭该项 MEDIUM，不改变该 owner 边界；
+本次 evidence-only descendant 再回填该 candidate 的 source-gate 状态。
 
-该 commit 的唯一 canonical run `22038ed8087f38a0a0bcd20c61064ecb` 在
-`/private/tmp/csg.VC5xLJ` sealed `FAIL` / RC 10：15 suites 为 14 `PASS` / 1 `FAIL`。唯一失败为
-`SUITE-ORPHAN-SKILL-BOUNDARY` 中的
-`test_s5_authority_transaction_owns_capture_restore_cleanup_facade`。这是 S4/S5 手写 source
-aggregation 漏列 `transaction.rs` 造成的 fixture drift，不是产品 failure，也不能写成 source `PASS`。
-completion seal SHA-256 为 `e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`，
-evidence manifest SHA-256 为 `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548`，
-source snapshot manifest SHA-256 为 `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4`。
-该 evidence root 可写但不得删除。
+`f60a55e` 的唯一 canonical run `0be6cd1e570a33cc5cfbdbad8a67a473` 在
+`/private/tmp/csg.9RP1pi` runner exit 0：15/15 suites、15/15 observations `PASS`，
+executed/passed/ignored/failed/skipped/not-run 为 `1480/1436/44/0/0/0`。completion seal SHA-256 为
+`24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`，evidence manifest 为
+`d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`，run manifest 为
+`14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`，source snapshot manifest 为
+`0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb`，input digest 为
+`6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831`。该 evidence root 保留，不得删除。
 
-`SOURCE-GREEN` 尚未成立。唯一后续是修复该 fixture、创建新 commit 并运行 final exact gate；commit
-仍需另行授权。artifact、isolated-live、authorized live、real provider、installed App/runtime、Skill/MCP、
-SSH、signing/notarization 与 release 全部 `NOT-RUN`。
+`8687e79` 的 `22038ed8087f38a0a0bcd20c61064ecb`（`/private/tmp/csg.VC5xLJ`）仍是 sealed
+`FAIL` / RC 10 的历史 attempt：14/15 suites `PASS`、唯一
+`SUITE-ORPHAN-SKILL-BOUNDARY` fixture drift 由漏列 `transaction.rs` 引起，现已由 `f60a55e` 修复，
+不得混作 PASS。
+
+`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`。本次回填形成的 evidence-only descendant
+不得继承该 seal；其是否成为当前 source closure 只由自身 clean exact gate 判定。artifact、isolated-live、
+authorized-live、installed、Skill/MCP、SSH、
+provider、signing/notarization 与 release 全部 `NOT-RUN`，且不继承。
 
 ## 当前源码问题
 
@@ -333,7 +339,7 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| Phase 5 one-click durable-journal owner | exact commit `8687e79bb85303c27a1f0d7137bf9dca87a482be` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；root `one_click.rs` 仍为 façade/coordinator、entry/recovery policy、success-finalize replay/effect/read-model/failure glue。History、`config.rs` wire schema、private replay manifest 与 live/fresh compensation effect/replay owner 未移动。唯一 canonical run `22038ed8087f38a0a0bcd20c61064ecb` sealed `FAIL` / RC 10，15 suites 为 14 `PASS` / 1 `FAIL`；唯一 `SUITE-ORPHAN-SKILL-BOUNDARY` failure 是 `test_s5_authority_transaction_owns_capture_restore_cleanup_facade`，诊断为 S4/S5 手写 source aggregation 漏 `transaction.rs` 的 fixture drift，不是产品 failure，亦非 source `PASS`。completion seal `e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`、evidence manifest `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548` 与 source snapshot manifest `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4` 均绑定可写但不得删除的 `/private/tmp/csg.VC5xLJ`。`SOURCE-GREEN` 未成立；fixture 修复、新 commit 与 final exact gate pending，commit 需另行授权 | `NOT-RUN` | `NOT-RUN`；未启动 Gateway / Science，未做 runtime live acceptance | `NOT-RUN`；真实 provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 均未运行 |
+| Phase 5 one-click durable-journal owner | `8687e79` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；其子提交、production/test-bearing final candidate `f60a55e` 修复 fixture。唯一 canonical run `0be6cd1e570a33cc5cfbdbad8a67a473` 为 runner exit 0、15/15 suites 与 observations `PASS`、`1480/1436/44/0/0/0` executed/passed/ignored/failed/skipped/not-run；completion seal `24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`、evidence manifest `d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`、run manifest `14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`、source snapshot manifest `0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb` 与 input digest `6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831` 均绑定保留的 `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 只为已修复 fixture drift 的历史 attempt。`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；其 evidence-only descendant 不继承该 seal，当前 source-closure 身份只由自身 clean exact gate 判定 | `NOT-RUN` | `NOT-RUN` | `NOT-RUN`；provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 不继承 |
 | 一键入口、Gateway / Science 启动与 finalize | `d2cf95e` fresh completion review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | 历史 `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；当前 source candidate artifact `NOT-RUN` | 历史 `18a6788` adoption G2 `PASS(scope=science-adoption-isolated-live)`；当前 source candidate `NOT-RUN` | installed normal 历史 product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；历史 profile-switch rollback owner 已随 dead writer 删除；`d2cf95e` review/gate `PASS` | 历史 `18a6788` Test G1 / normal identity `PASS`；当前 source candidate `NOT-RUN` | 历史 healthy deferred/cold selected/reopen/cleanup `PASS`；replacement/race/crash 由 source fixture 证明，当前 source candidate live `NOT-RUN` | installed normal 历史 Provider Stop/cleanup `PASS` |
 | Science fixed active / pending update adoption | `9476be5` 已实现 managed-health proof + generation/full-owner CAS；该修复已纳入 `d2cf95e` 的 608-test Desktop Rust suite、frontend、metadata、inventory、fresh completion review 与 canonical 15-suite `PASS` source closure | `NOT-RUN`；不得继承 `18a6788` artifact | `NOT-RUN`；RM-21 必须按 active/pending 与 next-cold-start 合同重跑 | `NOT-RUN`；真实 updater/Science 需另行授权 |

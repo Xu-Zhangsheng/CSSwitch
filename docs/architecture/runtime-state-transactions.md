@@ -63,25 +63,34 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 ## one-click / restore 当前边界基线
 
 Phase 4 基线源码审计为 2026-08-14 的 production source
-`139f6ee235b67284e2edc852521f24b3f501d467`。Phase 5 的 behavior-preserving owner
-变更现已提交为 exact commit `8687e79bb85303c27a1f0d7137bf9dca87a482be`：one-click
-durable-journal identity/transition owner 已物理移入 private
-`runtime/sandbox_session/one_click/transaction.rs`。这只记录该 commit 的所有权变化。
+`139f6ee235b67284e2edc852521f24b3f501d467`。Phase 5 的 production/test-bearing final candidate 是
+`f60a55ec1be3d101702c4b710ea8bfd3bd5be0d9`：其父提交
+`8687e79bb85303c27a1f0d7137bf9dca87a482be` 完成 one-click durable-journal
+identity/transition 到 private `runtime/sandbox_session/one_click/transaction.rs` 的物理移动；
+`f60a55e` 修复对应 fixture、关闭该项 MEDIUM，不改变该 owner 边界；本次 evidence-only descendant
+再回填该 candidate 的 source-gate 状态。
 
-该 exact commit 的唯一 canonical `bash test/run_all.sh --output-root /private/tmp/csg.VC5xLJ`
-run 为 `22038ed8087f38a0a0bcd20c61064ecb`，sealed `FAIL` / RC 10：15 suites 中 14
-`PASS`、1 `FAIL`。唯一失败为 `SUITE-ORPHAN-SKILL-BOUNDARY` 的
-`test_s5_authority_transaction_owns_capture_restore_cleanup_facade`。诊断是 S4/S5 手写
-source aggregation 漏列 `transaction.rs` 所致的 fixture drift；这不是产品 failure，也绝不能记为
-source `PASS`。completion seal SHA-256 为
-`e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`，evidence manifest
-SHA-256 为 `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548`，source snapshot
-manifest SHA-256 为 `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4`。证据 root
-`/private/tmp/csg.VC5xLJ` 可写但不得删除。
+唯一 canonical `bash test/run_all.sh --output-root /private/tmp/csg.9RP1pi` run 为
+`0be6cd1e570a33cc5cfbdbad8a67a473`，runner exit 0：15/15 suites、15/15 observations
+均为 `PASS`，executed/passed/ignored/failed/skipped/not-run 为
+`1480/1436/44/0/0/0`。completion seal SHA-256 为
+`24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`，evidence manifest 为
+`d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`，run manifest 为
+`14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`，source snapshot manifest 为
+`0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb`，input digest 为
+`6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831`。evidence root
+`/private/tmp/csg.9RP1pi` 保留，不得删除。
 
-因此 `SOURCE-GREEN` 尚未成立。先修复 fixture，再以新 commit 运行 final exact gate；新 commit
-仍需另行授权。artifact、installed/runtime、isolated-live、authorized provider、SSH、Skill/MCP、
-signing、notarization 与 release 均为 `NOT-RUN`，不得继承本 commit 或任何其它 SHA 的 PASS。
+此前 `8687e79` 的 run `22038ed8087f38a0a0bcd20c61064ecb`（`/private/tmp/csg.VC5xLJ`）仍是
+sealed `FAIL` / RC 10 的历史 attempt：14/15 suites `PASS`、
+`SUITE-ORPHAN-SKILL-BOUNDARY` 因手写 source aggregation 漏列 `transaction.rs` 而 fixture drift；
+该 drift 已由 `f60a55e` 修复，旧 attempt 不得混作 PASS。
+
+`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`。本次文档回填形成的 evidence-only
+descendant 不得继承该 source seal；其是否成为当前 source closure 只由自身 clean exact gate 判定。
+artifact、isolated-live、
+authorized-live、installed、Skill/MCP、SSH、provider、signing、notarization 与 release 均为 `NOT-RUN`，
+不得继承本 candidate 或任何历史 SHA 的 PASS。
 
 ### 入口与五条实际路径
 
@@ -487,22 +496,20 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- Phase 4 基线中的最窄物理边界已由 Phase 5 exact commit
-  `8687e79bb85303c27a1f0d7137bf9dca87a482be` 完成：one-click durable-journal
-  identity/transition owner 位于 private `one_click/transaction.rs`。根
-  `one_click.rs` 仍保留 façade/coordinator、entry/recovery policy、success-finalize replay、effect、
-  read-model 与 failure glue；History、`config.rs` wire schema、private replay manifest 以及
-  live/fresh compensation effect/replay owner 未移动，也没有被合并为同一事务；
-- canonical full gate 的唯一 run `22038ed8087f38a0a0bcd20c61064ecb` sealed `FAIL` / RC 10：
-  14/15 suites `PASS`，仅 `SUITE-ORPHAN-SKILL-BOUNDARY` 的
-  `test_s5_authority_transaction_owns_capture_restore_cleanup_facade` 失败。它是 S4/S5 手写 source
-  aggregation 遗漏 `transaction.rs` 的 fixture drift，不是产品 failure；completion seal
-  `e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`、evidence manifest
-  `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548` 与 source snapshot manifest
-  `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4` 均绑定
-  `/private/tmp/csg.VC5xLJ`。`SOURCE-GREEN` 未成立；fixture 修复、新 commit 与 final exact gate
-  pending，commit 仍需另行授权。artifact、installed/runtime、isolated-live、authorized provider、SSH、
-  Skill/MCP、signing、notarization 与 release 一律 `NOT-RUN`，不继承历史 PASS；
+- Phase 5 的最窄物理 owner 边界由 `8687e79` 完成，production/test-bearing final candidate
+  `f60a55e` 修复 fixture 后已取得唯一 canonical run `0be6cd1e570a33cc5cfbdbad8a67a473`：runner
+  exit 0、15/15 suites 与 observations `PASS`、`1480/1436/44/0/0/0`
+  executed/passed/ignored/failed/skipped/not-run。其 completion seal
+  `24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`、evidence manifest
+  `d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`、run manifest
+  `14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`、source snapshot manifest
+  `0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb` 与 input digest
+  `6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831` 均绑定保留的
+  `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 只保留为 fixture-drift 历史
+  attempt。`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；其 evidence-only descendant
+  不继承该 seal，当前 source-closure 身份只由自身 clean exact gate 判定。artifact、isolated-live、
+  authorized-live、installed、Skill/MCP、
+  SSH、provider、signing/notarization 与 release 仍一律 `NOT-RUN`；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
   finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private
