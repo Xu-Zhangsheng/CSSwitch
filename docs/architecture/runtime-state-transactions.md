@@ -59,6 +59,61 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 仍忽略 Science stop failure 并继续关闭 Gateway；任何“退出链已统一”的结论都必须
 区分共享状态 owner 与不同 terminal policy。
 
+## one-click / restore 当前边界基线
+
+最后源码审计：2026-08-14，production source `139f6ee235b67284e2edc852521f24b3f501d467`。
+本节只固定该 SHA 的源码所有权与事务边界，不继承其它 SHA 的 source gate、artifact 或 live 结果。
+
+### 入口与五条实际路径
+
+| 路径 | entry 与判定 | effect / transaction owner | 终点与不能外推的边界 |
+|---|---|---|---|
+| 手动 one-click entry | `desktop/src-tauri/src/commands/runtime/one_click.rs::one_click_login_cmd` 先把 one-click compensation 与 history recovery 重放到收敛，再捕获并复核 `OneClickEntryPreflight`；provider auth 在 `RuntimeMutationLease` 外完成，业务 entry 在 `Destructive` lease 内调用 | command 只拥有 pre-auth recovery/auth/failure DTO 边界；`runtime/sandbox_session/one_click.rs::one_click_login_entry` 是 runtime entry façade | command 不解释 journal outcome，也不启动 Gateway / Science；auth 失败前后仍会再次收敛可重放的本地 authority recovery |
+| healthy reopen | `one_click_login_with_options` 通过 `capture_one_click_entry_facts` + `decide_one_click_entry` 同时证明 Science `RunningHealthy`、virtual login intact、desired binding 不要求 Science restart | `one_click/healthy_reopen.rs::healthy_reopen_with_gateway_rollback` 独立拥有 Gateway ensure/catalog、binding commit、route best-effort、surface 与 config/Gateway rollback | 不捕获 `AuthorityTransaction`，不创建 one-click snapshot ticket 或 `RuntimeCompensationJournal`；失败只回滚该分支的 config/Gateway before-image，不能外推 cold compensation |
+| mutating cold start / restart | stopped，或 healthy 但 login / binding 不满足 reopen 时进入 `one_click/cold.rs::run_cold_one_click`；若 pending authority cleanup 实际被清除，entry 必须重采 facts 后重新判定 | cold coordinator 顺序拥有 prior Science durable stop、authority capture、SSH、Gateway/catalog、Science phase dispatch、route 与 success finalize；`cold/science_phase.rs` 拥有 managed Science launch/health/DB-restart phase；`cold/compensation.rs` 拥有五步 live compensation | 产生新的 `operation=one_click` V2 identity、verified snapshot ticket 与需要时的独立 V2 compensation；cold 并不接管 history credential commit，也不接管 interrupted-Gateway listener 的精确 stop |
+| History restore-only / restore-and-resume | `history_recovery.rs::restore_history_choice_entry` 从一次性 reference 开始，以 `operation=history_recovery` V2、完整 Config authority fingerprint、typed quiescence 与 protected snapshot 完成 credential publication | restore 与 interrupted restore replay 由 `history_recovery.rs` 独立拥有；四项 history private manifest、`acquire_runtime_history_effect_lease`、complete-record CAS 和 durable restore outcome 不属于 one-click compensation | restore-only 清 journal 并保持 stopped；以后点击 one-click 是新 destructive operation。restore-and-resume 只在同一 IPC / destructive lease 内发布 `ResumeAfterHistoryRestore` terminal handoff，随后仍先清 History record，再进入现有 one-click owner |
+| interrupted-Gateway recovery | `one_click_login_entry` 每轮重采 facts 后调用 `proxy_lifecycle::recover_interrupted_gateway`；只接受旧 profile-switch V1，或 `operation=profile_switch` 且处于 `StartFormalGateway|RecoverInterruptedGateway` 的 V2 | `runtime/proxy_lifecycle/recovery.rs` 拥有 listener proof、pending/outcome complete-record CAS 与 stop；runtime entry 只保留不可序列化的 affine terminal handoff | terminal record 保留到 healthy/cold 的首个接管点；ordinary one-click 不能伪造 expected record。该路径不恢复 prior Gateway，不处理 one-click/history snapshot，也不是当前 profile-switch writer |
+
+entry recovery 的真实次序是：V2 compensation replay → interrupted history replay → exact History
+resume handoff → success-finalize replay → pending-cleanup replay → interrupted-Gateway recovery →
+healthy/cold route。每个有 effect 的 recovery 后都重新载入 `Config` 再决定下一步；因此任一旧
+handoff、旧 facts 或旧 listener observation 都不能跨 effect 直接复用。
+
+### `one_click.rs` 仍承担的 owner
+
+`runtime/sandbox_session/one_click.rs` 当前约 3K 行 production/test 混合模块，不是只做 re-export
+的纯 façade。已有拆分降低了局部 effect 密度，但下列 owner 仍在根文件交叉：
+
+| owner 类别 | 当前符号 / 路径 | 判定 |
+|---|---|---|
+| façade | `OneClickEntryPreflight::{capture,verify_unchanged}`、`one_click_login_entry`、`one_click_login_with_options` | 合理保留 command → runtime 与 entry → branch 表面；但同文件继续实现 transaction、effect 与 recovery，故 façade 边界尚未物理闭合 |
+| coordinator | `one_click_login_entry` 的 recapture/decide/effect loop、`one_click_login_with_options` 的 healthy/cold dispatch | entry coordinator 与 branch coordinator 已逻辑分开；cold 顺序 owner 已在 `one_click/cold.rs`，根文件仍直接协调四类 recovery 与两条业务 branch |
+| transaction | `OneClickTransactionIdentity`、`OneClickJournalProgress`、`begin_prior_stop_intent`、`publish_prior_stop_outcome`、`write_one_click_checkpoint`、`begin_one_click_finalize`、`complete_one_click_finalize`，以及 compensation step CAS helpers | 这是根文件最明显的交叉 owner：schema/validator 在 `config.rs`，history 有自己的 `begin_history_transaction` / `update_history_record` / finalize，cold/healthy/compensation 又反向调用根文件 transition helpers |
+| effect | `open_science_surface`、`restart_science_identity_with_budget`、`capture_authority_after_science_quiesce` 与 DB health helpers | 与 `cold/science_phase.rs`、`ScienceHostAdapter`、`AuthorityTransaction` 的 effect owner 交叉；这些 helper 有真实 I/O、进程或 `AppState` publication，不是 façade-only glue |
+| recovery | `replay_interrupted_one_click_finalize`、History terminal handoff consume、V1 interrupted-Science validation；同时根 entry 调用 sibling compensation/history/Gateway replay | durable effect 本体分别位于 `one_click/compensation_replay.rs`、`history_recovery.rs`、`proxy_lifecycle/recovery.rs`，但 recovery policy / 顺序 / typed error conversion 仍分布在根文件与 command 层 |
+| read-model | `capture_one_click_entry_facts`、`decide_one_click_entry`、`history_resume_handoff` | 这是控制流 read-model，只为 branch/recovery eligibility 服务；最终用户 publication 的只读权威回读属于 `runtime/finalize_consumer.rs::project_finalize_consumer_state`，不得与 entry facts 合并 |
+| failure projection | `typed_one_click_err`、`typed_interrupted_gateway_recovery_error`、`typed_authority_cleanup_err`、`OneClickFailure`；cold compensation 生成 `ProjectedRecovery` | produce-site kind 在 runtime 内标注；最终 DTO 属于 `commands/runtime/one_click.rs::project_one_click_failure`，History resume 的失败可见性由 `history_recovery.rs::project_resume_failure` 再附加 `history_recovery.status=restored`。根文件不独占完整 projection owner |
+
+所以当前重复主要是**同类 transaction/recovery policy 分散在多个 owner**，而不是可以直接删除的
+dead writer。任何后续移动都必须保持 façade、业务 transition、durable recovery effect 和 consumer
+read-model 四类责任可分别测试，不能用“文件过长”作为合并事务的理由。
+
+### restore 与下一次 one-click 的一致和断裂
+
+| 维度 | 一致性 | 明确不一致 |
+|---|---|---|
+| 事务身份 | 两者都使用 `config.rs::RuntimeTransactionV2`、非空 transaction id、typed operation/phase 与完整原记录 CAS | History 的 `runtime_fingerprint` 是“移除 journal 后的完整 Config authority”SHA-256；one-click 是 candidate Science environment fingerprint。restore-only 清除 History id，未来点击创建新 one-click id；显式 resume 也先消费并清除 terminal History record，再由 one-click 创建新 id |
+| checkpoint / CAS | `history_recovery.rs::update_history_record` 与 `one_click.rs::write_one_click_checkpoint` 都要求磁盘完整 record 等于 expected，漂移即保留并 fail closed | History 额外要求完整 Config authority fingerprint 一直相等；one-click 以 active profile + previous binding + immutable candidate/snapshot/prior-stop identity 为 authority。两套 CAS predicate 不能互换 |
+| snapshot authority | 两者都通过 `AuthorityTransaction::capture` 取得 registered `RuntimeSnapshotTicket`，success 走 cleanup-only / cleanup retry，失败保留 registered recovery | one-click rollback 使用完整 protected projection 与 `RuntimeTransactionRestoreExpectation`；History 在 credential-write crash boundary 另持久化 encryption key、OAuth tokens、active org、virtual marker 四项 private manifest，并用 history-specific pending/succeeded phases 重放 |
+| compensation journal | open marker 都由 `Config::has_open_runtime_journal` 阻断普通 mutation | 只有 one-click 写独立 `RuntimeCompensationJournal` V2、固定五步与 live/fresh replay manifest；`validate_runtime_transaction_v2` 明确要求 History `compensation=not_started`。History 用自身 V2 phase + history effect lease，不借用五步 compensation |
+| blocking / replay | command 在 provider auth 前收敛 replayable compensation/history，runtime entry 再复核；V1、invalid、retargeted 与 typed incomplete 均保留证据并 fail closed | one-click V2 compensation 可逐步 fresh-process replay；History 只自动处理规定的 stop/snapshot/write-pending/restore-pending/restore-succeeded phase；`HistoryCredentialPublished` 交给 finalize replay，`ResumeAfterHistoryRestore` 只允许 exact terminal handoff消费 |
+| success finalize | 两者都用 `RuntimeFinalizeState::Intent`，authority cleanup 后以 exact record CAS 清 journal；中断由 `replay_interrupted_one_click_finalize` 收敛 | one-click `CommitBinding` 还要求 binding/runtime/V2 managed receipt/adoption attempt 四方一致；History 只允许 `ClearJournal|ResumeOneClick`，禁止 commit runtime binding |
+| failure / History 可见性 | open journal 使 `project_one_click_failure` 与 `finalize_consumer` 保持 manual/selection pending，不从 message 猜真实状态 | History credential durable commit 后，resume one-click 失败不会回滚用户选择；`restore_history_choice_entry` / `project_resume_failure` 保留 `history_recovery.status=restored` 与轮换后的 choices。restore-only 的 consumer disposition 是 attention，不是假装 runtime ready |
+
+这意味着“restore 后下一次 one-click 一致”只成立在共享 schema、CAS 纪律、snapshot ticket 和
+fail-closed readback 层；不成立在 operation identity、fingerprint、compensation journal、effect
+manifest 或成功语义层。不能把 restore-and-resume 称作一个覆盖 credential 与 runtime 的统一事务。
+
 ## 锁序与并发
 
 跨命令变更遵守固定顺序：
@@ -412,6 +467,11 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
+- `one_click.rs` 已有 entry、healthy、cold/Science/compensation sibling owner，但根文件仍同时保留
+  façade/coordinator、one-click business journal transition、若干 Science/authority effect helper、
+  finalize recovery、entry read-model 与 typed failure glue。当前最窄的物理闭合边界是把纯
+  one-click durable-journal identity/transition owner 移到 private sibling module；这不是把
+  History、one-click compensation 或 interrupted-Gateway 合成同一事务；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
   finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private

@@ -2,7 +2,7 @@
 
 状态：当前；唯一验收路线以[生产链路验收](../../docs/operations/real-machine-acceptance.md)为准
 
-最后复核：2026-08-13（Asia/Taipei）
+最后复核：2026-08-14（Asia/Taipei）
 
 失效条件：production owner / caller、确定性 fixture、候选 source、artifact identity、Science / Gateway runtime、provider capability、installed/runtime、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
@@ -281,6 +281,49 @@ SSH、installed、签名和 release 不外推。该历史 tuple 的精确 identi
 `06b630b` exact tuple 的 `B-CORE-01` run `bcore-06b630b-r2` 只保留为历史 PASS；其 identity、DB
 observation 与 23 项 evidence closure 不得继承到当前 `a60c2ee` artifact，也不再链接当前调查。
 
+## Phase 4 one-click / restore 重新基线
+
+本轮实时基线是分支 `codex/runtime-one-click-restore-rebaseline-phase4`、production source
+`139f6ee235b67284e2edc852521f24b3f501d467`。源码审计确认 entry、healthy reopen、cold、History
+restore/resume 与 interrupted-Gateway recovery 的当前 owner 和事务断裂，完整权威说明见
+[one-click / restore 当前边界基线](../../docs/architecture/runtime-state-transactions.md)。
+本轮没有修改产品源码，也没有运行 implementation/source gate；历史 SHA 的 PASS 不继承给该基线。
+本阶段证据状态固定为：`source/doc audit=COMPLETED`；`implementation=NOT-RUN`、
+`source gate=NOT-RUN`、`artifact=NOT-RUN`、`isolated/live=NOT-RUN`、
+`real provider=NOT-RUN`、`installed App=NOT-RUN`、`Skill/MCP=NOT-RUN`、`SSH=NOT-RUN`、
+`signing/notarization=NOT-RUN`、`release=NOT-RUN`。
+
+**唯一 Phase 5 NEXT：抽出 one-click durable-journal transition owner。** 在
+`runtime/sandbox_session/one_click/transaction.rs` 建立 private owner，并从 `one_click.rs` 移入
+`OneClickTransactionIdentity`、`OneClickJournalProgress`、phase/exposure 与 exact-match helpers、
+prior-stop intent/outcome、八阶段 checkpoint、healthy terminal-handoff binding CAS，以及
+success-finalize intent/completion 和 `RuntimeCompensationJournal` 的纯 intent/step/outcome/completion
+CAS helpers。该项只做 behavior-preserving 物理边界闭合：
+
+- owner 输入：config dir、冻结的 target / previous binding / optional interrupted-Gateway terminal
+  handoff、candidate fingerprint、registered snapshot ticket、expected complete V2 record / progress、
+  requested phase 或 finalize action；
+- owner 输出：exact next `RuntimeTransactionV2` / `OneClickJournalProgress` 或 fail-closed typed error；
+  不返回进程、文件树、credential、DTO 或 UI effect；
+- 必须保持：八个 one-click phase 与 exposure 映射、prior-stop intent → exact outcome、完整记录 CAS、
+  active profile + previous binding authority、transaction/fingerprint/ticket/binding/prior-stop/finalize
+  identity、History / Gateway affine handoff 只在既有接管点消费、binding/adoption finalize 语义与
+  public DTO/text/test identity 全部不变；
+- 明确排除：不改 `config.rs` wire schema，不统一 History transaction，不改变
+  `RuntimeCompensationJournal` 固定五步或状态机，不移动 private replay manifest、live/fresh
+  compensation effect 或 replay owner，不改 cold/healthy/Science/Gateway/authority effects，不碰
+  Skill/MCP、SSH、provider、installed App、artifact 或 release；
+- 建议验证：既有 `runtime_journal.rs` 的
+  `gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transitions`、
+  `one_click_v2_checkpoints_freeze_candidate_identity_and_ticket` 与
+  `one_click_compensation_journal_begin_and_finish_use_complete_record_cas`，以及
+  `transaction_contract.rs::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel`；
+  再运行 Rust fmt/clippy、Desktop Rust suite、quality metadata / inventory 与 canonical source gate。
+  artifact/live/provider/installed/signing/release 仍须另行授权和取证。
+
+Phase 4 不实施上述 NEXT。若目标文件同时开始拥有 compensation effect、History restore 或 DTO
+projection，或改变任何 wire/phase/CAS 语义，即已越过该唯一边界，必须停止并重新基线。
+
 ## 当前源码问题
 
 Provider compatibility slice 的 2026-08-11 code-bearing source 为
@@ -309,6 +352,7 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
+| Phase 4 one-click / restore owner 重新基线 | `139f6ee` 当前源码只完成 read-only source/doc audit；Phase 5 implementation 与 source gate 均 `NOT-RUN`，不继承 `d2cf95e` 或其它历史 tuple 的 PASS | `NOT-RUN` | `NOT-RUN`；未启动 Gateway / Science，未做 runtime live acceptance | `NOT-RUN`；真实 provider、installed App、Skill/MCP、SSH 均未运行 |
 | 一键入口、Gateway / Science 启动与 finalize | `d2cf95e` fresh completion review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | 历史 `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；当前 source candidate artifact `NOT-RUN` | 历史 `18a6788` adoption G2 `PASS(scope=science-adoption-isolated-live)`；当前 source candidate `NOT-RUN` | installed normal 历史 product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；历史 profile-switch rollback owner 已随 dead writer 删除；`d2cf95e` review/gate `PASS` | 历史 `18a6788` Test G1 / normal identity `PASS`；当前 source candidate `NOT-RUN` | 历史 healthy deferred/cold selected/reopen/cleanup `PASS`；replacement/race/crash 由 source fixture 证明，当前 source candidate live `NOT-RUN` | installed normal 历史 Provider Stop/cleanup `PASS` |
 | Science fixed active / pending update adoption | `9476be5` 已实现 managed-health proof + generation/full-owner CAS；该修复已纳入 `d2cf95e` 的 608-test Desktop Rust suite、frontend、metadata、inventory、fresh completion review 与 canonical 15-suite `PASS` source closure | `NOT-RUN`；不得继承 `18a6788` artifact | `NOT-RUN`；RM-21 必须按 active/pending 与 next-cold-start 合同重跑 | `NOT-RUN`；真实 updater/Science 需另行授权 |
