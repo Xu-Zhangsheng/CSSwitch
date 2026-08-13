@@ -306,9 +306,28 @@ executed/passed/ignored/failed/skipped/not-run 为 `1480/1436/44/0/0/0`。comple
 `SUITE-ORPHAN-SKILL-BOUNDARY` fixture drift 由漏列 `transaction.rs` 引起，现已由 `f60a55e` 修复，
 不得混作 PASS。
 
-`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`。本次回填形成的 evidence-only descendant
-不得继承该 seal；其是否成为当前 source closure 只由自身 clean exact gate 判定。artifact、isolated-live、
-authorized-live、installed、Skill/MCP、SSH、
+`070bd0b4e223960263b91d8119a278bdc86f3678` 是回填上述证据的 evidence-only descendant；其唯一
+canonical run `2247f8e529a24c9846c1040a176e634b`（`/private/tmp/csg.Y2ZbTS`）sealed `FAIL` / RC 12：
+14/15 suites `PASS`，唯一 `SUITE-RUST-DESKTOP` 为 `INFRA_ERROR` / `ADAPTER_MALFORMED`，observation
+reason 为 `TEST_IDENTITY_MISMATCH`。executed/passed/ignored/failed/skipped/not-run 为
+`1480/1435/44/1/0/0`；唯一 failed ID 是
+`desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore`。
+completion seal 为
+`756715cb68973d5d471a90b67fe9507db2f76e9adf4e30df299ab156c1b1a7ff`，evidence manifest 为
+`dd14c0a4fea9e6136a809781f5b11e12cf7df2afbd7f7feaf5d1690aef9e9bc2`，run manifest 为
+`330712c1be06b31509c64a515a8d1d77ca107f48cfab066a442b7a93fc53816d`，source snapshot manifest 为
+`06ff544bbdab26531aa05bc84cf3903d7443979bcf958a08a794d41b8d3401e0`，input digest 为
+`69f405934b2e819789090e0a4251254f3d24aa545472439e07a7274e310deafe`。执行方报告该 exact wrapper
+随后的单次非 canonical focused diagnosis 为 `PASS`（1 passed、603 filtered、2.99s）；但该运行没有
+canonical manifest 或 retained receipt，当前正文不能独立复核，只能作为单点未复现的诊断线索，不能把
+`070bd0b` 改写为 source PASS，也不能替代 canonical seal。
+
+`f60a55e` 的历史 run 已建立该 exact SHA 的 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；`070bd0b` 保持
+sealed `FAIL`。当前 dirty test/docs candidate 只删除失败后会受 authority rollback 影响的辅助
+`serve` call-count 断言；存活 unbound PID、精确 authority mutation、blocked restore、无 listener / receipt
+与 attributable cleanup 的强断言均保留，production source 未改变。该候选的
+`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；其是否成为当前 source closure 只由后续 clean exact
+SHA gate 判定。artifact、isolated-live、authorized-live、installed、Skill/MCP、SSH、
 provider、signing/notarization 与 release 全部 `NOT-RUN`，且不继承。
 
 ## 当前源码问题
@@ -339,7 +358,7 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| Phase 5 one-click durable-journal owner | `8687e79` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；其子提交、production/test-bearing final candidate `f60a55e` 修复 fixture。唯一 canonical run `0be6cd1e570a33cc5cfbdbad8a67a473` 为 runner exit 0、15/15 suites 与 observations `PASS`、`1480/1436/44/0/0/0` executed/passed/ignored/failed/skipped/not-run；completion seal `24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`、evidence manifest `d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`、run manifest `14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`、source snapshot manifest `0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb` 与 input digest `6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831` 均绑定保留的 `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 只为已修复 fixture drift 的历史 attempt。`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；其 evidence-only descendant 不继承该 seal，当前 source-closure 身份只由自身 clean exact gate 判定 | `NOT-RUN` | `NOT-RUN` | `NOT-RUN`；provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 不继承 |
+| Phase 5 one-click durable-journal owner | `8687e79` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；`f60a55e` 修复 fixture，canonical `0be6cd1e…` 为 15/15 `PASS`，其 seal 与 manifests 绑定 `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 是已修复 fixture drift 的历史 attempt；evidence-only `070bd0b` 的 `2247f8e…` 亦为 sealed `FAIL` / RC 12：14/15，唯一 Desktop wrapper identity observation failed，随后单次 exact focused test `PASS` 但不能替代 seal。其 completion/evidence/run/source manifest 与 input digest 分别为 `756715cb…` / `dd14c0a4…` / `330712c1…` / `06ff544b…` / `69f40593…`，绑定 `/private/tmp/csg.Y2ZbTS`。当前 dirty test/docs candidate 只删除不稳定的辅助 serve-count 断言，production source 未变，`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；当前 source-closure 身份只由后续 clean exact SHA gate 判定 | `NOT-RUN` | `NOT-RUN` | `NOT-RUN`；provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 不继承 |
 | 一键入口、Gateway / Science 启动与 finalize | `d2cf95e` fresh completion review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | 历史 `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；当前 source candidate artifact `NOT-RUN` | 历史 `18a6788` adoption G2 `PASS(scope=science-adoption-isolated-live)`；当前 source candidate `NOT-RUN` | installed normal 历史 product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；历史 profile-switch rollback owner 已随 dead writer 删除；`d2cf95e` review/gate `PASS` | 历史 `18a6788` Test G1 / normal identity `PASS`；当前 source candidate `NOT-RUN` | 历史 healthy deferred/cold selected/reopen/cleanup `PASS`；replacement/race/crash 由 source fixture 证明，当前 source candidate live `NOT-RUN` | installed normal 历史 Provider Stop/cleanup `PASS` |
 | Science fixed active / pending update adoption | `9476be5` 已实现 managed-health proof + generation/full-owner CAS；该修复已纳入 `d2cf95e` 的 608-test Desktop Rust suite、frontend、metadata、inventory、fresh completion review 与 canonical 15-suite `PASS` source closure | `NOT-RUN`；不得继承 `18a6788` artifact | `NOT-RUN`；RM-21 必须按 active/pending 与 next-cold-start 合同重跑 | `NOT-RUN`；真实 updater/Science 需另行授权 |

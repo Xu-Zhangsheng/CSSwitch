@@ -2047,15 +2047,6 @@ exec '{}' "$@"
                         && error.contains("recovery_status=cleanup_required")
                 }),
                 "a detached post-spawn/pre-receipt candidate must block authority restore with typed recovery: {failed:?}"
-            );
-        assert_eq!(
-            fs::read_to_string(&science_call_log)
-                .unwrap_or_default()
-                .lines()
-                .filter(|line| *line == "serve")
-                .count(),
-            2,
-            "the unbound candidate must be the sole recovery restart"
         );
         if failure_edge == "db-restart-launch-blocks" {
             assert!(

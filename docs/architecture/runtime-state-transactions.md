@@ -86,11 +86,28 @@ sealed `FAIL` / RC 10 的历史 attempt：14/15 suites `PASS`、
 `SUITE-ORPHAN-SKILL-BOUNDARY` 因手写 source aggregation 漏列 `transaction.rs` 而 fixture drift；
 该 drift 已由 `f60a55e` 修复，旧 attempt 不得混作 PASS。
 
-`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`。本次文档回填形成的 evidence-only
-descendant 不得继承该 source seal；其是否成为当前 source closure 只由自身 clean exact gate 判定。
-artifact、isolated-live、
-authorized-live、installed、Skill/MCP、SSH、provider、signing、notarization 与 release 均为 `NOT-RUN`，
-不得继承本 candidate 或任何历史 SHA 的 PASS。
+回填上述状态的 evidence-only commit `070bd0b4e223960263b91d8119a278bdc86f3678` 也没有继承该 seal。
+其唯一 canonical run `2247f8e529a24c9846c1040a176e634b`（`/private/tmp/csg.Y2ZbTS`）sealed
+`FAIL` / RC 12：14/15 suites `PASS`，唯一 `SUITE-RUST-DESKTOP` observation 为 `INFRA_ERROR` /
+`ADAPTER_MALFORMED` / `TEST_IDENTITY_MISMATCH`；counts 为 `1480/1435/44/1/0/0`，唯一 failed ID 是
+`desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore`。
+completion seal、
+evidence manifest、run manifest、source snapshot manifest 与 input digest 分别为
+`756715cb68973d5d471a90b67fe9507db2f76e9adf4e30df299ab156c1b1a7ff`、
+`dd14c0a4fea9e6136a809781f5b11e12cf7df2afbd7f7feaf5d1690aef9e9bc2`、
+`330712c1be06b31509c64a515a8d1d77ca107f48cfab066a442b7a93fc53816d`、
+`06ff544bbdab26531aa05bc84cf3903d7443979bcf958a08a794d41b8d3401e0` 与
+`69f405934b2e819789090e0a4251254f3d24aa545472439e07a7274e310deafe`。执行方报告随后该 exact wrapper
+的单次非 canonical focused diagnosis `PASS`（1 passed、603 filtered、2.99s）；但该运行没有 canonical
+manifest 或 retained receipt，当前正文不能独立复核，只能作为单点未复现的诊断线索，不能替代 seal。
+
+因此 `f60a55e` 的历史 run 只为该 exact SHA 建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`，`070bd0b`
+保持 sealed `FAIL`。当前 dirty test/docs candidate 只删除失败后会受 authority rollback 影响的辅助
+`serve` call-count 断言；存活 unbound PID、精确 authority mutation、blocked restore、无 listener / receipt
+与 attributable cleanup 的强断言均保留，production source 未改变。该候选的
+`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；其是否成为当前 source closure 只由后续 clean exact
+SHA gate 判定。artifact、isolated-live、authorized-live、installed、Skill/MCP、
+SSH、provider、signing、notarization 与 release 均为 `NOT-RUN`，不得继承。
 
 ### 入口与五条实际路径
 
@@ -506,8 +523,12 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   `0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb` 与 input digest
   `6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831` 均绑定保留的
   `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 只保留为 fixture-drift 历史
-  attempt。`f60a55e` 已建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；其 evidence-only descendant
-  不继承该 seal，当前 source-closure 身份只由自身 clean exact gate 判定。artifact、isolated-live、
+  attempt。`f60a55e` 的 `0be6cd1e…` 只为该 exact SHA 建立 source green；evidence-only `070bd0b`
+  的 `2247f8e…` sealed `FAIL` / RC 12（14/15，唯一 Desktop wrapper identity observation failed），
+  随后单次 exact focused test `PASS` 但不能替代 seal。任一 evidence-only descendant 不继承历史
+  PASS/FAIL。当前 dirty test/docs candidate 只删除不稳定的辅助 serve-count 断言，production source
+  未变，`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；当前 source-closure 身份只由后续 clean exact
+  SHA gate 判定。artifact、isolated-live、
   authorized-live、installed、Skill/MCP、
   SSH、provider、signing/notarization 与 release 仍一律 `NOT-RUN`；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
