@@ -179,7 +179,7 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             || ScienceHostAdapter::receipt_process_is_alive(&prior.launch_token)
             || receipt.exists()
         {
-            let restart = restart_prior_science(&app, &state, lifecycle, auth_proof, prior);
+            let restart = restart_prior_science(&app, &state, lifecycle, auth_proof, prior, None);
             if restart.is_ok() {
                 if let Some(expected) = prior_stop_record.as_ref() {
                     clear_prior_stop_transition(&dir, expected).map_err(|error| {

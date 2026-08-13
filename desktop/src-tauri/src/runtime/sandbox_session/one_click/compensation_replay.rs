@@ -348,6 +348,7 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
                     manifest
                         .as_ref()
                         .expect("Science replay requires its private manifest"),
+                    &authority_bypass,
                 ),
                 config::RuntimeCompensationStep::SshCleanup => {
                     replay_ssh_cleanup(
@@ -373,6 +374,7 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
                     manifest
                         .as_ref()
                         .expect("prior Science replay requires its private manifest"),
+                    Some(&authority_bypass),
                 ),
                 config::RuntimeCompensationStep::SnapshotCleanup => {
                     replay_snapshot_cleanup(state, journal)
@@ -536,6 +538,7 @@ fn replay_science_cleanup<R: Runtime>(
     state: &SharedAppState,
     lifecycle: &lifecycle::Lifecycle,
     manifest: &CompensationReplayManifest,
+    bypass: &config::AuthorityWriterBypass<'_>,
 ) -> config::RuntimeCompensationStepState {
     if manifest.candidate_stop_proof == DurableCandidateStopProof::Unproven {
         return config::RuntimeCompensationStepState::Failed;
@@ -579,7 +582,10 @@ fn replay_science_cleanup<R: Runtime>(
                 ScienceStopOwnershipReceipt::from_managed_launch(&receipt),
             ))
         },
-        |request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        |request| {
+            ScienceHostAdapter::execute_stop_with_authority_bypass(app, request, bypass)
+                .into_parts()
+        },
         |_state, _confirmed_runtime| {},
     );
     match result {
@@ -732,6 +738,7 @@ fn replay_prior_restart<R: Runtime>(
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     journal: &config::RuntimeCompensationJournal,
     manifest: &CompensationReplayManifest,
+    bypass: Option<&config::AuthorityWriterBypass<'_>>,
 ) -> config::RuntimeCompensationStepState {
     if step_outcome(journal, config::RuntimeCompensationStep::AuthorityRestore)
         != Some(config::RuntimeCompensationStepState::Succeeded)
@@ -786,6 +793,7 @@ fn replay_prior_restart<R: Runtime>(
         recipe.port,
         operation::SANDBOX_HEALTH_BUDGET_MS,
         Some(restart_launch_id),
+        bypass,
     ) {
         Ok(()) => config::RuntimeCompensationStepState::Succeeded,
         Err(_) => config::RuntimeCompensationStepState::Failed,
@@ -819,7 +827,7 @@ pub(super) fn test_replay_prior_restart_effect_without_outcome<R: Runtime>(
         .map_err(|_| "test prior restart manifest format is invalid".to_string())?;
     validate_replay_manifest(journal, &manifest)?;
     Ok(replay_prior_restart(
-        app, state, lifecycle, None, journal, &manifest,
+        app, state, lifecycle, None, journal, &manifest, None,
     ))
 }
 

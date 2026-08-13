@@ -340,6 +340,22 @@ pub(crate) fn execute_science_stop<R: Runtime>(
     app: &tauri::AppHandle<R>,
     request: ScienceStopRequest,
 ) -> ScienceStopExecution {
+    execute_science_stop_inner(app, request, None)
+}
+
+pub(crate) fn execute_science_stop_with_authority_bypass<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    request: ScienceStopRequest,
+    bypass: &config::AuthorityWriterBypass<'_>,
+) -> ScienceStopExecution {
+    execute_science_stop_inner(app, request, Some(bypass))
+}
+
+fn execute_science_stop_inner<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    request: ScienceStopRequest,
+    bypass: Option<&config::AuthorityWriterBypass<'_>>,
+) -> ScienceStopExecution {
     let ScienceStopRequest {
         runtime,
         ownership,
@@ -530,7 +546,14 @@ pub(crate) fn execute_science_stop<R: Runtime>(
                     "Science stop 后配置端口重新出现监听；未确认停止且未清理 managed launch 记录。"
                         .to_string(),
                 ));
-            } else if let Err(error) = clear_managed_launch_identity(&stop_token, runtime) {
+            } else if let Err(error) = match bypass {
+                Some(bypass) => clear_managed_launch_identity_with_authority_bypass(
+                    &stop_token,
+                    runtime,
+                    bypass,
+                ),
+                None => clear_managed_launch_identity(&stop_token, runtime),
+            } {
                 failure = Some(
                     ScienceStopFailure::receipt_cleanup_failure(error)
                         .with_confirmed_runtime(runtime.clone()),

@@ -275,6 +275,7 @@ pub(super) fn run_managed_science_launch_phase<R: Runtime>(
                 recovery.port,
                 science_db_recovery_restart_budget_ms(),
                 None,
+                None,
             ) {
                 rollback_context.candidate_stop_proof = error.candidate_stop_proof;
                 return Err(rollback_context.failure(error.to_string()));

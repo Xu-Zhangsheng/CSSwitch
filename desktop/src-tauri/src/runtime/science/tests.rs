@@ -2737,6 +2737,214 @@ fn unique_temp_dir(name: &str) -> std::io::Result<std::path::PathBuf> {
     p.canonicalize()
 }
 
+#[test]
+fn managed_launch_authority_writer_leaf_uses_sh_or_scoped_ex_bypass(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD_ENV: &str = "CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_CHILD";
+    const CLEAR_ENV: &str = "CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_CLEAR";
+    const WRITE_ENV: &str = "CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_WRITE";
+    if std::env::var_os(WRITE_ENV).is_some() {
+        let root = std::env::var_os("CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_ROOT")
+            .map(std::path::PathBuf::from)
+            .ok_or("managed launch authority leaf child root is required")?;
+        let runtime = authority_leaf_runtime()?;
+        let record = super::managed_launch_record_for(
+            1,
+            std::process::id(),
+            &runtime,
+            Some("authority-writer-managed-launch-leaf-write"),
+            None,
+        )
+        .ok_or("normal writer managed launch record must be constructible")?;
+        std::env::set_var(
+            "CSSWITCH_TEST_AUTHORITY_WRITER_SH_PROBE_MARKER",
+            root.join("write-sh-probe"),
+        );
+        super::write_managed_launch_record(&record)?;
+        std::env::remove_var("CSSWITCH_TEST_AUTHORITY_WRITER_SH_PROBE_MARKER");
+        let after_return = crate::config::acquire_runtime_compensation_replay_lease(
+            &crate::config::default_dir(),
+        )?;
+        drop(after_return);
+        fs::write(root.join("write-returned"), b"returned")?;
+        return Ok(());
+    }
+    if std::env::var_os(CLEAR_ENV).is_some() {
+        let root = std::env::var_os("CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_ROOT")
+            .map(std::path::PathBuf::from)
+            .ok_or("managed launch authority leaf child root is required")?;
+        let runtime = authority_leaf_runtime()?;
+        let (record, receipt_file) = super::read_managed_launch_snapshot()
+            .ok_or("managed launch receipt required for normal clear leaf")?;
+        let token = super::ScienceManagedLaunchToken {
+            record,
+            receipt_file: Some(receipt_file),
+        };
+        std::env::set_var(
+            "CSSWITCH_TEST_AUTHORITY_WRITER_SH_PROBE_MARKER",
+            root.join("sh-probe"),
+        );
+        super::clear_managed_launch_identity(&token, &runtime)?;
+        std::env::remove_var("CSSWITCH_TEST_AUTHORITY_WRITER_SH_PROBE_MARKER");
+        // The normal clear leaf guard is lexical: after it returns, this
+        // process must be able to become the EX effect owner.
+        let after_return = crate::config::acquire_runtime_compensation_replay_lease(
+            &crate::config::default_dir(),
+        )?;
+        drop(after_return);
+        fs::write(root.join("returned"), b"returned")?;
+        return Ok(());
+    }
+
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let root = unique_temp_dir("managed-launch-authority-leaf")?;
+        let home = root.join("home");
+        fs::create_dir_all(&home)?;
+        let output = Command::new(std::env::current_exe()?)
+            .arg("--exact")
+            .arg("runtime::science::tests::managed_launch_authority_writer_leaf_uses_sh_or_scoped_ex_bypass")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(CHILD_ENV, "1")
+            .env("CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_ROOT", &root)
+            .env("HOME", &home)
+            .output()?;
+        fs::remove_dir_all(&root)?;
+        assert!(
+            output.status.success(),
+            "isolated managed launch authority leaf oracle failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    let root = unique_temp_dir("managed-launch-authority-leaf")?;
+    let config_dir = crate::config::default_dir();
+    fs::create_dir_all(&config_dir)?;
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))?;
+    crate::config::save_to(&config_dir, &crate::config::Config::default())?;
+    let runtime = authority_leaf_runtime()?;
+    let record = super::managed_launch_record_for(
+        1,
+        std::process::id(),
+        &runtime,
+        Some("authority-writer-managed-launch-leaf"),
+        None,
+    )
+    .ok_or("test managed launch record must be constructible")?;
+    let ex_owner = crate::config::acquire_runtime_compensation_replay_lease(&config_dir)?;
+    // First exercise both actual write and actual clear through the scoped
+    // EX bypass. A nested SH acquisition here would self-deadlock.
+    {
+        let bypass = ex_owner.authority_writer_bypass();
+        super::write_managed_launch_record_with_authority_bypass(&record, &bypass)?;
+        let (committed_record, receipt_file) = super::read_managed_launch_snapshot()
+            .ok_or("bypass write must commit managed launch receipt")?;
+        let token = super::ScienceManagedLaunchToken {
+            record: committed_record,
+            receipt_file: Some(receipt_file),
+        };
+        super::clear_managed_launch_identity_with_authority_bypass(&token, &runtime, &bypass)?;
+        assert!(
+            super::managed_launch_path().symlink_metadata().is_err(),
+            "scoped EX bypass must complete the actual managed launch clear leaf"
+        );
+    }
+    let write_child = Command::new(std::env::current_exe()?)
+        .arg("--exact")
+        .arg("runtime::science::tests::managed_launch_authority_writer_leaf_uses_sh_or_scoped_ex_bypass")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(WRITE_ENV, "1")
+        .env("CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_ROOT", &root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    for _ in 0..100 {
+        if root.join("write-sh-probe").is_file() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        fs::read(root.join("write-sh-probe"))? == b"blocked",
+        "actual normal managed-launch write leaf did not reach a contended SH flock"
+    );
+    drop(ex_owner);
+    let output = write_child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "managed launch normal writer child failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join("write-returned").is_file());
+    assert!(
+        super::managed_launch_path().is_file(),
+        "normal managed-launch write leaf must commit after EX releases"
+    );
+
+    let ex_owner = crate::config::acquire_runtime_compensation_replay_lease(&config_dir)?;
+    {
+        let bypass = ex_owner.authority_writer_bypass();
+        super::write_managed_launch_record_with_authority_bypass(&record, &bypass)?;
+    }
+    let clear_child = Command::new(std::env::current_exe()?)
+        .arg("--exact")
+        .arg("runtime::science::tests::managed_launch_authority_writer_leaf_uses_sh_or_scoped_ex_bypass")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(CLEAR_ENV, "1")
+        .env("CSSWITCH_MANAGED_LAUNCH_AUTHORITY_LEAF_ROOT", &root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    for _ in 0..100 {
+        if root.join("sh-probe").is_file() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        fs::read(root.join("sh-probe"))? == b"blocked",
+        "actual normal managed-launch clear leaf did not reach a contended SH flock"
+    );
+    drop(ex_owner);
+    let output = clear_child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "managed launch normal clear child failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join("returned").is_file());
+    assert!(
+        super::managed_launch_path().symlink_metadata().is_err(),
+        "normal managed-launch clear leaf must remove the receipt after EX releases"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+fn authority_leaf_runtime() -> Result<ScienceRuntimeIdentity, Box<dyn std::error::Error>> {
+    let config_dir = crate::config::default_dir();
+    let data_dir = sandbox_data_dir();
+    fs::create_dir_all(&data_dir)?;
+    fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
+    let runtime_bin = config_dir.join("authority-writer-managed-launch-runtime");
+    if !runtime_bin.exists() {
+        write_fake_version_bin(&runtime_bin, 0o700, "claude-science authority-leaf")?;
+    }
+    runtime_identity(
+        runtime_bin,
+        ScienceRuntimeSource::Explicit,
+        &ScienceVersionCache::default(),
+    )
+    .ok_or_else(|| "authority leaf runtime must be observable".into())
+}
+
 fn write_fake_bin(path: &std::path::Path, mode: u32) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

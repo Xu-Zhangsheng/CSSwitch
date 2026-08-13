@@ -438,7 +438,14 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
                     ownership,
                 ))
             },
-            |request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+            |request| {
+                ScienceHostAdapter::execute_stop_with_authority_bypass(
+                    app,
+                    request,
+                    &authority_bypass,
+                )
+                .into_parts()
+            },
             |_state, _confirmed_runtime| {},
         )
         .map(|_| ())
@@ -557,7 +564,14 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     )?;
     let prior_restart = if authority_restore.succeeded() && !cross_runtime_environment {
         match prior_science {
-            Some(prior) => match restart_prior_science(app, state, lifecycle, auth_proof, prior) {
+            Some(prior) => match restart_prior_science(
+                app,
+                state,
+                lifecycle,
+                auth_proof,
+                prior,
+                Some(&authority_bypass),
+            ) {
                 Ok(()) => CompensationStepOutcome::Succeeded,
                 Err(error) => {
                     CompensationStepOutcome::Failed(CompensationCause::PriorScienceRestart(error))

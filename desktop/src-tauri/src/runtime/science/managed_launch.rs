@@ -303,6 +303,23 @@ fn read_managed_launch_record() -> Option<ScienceManagedLaunchRecord> {
 }
 
 fn write_managed_launch_record(record: &ScienceManagedLaunchRecord) -> Result<(), String> {
+    let _authority_guard = config::acquire_authority_writer_guard()
+        .map_err(|error| format!("Science managed launch authority fence unavailable: {error}"))?;
+    write_managed_launch_record_unfenced(record)
+}
+
+/// The caller already owns the exclusive compensation/replay fence.  Retain
+/// the non-Send/non-Sync proof through this leaf so a nested SH flock cannot
+/// self-deadlock the EX owner.
+fn write_managed_launch_record_with_authority_bypass(
+    record: &ScienceManagedLaunchRecord,
+    bypass: &config::AuthorityWriterBypass<'_>,
+) -> Result<(), String> {
+    let _authority_guard = config::authority_writer_guard_from_bypass(bypass);
+    write_managed_launch_record_unfenced(record)
+}
+
+fn write_managed_launch_record_unfenced(record: &ScienceManagedLaunchRecord) -> Result<(), String> {
     let path = managed_launch_path();
     let parent = path
         .parent()
@@ -358,7 +375,7 @@ pub(crate) fn record_managed_science_launch(
     port: u16,
     runtime: &ScienceRuntimeIdentity,
 ) -> Result<ScienceManagedLaunchToken, ScienceManagedLaunchCommitError> {
-    record_managed_science_launch_with_id(port, runtime, None)
+    record_managed_science_launch_with_id(port, runtime, None, None)
 }
 
 pub(crate) fn record_managed_science_launch_with_launch_id(
@@ -366,13 +383,31 @@ pub(crate) fn record_managed_science_launch_with_launch_id(
     runtime: &ScienceRuntimeIdentity,
     launch_id: &str,
 ) -> Result<ScienceManagedLaunchToken, ScienceManagedLaunchCommitError> {
-    record_managed_science_launch_with_id(port, runtime, Some(launch_id))
+    record_managed_science_launch_with_id(port, runtime, Some(launch_id), None)
+}
+
+pub(crate) fn record_managed_science_launch_with_authority_bypass(
+    port: u16,
+    runtime: &ScienceRuntimeIdentity,
+    bypass: &config::AuthorityWriterBypass<'_>,
+) -> Result<ScienceManagedLaunchToken, ScienceManagedLaunchCommitError> {
+    record_managed_science_launch_with_id(port, runtime, None, Some(bypass))
+}
+
+pub(crate) fn record_managed_science_launch_with_launch_id_and_authority_bypass(
+    port: u16,
+    runtime: &ScienceRuntimeIdentity,
+    launch_id: &str,
+    bypass: &config::AuthorityWriterBypass<'_>,
+) -> Result<ScienceManagedLaunchToken, ScienceManagedLaunchCommitError> {
+    record_managed_science_launch_with_id(port, runtime, Some(launch_id), Some(bypass))
 }
 
 fn record_managed_science_launch_with_id(
     port: u16,
     runtime: &ScienceRuntimeIdentity,
     launch_id: Option<&str>,
+    bypass: Option<&config::AuthorityWriterBypass<'_>>,
 ) -> Result<ScienceManagedLaunchToken, ScienceManagedLaunchCommitError> {
     let listener_pid =
         listener_runtime_pid(port, runtime).ok_or_else(|| ScienceManagedLaunchCommitError {
@@ -438,7 +473,11 @@ fn record_managed_science_launch_with_id(
             token: Some(v2_uncommitted_token.clone()),
         });
     }
-    if let Err(message) = write_managed_launch_record(&record) {
+    let write = match bypass {
+        Some(bypass) => write_managed_launch_record_with_authority_bypass(&record, bypass),
+        None => write_managed_launch_record(&record),
+    };
+    if let Err(message) = write {
         return Err(ScienceManagedLaunchCommitError {
             message,
             token: Some(v2_uncommitted_token.clone()),
@@ -615,6 +654,24 @@ fn restore_unmatched_managed_launch_tombstone(tombstone: &Path, path: &Path) -> 
 }
 
 fn clear_managed_launch_identity(
+    token: &ScienceManagedLaunchToken,
+    runtime: &ScienceRuntimeIdentity,
+) -> Result<(), String> {
+    let _authority_guard = config::acquire_authority_writer_guard()
+        .map_err(|error| format!("Science managed launch authority fence unavailable: {error}"))?;
+    clear_managed_launch_identity_unfenced(token, runtime)
+}
+
+pub(crate) fn clear_managed_launch_identity_with_authority_bypass(
+    token: &ScienceManagedLaunchToken,
+    runtime: &ScienceRuntimeIdentity,
+    bypass: &config::AuthorityWriterBypass<'_>,
+) -> Result<(), String> {
+    let _authority_guard = config::authority_writer_guard_from_bypass(bypass);
+    clear_managed_launch_identity_unfenced(token, runtime)
+}
+
+fn clear_managed_launch_identity_unfenced(
     token: &ScienceManagedLaunchToken,
     runtime: &ScienceRuntimeIdentity,
 ) -> Result<(), String> {

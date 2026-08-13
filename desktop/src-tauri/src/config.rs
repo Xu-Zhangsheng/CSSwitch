@@ -2724,6 +2724,26 @@ pub(crate) fn acquire_authority_writer_guard() -> io::Result<AuthorityWriterGuar
 
 fn acquire_authority_writer_guard_at(dir: &Path) -> io::Result<AuthorityWriterGuard<'static>> {
     let secure = SecureDir::open(dir, true)?;
+    #[cfg(test)]
+    if let Some(marker) = std::env::var_os("CSSWITCH_TEST_AUTHORITY_WRITER_SH_PROBE_MARKER") {
+        // A test-only nonblocking probe records that this precise normal
+        // writer reached the SH flock and observed an EX owner. The real
+        // blocking acquisition immediately below remains the production path.
+        let probe = secure.acquire_runtime_compensation_fence(libc::LOCK_SH | libc::LOCK_NB);
+        match probe {
+            Ok(fence) => {
+                drop(fence);
+                fs::write(marker, b"uncontended")?;
+            }
+            Err(error)
+                if error.raw_os_error() == Some(libc::EWOULDBLOCK)
+                    || error.raw_os_error() == Some(libc::EAGAIN) =>
+            {
+                fs::write(marker, b"blocked")?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_SH)?;
     Ok(AuthorityWriterGuard {
         _kind: AuthorityWriterGuardKind::Shared {

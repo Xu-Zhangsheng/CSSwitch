@@ -1046,6 +1046,7 @@ fn restart_prior_science<R: Runtime>(
     lifecycle: &lifecycle::Lifecycle,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     prior: &PriorScienceContext,
+    authority_bypass: Option<&config::AuthorityWriterBypass<'_>>,
 ) -> Result<(), ManagedScienceRestartError> {
     restart_science_identity_with_budget(
         app,
@@ -1056,6 +1057,7 @@ fn restart_prior_science<R: Runtime>(
         prior.port,
         operation::SANDBOX_HEALTH_BUDGET_MS,
         None,
+        authority_bypass,
     )
 }
 
@@ -1069,6 +1071,7 @@ fn restart_science_identity_with_budget<R: Runtime>(
     port: u16,
     health_budget_ms: u64,
     durable_launch_id: Option<&str>,
+    authority_bypass: Option<&config::AuthorityWriterBypass<'_>>,
 ) -> Result<(), ManagedScienceRestartError> {
     let dir = config::default_dir();
     let cfg = config::load_from(&dir).map_err(|error| error.to_string())?;
@@ -1171,23 +1174,38 @@ fn restart_science_identity_with_budget<R: Runtime>(
             drop(seams);
             let mut sandbox = None;
             let mut url = None;
-            let cleanup = ScienceHostAdapter::stop(
-                app,
-                &mut sandbox,
-                &mut url,
-                ScienceStopRequest::exact(
-                    runtime,
-                    ScienceStopOwnershipReceipt::from_managed_launch(&_candidate_token),
-                ),
+            let request = ScienceStopRequest::exact(
+                runtime,
+                ScienceStopOwnershipReceipt::from_managed_launch(&_candidate_token),
             );
+            let cleanup = match authority_bypass {
+                Some(bypass) => ScienceHostAdapter::stop_with_authority_bypass(
+                    app,
+                    &mut sandbox,
+                    &mut url,
+                    request,
+                    bypass,
+                ),
+                None => ScienceHostAdapter::stop(app, &mut sandbox, &mut url, request),
+            };
             return Err(ManagedScienceRestartError::test_post_spawn_validation(
                 runtime, cleanup,
             ));
         }
     }
-    let committed_launch = match durable_launch_id {
-        Some(launch_id) => ScienceHostAdapter::commit_launch_with_launch_id(verified, launch_id),
-        None => ScienceHostAdapter::commit_launch(verified),
+    let committed_launch = match (durable_launch_id, authority_bypass) {
+        (Some(launch_id), Some(bypass)) => {
+            ScienceHostAdapter::commit_launch_with_launch_id_and_authority_bypass(
+                verified, launch_id, bypass,
+            )
+        }
+        (None, Some(bypass)) => {
+            ScienceHostAdapter::commit_launch_with_authority_bypass(verified, bypass)
+        }
+        (Some(launch_id), None) => {
+            ScienceHostAdapter::commit_launch_with_launch_id(verified, launch_id)
+        }
+        (None, None) => ScienceHostAdapter::commit_launch(verified),
     };
     let committed_runtime = match committed_launch {
         Ok(receipt) => receipt.runtime().clone(),
@@ -1204,7 +1222,16 @@ fn restart_science_identity_with_budget<R: Runtime>(
                     )
                 })
                 .unwrap_or_else(|| ScienceStopRequest::recover(Some(runtime)));
-            let cleanup = ScienceHostAdapter::stop(app, &mut sandbox, &mut url, request);
+            let cleanup = match authority_bypass {
+                Some(bypass) => ScienceHostAdapter::stop_with_authority_bypass(
+                    app,
+                    &mut sandbox,
+                    &mut url,
+                    request,
+                    bypass,
+                ),
+                None => ScienceHostAdapter::stop(app, &mut sandbox, &mut url, request),
+            };
             let message = match error.kind() {
                 ScienceLaunchFailureKind::ReceiptIdentityDrift => {
                     "恢复 prior Science 后 fresh managed receipt 回读不一致".to_string()
@@ -1246,7 +1273,7 @@ fn capture_authority_after_science_quiesce<R: Runtime>(
         Ok(snapshot) => Ok(snapshot),
         Err(capture_error) => {
             if let Some(prior) = prior_science {
-                match restart_prior_science(app, state, lifecycle, auth_proof, prior) {
+                match restart_prior_science(app, state, lifecycle, auth_proof, prior, None) {
                     Ok(()) => Err(AuthorityCaptureAfterQuiesceError::PriorScienceRestored(
                         capture_error,
                     )),

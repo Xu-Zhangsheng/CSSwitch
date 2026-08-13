@@ -558,17 +558,63 @@ impl ScienceHostAdapter {
         Self::commit_launch_with_id(verified, Some(launch_id))
     }
 
+    pub(crate) fn commit_launch_with_authority_bypass(
+        verified: ScienceVerifiedLaunch,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
+        Self::commit_launch_with_id_and_authority_bypass(verified, None, bypass)
+    }
+
+    pub(crate) fn commit_launch_with_launch_id_and_authority_bypass(
+        verified: ScienceVerifiedLaunch,
+        launch_id: &str,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
+        Self::commit_launch_with_id_and_authority_bypass(verified, Some(launch_id), bypass)
+    }
+
     fn commit_launch_with_id(
         verified: ScienceVerifiedLaunch,
         launch_id: Option<&str>,
     ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
+        Self::commit_launch_with_id_inner(verified, launch_id, None)
+    }
+
+    fn commit_launch_with_id_and_authority_bypass(
+        verified: ScienceVerifiedLaunch,
+        launch_id: Option<&str>,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
+        Self::commit_launch_with_id_inner(verified, launch_id, Some(bypass))
+    }
+
+    fn commit_launch_with_id_inner(
+        verified: ScienceVerifiedLaunch,
+        launch_id: Option<&str>,
+        bypass: Option<&crate::config::AuthorityWriterBypass<'_>>,
+    ) -> Result<ScienceLaunchReceipt, ScienceLaunchFailure> {
         let ownership = match launch_id {
-            Some(launch_id) => record_managed_science_launch_with_launch_id(
-                verified.port,
-                &verified.runtime,
-                launch_id,
-            ),
-            None => record_managed_science_launch(verified.port, &verified.runtime),
+            Some(launch_id) => match bypass {
+                Some(bypass) => record_managed_science_launch_with_launch_id_and_authority_bypass(
+                    verified.port,
+                    &verified.runtime,
+                    launch_id,
+                    bypass,
+                ),
+                None => record_managed_science_launch_with_launch_id(
+                    verified.port,
+                    &verified.runtime,
+                    launch_id,
+                ),
+            },
+            None => match bypass {
+                Some(bypass) => record_managed_science_launch_with_authority_bypass(
+                    verified.port,
+                    &verified.runtime,
+                    bypass,
+                ),
+                None => record_managed_science_launch(verified.port, &verified.runtime),
+            },
         }
         .map_err(|error| {
             ScienceLaunchFailure::new(
@@ -675,6 +721,14 @@ impl ScienceHostAdapter {
         execute_science_stop(app, request)
     }
 
+    pub(crate) fn execute_stop_with_authority_bypass<R: Runtime>(
+        app: &tauri::AppHandle<R>,
+        request: ScienceStopRequest,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> ScienceStopExecution {
+        execute_science_stop_with_authority_bypass(app, request, bypass)
+    }
+
     pub(crate) fn stop<R: Runtime>(
         app: &tauri::AppHandle<R>,
         sandbox: &mut Option<Child>,
@@ -682,6 +736,22 @@ impl ScienceHostAdapter {
         request: ScienceStopRequest,
     ) -> ScienceStopOutcome {
         stop_sandbox(app, sandbox, sandbox_url, request)
+    }
+
+    pub(crate) fn stop_with_authority_bypass<R: Runtime>(
+        app: &tauri::AppHandle<R>,
+        sandbox: &mut Option<Child>,
+        sandbox_url: &mut Option<String>,
+        request: ScienceStopRequest,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> ScienceStopOutcome {
+        let execution = execute_science_stop_with_authority_bypass(app, request, bypass);
+        let (outcome, clear_process_tracking) = execution.into_parts();
+        if clear_process_tracking {
+            kill_child(sandbox);
+            *sandbox_url = None;
+        }
+        outcome
     }
 }
 
