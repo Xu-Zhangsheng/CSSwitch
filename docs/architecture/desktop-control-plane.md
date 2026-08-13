@@ -75,7 +75,7 @@ Tauri backend
 当前注册面没有已知的无 bundled production caller command；内部 preview/helper 不注册为产品 IPC。
 
 S6 已移除无 bundled caller 的 `start_proxy` Tauri command；formal Gateway 只能由现有
-cold/healthy/profile-switch/recovery 内部流程经 `GatewayController` 启动或复用，不再暴露
+cold、healthy reopen 或 interrupted-Gateway recovery 内部流程经 `GatewayController` 启动或复用，不再暴露
 独立的 Gateway-only invoke mutation。
 
 生产 frontend 没有发现 literal command 调用未在 Tauri 注册的反向缺口。

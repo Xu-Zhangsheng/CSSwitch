@@ -4,7 +4,7 @@
     "id": "BUG-083-SCIENCE-UPDATER",
     "version": "v0.8.3",
     "title": "Science 0.1.25 updater and installed authority were incompatible with CSSwitch",
-    "summary": "The official 0.1.25 standalone updater reproduced a source failure because CSSwitch required the DMG-seed identifier at the fixed updater path. Installed restart then exposed managed-state compatibility defects in cache/file bounds, an official runtime Skill symlink, later Conda growth beyond intermediate logical limits, and rollback that restarted an already-restored prior Science and repeated the failed snapshot. Source now separates executable tracks, snapshots internal symlinks, uses bounded APFS clones with 131,072-entry / 8 GiB / 512 MiB logical limits plus the unchanged 128 MiB/file / 512 MiB/scope byte-copy fallback, and reuses only a typed, exactly revalidated prior recovery; production artifact/runtime and public release remain pending.",
+    "summary": "The official 0.1.25 standalone updater reproduced a source failure because CSSwitch required the DMG-seed identifier at the fixed updater path. Installed restart then exposed managed-state compatibility defects in cache/file bounds, an official runtime Skill symlink, and later Conda growth beyond intermediate logical limits. Source now separates executable tracks, snapshots internal symlinks, and uses bounded APFS clones with 131,072-entry / 8 GiB / 512 MiB logical limits plus the unchanged 128 MiB/file / 512 MiB/scope byte-copy fallback; production artifact/runtime and public release remain pending.",
     "status": "active",
     "owner": "science-runtime",
     "severity": "P1",
@@ -15,7 +15,6 @@
       "desktop/src-tauri/src/runtime/science.rs",
       "desktop/src-tauri/src/runtime/science/",
       "desktop/src-tauri/src/runtime/sandbox_session/",
-      "desktop/src-tauri/src/runtime/profile_switch.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/commands/runtime/"
     ],
@@ -48,9 +47,9 @@
         "Install the candidate and activate Qwen after DeepSeek: scratch passes, but Science restart fails at 2,147,791,174 bytes / 24,974 partial entries before rollback. The complete tree then measures 32,519 entries, 2,388,270,307 bytes, a 189,776,400-byte maximum file, and zero files above 512 MiB.",
         "Raise the APFS-clone logical limits to 65,536 entries and 4 GiB while retaining the 512 MiB per-file logical limit and the unchanged 128 MiB-per-file / 512 MiB-per-scope byte-copy fallback limits; separately prove the observed entry/byte budget pair and sparse clone/restore byte total.",
         "After first-run R/Conda setup, observe DeepSeek-to-Qwen restart fail at 65,537 entries with authority_snapshot_entry_limit and incomplete science_start recovery; a metadata-only probe measures 75,588 entries, 4,386,369,604 logical bytes, and a 189,776,400-byte maximum file.",
-        "Invalidate that candidate, raise APFS-clone logical limits to 131,072 entries and 8 GiB, and type the prior-Science-restored outcome so rollback revalidates and reuses it instead of repeating capture; retain all per-file and fallback bounds."
+        "Invalidate that candidate, raise APFS-clone logical limits to 131,072 entries and 8 GiB, and retain all per-file and fallback bounds. The separate test-only profile-switch rollback characterization is retired with its dead writer and is no longer active updater evidence."
       ],
-      "observed": "Old source failed the updater oracle; candidates then failed on cache, symlink, full-copy, and logical-tree bounds. After R/Conda setup the tree reached 75,588 entries and 4,386,369,604 bytes, then failed at entry 65,537. Inner recovery restored prior Science, but outer rollback stopped it and repeated capture. Source now raises bounded clone limits and reuses only a typed, exactly revalidated prior recovery.",
+      "observed": "Old source failed the updater oracle; candidates then failed on cache, symlink, full-copy, and logical-tree bounds. After R/Conda setup the tree reached 75,588 entries and 4,386,369,604 bytes, then failed at entry 65,537. Source now raises bounded clone limits; the removed test-only profile-switch rollback is not part of the current product or updater claim.",
       "not_claimed": ["isolated-test-app", "final-dmg", "installed-final", "live", "signing", "public"]
     },
     "confirmed_facts": [
@@ -82,11 +81,6 @@
       {
         "statement": "After Science 0.1.25 completed first-run R/Conda environment creation, a metadata-only probe measured 75,588 entries, 66,911 regular files, 4,386,369,604 logical regular-file bytes, and a 189,776,400-byte maximum regular file.",
         "evidence_ref": "docs/evidence/investigations/2026-07-28-claude-science-0.1.25-compatibility.md",
-        "verification_status": "confirmed"
-      },
-      {
-        "statement": "Profile-switch recovery skips the second capture only for a typed prior-Science-restored outcome after exact runtime, fresh managed receipt, and live-health revalidation; every other failure retains the forced-restart fallback.",
-        "evidence_ref": "desktop/src-tauri/src/commands/runtime/tests.rs::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "verification_status": "confirmed"
       },
       {

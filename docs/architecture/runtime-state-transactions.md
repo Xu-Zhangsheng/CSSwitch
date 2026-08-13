@@ -183,14 +183,14 @@ replacement；退出状态不确定的 child 由独立 registry 保留。control
 identity、catalog fingerprint 与完整 `GatewayLaunchRecipe`；当 host context 来自健康的
 remembered Science 时，recipe 保存该 effective runtime，而不是只复制 caller 的显式参数。
 `AppState.gateway_launch_context` 与 receipt 使用同一 recipe。无 bundled caller 的 registered
-`start_proxy` 已移除，Gateway 启动只保留在 cold/healthy/profile-switch/recovery 内部路径；S6
+`start_proxy` 已移除，Gateway 启动只保留在 cold、healthy reopen 与 interrupted-Gateway recovery 内部路径；S6
 不改变这些 caller 的 lease、checkpoint、补偿、binding/journal commit、DTO 或可见文案。
 
 三类 receipt/authority 不能合并成一个“统一事务”：
 
 | 证明 | 建立的控制权 | 当前 consumer | 明确不拥有 |
 |---|---|---|---|
-| `GatewayReceipt` | process-local start/reuse 的 route、accepted health/catalog 与完整 recipe | cold/healthy/profile-switch/recovery caller | crash journal、rollback、binding commit |
+| `GatewayReceipt` | process-local start/reuse 的 route、accepted health/catalog 与完整 recipe | cold、healthy reopen、interrupted-Gateway recovery caller | crash journal、rollback、binding commit |
 | Science launch/stop receipt | executable/data-dir/listener/PID/process-start/runtime SHA 与 managed record 的 exact live ownership | prior/history/DB/compensation stop 与 fresh restart | authority tree before-image 或跨进程 lease |
 | `AuthorityTransaction` | protected projection capture、verified ticket、restore、cleanup/commit | one-click coordinator | prior stop、Gateway/SSH、journal、DTO 与全局编排 |
 
