@@ -34,7 +34,8 @@
 | macOS native exit 的 terminal cleanup 与进程退出投影 | `desktop/src-tauri/src/lib.rs::cleanup_for_exit_with` / `cleanup_for_exit` / `run_native_exit_event` |
 | process-local Science stop 的 owner claim、锁外 execute/wait 与结果 CAS | `commands/runtime/lifecycle.rs::execute_process_local_science_stop_with` |
 | 一键 IPC、锁外 auth preflight 与 UI failure 投影 | `commands/runtime/one_click.rs` |
-| typed entry decision、protected projection、journal recovery 与 healthy / cold branch dispatch | `runtime/sandbox_session/one_click.rs` |
+| one-click entry/recovery policy、protected projection、healthy / cold branch dispatch、success-finalize replay/effect/read-model/failure glue | `runtime/sandbox_session/one_click.rs` |
+| one-click durable-journal identity 与 transition | private `runtime/sandbox_session/one_click/transaction.rs`；只由 `one_click.rs` 的受限接口重导出给 sibling owner，wire schema 仍在 `config.rs` |
 | mutating cold/recovery 的 prior stop、SSH、authority、Gateway、phase dispatch、route 与 finalize 顺序编排 | `runtime/sandbox_session/one_click/cold.rs` |
 | cold path 的 managed Science launch、health、DB reverify 与 bounded restart phase | `runtime/sandbox_session/one_click/cold/science_phase.rs` |
 | cold failure 的 aggregate compensation outcome 与五个 top-level effect 执行顺序 | `runtime/sandbox_session/one_click/cold/compensation.rs` |
@@ -61,8 +62,24 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 
 ## one-click / restore 当前边界基线
 
-最后源码审计：2026-08-14，production source `139f6ee235b67284e2edc852521f24b3f501d467`。
-本节只固定该 SHA 的源码所有权与事务边界，不继承其它 SHA 的 source gate、artifact 或 live 结果。
+Phase 4 基线源码审计：2026-08-14，production source
+`139f6ee235b67284e2edc852521f24b3f501d467`。本轮 Phase 5 implementation 是
+`codex/runtime-one-click-transaction-owner-phase5` 在
+`2e7cf48db667378655c078cdc51a550625074148` 之上的当前未提交 source candidate：
+one-click durable-journal identity/transition owner 已物理移入 private
+`runtime/sandbox_session/one_click/transaction.rs`。这只记录当前 source candidate 的
+所有权变化。4 个指定 focused exact tests 均 `PASS`；Desktop `cargo fmt --check` 与
+`clippy --all-targets -- -D warnings` 均 `PASS`，受控环境先构建 Gateway 后 Desktop suite
+为 564 passed / 0 failed / 40 ignored；Gateway fmt、clippy 与 test 均 `PASS`，test 为
+291 passed / 0 failed / 0 ignored；metadata validator `PASS`，quality kernel + runtime mutation
+inventory 共 21 tests `PASS`。canonical `bash test/run_all.sh --output-root
+/private/tmp/csg.POwoFR` 只运行一次，使用空 mode-0700 output root，但因当前未提交 diff 无法
+绑定 exact Git identity，在 preflight 以 RC 12 / internal-failure 退出；15 suites / observations
+未开始，未生成 run id、completion seal、evidence 或 source snapshot manifest。因此该项判为
+`PREFLIGHT/ENV-BLOCKED`，clean exact-SHA canonical gate 仍为 `NOT-RUN`，不是 source `PASS`
+也不是产品 `FAIL`；commit 仍需用户另行授权。artifact、installed/runtime、isolated-live、
+authorized provider、SSH、Skill/MCP、signing、notarization 与 release 均为 `NOT-RUN`，不得
+继承本基线或任何其它 SHA 的 PASS。
 
 ### 入口与五条实际路径
 
@@ -81,22 +98,23 @@ handoff、旧 facts 或旧 listener observation 都不能跨 effect 直接复用
 
 ### `one_click.rs` 仍承担的 owner
 
-`runtime/sandbox_session/one_click.rs` 当前约 3K 行 production/test 混合模块，不是只做 re-export
-的纯 façade。已有拆分降低了局部 effect 密度，但下列 owner 仍在根文件交叉：
+`runtime/sandbox_session/one_click.rs` 仍是 production/test 混合的根 façade/coordinator，
+不是只做 re-export 的纯 façade。本轮 candidate 已将 durable-journal identity/transition
+物理闭合到 private `one_click/transaction.rs`；根文件保留的 owner 如下：
 
 | owner 类别 | 当前符号 / 路径 | 判定 |
 |---|---|---|
-| façade | `OneClickEntryPreflight::{capture,verify_unchanged}`、`one_click_login_entry`、`one_click_login_with_options` | 合理保留 command → runtime 与 entry → branch 表面；但同文件继续实现 transaction、effect 与 recovery，故 façade 边界尚未物理闭合 |
+| façade | `OneClickEntryPreflight::{capture,verify_unchanged}`、`one_click_login_entry`、`one_click_login_with_options`，及对 `transaction` 受限接口的 re-export | 合理保留 command → runtime 与 entry → branch 表面；durable transaction 本体已不在根文件，根文件仍有 coordinator、effect 与 recovery policy |
 | coordinator | `one_click_login_entry` 的 recapture/decide/effect loop、`one_click_login_with_options` 的 healthy/cold dispatch | entry coordinator 与 branch coordinator 已逻辑分开；cold 顺序 owner 已在 `one_click/cold.rs`，根文件仍直接协调四类 recovery 与两条业务 branch |
-| transaction | `OneClickTransactionIdentity`、`OneClickJournalProgress`、`begin_prior_stop_intent`、`publish_prior_stop_outcome`、`write_one_click_checkpoint`、`begin_one_click_finalize`、`complete_one_click_finalize`，以及 compensation step CAS helpers | 这是根文件最明显的交叉 owner：schema/validator 在 `config.rs`，history 有自己的 `begin_history_transaction` / `update_history_record` / finalize，cold/healthy/compensation 又反向调用根文件 transition helpers |
-| effect | `open_science_surface`、`restart_science_identity_with_budget`、`capture_authority_after_science_quiesce` 与 DB health helpers | 与 `cold/science_phase.rs`、`ScienceHostAdapter`、`AuthorityTransaction` 的 effect owner 交叉；这些 helper 有真实 I/O、进程或 `AppState` publication，不是 façade-only glue |
-| recovery | `replay_interrupted_one_click_finalize`、History terminal handoff consume、V1 interrupted-Science validation；同时根 entry 调用 sibling compensation/history/Gateway replay | durable effect 本体分别位于 `one_click/compensation_replay.rs`、`history_recovery.rs`、`proxy_lifecycle/recovery.rs`，但 recovery policy / 顺序 / typed error conversion 仍分布在根文件与 command 层 |
+| durable transaction | private `one_click/transaction.rs` 的 `OneClickTransactionIdentity`、`OneClickJournalProgress`、prior-stop / checkpoint / finalize transition 与 compensation step CAS helpers | owner 已物理移动；`config.rs` 仍拥有 wire schema/validator，History 仍有自己的 transaction/finalize，private replay manifest 与 live/fresh compensation effect/replay owner 均未移动 |
+| effect | 根文件的 `open_science_surface`、`restart_science_identity_with_budget`、`capture_authority_after_science_quiesce` 与 DB health helpers | 与 `cold/science_phase.rs`、`ScienceHostAdapter`、`AuthorityTransaction` 的 effect owner 交叉；这些 helper 有真实 I/O、进程或 `AppState` publication，不是 façade-only glue |
+| recovery | 根文件的 `replay_interrupted_one_click_finalize`、History terminal handoff consume、V1 interrupted-Science validation；同时 entry 调用 sibling compensation/history/Gateway replay | success-finalize replay/policy、顺序与 typed error conversion 仍在根文件；durable effect 本体分别仍位于 `one_click/compensation_replay.rs`、`history_recovery.rs`、`proxy_lifecycle/recovery.rs` |
 | read-model | `capture_one_click_entry_facts`、`decide_one_click_entry`、`history_resume_handoff` | 这是控制流 read-model，只为 branch/recovery eligibility 服务；最终用户 publication 的只读权威回读属于 `runtime/finalize_consumer.rs::project_finalize_consumer_state`，不得与 entry facts 合并 |
 | failure projection | `typed_one_click_err`、`typed_interrupted_gateway_recovery_error`、`typed_authority_cleanup_err`、`OneClickFailure`；cold compensation 生成 `ProjectedRecovery` | produce-site kind 在 runtime 内标注；最终 DTO 属于 `commands/runtime/one_click.rs::project_one_click_failure`，History resume 的失败可见性由 `history_recovery.rs::project_resume_failure` 再附加 `history_recovery.status=restored`。根文件不独占完整 projection owner |
 
-所以当前重复主要是**同类 transaction/recovery policy 分散在多个 owner**，而不是可以直接删除的
-dead writer。任何后续移动都必须保持 façade、业务 transition、durable recovery effect 和 consumer
-read-model 四类责任可分别测试，不能用“文件过长”作为合并事务的理由。
+因此，本轮只闭合 one-click durable-journal identity/transition 的物理 owner；不是删除 dead
+writer，也不是合并 transaction/recovery policy。任何后续移动都必须保持 façade、业务 transition、
+durable recovery effect 和 consumer read-model 四类责任可分别测试，不能用“文件过长”作为合并事务的理由。
 
 ### restore 与下一次 one-click 的一致和断裂
 
@@ -467,11 +485,19 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- `one_click.rs` 已有 entry、healthy、cold/Science/compensation sibling owner，但根文件仍同时保留
-  façade/coordinator、one-click business journal transition、若干 Science/authority effect helper、
-  finalize recovery、entry read-model 与 typed failure glue。当前最窄的物理闭合边界是把纯
-  one-click durable-journal identity/transition owner 移到 private sibling module；这不是把
-  History、one-click compensation 或 interrupted-Gateway 合成同一事务；
+- Phase 4 基线中的最窄物理边界已由本轮 Phase 5 未提交 source candidate 完成：one-click
+  durable-journal identity/transition owner 位于 private `one_click/transaction.rs`。根
+  `one_click.rs` 仍保留 façade/coordinator、entry/recovery policy、success-finalize replay、effect、
+  read-model 与 failure glue；History、`config.rs` wire schema、private replay manifest 以及
+  live/fresh compensation effect/replay owner 未移动，也没有被合并为同一事务；
+- 该 candidate 的 4 个 specified focused exact tests、Desktop/Gateway fmt + clippy、Desktop
+  564/0/40 suite、Gateway 291/0/0 tests、metadata validator 与 quality kernel + runtime mutation
+  inventory 21 tests 均 `PASS`。唯一一次 canonical full-gate 尝试使用空 mode-0700
+  `/private/tmp/csg.POwoFR`，但 dirty worktree 无 exact Git binding，故 preflight RC 12 / internal-failure，
+  15 suites / observations 未开始且无 run id、completion seal、evidence 或 source snapshot manifest；
+  判定为 `PREFLIGHT/ENV-BLOCKED`，exact-SHA canonical source gate 保持 `NOT-RUN`，不是 source
+  `PASS` 或产品 `FAIL`。commit 需另行授权；artifact、installed/runtime、isolated-live、authorized
+  provider、SSH、Skill/MCP、signing、notarization 与 release 一律 `NOT-RUN`，不继承历史 PASS；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
   finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private

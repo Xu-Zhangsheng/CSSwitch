@@ -196,6 +196,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     }
 
     let source = include_str!("../one_click.rs");
+    let transaction_source = include_str!("../one_click/transaction.rs");
     let transaction_stop_source = include_str!("../transaction_science_stop.rs");
     let recovery_source = include_str!("../recovery.rs");
     let failure_source = include_str!("../../failure.rs");
@@ -309,31 +310,24 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && !gateway_recovery_source.contains("当前 R2-A 兼容层"),
         "interrupted Gateway recovery must publish typed V2 intent/outcomes with complete-record CAS and never write a V1 string stage"
     );
-    let one_click_progress = source
-        .split("pub(super) enum OneClickJournalProgress")
+    let one_click_progress = transaction_source
+        .split("enum OneClickJournalProgress")
         .nth(1)
-        .and_then(|tail| tail.split("pub(super) fn one_click_phase_exposure").next())
+        .and_then(|tail| tail.split("fn one_click_phase_exposure").next())
         .expect("one-click journal progress must remain discoverable");
-    let one_click_writer = source
-        .split("pub(super) fn write_one_click_checkpoint")
+    let one_click_writer = transaction_source
+        .split("fn write_one_click_checkpoint")
         .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(super) fn validate_interrupted_science_transaction_entry")
-                .next()
-        })
+        .and_then(|tail| tail.split("fn begin_one_click_compensation").next())
         .expect("one-click V2 writer must remain discoverable");
-    let compensation_journal = source
-        .split("pub(super) fn begin_one_click_compensation(")
+    let compensation_journal = transaction_source
+        .split("fn begin_one_click_compensation(")
         .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(super) fn validate_interrupted_science_transaction_entry")
-                .next()
-        })
+        .and_then(|tail| tail.split("fn clear_one_click_transaction").next())
         .expect("durable one-click compensation journal writers must remain discoverable");
-    let one_click_terminal_writers = source
-        .split("pub(super) fn clear_one_click_transaction")
+    let one_click_terminal_writers = transaction_source
+        .split("fn clear_one_click_transaction")
         .nth(1)
-        .and_then(|tail| tail.split("fn history_recovery_choices").next())
         .expect("one-click terminal journal writers must remain discoverable");
     let one_click_restore = recovery_source
         .split("pub(super) fn restore_with_gateway")
@@ -367,16 +361,15 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && one_click_terminal_writers
                 .contains("next.finalize = config::RuntimeFinalizeState::Intent")
             && one_click_terminal_writers.contains("fn complete_one_click_finalize")
-            && one_click_terminal_writers.contains("fn replay_interrupted_one_click_finalize")
-            && one_click_terminal_writers
-                .contains("replay_finalize_authority_cleanup(state, ticket)")
+            && source.contains("fn replay_interrupted_one_click_finalize")
+            && source.contains("replay_finalize_authority_cleanup(state, ticket)")
             && one_click_terminal_writers
                 .contains("current.runtime_binding = Some(binding.clone())")
             && one_click_terminal_writers.contains("current.runtime_transaction = None")
             && one_click_terminal_writers.contains("OneClickJournalProgress::Finalized")
-            && source
+            && transaction_source
                 .contains("journal.compensation == config::RuntimeCompensationState::NotStarted")
-            && source.contains(
+            && transaction_source.contains(
                 "journal.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted"
             ),
         "one-click finalize writers must remain replayable complete-record transitions"
@@ -472,13 +465,14 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         "authority restore must preserve the exact durable compensation record before effects"
     );
     assert!(
-        source.contains("fn config_authority_matches(")
-            && source.contains("current.active_id == target_profile_id")
-            && source.contains("current.runtime_binding.as_ref() == previous_binding")
+        transaction_source.contains("fn config_authority_matches(")
+            && transaction_source.contains("current.active_id == target_profile_id")
+            && transaction_source.contains("current.runtime_binding.as_ref() == previous_binding")
             && one_click_writer.contains("config_authority_matches(")
-            && one_click_terminal_writers
+            && (one_click_terminal_writers
                 .matches("config_authority_matches(")
                 .count()
+                + source.matches("config_authority_matches(").count())
                 >= 5
             && pending_cleanup_source.contains("cleanup_manifest_missing")
             && pending_cleanup_source.contains("manifest.schema_version == 2")
@@ -1229,7 +1223,7 @@ fn o1_e3_compensation_replay_has_one_durable_pre_auth_owner() {
     let command_source = include_str!("../../../commands/runtime/one_click.rs");
     let compensation_source = include_str!("../one_click/cold/compensation.rs");
     let replay_source = include_str!("../one_click/compensation_replay.rs");
-    let owner_source = include_str!("../one_click.rs");
+    let transaction_source = include_str!("../one_click/transaction.rs");
     let recovery_source = include_str!("../recovery.rs");
     let managed_launch_source = include_str!("../../science/managed_launch.rs");
     let settings_source = include_str!("../../settings.rs");
@@ -1269,7 +1263,7 @@ fn o1_e3_compensation_replay_has_one_durable_pre_auth_owner() {
         command_source.contains("interrupted_compensation_requires_pre_auth_replay()")
             && command_source.contains("RuntimeMutationDomain::Destructive")
             && command_source.contains("acquire_runtime_compensation_auth_lease")
-            && owner_source.contains("acquire_runtime_compensation_publication_lease"),
+            && transaction_source.contains("acquire_runtime_compensation_publication_lease"),
         "normal login must avoid the destructive lease while replay must serialize effects"
     );
 
