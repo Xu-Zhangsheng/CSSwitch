@@ -322,12 +322,19 @@ completion seal 为
 canonical manifest 或 retained receipt，当前正文不能独立复核，只能作为单点未复现的诊断线索，不能把
 `070bd0b` 改写为 source PASS，也不能替代 canonical seal。
 
-`f60a55e` 的历史 run 已建立该 exact SHA 的 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；`070bd0b` 保持
-sealed `FAIL`。当前 dirty test/docs candidate 只删除失败后会受 authority rollback 影响的辅助
+`c9cf1e6a989663c8cc57ae9d837be003bed17144` 只删除失败后会受 authority rollback 影响的辅助
 `serve` call-count 断言；存活 unbound PID、精确 authority mutation、blocked restore、无 listener / receipt
-与 attributable cleanup 的强断言均保留，production source 未改变。该候选的
-`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；其是否成为当前 source closure 只由后续 clean exact
-SHA gate 判定。artifact、isolated-live、authorized-live、installed、Skill/MCP、SSH、
+与 attributable cleanup 的强断言均保留，production source 未改变。该 clean exact SHA 的 canonical
+run `7dee16001e4d3c7d7e5b51be212aee68`（`/private/tmp/p5g.VPWbWg`）runner exit 0、15/15 suites 与
+15/15 observations 均为 `PASS`。completion seal、evidence manifest、run manifest、source snapshot
+manifest 与 input digest 分别为 `0d162b0599b57d1526ded8b49e7a15d5571e6ff0cafd59844ed14d210839a6b3`、
+`2cae27dd1d444cc1515d3deb493503dcf353ef8c33543aa91c786b5d87ca17a9`、
+`03ca831b4f5400f458501c75e28c08676268ca61bf94a75fcc3ce3d1eeeb2cb8`、
+`6daed8512c3cc417d15cc352adbe8986d7f85c7aea02bd7877abf35683a3b496` 与
+`e4e087feb61aa138b4fc573819393b4df59aa253ba9b02a964e4976ced4789d6`。因此 `f60a55e` 与
+`c9cf1e6` 分别只为各自 exact SHA 建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`；`070bd0b` 保持 sealed
+`FAIL`。本 evidence-only descendant 不继承任一历史 seal，其 exact 状态仍只由绑定该 SHA 的外部
+canonical completion seal 判定。artifact、isolated-live、authorized-live、installed、Skill/MCP、SSH、
 provider、signing/notarization 与 release 全部 `NOT-RUN`，且不继承。
 
 ## 当前源码问题
@@ -358,7 +365,7 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| Phase 5 one-click durable-journal owner | `8687e79` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；`f60a55e` 修复 fixture，canonical `0be6cd1e…` 为 15/15 `PASS`，其 seal 与 manifests 绑定 `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 是已修复 fixture drift 的历史 attempt；evidence-only `070bd0b` 的 `2247f8e…` 亦为 sealed `FAIL` / RC 12：14/15，唯一 Desktop wrapper identity observation failed，随后单次 exact focused test `PASS` 但不能替代 seal。其 completion/evidence/run/source manifest 与 input digest 分别为 `756715cb…` / `dd14c0a4…` / `330712c1…` / `06ff544b…` / `69f40593…`，绑定 `/private/tmp/csg.Y2ZbTS`。当前 dirty test/docs candidate 只删除不稳定的辅助 serve-count 断言，production source 未变，`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；当前 source-closure 身份只由后续 clean exact SHA gate 判定 | `NOT-RUN` | `NOT-RUN` | `NOT-RUN`；provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 不继承 |
+| Phase 5 one-click durable-journal owner | `8687e79` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；`f60a55e` 修复 fixture，canonical `0be6cd1e…` 为 15/15 `PASS`。`8687e79` 的 `22038ed…` sealed `FAIL` 是已修复 fixture drift 的历史 attempt；`070bd0b` 的 `2247f8e…` 亦保持 sealed `FAIL` / RC 12。`c9cf1e6` 删除不稳定的辅助 serve-count 断言，production source 未变；其 clean exact-SHA canonical run `7dee1600…` 为 15/15 `PASS`，completion/evidence/run/source manifest 与 input digest 分别为 `0d162b05…` / `2cae27dd…` / `03ca831b…` / `6daed851…` / `e4e087fe…`，绑定保留的 `/private/tmp/p5g.VPWbWg`。本 evidence-only descendant 的 exact 状态不继承，仍只由后续绑定该 SHA 的 canonical seal 判定 | `NOT-RUN` | `NOT-RUN` | `NOT-RUN`；provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 不继承 |
 | 一键入口、Gateway / Science 启动与 finalize | `d2cf95e` fresh completion review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | 历史 `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；当前 source candidate artifact `NOT-RUN` | 历史 `18a6788` adoption G2 `PASS(scope=science-adoption-isolated-live)`；当前 source candidate `NOT-RUN` | installed normal 历史 product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；历史 profile-switch rollback owner 已随 dead writer 删除；`d2cf95e` review/gate `PASS` | 历史 `18a6788` Test G1 / normal identity `PASS`；当前 source candidate `NOT-RUN` | 历史 healthy deferred/cold selected/reopen/cleanup `PASS`；replacement/race/crash 由 source fixture 证明，当前 source candidate live `NOT-RUN` | installed normal 历史 Provider Stop/cleanup `PASS` |
 | Science fixed active / pending update adoption | `9476be5` 已实现 managed-health proof + generation/full-owner CAS；该修复已纳入 `d2cf95e` 的 608-test Desktop Rust suite、frontend、metadata、inventory、fresh completion review 与 canonical 15-suite `PASS` source closure | `NOT-RUN`；不得继承 `18a6788` artifact | `NOT-RUN`；RM-21 必须按 active/pending 与 next-cold-start 合同重跑 | `NOT-RUN`；真实 updater/Science 需另行授权 |

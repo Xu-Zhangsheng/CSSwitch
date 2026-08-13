@@ -101,13 +101,21 @@ evidence manifest、run manifest、source snapshot manifest 与 input digest 分
 的单次非 canonical focused diagnosis `PASS`（1 passed、603 filtered、2.99s）；但该运行没有 canonical
 manifest 或 retained receipt，当前正文不能独立复核，只能作为单点未复现的诊断线索，不能替代 seal。
 
-因此 `f60a55e` 的历史 run 只为该 exact SHA 建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`，`070bd0b`
-保持 sealed `FAIL`。当前 dirty test/docs candidate 只删除失败后会受 authority rollback 影响的辅助
+`c9cf1e6a989663c8cc57ae9d837be003bed17144` 只删除失败后会受 authority rollback 影响的辅助
 `serve` call-count 断言；存活 unbound PID、精确 authority mutation、blocked restore、无 listener / receipt
-与 attributable cleanup 的强断言均保留，production source 未改变。该候选的
-`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；其是否成为当前 source closure 只由后续 clean exact
-SHA gate 判定。artifact、isolated-live、authorized-live、installed、Skill/MCP、
-SSH、provider、signing、notarization 与 release 均为 `NOT-RUN`，不得继承。
+与 attributable cleanup 的强断言均保留，production source 未改变。该 clean exact SHA 的 canonical
+run `7dee16001e4d3c7d7e5b51be212aee68`（`/private/tmp/p5g.VPWbWg`）runner exit 0、15/15 suites 与
+15/15 observations 均为 `PASS`。completion seal、evidence manifest、run manifest、source snapshot
+manifest 与 input digest 分别为 `0d162b0599b57d1526ded8b49e7a15d5571e6ff0cafd59844ed14d210839a6b3`、
+`2cae27dd1d444cc1515d3deb493503dcf353ef8c33543aa91c786b5d87ca17a9`、
+`03ca831b4f5400f458501c75e28c08676268ca61bf94a75fcc3ce3d1eeeb2cb8`、
+`6daed8512c3cc417d15cc352adbe8986d7f85c7aea02bd7877abf35683a3b496` 与
+`e4e087feb61aa138b4fc573819393b4df59aa253ba9b02a964e4976ced4789d6`。
+
+因此 `f60a55e` 与 `c9cf1e6` 分别只为各自 exact SHA 建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`，
+`070bd0b` 保持 sealed `FAIL`。本 evidence-only descendant 不继承任一历史 seal，其 exact 状态仍只由
+绑定该 SHA 的外部 canonical completion seal 判定。artifact、isolated-live、authorized-live、installed、
+Skill/MCP、SSH、provider、signing、notarization 与 release 均为 `NOT-RUN`，不得继承。
 
 ### 入口与五条实际路径
 
@@ -526,9 +534,11 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   attempt。`f60a55e` 的 `0be6cd1e…` 只为该 exact SHA 建立 source green；evidence-only `070bd0b`
   的 `2247f8e…` sealed `FAIL` / RC 12（14/15，唯一 Desktop wrapper identity observation failed），
   随后单次 exact focused test `PASS` 但不能替代 seal。任一 evidence-only descendant 不继承历史
-  PASS/FAIL。当前 dirty test/docs candidate 只删除不稳定的辅助 serve-count 断言，production source
-  未变，`GATE-SOURCE=NOT-RUN`、`SOURCE-GREEN=NOT-RUN`；当前 source-closure 身份只由后续 clean exact
-  SHA gate 判定。artifact、isolated-live、
+  PASS/FAIL。`c9cf1e6` 只删除不稳定的辅助 serve-count 断言，production source 未变；其 clean exact-SHA
+  canonical run `7dee1600…` 为 15/15 `PASS`，completion/evidence/run/source manifest 与 input digest
+  分别为 `0d162b05…` / `2cae27dd…` / `03ca831b…` / `6daed851…` / `e4e087fe…`，绑定保留的
+  `/private/tmp/p5g.VPWbWg`。本 evidence-only descendant 不继承该 seal，其 exact source-closure 身份
+  只由绑定该 SHA 的外部 canonical completion seal 判定。artifact、isolated-live、
   authorized-live、installed、Skill/MCP、
   SSH、provider、signing/notarization 与 release 仍一律 `NOT-RUN`；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
