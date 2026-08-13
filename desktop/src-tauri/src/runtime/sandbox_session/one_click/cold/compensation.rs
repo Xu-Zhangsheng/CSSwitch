@@ -362,6 +362,7 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
             .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
         }
     };
+    let authority_bypass = _live_replay_lease.authority_writer_bypass();
     let prior_runtime_fingerprint =
         prior_science.map(|prior| prior.runtime.environment_transaction_id());
     let launch_runtime_fingerprint = failure.rollback.launch_runtime.environment_transaction_id();
@@ -494,8 +495,13 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         config::RuntimeCompensationStep::SshCleanup,
     )?;
     let ssh_cleanup_result = match failure.rollback.ssh_stub_transaction.as_ref() {
-        Some(transaction) => transaction.compensate(&sandbox_home()),
-        None => crate::runtime::settings::remove_managed_sandbox_ssh_stub(&sandbox_home()),
+        Some(transaction) => {
+            transaction.compensate_with_authority_bypass(&sandbox_home(), &authority_bypass)
+        }
+        None => crate::runtime::settings::remove_managed_sandbox_ssh_stub_with_authority_bypass(
+            &sandbox_home(),
+            &authority_bypass,
+        ),
     };
     let ssh_cleanup = match ssh_cleanup_result {
         Ok(_) => CompensationStepOutcome::Succeeded,

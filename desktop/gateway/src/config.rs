@@ -30,6 +30,9 @@ pub struct GatewayConfig {
     /// It is supplied only through the child environment and is never returned
     /// from Gateway health or inference responses.
     pub skill_bridge_token: Option<String>,
+    /// Inherited, nonce-bound identity of Desktop's compensation authority
+    /// fence.  It is intentionally a descriptor identity, never a path.
+    pub(crate) skill_authority_fence: Option<crate::skill_install::AuthorityFenceDescriptor>,
     /// Verified Science runtime identity used by the local Skill attach control
     /// plane. A gateway without this context still serves inference traffic but
     /// does not install Skills.
@@ -396,6 +399,19 @@ impl GatewayConfig {
                     value.len() == 64
                         && value.chars().all(|character| character.is_ascii_hexdigit())
                 });
+        let skill_surface_present =
+            skill_data_dir.is_some() || skill_bridge_dir.is_some() || skill_bridge_token.is_some();
+        let skill_authority_fence =
+            match skill_bridge_token.as_deref() {
+                Some(token) => Some(crate::skill_install::AuthorityFenceDescriptor::from_env(
+                    token,
+                )?),
+                None if skill_surface_present => return Err(
+                    "Skill bridge capability 不完整，拒绝启动未受 authority fence 保护的写入宿主"
+                        .into(),
+                ),
+                None => None,
+            };
         let science_host_context = std::env::var("CSSWITCH_SCIENCE_HOST_CONTEXT")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -455,6 +471,7 @@ impl GatewayConfig {
             skill_data_dir,
             skill_bridge_dir,
             skill_bridge_token,
+            skill_authority_fence,
             science_host_context,
         })
     }

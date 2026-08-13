@@ -18,10 +18,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::marker::PhantomData;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::model_catalog::{ModelRoute, RoleBindings};
 use crate::provider_contracts::{CredentialSource, ModelPolicy};
@@ -2172,6 +2174,62 @@ pub(crate) struct RuntimeHistoryEffectLease {
     _fence: RuntimeCompensationFence,
 }
 
+/// A scoped proof that the caller already owns the authority fence exclusively.
+/// It deliberately cannot cross threads and is only constructible from an EX
+/// lease, so an EX owner can call an authority writer without attempting its
+/// own incompatible SH flock.
+pub(crate) struct AuthorityWriterBypass<'owner> {
+    _owner: PhantomData<&'owner RuntimeCompensationFence>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+/// Keeps a normal authority filesystem mutation inside the shared authority
+/// fence, or records the scoped EX-owner bypass that made SH unnecessary.
+pub(crate) struct AuthorityWriterGuard<'owner> {
+    _kind: AuthorityWriterGuardKind<'owner>,
+}
+
+enum AuthorityWriterGuardKind<'owner> {
+    Shared {
+        _secure: SecureDir,
+        _fence: RuntimeCompensationFence,
+    },
+    Bypass(PhantomData<&'owner AuthorityWriterBypass<'owner>>),
+}
+
+/// A single inherited descriptor for the Skill-install host.  It identifies
+/// the existing compensation fence without handing a path to the child; the
+/// receiver must still check the frozen device/inode before taking SH.
+pub(crate) struct AuthorityFenceCapability {
+    directory: fs::File,
+    directory_device: u64,
+    directory_inode: u64,
+    lock_device: u64,
+    lock_inode: u64,
+}
+
+impl AuthorityFenceCapability {
+    pub(crate) fn fd(&self) -> i32 {
+        self.directory.as_raw_fd()
+    }
+
+    pub(crate) fn directory_device(&self) -> u64 {
+        self.directory_device
+    }
+
+    pub(crate) fn directory_inode(&self) -> u64 {
+        self.directory_inode
+    }
+
+    pub(crate) fn lock_device(&self) -> u64 {
+        self.lock_device
+    }
+
+    pub(crate) fn lock_inode(&self) -> u64 {
+        self.lock_inode
+    }
+}
+
 impl Drop for ConfigWriterFence {
     fn drop(&mut self) {
         unsafe {
@@ -2511,6 +2569,73 @@ impl SecureDir {
         Ok(RuntimeCompensationFence { file })
     }
 
+    fn authority_fence_capability(&self) -> io::Result<AuthorityFenceCapability> {
+        let name = Self::name(RUNTIME_COMPENSATION_AUTH_LOCK_FILE)?;
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_CREAT
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC
+                    | libc::O_NONBLOCK,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "runtime compensation auth fence 必须是当前用户的单链接私有普通文件",
+            ));
+        }
+        let inherited_fd = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_DUPFD, 64) };
+        if inherited_fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let inherited = unsafe { fs::File::from_raw_fd(inherited_fd) };
+        let flags = unsafe { libc::fcntl(inherited.as_raw_fd(), libc::F_GETFD) };
+        if flags < 0
+            || unsafe {
+                libc::fcntl(
+                    inherited.as_raw_fd(),
+                    libc::F_SETFD,
+                    flags & !libc::FD_CLOEXEC,
+                )
+            } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let verified = inherited.metadata()?;
+        let directory = self.file.metadata()?;
+        if !verified.is_dir()
+            || verified.uid() != unsafe { libc::geteuid() }
+            || verified.permissions().mode() & 0o077 != 0
+            || verified.dev() != directory.dev()
+            || verified.ino() != directory.ino()
+        {
+            return Err(io::Error::other(
+                "runtime compensation auth fence capability identity changed",
+            ));
+        }
+        Ok(AuthorityFenceCapability {
+            directory: inherited,
+            directory_device: directory.dev(),
+            directory_inode: directory.ino(),
+            lock_device: metadata.dev(),
+            lock_inode: metadata.ino(),
+        })
+    }
+
     fn rename(&self, from: &str, to: &str) -> io::Result<()> {
         let from = Self::name(from)?;
         let to = Self::name(to)?;
@@ -2588,6 +2713,60 @@ pub(crate) fn acquire_runtime_compensation_auth_lease(
         _secure: secure,
         _fence: fence,
     })
+}
+
+/// Serialize one ordinary authority filesystem mutation with durable replay
+/// and live/history authority restoration.  This is intentionally narrower
+/// than the config writer fence: only authority writers call it.
+pub(crate) fn acquire_authority_writer_guard() -> io::Result<AuthorityWriterGuard<'static>> {
+    acquire_authority_writer_guard_at(&default_dir())
+}
+
+fn acquire_authority_writer_guard_at(dir: &Path) -> io::Result<AuthorityWriterGuard<'static>> {
+    let secure = SecureDir::open(dir, true)?;
+    let fence = secure.acquire_runtime_compensation_fence(libc::LOCK_SH)?;
+    Ok(AuthorityWriterGuard {
+        _kind: AuthorityWriterGuardKind::Shared {
+            _secure: secure,
+            _fence: fence,
+        },
+    })
+}
+
+/// Consume a scoped EX proof for a single nested writer call.  The guard has
+/// no unlock effect because the owner lease remains responsible for the EX
+/// flock's lifetime.
+pub(crate) fn authority_writer_guard_from_bypass<'owner>(
+    _bypass: &'owner AuthorityWriterBypass<'owner>,
+) -> AuthorityWriterGuard<'owner> {
+    AuthorityWriterGuard {
+        _kind: AuthorityWriterGuardKind::Bypass(PhantomData),
+    }
+}
+
+macro_rules! authority_writer_bypass {
+    ($lease:ty) => {
+        impl $lease {
+            pub(crate) fn authority_writer_bypass(&self) -> AuthorityWriterBypass<'_> {
+                AuthorityWriterBypass {
+                    _owner: PhantomData,
+                    _not_send_or_sync: PhantomData,
+                }
+            }
+        }
+    };
+}
+
+authority_writer_bypass!(RuntimeCompensationReplayLease);
+authority_writer_bypass!(RuntimeHistoryEffectLease);
+
+/// Prepare the one descriptor that the Desktop-spawned Gateway may inherit for
+/// its Skill mutation host.  The descriptor is not a lock grant: the child
+/// revalidates this exact identity and takes SH for each mutation.
+pub(crate) fn prepare_authority_fence_capability(
+    dir: &Path,
+) -> io::Result<AuthorityFenceCapability> {
+    SecureDir::open(dir, false)?.authority_fence_capability()
 }
 
 pub(crate) fn acquire_runtime_compensation_publication_lease(
@@ -5183,6 +5362,143 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap();
         publication.join().unwrap();
+    }
+
+    #[test]
+    fn authority_writer_guard_waits_for_ex_owner_and_bypass_never_relocks() {
+        let dir = tmpdir().join("authority-writer-guard");
+        save_to(&dir, &Config::default()).unwrap();
+        let replay = acquire_runtime_compensation_replay_lease(&dir).unwrap();
+        let (entered, received) = std::sync::mpsc::channel();
+        let waiting_dir = dir.clone();
+        let writer = std::thread::spawn(move || {
+            let _guard = acquire_authority_writer_guard_at(&waiting_dir).unwrap();
+            entered.send(()).unwrap();
+        });
+        assert!(
+            received
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "ordinary authority writer must wait for an EX effect owner"
+        );
+        {
+            let bypass = replay.authority_writer_bypass();
+            let _guard = authority_writer_guard_from_bypass(&bypass);
+        }
+        drop(replay);
+        received
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn authority_writer_guard_early_return_releases_sh() {
+        fn early_return(dir: &Path) -> io::Result<()> {
+            let _guard = acquire_authority_writer_guard_at(dir)?;
+            Ok(())
+        }
+
+        let dir = tmpdir().join("authority-writer-early-return");
+        save_to(&dir, &Config::default()).unwrap();
+        early_return(&dir).unwrap();
+        let replay = acquire_runtime_compensation_replay_lease(&dir).unwrap();
+        drop(replay);
+    }
+
+    #[test]
+    fn authority_writer_guard_ssh_leaf_child() {
+        let Some(root) = std::env::var_os("CSSWITCH_AUTHORITY_WRITER_SSH_CHILD_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        fs::write(root.join("about-to-write"), b"ready").unwrap();
+        let _ = crate::runtime::ssh_bridge::revoke_science_ssh_bridge(&root.join("sandbox"));
+        fs::write(root.join("write-returned"), b"done").unwrap();
+    }
+
+    #[test]
+    fn authority_writer_guard_blocks_actual_ssh_leaf_until_ex_releases() {
+        let root = tmpdir().join("authority-writer-ssh-leaf");
+        let dir = root.join("home/.csswitch");
+        fs::create_dir_all(&root).unwrap();
+        save_to(&dir, &Config::default()).unwrap();
+        let replay = acquire_runtime_compensation_replay_lease(&dir).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("config::tests::authority_writer_guard_ssh_leaf_child")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("CSSWITCH_AUTHORITY_WRITER_SSH_CHILD_ROOT", &root)
+            .env("HOME", root.join("home"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        wait_for_test_path(&root.join("about-to-write"));
+        assert!(
+            !root.join("write-returned").exists(),
+            "actual SSH authority writer entered while an EX owner still held the fence"
+        );
+        drop(replay);
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "authority SSH writer failed:\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(root.join("write-returned").is_file());
+    }
+
+    #[test]
+    fn authority_writer_leaf_contracts_use_fence_or_scoped_bypass() {
+        let oauth = include_str!("oauth_forge.rs");
+        let settings = include_str!("runtime/settings.rs");
+        let ssh_bridge = include_str!("runtime/ssh_bridge.rs");
+        let route = include_str!("runtime/skill_install_bridge.rs");
+        let skill_key = include_str!("runtime/proxy_lifecycle/skill_bridge.rs");
+        let history = include_str!("runtime/sandbox_session/history_recovery.rs");
+        let live = include_str!("runtime/sandbox_session/one_click/cold/compensation.rs");
+        let replay = include_str!("runtime/sandbox_session/one_click/compensation_replay.rs");
+
+        assert!(
+            oauth.contains("pub fn ensure_virtual_login")
+                && oauth.contains("acquire_authority_writer_guard")
+        );
+        assert!(oauth.contains("restore_history_choice_with_authority_bypass"));
+        assert!(
+            settings.contains("compensate_with_authority_bypass")
+                && settings.contains("compensate_durable_with_authority_bypass")
+                && settings.contains("remove_managed_sandbox_ssh_stub_with_authority_bypass")
+        );
+        assert!(
+            ssh_bridge.contains("pub(crate) fn prepare_science_ssh_bridge")
+                && ssh_bridge.contains("pub(crate) fn revoke_science_ssh_bridge")
+                && ssh_bridge.matches("acquire_authority_writer_guard").count() >= 2
+        );
+        assert!(
+            route.contains("fn register_before_science_start")
+                && route.contains("fn invalidate_route_configuration")
+                && route.contains("fn mark_route_configuration_current")
+                && route.matches("acquire_authority_writer_guard").count() >= 3
+        );
+        assert!(
+            skill_key.contains("fn publish_canonical_key")
+                && skill_key.contains("acquire_authority_writer_guard")
+        );
+        assert!(
+            history.contains("restore_history_choice_with_authority_bypass")
+                && history.contains("history_effect_lease.authority_writer_bypass")
+        );
+        assert!(
+            live.contains("_live_replay_lease.authority_writer_bypass")
+                && live.contains("compensate_with_authority_bypass")
+        );
+        assert!(
+            replay.contains("_replay_lease.authority_writer_bypass")
+                && replay.contains("compensate_durable_with_authority_bypass")
+        );
     }
 
     #[test]

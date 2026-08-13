@@ -156,7 +156,16 @@ impl ManagedSshStubTransaction {
         .flatten();
     }
 
-    pub(crate) fn compensate(&self, sandbox_home: &Path) -> Result<(), String> {
+    pub(crate) fn compensate_with_authority_bypass(
+        &self,
+        sandbox_home: &Path,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> Result<(), String> {
+        let _authority_guard = crate::config::authority_writer_guard_from_bypass(bypass);
+        self.compensate_unfenced(sandbox_home)
+    }
+
+    fn compensate_unfenced(&self, sandbox_home: &Path) -> Result<(), String> {
         let current = read_exact_v2_managed_stub(
             sandbox_home,
             &self.expected_system_config,
@@ -204,7 +213,16 @@ impl ManagedSshStubTransaction {
         }
     }
 
-    pub(crate) fn compensate_durable(&self, sandbox_home: &Path) -> Result<(), String> {
+    pub(crate) fn compensate_durable_with_authority_bypass(
+        &self,
+        sandbox_home: &Path,
+        bypass: &crate::config::AuthorityWriterBypass<'_>,
+    ) -> Result<(), String> {
+        let _authority_guard = crate::config::authority_writer_guard_from_bypass(bypass);
+        self.compensate_durable_unfenced(sandbox_home)
+    }
+
+    fn compensate_durable_unfenced(&self, sandbox_home: &Path) -> Result<(), String> {
         if self.expected_system_config != system_ssh_config_path()?
             || self.expected_hosts.is_empty()
             || !self
@@ -214,7 +232,7 @@ impl ManagedSshStubTransaction {
         {
             return Err("durable SSH stub transaction authority drifted or retargeted".into());
         }
-        self.compensate(sandbox_home)
+        self.compensate_unfenced(sandbox_home)
     }
 }
 
@@ -240,6 +258,20 @@ pub(crate) fn system_ssh_config_path() -> Result<PathBuf, String> {
 /// symlinks and special files fail closed instead of being deleted or exposed
 /// to a later isolated Science launch.
 pub(crate) fn remove_managed_sandbox_ssh_stub(sandbox_home: &Path) -> Result<(), String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    remove_managed_sandbox_ssh_stub_unfenced(sandbox_home)
+}
+
+pub(crate) fn remove_managed_sandbox_ssh_stub_with_authority_bypass(
+    sandbox_home: &Path,
+    bypass: &crate::config::AuthorityWriterBypass<'_>,
+) -> Result<(), String> {
+    let _authority_guard = crate::config::authority_writer_guard_from_bypass(bypass);
+    remove_managed_sandbox_ssh_stub_unfenced(sandbox_home)
+}
+
+fn remove_managed_sandbox_ssh_stub_unfenced(sandbox_home: &Path) -> Result<(), String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("无法确认系统 HOME，不能撤销系统 SSH 配置。")?;

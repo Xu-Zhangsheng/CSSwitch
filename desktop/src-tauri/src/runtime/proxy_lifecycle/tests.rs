@@ -801,6 +801,7 @@ fn gateway_spawn_generation_drift_clears_only_its_marker_and_never_publishes_sta
     .unwrap();
     let mut skill_host = PreparedSkillInstallHost {
         key: Some(staged_bridge),
+        authority_fence: None,
     };
     let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
     let lifecycle = crate::lifecycle::Lifecycle::new();

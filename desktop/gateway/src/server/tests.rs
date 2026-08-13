@@ -1208,6 +1208,7 @@ fn every_provider_request_body_limit_returns_413_before_allocation() {
             skill_data_dir: None,
             skill_bridge_dir: None,
             skill_bridge_token: None,
+            skill_authority_fence: None,
             science_host_context: None,
         };
         let response = capture_tcp_response(|stream| {
@@ -1625,6 +1626,7 @@ fn deepseek_dsml_modes_never_select_or_apply_kimi_rules() {
         skill_data_dir: None,
         skill_bridge_dir: None,
         skill_bridge_token: None,
+        skill_authority_fence: None,
         science_host_context: None,
     };
     assert!(dsml_stream_filter(&base, &tools, Some("nonce")).is_none());
@@ -1669,6 +1671,7 @@ fn openai_reasoning_history_survives_loopback_token_rotation_but_not_profile_cha
         skill_data_dir: None,
         skill_bridge_dir: None,
         skill_bridge_token: None,
+        skill_authority_fence: None,
         science_host_context: None,
     };
     let first_signer = openai_chat_reasoning_signer(&base).unwrap();

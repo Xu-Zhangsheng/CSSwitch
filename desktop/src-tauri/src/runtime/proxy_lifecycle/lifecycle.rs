@@ -775,6 +775,9 @@ fn start_proxy_for_inner<R: Runtime>(
             return Err(error);
         }
     };
+    if let Some(skill_host) = prepared_skill_host.as_mut() {
+        skill_host.close_parent_authority_fence_after_spawn();
+    }
     let mut candidate = GatewaySpawnCandidate::new(child, state, spawn_owner.clone());
 
     let mut accepted_health = None;

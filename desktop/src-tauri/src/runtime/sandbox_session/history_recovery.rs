@@ -1230,11 +1230,13 @@ pub(crate) fn restore_history_choice_entry<R: Runtime>(
         };
     }
 
-    if let Err(error) = oauth_forge::restore_history_choice(
+    let authority_bypass = history_effect_lease.authority_writer_bypass();
+    if let Err(error) = oauth_forge::restore_history_choice_with_authority_bypass(
         &auth_dir,
         "virtual@localhost.invalid",
         &sandbox_root,
         &candidate,
+        &authority_bypass,
     ) {
         return match compensate_history_failure(
             &app,

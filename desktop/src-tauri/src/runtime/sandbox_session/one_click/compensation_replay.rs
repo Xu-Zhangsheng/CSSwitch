@@ -273,6 +273,7 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
     let dir = config::default_dir();
     let _replay_lease = config::acquire_runtime_compensation_replay_lease(&dir)
         .map_err(|error| format!("durable compensation replay lease failed: {error}"))?;
+    let authority_bypass = _replay_lease.authority_writer_bypass();
     let cfg = config::load_from(&dir).map_err(|error| error.to_string())?;
     let Some(journal) = cfg.runtime_compensation.as_ref() else {
         return Ok(false);
@@ -349,7 +350,10 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
                         .expect("Science replay requires its private manifest"),
                 ),
                 config::RuntimeCompensationStep::SshCleanup => {
-                    replay_ssh_cleanup(manifest.as_ref().expect("SSH replay requires manifest"))
+                    replay_ssh_cleanup(
+                        manifest.as_ref().expect("SSH replay requires manifest"),
+                        &authority_bypass,
+                    )
                 }
                 config::RuntimeCompensationStep::AuthorityRestore => {
                     let manifest = manifest
@@ -586,10 +590,16 @@ fn replay_science_cleanup<R: Runtime>(
 
 fn replay_ssh_cleanup(
     manifest: &CompensationReplayManifest,
+    bypass: &config::AuthorityWriterBypass<'_>,
 ) -> config::RuntimeCompensationStepState {
     let result = match manifest.ssh_stub_transaction.as_ref() {
-        Some(transaction) => transaction.compensate_durable(&sandbox_home()),
-        None => crate::runtime::settings::remove_managed_sandbox_ssh_stub(&sandbox_home()),
+        Some(transaction) => {
+            transaction.compensate_durable_with_authority_bypass(&sandbox_home(), bypass)
+        }
+        None => crate::runtime::settings::remove_managed_sandbox_ssh_stub_with_authority_bypass(
+            &sandbox_home(),
+            bypass,
+        ),
     };
     match result {
         Ok(_) => config::RuntimeCompensationStepState::Succeeded,

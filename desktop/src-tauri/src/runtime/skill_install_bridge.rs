@@ -62,6 +62,8 @@ pub(crate) fn register_before_science_start<R: Runtime>(
     bridge_key_file: &Path,
 ) -> RegistrationStatus {
     let result = (|| -> Result<bool, String> {
+        let _authority_guard = crate::config::acquire_authority_writer_guard()
+            .map_err(|error| format!("authority writer fence failed: {error}"))?;
         let (config, expected) = registration_inputs(app, data_dir, bridge_dir, bridge_key_file)?;
         let mcp_changed = merge_runtime_registration(&config, expected)?;
         let route_changed = ensure_route_skill(data_dir)?;
@@ -211,6 +213,12 @@ pub(crate) fn route_configuration_is_current(
 }
 
 pub(crate) fn invalidate_route_configuration(data_dir: &Path) -> Result<(), String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    invalidate_route_configuration_unfenced(data_dir)
+}
+
+fn invalidate_route_configuration_unfenced(data_dir: &Path) -> Result<(), String> {
     let path = route_state_path(data_dir);
     reject_symlink_path(&path)?;
     match fs::remove_file(&path) {
@@ -226,6 +234,15 @@ pub(crate) fn invalidate_route_configuration(data_dir: &Path) -> Result<(), Stri
 }
 
 pub(crate) fn mark_route_configuration_current(
+    data_dir: &Path,
+    science_version: &str,
+) -> Result<(), String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    mark_route_configuration_current_unfenced(data_dir, science_version)
+}
+
+fn mark_route_configuration_current_unfenced(
     data_dir: &Path,
     science_version: &str,
 ) -> Result<(), String> {

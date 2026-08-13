@@ -1326,7 +1326,9 @@ fn o1_e4_history_full_snapshot_restore_has_one_durable_effect_owner() {
         live.find("acquire_runtime_history_effect_lease").unwrap()
             < live.find("let owned_cfg = config::load_from").unwrap()
             && live.find("let owned_cfg = config::load_from").unwrap()
-                < live.find("oauth_forge::restore_history_choice(").unwrap(),
+                < live
+                    .find("oauth_forge::restore_history_choice_with_authority_bypass(")
+                    .unwrap(),
         "live history publication must acquire and revalidate its cross-process effect owner before credential effects"
     );
     assert!(

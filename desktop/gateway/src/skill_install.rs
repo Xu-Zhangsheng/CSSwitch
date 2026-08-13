@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
 use regex::Regex;
 use serde_json::{json, Value};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use csswitch_skill_install_core::{
     attach_skill, find_bundle_for_skill, install_github_package_with_progress, quarantine_bundle,
@@ -29,6 +31,242 @@ const BRIDGE_REQUEST_VERSION: u64 = 1;
 const BRIDGE_REQUEST_TTL_SECONDS: u64 = 180;
 pub(crate) const BRIDGE_INSTALL_RESPONSE_TIMEOUT_SECONDS: u64 =
     GITHUB_BUNDLE_OPERATION_TIMEOUT_SECONDS + 60;
+
+#[derive(Debug)]
+pub(crate) struct AuthorityFenceDescriptor {
+    directory: File,
+    directory_device: u64,
+    directory_inode: u64,
+    lock_device: u64,
+    lock_inode: u64,
+}
+
+impl Clone for AuthorityFenceDescriptor {
+    fn clone(&self) -> Self {
+        Self {
+            directory: self
+                .directory
+                .try_clone()
+                .expect("verified authority fence directory descriptor must remain open"),
+            directory_device: self.directory_device,
+            directory_inode: self.directory_inode,
+            lock_device: self.lock_device,
+            lock_inode: self.lock_inode,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AuthorityFenceSharedGuard {
+    file: File,
+}
+
+#[cfg(test)]
+static AUTHORITY_FENCE_AFTER_LOCK_SEAM: std::sync::LazyLock<
+    std::sync::Mutex<Option<(PathBuf, PathBuf)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+fn authority_fence_metadata_matches(metadata: &std::fs::Metadata, device: u64, inode: u64) -> bool {
+    metadata.is_file()
+        && metadata.dev() == device
+        && metadata.ino() == inode
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.nlink() == 1
+        && metadata.permissions().mode() & 0o077 == 0
+}
+
+impl Drop for AuthorityFenceSharedGuard {
+    fn drop(&mut self) {
+        // SAFETY: this guard owns the per-mutation open-file-description.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+impl AuthorityFenceDescriptor {
+    #[cfg(test)]
+    pub(crate) fn test_only(
+        directory: File,
+        directory_device: u64,
+        directory_inode: u64,
+        lock_device: u64,
+        lock_inode: u64,
+    ) -> Self {
+        Self {
+            directory,
+            directory_device,
+            directory_inode,
+            lock_device,
+            lock_inode,
+        }
+    }
+
+    pub(crate) fn from_env(bridge_token: &str) -> Result<Self, String> {
+        let parse = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or_else(|| format!("{name} 非法或缺失"))
+        };
+        let fd = std::env::var("CSSWITCH_AUTHORITY_FENCE_FD")
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|value| *value >= 3)
+            .ok_or("CSSWITCH_AUTHORITY_FENCE_FD 非法或缺失")?;
+        let directory_device = parse("CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE")?;
+        let directory_inode = parse("CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE")?;
+        let lock_device = parse("CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE")?;
+        let lock_inode = parse("CSSWITCH_AUTHORITY_FENCE_LOCK_INODE")?;
+        let binding = std::env::var("CSSWITCH_AUTHORITY_FENCE_NONCE")
+            .map_err(|_| "CSSWITCH_AUTHORITY_FENCE_NONCE 缺失")?;
+        let mut expected = Sha256::new();
+        expected.update(b"csswitch-skill-authority-fence-v1\0");
+        expected.update(bridge_token.as_bytes());
+        if binding != format!("{:x}", expected.finalize()) {
+            return Err("Skill authority fence descriptor 与当前 bridge 配置不匹配".into());
+        }
+        let owned_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 64) };
+        if owned_fd < 0 {
+            return Err("无法接管 Skill authority fence directory descriptor".into());
+        }
+        // Trusted Desktop spawn supplied this raw descriptor only across the
+        // Desktop -> Gateway exec boundary. Close it before Gateway can launch
+        // any downloader child; untrusted standalone callers fail validation.
+        if unsafe { libc::close(fd) } != 0 {
+            unsafe { libc::close(owned_fd) };
+            return Err("无法关闭已继承的 Skill authority fence descriptor".into());
+        }
+        let directory = unsafe { File::from_raw_fd(owned_fd) };
+        let metadata = directory
+            .metadata()
+            .map_err(|_| "无法检查 Skill authority fence directory descriptor")?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.dev() != directory_device
+            || metadata.ino() != directory_inode
+        {
+            return Err("Skill authority fence directory descriptor identity 或权限不匹配".into());
+        }
+        Ok(Self {
+            directory,
+            directory_device,
+            directory_inode,
+            lock_device,
+            lock_inode,
+        })
+    }
+
+    pub(crate) fn acquire_shared(&self) -> Result<AuthorityFenceSharedGuard, String> {
+        let directory = self
+            .directory
+            .metadata()
+            .map_err(|_| "无法复核 Skill authority fence directory descriptor")?;
+        if !directory.is_dir()
+            || directory.uid() != unsafe { libc::geteuid() }
+            || directory.permissions().mode() & 0o077 != 0
+            || directory.dev() != self.directory_device
+            || directory.ino() != self.directory_inode
+        {
+            return Err("Skill authority fence directory descriptor 已漂移".into());
+        }
+        let name = std::ffi::CString::new(".runtime-compensation.auth.lock").unwrap();
+        let fd = unsafe {
+            libc::openat(
+                self.directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            return Err("Skill authority fence lock entry 不可用".into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let metadata = file
+            .metadata()
+            .map_err(|_| "无法检查 Skill authority fence lock")?;
+        if !authority_fence_metadata_matches(&metadata, self.lock_device, self.lock_inode) {
+            return Err("Skill authority fence descriptor identity 或权限不匹配".into());
+        }
+        loop {
+            // SAFETY: `file` is a new O_CLOEXEC open-file-description for this mutation.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) } == 0 {
+                let after_lock = match file.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(_) => {
+                        unsafe {
+                            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+                        }
+                        return Err("无法复核已锁定的 Skill authority fence".into());
+                    }
+                };
+                #[cfg(test)]
+                if let Some((entered, release)) = AUTHORITY_FENCE_AFTER_LOCK_SEAM
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone()
+                {
+                    fs::write(entered, b"locked").map_err(|_| {
+                        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+                        "无法发布 authority fence after-lock 测试同步点"
+                    })?;
+                    wait_for_authority_fence_test_path(&release)?;
+                }
+                let fresh_fd = unsafe {
+                    libc::openat(
+                        self.directory.as_raw_fd(),
+                        name.as_ptr(),
+                        libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                    )
+                };
+                if fresh_fd < 0 {
+                    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+                    return Err("已锁定后无法重新打开 Skill authority fence entry".into());
+                }
+                let fresh = unsafe { File::from_raw_fd(fresh_fd) };
+                let fresh_metadata = match fresh.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(_) => {
+                        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+                        return Err("已锁定后无法复核 Skill authority fence entry".into());
+                    }
+                };
+                if authority_fence_metadata_matches(&after_lock, self.lock_device, self.lock_inode)
+                    && authority_fence_metadata_matches(
+                        &fresh_metadata,
+                        self.lock_device,
+                        self.lock_inode,
+                    )
+                    && fresh_metadata.dev() == after_lock.dev()
+                    && fresh_metadata.ino() == after_lock.ino()
+                {
+                    return Ok(AuthorityFenceSharedGuard { file });
+                }
+                unsafe {
+                    libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+                }
+                return Err("已锁定的 Skill authority fence identity 或权限不匹配".into());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("无法取得 Skill authority shared fence: {error}"));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn wait_for_authority_fence_test_path(path: &Path) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if path.exists() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Err("authority fence 测试同步点超时".into())
+}
 
 #[derive(Debug)]
 struct InstallLock {
@@ -1545,6 +1783,7 @@ fn rename_no_replace(source: &Path, target: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::OpenOptionsExt;
 
     const TEST_BRIDGE_TOKEN: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1569,6 +1808,341 @@ mod tests {
         fs::create_dir_all(data.join("orgs/org-test/skills")).unwrap();
         fs::write(data.join("active-org.json"), br#"{"org_uuid":"org-test"}"#).unwrap();
         (root, data)
+    }
+
+    fn test_authority_fence(root: &Path) -> (File, AuthorityFenceDescriptor) {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+        fs::create_dir_all(root).unwrap();
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join(".runtime-compensation.auth.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        let metadata = file.metadata().unwrap();
+        let directory = File::open(root).unwrap();
+        let directory_metadata = directory.metadata().unwrap();
+        (
+            file,
+            AuthorityFenceDescriptor::test_only(
+                directory,
+                directory_metadata.dev(),
+                directory_metadata.ino(),
+                metadata.dev(),
+                metadata.ino(),
+            ),
+        )
+    }
+
+    struct AuthorityFenceAfterLockGuard;
+
+    impl Drop for AuthorityFenceAfterLockGuard {
+        fn drop(&mut self) {
+            *AUTHORITY_FENCE_AFTER_LOCK_SEAM
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
+        }
+    }
+
+    fn arm_authority_fence_after_lock(
+        entered: PathBuf,
+        release: PathBuf,
+    ) -> AuthorityFenceAfterLockGuard {
+        *AUTHORITY_FENCE_AFTER_LOCK_SEAM
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some((entered, release));
+        AuthorityFenceAfterLockGuard
+    }
+
+    #[test]
+    fn authority_fence_rejects_closed_and_replaced_descriptor() {
+        let root = temp_dir("authority-fence-invalid");
+        let (closed, descriptor) = test_authority_fence(&root);
+        drop(closed);
+        fs::remove_file(root.join(".runtime-compensation.auth.lock")).unwrap();
+        assert!(descriptor.acquire_shared().is_err());
+
+        let replacement_root = root.join("replacement");
+        let (original, descriptor) = test_authority_fence(&replacement_root);
+        fs::remove_file(replacement_root.join(".runtime-compensation.auth.lock")).unwrap();
+        let (replacement, _) = test_authority_fence(&root.join("other"));
+        fs::hard_link(
+            root.join("other/.runtime-compensation.auth.lock"),
+            replacement_root.join(".runtime-compensation.auth.lock"),
+        )
+        .unwrap();
+        assert!(descriptor.acquire_shared().is_err());
+        drop(original);
+        drop(replacement);
+    }
+
+    #[test]
+    fn authority_fence_rejects_rename_away_and_recreated_entry_after_sh_lock() {
+        let root = temp_dir("authority-fence-rebind-after-lock");
+        let (frozen, descriptor) = test_authority_fence(&root);
+        let entered = root.join("after-lock-entered");
+        let release = root.join("after-lock-release");
+        let _seam = arm_authority_fence_after_lock(entered.clone(), release.clone());
+        let worker = std::thread::spawn(move || descriptor.acquire_shared());
+        wait_for_authority_fence_test_path(&entered).unwrap();
+        let lock = root.join(".runtime-compensation.auth.lock");
+        fs::rename(&lock, root.join("frozen-a-renamed-away")).unwrap();
+        let recreated = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&lock)
+            .unwrap();
+        fs::write(&release, b"continue").unwrap();
+        assert!(
+            worker.join().unwrap().is_err(),
+            "a name rebound after SH on frozen A must not be accepted as the shared fence"
+        );
+        drop(recreated);
+        drop(frozen);
+    }
+
+    #[test]
+    fn authority_fence_child() {
+        if let Some(marker) = std::env::var_os("CSSWITCH_TEST_AUTHORITY_FENCE_LEAK_MARKER") {
+            let raw_fd = std::env::var("CSSWITCH_AUTHORITY_FENCE_FD")
+                .unwrap()
+                .parse::<i32>()
+                .unwrap();
+            let _descriptor = AuthorityFenceDescriptor::from_env(TEST_BRIDGE_TOKEN).unwrap();
+            let output = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("test ! -e /dev/fd/{raw_fd}"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "authority dirfd leaked to child");
+            fs::write(marker, b"no-leak").unwrap();
+            return;
+        }
+        if let Some(marker) = std::env::var_os("CSSWITCH_TEST_AUTHORITY_FENCE_EX_MARKER") {
+            let descriptor = AuthorityFenceDescriptor::from_env(TEST_BRIDGE_TOKEN).unwrap();
+            if let Some(about) = std::env::var_os("CSSWITCH_TEST_AUTHORITY_FENCE_ABOUT_TO_FLOCK") {
+                fs::write(about, b"about-to-flock").unwrap();
+            }
+            let name = std::ffi::CString::new(".runtime-compensation.auth.lock").unwrap();
+            let fd = unsafe {
+                libc::openat(
+                    descriptor.directory.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            assert!(fd >= 0);
+            let file = unsafe { File::from_raw_fd(fd) };
+            assert_eq!(unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) }, 0);
+            fs::write(marker, b"entered").unwrap();
+            return;
+        }
+        let Some(marker) = std::env::var_os("CSSWITCH_TEST_AUTHORITY_FENCE_CHILD_MARKER") else {
+            return;
+        };
+        let descriptor = AuthorityFenceDescriptor::from_env(TEST_BRIDGE_TOKEN).unwrap();
+        if let Some(about) = std::env::var_os("CSSWITCH_TEST_AUTHORITY_FENCE_ABOUT_TO_FLOCK") {
+            fs::write(about, b"about-to-flock").unwrap();
+        }
+        let _guard = descriptor.acquire_shared().unwrap();
+        fs::write(marker, b"entered").unwrap();
+    }
+
+    #[test]
+    fn authority_fence_shared_waits_for_ex_and_releases_after_guard_drop() {
+        let root = temp_dir("authority-fence-blocking");
+        let (_fence, descriptor) = test_authority_fence(&root);
+        let fd = descriptor.directory.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
+            0
+        );
+        let ex_owner = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".runtime-compensation.auth.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&ex_owner), libc::LOCK_EX) },
+            0
+        );
+        let marker = root.join("child-entered");
+        let about = root.join("child-about-to-flock");
+        let contender = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "skill_install::tests::authority_fence_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CSSWITCH_TEST_AUTHORITY_FENCE_CHILD_MARKER", &marker)
+            .env("CSSWITCH_TEST_AUTHORITY_FENCE_ABOUT_TO_FLOCK", &about)
+            .env("CSSWITCH_AUTHORITY_FENCE_FD", fd.to_string())
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE",
+                descriptor.directory_device.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE",
+                descriptor.directory_inode.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE",
+                descriptor.lock_device.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_LOCK_INODE",
+                descriptor.lock_inode.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_NONCE",
+                authority_fence_test_binding(),
+            )
+            .spawn()
+            .unwrap();
+        wait_for_authority_fence_test_path(&about).unwrap();
+        assert!(
+            !marker.exists(),
+            "inherited Skill authority writer must wait for the EX owner"
+        );
+        assert_eq!(
+            unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&ex_owner), libc::LOCK_UN,) },
+            0
+        );
+        let output = contender.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert!(marker.is_file());
+    }
+
+    #[test]
+    fn two_skill_mutations_keep_excluded_owner_blocked_until_both_finish() {
+        let root = temp_dir("authority-fence-two-writers");
+        let (_fence, descriptor) = test_authority_fence(&root);
+        let descriptor = std::sync::Arc::new(descriptor);
+        let first = descriptor.acquire_shared().unwrap();
+        let (second_entered_tx, second_entered_rx) = std::sync::mpsc::channel();
+        let (release_second_tx, release_second_rx) = std::sync::mpsc::channel();
+        let second_descriptor = std::sync::Arc::clone(&descriptor);
+        let second = std::thread::spawn(move || {
+            let _second = second_descriptor.acquire_shared().unwrap();
+            second_entered_tx.send(()).unwrap();
+            release_second_rx.recv().unwrap();
+        });
+        second_entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let fd = descriptor.directory.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
+            0
+        );
+        drop(first);
+        let marker = root.join("ex-entered");
+        let about = root.join("ex-about-to-flock");
+        let contender = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "skill_install::tests::authority_fence_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CSSWITCH_TEST_AUTHORITY_FENCE_EX_MARKER", &marker)
+            .env("CSSWITCH_TEST_AUTHORITY_FENCE_ABOUT_TO_FLOCK", &about)
+            .env("CSSWITCH_AUTHORITY_FENCE_FD", fd.to_string())
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE",
+                descriptor.directory_device.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE",
+                descriptor.directory_inode.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE",
+                descriptor.lock_device.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_LOCK_INODE",
+                descriptor.lock_inode.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_NONCE",
+                authority_fence_test_binding(),
+            )
+            .spawn()
+            .unwrap();
+        wait_for_authority_fence_test_path(&about).unwrap();
+        assert!(
+            !marker.exists(),
+            "dropping one mutation guard must not unlock the other mutation's SH"
+        );
+        release_second_tx.send(()).unwrap();
+        second.join().unwrap();
+        assert!(contender.wait_with_output().unwrap().status.success());
+        assert!(marker.is_file());
+    }
+
+    #[test]
+    fn gateway_closes_inherited_authority_dirfd_before_spawned_children() {
+        let root = temp_dir("authority-fence-no-child-leak");
+        let (_fence, descriptor) = test_authority_fence(&root);
+        let fd = descriptor.directory.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
+            0
+        );
+        let marker = root.join("no-child-leak");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "skill_install::tests::authority_fence_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CSSWITCH_TEST_AUTHORITY_FENCE_LEAK_MARKER", &marker)
+            .env("CSSWITCH_AUTHORITY_FENCE_FD", fd.to_string())
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE",
+                descriptor.directory_device.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE",
+                descriptor.directory_inode.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE",
+                descriptor.lock_device.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_LOCK_INODE",
+                descriptor.lock_inode.to_string(),
+            )
+            .env(
+                "CSSWITCH_AUTHORITY_FENCE_NONCE",
+                authority_fence_test_binding(),
+            )
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(marker.is_file());
+    }
+
+    fn authority_fence_test_binding() -> String {
+        let mut binding = Sha256::new();
+        binding.update(b"csswitch-skill-authority-fence-v1\0");
+        binding.update(TEST_BRIDGE_TOKEN.as_bytes());
+        format!("{:x}", binding.finalize())
     }
 
     fn write_skill_archive(root: &Path, skill_name: &str) -> PathBuf {

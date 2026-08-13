@@ -464,6 +464,8 @@ pub(crate) fn prepare_science_ssh_bridge_for(
 }
 
 pub(crate) fn prepare_science_ssh_bridge(sandbox_home: &Path) -> Result<Vec<String>, String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("无法确认系统 HOME，不能启用系统 SSH 配置。")?;
@@ -526,6 +528,12 @@ pub(crate) fn prevalidate_science_ssh_bridge(
 }
 
 pub(crate) fn revoke_science_ssh_bridge(sandbox_home: &Path) -> Result<(), String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    revoke_science_ssh_bridge_unfenced(sandbox_home)
+}
+
+fn revoke_science_ssh_bridge_unfenced(sandbox_home: &Path) -> Result<(), String> {
     reject_symlink_components(sandbox_home)?;
     let data_dir = sandbox_home.join(".claude-science");
     let state_path = data_dir.join(STATE_FILE);

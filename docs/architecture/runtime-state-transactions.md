@@ -251,6 +251,14 @@ entry 的每个单步 replay 也持有该 fence 的 crash-releasing exclusive le
 config、决策、执行 effect、发布 outcome；因此两个 Desktop 进程不能同时执行同一 `InProgress` effect。唯一
 live compensation funnel 在公开 intent 成功后、首个 step intent/effect 前取得同一 exclusive lease 并持有到
 本轮 funnel 返回，因此 live owner 与 fresh owner 也不能交错执行同一步。
+
+同一 inode 的 authority fence 也为 cooperating CSSwitch authority writers 提供 SH：当前覆盖 OAuth
+virtual-login/history credential 写入、managed SSH stub 的补偿/撤销、SSH bridge prepare/revoke、Skill route
+注册/route-state 以及 Skill bridge runtime key publish；EX owner 只能通过其借用期内、不可跨线程的 scoped
+bypass 调用这些 leaf，不能靠进程全局的“正在 replay”标志绕过 flock。这个协作协议不把同 UID 对 0700 config
+目录的非合作 `rename`/`unlink` 宣称为 path-level CAS；获取 SH 后的 identity recheck 遇到该类 drift 必须
+fail closed。managed-launch receipt 的 write/clear 与 prior-restart/lifecycle 传播尚未纳入这组 SH writers，
+在其 scoped-bypass call graph 完整落地前仍是明确的后续缺口，不能据此扩大本段已覆盖范围。
 replay owner 在 provider auth 前循环重采 config，校验 public record、private manifest、
 snapshot ticket 与完整 business record，然后重放或观察一个 `pending|in_progress` step。若同进程补偿替换过
 Gateway，私有 manifest 只保存其受管 health identity、path secret 与端口；fresh authority step 必须再以当前

@@ -226,11 +226,18 @@ pub(super) fn recover_orphaned_bridge_processing(bridge: &std::path::Path) -> Re
 pub(super) fn start_skill_install_bridge(cfg: &GatewayConfig) -> Result<(), String> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
-    let (Some(bridge), Some(data_dir), Some(bridge_token)) = (
+    let (Some(bridge), Some(data_dir), Some(bridge_token), Some(authority_fence)) = (
         &cfg.skill_bridge_dir,
         &cfg.skill_data_dir,
         &cfg.skill_bridge_token,
+        cfg.skill_authority_fence.clone(),
     ) else {
+        if cfg.skill_bridge_dir.is_some()
+            || cfg.skill_data_dir.is_some()
+            || cfg.skill_bridge_token.is_some()
+        {
+            return Err("Skill bridge 缺少已验证的 authority fence capability".into());
+        }
         return Ok(());
     };
     let name = bridge
@@ -395,12 +402,17 @@ pub(super) fn start_skill_install_bridge(cfg: &GatewayConfig) -> Result<(), Stri
                         {
                             bridge_request_failed()
                         } else {
-                            crate::skill_install::handle_bridge_request_with_progress(
-                                &data_dir,
-                                science_host_context.as_ref(),
-                                &request,
-                                &mut report_progress,
-                            )
+                            match authority_fence.acquire_shared() {
+                                Ok(_guard) => {
+                                    crate::skill_install::handle_bridge_request_with_progress(
+                                        &data_dir,
+                                        science_host_context.as_ref(),
+                                        &request,
+                                        &mut report_progress,
+                                    )
+                                }
+                                Err(_) => bridge_request_failed(),
+                            }
                         }
                     })
                 }))
@@ -541,6 +553,26 @@ mod tests {
     }
 
     fn bridge_config(bridge: &std::path::Path) -> GatewayConfig {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let fence_path = bridge.join(".runtime-compensation.auth.lock");
+        let fence = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&fence_path)
+            .unwrap();
+        let metadata = fence.metadata().unwrap();
+        let directory = std::fs::File::open(bridge).unwrap();
+        let directory_metadata = directory.metadata().unwrap();
+        let authority_fence = crate::skill_install::AuthorityFenceDescriptor::test_only(
+            directory,
+            directory_metadata.dev(),
+            directory_metadata.ino(),
+            metadata.dev(),
+            metadata.ino(),
+        );
+        drop(fence);
         GatewayConfig {
             provider: "deepseek".into(),
             port: 0,
@@ -559,6 +591,7 @@ mod tests {
             skill_data_dir: Some(bridge.join("science-data")),
             skill_bridge_dir: Some(bridge.to_path_buf()),
             skill_bridge_token: Some("r0-g-private-test-token".into()),
+            skill_authority_fence: Some(authority_fence),
             science_host_context: None,
         }
     }

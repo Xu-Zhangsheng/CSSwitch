@@ -862,6 +862,16 @@ pub fn ensure_virtual_login(
     email: &str,
     sandbox_root: &Path,
 ) -> Result<(ForgeResult, LoginAction), EnsureVirtualLoginError> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    ensure_virtual_login_unfenced(auth_dir, email, sandbox_root)
+}
+
+fn ensure_virtual_login_unfenced(
+    auth_dir: &Path,
+    email: &str,
+    sandbox_root: &Path,
+) -> Result<(ForgeResult, LoginAction), EnsureVirtualLoginError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("无 HOME 环境变量")?;
@@ -932,7 +942,18 @@ fn ensure_virtual_login_guarded(
 /// Complete an explicit legacy-history choice. The candidate is a backend-only
 /// inode snapshot created by `ensure_virtual_login`; it is revalidated before
 /// any credential file is written.
-pub(crate) fn restore_history_choice(
+pub(crate) fn restore_history_choice_with_authority_bypass(
+    auth_dir: &Path,
+    email: &str,
+    sandbox_root: &Path,
+    candidate: &HistoryOrgCandidate,
+    bypass: &crate::config::AuthorityWriterBypass<'_>,
+) -> Result<(ForgeResult, LoginAction), String> {
+    let _authority_guard = crate::config::authority_writer_guard_from_bypass(bypass);
+    restore_history_choice_unfenced(auth_dir, email, sandbox_root, candidate)
+}
+
+fn restore_history_choice_unfenced(
     auth_dir: &Path,
     email: &str,
     sandbox_root: &Path,
@@ -1511,7 +1532,7 @@ mod tests {
             .unwrap();
         std::fs::remove_dir(dir.join("orgs").join(&first)).unwrap();
         std::fs::create_dir(dir.join("orgs").join(&first)).unwrap();
-        assert!(restore_history_choice(&dir, email, &dir, &chosen).is_err());
+        assert!(restore_history_choice_unfenced(&dir, email, &dir, &chosen).is_err());
         assert!(!dir.join("active-org.json").exists());
         for d in [dir, fake_real] {
             let _ = std::fs::remove_dir_all(&d);

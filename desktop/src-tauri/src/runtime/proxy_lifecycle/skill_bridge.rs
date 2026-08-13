@@ -9,9 +9,18 @@ pub(crate) fn skill_install_bridge_dir(secret: &str) -> Result<PathBuf, String> 
 
 pub(crate) struct PreparedSkillInstallHost {
     key: Option<PreparedSkillInstallBridgeKey>,
+    // Kept open until the Gateway has inherited it.  The descriptor is passed
+    // only through exec inheritance; no authority path is exposed to Gateway.
+    authority_fence: Option<config::AuthorityFenceCapability>,
 }
 
 impl PreparedSkillInstallHost {
+    pub(crate) fn close_parent_authority_fence_after_spawn(&mut self) {
+        // The child already inherited the non-CLOEXEC dirfd at successful exec.
+        // Keeping it in Desktop would let later unrelated child spawns inherit it.
+        self.authority_fence.take();
+    }
+
     pub(crate) fn publish(&mut self) -> Result<PathBuf, String> {
         self.key
             .as_mut()
@@ -29,6 +38,14 @@ pub(crate) fn prepare_skill_install_host(
 ) -> Result<PreparedSkillInstallHost, String> {
     let bridge_dir = skill_install_bridge_dir(secret)?;
     let bridge_token = skill_install_bridge_token(secret, launch_id)?;
+    let authority_fence = config::prepare_authority_fence_capability(&config::default_dir())
+        .map_err(|error| format!("无法准备 Skill authority fence capability: {error}"))?;
+    // This deterministic value only detects accidental bridge-config mixing;
+    // authority comes from the inherited directory descriptor plus identities.
+    let mut binding = Sha256::new();
+    binding.update(b"csswitch-skill-authority-fence-v1\0");
+    binding.update(bridge_token.as_bytes());
+    let authority_fence_binding = format!("{:x}", binding.finalize());
     let science_context = science_context
         .map(|context| {
             serde_json::to_string(context).map_err(|_| "无法编码 Science Skill attach host context")
@@ -37,13 +54,37 @@ pub(crate) fn prepare_skill_install_host(
     let key = stage_skill_install_bridge_key(&bridge_token)?;
     cmd.env("CSSWITCH_SKILL_DATA_DIR", data_dir)
         .env("CSSWITCH_SKILL_BRIDGE_DIR", bridge_dir)
-        .env("CSSWITCH_SKILL_BRIDGE_TOKEN", bridge_token);
+        .env("CSSWITCH_SKILL_BRIDGE_TOKEN", bridge_token)
+        .env(
+            "CSSWITCH_AUTHORITY_FENCE_FD",
+            authority_fence.fd().to_string(),
+        )
+        .env(
+            "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE",
+            authority_fence.directory_device().to_string(),
+        )
+        .env(
+            "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE",
+            authority_fence.directory_inode().to_string(),
+        )
+        .env(
+            "CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE",
+            authority_fence.lock_device().to_string(),
+        )
+        .env(
+            "CSSWITCH_AUTHORITY_FENCE_LOCK_INODE",
+            authority_fence.lock_inode().to_string(),
+        )
+        .env("CSSWITCH_AUTHORITY_FENCE_NONCE", authority_fence_binding);
     if let Some(encoded) = science_context {
         cmd.env("CSSWITCH_SCIENCE_HOST_CONTEXT", encoded);
     } else {
         cmd.env_remove("CSSWITCH_SCIENCE_HOST_CONTEXT");
     }
-    Ok(PreparedSkillInstallHost { key: Some(key) })
+    Ok(PreparedSkillInstallHost {
+        key: Some(key),
+        authority_fence: Some(authority_fence),
+    })
 }
 
 fn proxy_fingerprint_with_science_context(
@@ -120,6 +161,8 @@ struct PreparedSkillInstallBridgeKey {
 
 impl PreparedSkillInstallBridgeKey {
     fn publish_canonical_key(&mut self) -> Result<PathBuf, String> {
+        let _authority_guard = crate::config::acquire_authority_writer_guard()
+            .map_err(|error| format!("authority writer fence failed: {error}"))?;
         let temporary = self
             .temporary
             .as_ref()
