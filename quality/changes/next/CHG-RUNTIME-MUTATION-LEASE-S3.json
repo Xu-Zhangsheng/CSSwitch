@@ -19,7 +19,6 @@
       "desktop/src-tauri/src/commands/runtime/one_click.rs",
       "desktop/src-tauri/src/commands/runtime/tests.rs",
       "desktop/src-tauri/src/commands/skill_install.rs",
-      "desktop/src-tauri/src/commands/skills.rs",
       "desktop/src-tauri/src/lib.rs",
       "desktop/src-tauri/src/lifecycle.rs",
       "docs/architecture/runtime-state-transactions.md",

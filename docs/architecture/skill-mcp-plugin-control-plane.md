@@ -32,8 +32,9 @@ probe 与真实结果分别留在
 5. 初始共同执行面是 Agent Skills 与明确版本的 MCP profile。`agents/`、hooks、UI、
    LSP、monitors、settings 等供应商组件只有在 Science 能力被独立证明且语义可以保持时
    才能晋级；否则必须显式降级或拒绝，禁止静默丢弃后仍报告“完整 Plugin 已安装”。
-6. 当前 v1 bridge 继续原样生效。本合同不注册新 command，不改变 route，不执行安装，
-   不删除旧 Skill Manager，也不建立 source、artifact、installed 或 live `PASS`。
+6. 当前 v1 bridge 继续原样生效。本合同不注册新 command，不改变 route，不执行安装。
+   旧 Skill Manager 的删除是独立 negative refactor，不实现本合同，也不建立 artifact、
+   installed 或 live `PASS`。
 
 ## 2. 外部协议事实与 Science 未验证边界
 
@@ -406,9 +407,9 @@ HTTP OAuth 与 stdio credential 必须分开：
 所有实际结果只沿[生产链路验收](../operations/real-machine-acceptance.md#2-唯一证据链)
 的唯一证据链判定。本控制面在任何实施批次中都必须保持：
 
-- 未注册、未编译的旧 Skill Manager 只作为独立 negative refactor 处理，不得成为 parser、
-  component graph、operation ledger 或 Science adapter 的依赖；删除旧代码与实现本合同
-  不能合并成一个不可审计的大替换；
+- 未注册、未编译的旧 Skill Manager 已由独立 negative refactor 删除；它不得重新成为
+  parser、component graph、operation ledger 或 Science adapter 的依赖，该删除也不构成
+  本合同的任何 inspect / plan / apply 实现；
 - inspection 始终无执行；parser、component graph、limits 与 fixture 的存在不打开 apply path；
 - 新的 plan/effect/next-action 表达不得改变当前 v1 public tool schema 或结果，除非该兼容
   边界已经单独冻结、实现并验收；

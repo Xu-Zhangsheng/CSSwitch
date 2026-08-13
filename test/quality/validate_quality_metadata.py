@@ -105,6 +105,30 @@ SOURCE_SUITE_ORDER = (
     "SUITE-ORPHAN-SKILL-BOUNDARY",
     "SUITE-SOURCE-GATE-CONTRACT",
 )
+RETIRED_PRODUCTION_DELETIONS = {
+    "desktop/src-tauri/src/commands/skills.rs": "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR",
+    "desktop/src-tauri/src/skill_manager/": "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR",
+}
+RETIRED_PRODUCTION_CHANGE_ID = "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"
+RETIRED_PRODUCTION_CHANGE_SOURCE = (
+    "quality/changes/next/CHG-SKILL-MANAGER-NEGATIVE-REFACTOR.json"
+)
+RETIRED_PRODUCTION_FILES = frozenset(
+    {
+        "desktop/src-tauri/src/commands/skills.rs",
+        "desktop/src-tauri/src/skill_manager/compatibility.rs",
+        "desktop/src-tauri/src/skill_manager/deployment.rs",
+        "desktop/src-tauri/src/skill_manager/discovery.rs",
+        "desktop/src-tauri/src/skill_manager/error.rs",
+        "desktop/src-tauri/src/skill_manager/external.rs",
+        "desktop/src-tauri/src/skill_manager/inspection.rs",
+        "desktop/src-tauri/src/skill_manager/mod.rs",
+        "desktop/src-tauri/src/skill_manager/model.rs",
+        "desktop/src-tauri/src/skill_manager/requirements.rs",
+        "desktop/src-tauri/src/skill_manager/store.rs",
+        "desktop/src-tauri/src/skill_manager/workspace_ingress.rs",
+    }
+)
 
 
 class ValidationError(Exception):
@@ -1223,6 +1247,93 @@ class Validator:
             self.error("production-paths", "unknown path policy must be fail-closed")
         if self.path_policy.get("rename_delete_policy") != "fail-closed":
             self.error("production-paths", "rename/delete policy must be fail-closed")
+        retirements = [
+            item
+            for item in self.path_policy.get("retired_path_deletions", [])
+            if isinstance(item, dict)
+        ]
+        retirement_paths = [str(item.get("path", "")) for item in retirements]
+        if len(retirement_paths) != len(set(retirement_paths)):
+            self.error("production-paths.retired_path_deletions", "duplicate retired path")
+        retirement_bindings = {
+            str(item.get("path", "")): str(item.get("change_id", ""))
+            for item in retirements
+        }
+        if retirement_bindings != RETIRED_PRODUCTION_DELETIONS:
+            self.error(
+                "production-paths.retired_path_deletions",
+                "retired deletions must equal the frozen Skill Manager orphan set",
+            )
+        retirement_change = self.changes.get(RETIRED_PRODUCTION_CHANGE_ID)
+        if isinstance(retirement_change, dict):
+            declared_desktop_paths = {
+                str(path)
+                for path in retirement_change.get("changed_paths", [])
+                if str(path).startswith("desktop/")
+            }
+            if declared_desktop_paths != set(RETIRED_PRODUCTION_DELETIONS):
+                self.error(
+                    RETIRED_PRODUCTION_CHANGE_ID,
+                    "desktop changed_paths must equal the frozen retired path declarations",
+                )
+        for index, item in enumerate(retirements):
+            retired_path = str(item.get("path", ""))
+            if not retired_path or retired_path.startswith("/"):
+                self.error(
+                    "production-paths.retired_path_deletions[{}]".format(index),
+                    "retired path must be relative",
+                )
+                continue
+            matching = [
+                policy
+                for policy in paths
+                if isinstance(policy, dict)
+                and self.path_matches(str(policy.get("path", "")), retired_path)
+            ]
+            if not matching:
+                self.error(
+                    "production-paths.retired_path_deletions[{}]".format(index),
+                    "retired path must be nested under a registered production path",
+                )
+            change_id = str(item.get("change_id", ""))
+            change = self.changes.get(change_id)
+            if not isinstance(change, dict) or change.get("status") != "active":
+                self.error(
+                    "production-paths.retired_path_deletions[{}]".format(index),
+                    "retired path must bind an active ChangeRecordV1",
+                )
+            elif not any(
+                self.path_matches(str(pattern), retired_path)
+                for pattern in change.get("changed_paths", [])
+            ):
+                self.error(
+                    "production-paths.retired_path_deletions[{}]".format(index),
+                    "retired path must be covered by its bound ChangeRecordV1",
+                )
+            if (self.repo / retired_path.rstrip("/")).exists():
+                self.error(
+                    "production-paths.retired_path_deletions[{}]".format(index),
+                    "retired path must be absent from the candidate",
+                )
+        for index, left in enumerate(retirement_paths):
+            for right in retirement_paths[index + 1 :]:
+                if self.path_matches(left, right) or self.path_matches(right, left):
+                    self.error(
+                        "production-paths.retired_path_deletions",
+                        "retired paths must not overlap",
+                    )
+        if (
+            isinstance(retirement_change, dict)
+            and retirement_change.get("status") == "active"
+            and self.change_sources.get(RETIRED_PRODUCTION_CHANGE_ID)
+            == RETIRED_PRODUCTION_CHANGE_SOURCE
+        ):
+            activation_changes = self.retired_deletion_activation_changes()
+            if activation_changes is not None:
+                self.check_retired_deletion_manifest(
+                    activation_changes,
+                    "production-paths.retired_path_deletions",
+                )
 
     def check_impact(self, profile: str, target_ref: Optional[str]) -> None:
         gate_profile = self.gate_for_profile(profile)
@@ -1366,6 +1477,69 @@ class Validator:
                 result.append((status, path))
         return result
 
+    def retired_deletion_activation_changes(self) -> Optional[List[Tuple[str, str]]]:
+        status_changed = self.status_paths()
+        source_statuses = [
+            status
+            for status, path in status_changed
+            if path == RETIRED_PRODUCTION_CHANGE_SOURCE
+        ]
+        if any(status == "??" or status.startswith("A") for status in source_statuses):
+            return status_changed
+
+        rc, activation_history, _ = self.git(
+            [
+                "log",
+                "--diff-filter=A",
+                "--format=%H",
+                "--",
+                RETIRED_PRODUCTION_CHANGE_SOURCE,
+            ],
+            allow_failure=True,
+        )
+        activation_commits = [
+            commit
+            for commit in activation_history.splitlines()
+            if SHA_RE.fullmatch(commit)
+        ]
+        if rc != 0 or len(activation_commits) != 1:
+            self.error(
+                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                "retirement ChangeRecord must have exactly one introduction commit; "
+                "missing or delete/re-add history is fail-closed",
+            )
+            return None
+        activation_commit = activation_commits[0]
+        rc, parent, _ = self.git(
+            ["rev-parse", "{}^".format(activation_commit)],
+            allow_failure=True,
+        )
+        if rc != 0 or not parent:
+            self.error(
+                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                "retirement ChangeRecord introduction must have a parent commit",
+            )
+            return None
+        return self.diff_paths(parent, activation_commit)
+
+    def check_retired_deletion_manifest(
+        self,
+        changed: Iterable[Tuple[str, str]],
+        profile: str,
+    ) -> None:
+        actual = {
+            (status, path)
+            for status, path in changed
+            if path.startswith("desktop/")
+        }
+        expected = {("D", path) for path in RETIRED_PRODUCTION_FILES}
+        if actual != expected:
+            self.error(
+                profile,
+                "retirement activation Desktop manifest must equal the frozen 12 deletions; "
+                "extra or missing A/M/R/C/D paths are fail-closed",
+            )
+
     @staticmethod
     def path_matches(pattern: str, path: str) -> bool:
         if pattern.endswith("/"):
@@ -1379,8 +1553,25 @@ class Validator:
         profile: str,
         current_change_ids: Optional[set] = None,
     ) -> None:
+        changed = list(changed)
+        changed_paths = {path for _, path in changed}
+        if (
+            RETIRED_PRODUCTION_CHANGE_SOURCE in changed_paths
+            and any(
+                status.startswith("D") and path in RETIRED_PRODUCTION_FILES
+                for status, path in changed
+            )
+        ):
+            activation_changes = self.retired_deletion_activation_changes()
+            if activation_changes is not None:
+                self.check_retired_deletion_manifest(activation_changes, profile)
         policy_paths = [item for item in self.path_policy.get("paths", []) if isinstance(item, dict)]
         exemptions = [item for item in self.path_policy.get("narrative_exemptions", []) if isinstance(item, dict)]
+        retired_deletions = [
+            item
+            for item in self.path_policy.get("retired_path_deletions", [])
+            if isinstance(item, dict)
+        ]
         eligible_ids = set(self.changes) if current_change_ids is None else set(current_change_ids)
         changes = [record for record_id, record in self.changes.items() if record_id in eligible_ids]
         seen: set = set()
@@ -1390,7 +1581,15 @@ class Validator:
             seen.add(path)
             matching = [item for item in policy_paths if self.path_matches(str(item.get("path", "")), path)]
             if matching:
-                if status.startswith("D") or status.startswith("R") or status.startswith("C"):
+                matching_retirements = [
+                    item
+                    for item in retired_deletions
+                    if status.startswith("D")
+                    and self.path_matches(str(item.get("path", "")), path)
+                ]
+                if status.startswith("D") and not matching_retirements:
+                    self.error(profile, "rename/delete/copy status is fail-closed for {} ({})".format(path, status))
+                elif status.startswith("R") or status.startswith("C"):
                     self.error(profile, "rename/delete/copy status is fail-closed for {} ({})".format(path, status))
                 policy = sorted(matching, key=lambda item: len(str(item.get("path", ""))), reverse=True)[0]
                 active_matches = [
@@ -1398,6 +1597,23 @@ class Validator:
                     if change.get("status") == "active"
                     and any(self.path_matches(str(path_pattern), path) for path_pattern in change.get("changed_paths", []))
                 ]
+                if matching_retirements:
+                    retirement = sorted(
+                        matching_retirements,
+                        key=lambda item: len(str(item.get("path", ""))),
+                        reverse=True,
+                    )[0]
+                    required_change_id = str(retirement.get("change_id", ""))
+                    if not any(
+                        change.get("id") == required_change_id
+                        for change in active_matches
+                    ):
+                        self.error(
+                            path,
+                            "retired production deletion requires current active change {}".format(
+                                required_change_id
+                            ),
+                        )
                 if not active_matches:
                     self.error(path, "production path has no current matching ChangeRecordV1")
                     continue

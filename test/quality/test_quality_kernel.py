@@ -15,10 +15,22 @@ import unittest
 from unittest import mock
 
 try:
-    from validate_quality_metadata import PRODUCT_BUG_IDS, Validator, ROOT
+    from validate_quality_metadata import (
+        PRODUCT_BUG_IDS,
+        RETIRED_PRODUCTION_CHANGE_SOURCE,
+        RETIRED_PRODUCTION_FILES,
+        Validator,
+        ROOT,
+    )
     import source_candidate
 except ModuleNotFoundError:
-    from test.quality.validate_quality_metadata import PRODUCT_BUG_IDS, Validator, ROOT
+    from test.quality.validate_quality_metadata import (
+        PRODUCT_BUG_IDS,
+        RETIRED_PRODUCTION_CHANGE_SOURCE,
+        RETIRED_PRODUCTION_FILES,
+        Validator,
+        ROOT,
+    )
     from test.quality import source_candidate
 
 
@@ -121,6 +133,140 @@ class QualityKernelFocused(unittest.TestCase):
         errors = self.errors_after(validator, lambda: validator.check_changed_paths([("D", "quality/requirements.v1.json")], "impact-release"))
         self.assertIn("rename/delete/copy status is fail-closed", errors)
 
+        validator = self.fresh()
+        validator.path_policy["retired_path_deletions"].append(
+            {
+                "path": "desktop/src-tauri/src/commands/skills-next.rs",
+                "change_id": "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR",
+                "reason": "malicious widening",
+                "owner": "desktop",
+            }
+        )
+        errors = self.errors_after(validator, validator.check_production_policy_shape)
+        self.assertIn("must equal the frozen Skill Manager orphan set", errors)
+
+        validator = self.fresh()
+        validator.path_policy["retired_path_deletions"][0]["change_id"] = (
+            "CHG-RUNTIME-MUTATION-LEASE-S3"
+        )
+        errors = self.errors_after(validator, validator.check_production_policy_shape)
+        self.assertIn("must equal the frozen Skill Manager orphan set", errors)
+
+        validator = self.fresh()
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("D", "desktop/src-tauri/src/commands/skills.rs")],
+                "impact-release",
+                {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
+            ),
+        )
+        self.assertFalse(errors)
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("D", "desktop/src-tauri/src/skill_manager/store.rs")],
+                "impact-release",
+                {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
+            ),
+        )
+        self.assertFalse(errors)
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("D", "desktop/src-tauri/src/commands/skills.rs")],
+                "impact-release",
+                set(),
+            ),
+        )
+        self.assertIn("retired production deletion requires current active change", errors)
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("R100", "desktop/src-tauri/src/commands/skills.rs")],
+                "impact-release",
+                {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
+            ),
+        )
+        self.assertIn("rename/delete/copy status is fail-closed", errors)
+
+        exact_retirement = [("D", path) for path in sorted(RETIRED_PRODUCTION_FILES)]
+        exact_retirement.append(("??", RETIRED_PRODUCTION_CHANGE_SOURCE))
+        validator = self.fresh()
+        with mock.patch.object(
+            validator,
+            "retired_deletion_activation_changes",
+            return_value=exact_retirement,
+        ) as activation:
+            errors = self.errors_after(
+                validator,
+                lambda: validator.check_changed_paths(
+                    exact_retirement,
+                    "impact-pr",
+                    {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
+                ),
+            )
+        activation.assert_called_once_with()
+        self.assertFalse(errors)
+
+        for disguised_copy in (
+            "desktop/src-tauri/src/commands/skills-next.rs",
+            "desktop/src-tauri/src/skill_manager_next/store.rs",
+        ):
+            validator = self.fresh()
+            with mock.patch.object(
+                validator,
+                "retired_deletion_activation_changes",
+                return_value=exact_retirement + [("A", disguised_copy)],
+            ):
+                errors = self.errors_after(
+                    validator,
+                    lambda: validator.check_changed_paths(
+                        exact_retirement,
+                        "impact-pr",
+                        {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
+                    ),
+                )
+            self.assertIn("manifest must equal the frozen 12 deletions", errors)
+
+        validator = self.fresh()
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_retired_deletion_manifest(
+                exact_retirement[:-2],
+                "malicious-missing-delete",
+            ),
+        )
+        self.assertIn("manifest must equal the frozen 12 deletions", errors)
+
+        validator = self.fresh()
+        later_release_diff = exact_retirement + [
+            ("M", "desktop/src-tauri/src/lib.rs"),
+        ]
+        with mock.patch.object(
+            validator,
+            "retired_deletion_activation_changes",
+            return_value=exact_retirement,
+        ) as activation:
+            errors = self.errors_after(
+                validator,
+                lambda: validator.check_changed_paths(
+                    later_release_diff,
+                    "later-release-wide-diff",
+                ),
+            )
+        activation.assert_called_once_with()
+        self.assertNotIn("manifest must equal the frozen 12 deletions", errors)
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("D", "desktop/src-tauri/src/commands/skills-next.rs")],
+                "impact-release",
+                {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
+            ),
+        )
+        self.assertIn("rename/delete/copy status is fail-closed", errors)
+
         original_git = validator.git
 
         def git_with_dirty_fixture(args, allow_failure=False):
@@ -131,6 +277,92 @@ class QualityKernelFocused(unittest.TestCase):
         validator.git = git_with_dirty_fixture
         errors = self.errors_after(validator, lambda: validator.check_impact("impact-release", None))
         self.assertIn("worktree must be clean", errors)
+
+        def run_git(repo, *args):
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(repo),
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ).stdout.strip()
+
+        with tempfile.TemporaryDirectory(prefix="csswitch-retirement-history-") as raw:
+            repo = pathlib.Path(raw)
+            run_git(repo, "init", "-q")
+            run_git(repo, "config", "user.name", "Quality Fixture")
+            run_git(repo, "config", "user.email", "quality-fixture@example.invalid")
+            for path in RETIRED_PRODUCTION_FILES:
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("legacy\n", encoding="utf-8")
+            run_git(repo, "add", *sorted(RETIRED_PRODUCTION_FILES))
+            run_git(repo, "commit", "-q", "-m", "fixture base")
+
+            source = repo / RETIRED_PRODUCTION_CHANGE_SOURCE
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("{}\n", encoding="utf-8")
+            for path in RETIRED_PRODUCTION_FILES:
+                (repo / path).unlink()
+            disguise = repo / "desktop/src-tauri/src/commands/skills_copy_disguise.rs"
+            disguise.write_text("disguise\n", encoding="utf-8")
+            run_git(
+                repo,
+                "add",
+                "--",
+                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                "desktop/src-tauri/src/commands/skills_copy_disguise.rs",
+                *sorted(RETIRED_PRODUCTION_FILES),
+            )
+            run_git(repo, "commit", "-q", "-m", "malicious first introduction")
+
+            history_validator = Validator(repo)
+            activation = history_validator.retired_deletion_activation_changes()
+            self.assertIsNotNone(activation)
+            errors = self.errors_after(
+                history_validator,
+                lambda: history_validator.check_retired_deletion_manifest(
+                    activation or [],
+                    "malicious-first-introduction",
+                ),
+            )
+            self.assertIn("manifest must equal the frozen 12 deletions", errors)
+
+            source.unlink()
+            disguise.unlink()
+            for path in RETIRED_PRODUCTION_FILES:
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("legacy\n", encoding="utf-8")
+            run_git(
+                repo,
+                "add",
+                "--",
+                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                "desktop/src-tauri/src/commands/skills_copy_disguise.rs",
+                *sorted(RETIRED_PRODUCTION_FILES),
+            )
+            run_git(repo, "commit", "-q", "-m", "remove record and restore legacy files")
+            source.write_text("{}\n", encoding="utf-8")
+            for path in RETIRED_PRODUCTION_FILES:
+                (repo / path).unlink()
+            run_git(
+                repo,
+                "add",
+                "--",
+                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                *sorted(RETIRED_PRODUCTION_FILES),
+            )
+            run_git(repo, "commit", "-q", "-m", "clean second introduction")
+
+            history_validator = Validator(repo)
+            activation = history_validator.retired_deletion_activation_changes()
+            self.assertIsNone(activation)
+            self.assertIn(
+                "must have exactly one introduction commit",
+                "\n".join(history_validator.errors),
+            )
 
     def test_orphan_and_cargo_manifest_inventory_is_closed(self):
         validator = self.fresh()

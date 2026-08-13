@@ -10,6 +10,8 @@
 
 `quality/release-lineage.v1.json` 的 `previous_release` 是下一候选的冻结公开 comparison base；`development_source` 明确给出开发线、ChangeRecord namespace 与 record version。已公开 `quality/changes/v*` namespace 只读，发布后工作只能进入 `quality/changes/next/`。impact coverage 只接受 `base..candidate` 本次新增或更新的 matching ChangeRecord，历史 active record 不能替当前变化兜底。
 
+production path 的 rename / copy / delete 默认继续 fail-closed。只有 `production-paths.v1.json` 中按精确文件或目录前缀登记的 `retired_path_deletions` 可以删除；每项必须绑定当前 active ChangeRecord、仍满足原 production policy 的 suite / gate 覆盖、候选中已不存在且不能与其他退役路径重叠。当前 Skill Manager 退役还冻结 ChangeRecord 首次引入候选（未提交时为当前 worktree，提交后为唯一一次新增该 record 的 commit）的完整 Desktop manifest：只能是已批准的 12 个 `D`，任何并行 Desktop `A/M/R/C/D`、缺失删除、缺失 introduction 或 delete/re-add 历史均 fail-closed，防止把 delete + add/copy 伪装成 negative refactor。该机制只表达已独立证明不在 production registration / caller graph 中的源码退役，不把目录排除出新增或修改路径的 fail-closed 检查。
+
 clean exact candidate 的完整 `GATE-SOURCE` PASS 后，`python3 -m test.quality.source_candidate create --evidence-root <GATE_OUTPUT_ROOT> --candidate <SHA>` 从该 output root 中唯一且 state/evidence identity 一致的 sealed PASS run 读取 public manifests 与 private snapshot，并以 no-clobber 方式生成 `quality/source-candidates/<SHA>.json`。记录绑定 v0.8.4 tag identity、exact candidate、canonical Git change set、current change IDs、run manifest、completion seal、source snapshot 与 evidence manifest digest；它不保存 reviewer 结论，也不建立 release evidence。
 
 promotion 顺序固定为 `SourceCandidateRecord -> ReleaseCandidateV1 -> ReleaseEvidenceV1`：ReleaseCandidate 必须引用同一 candidate/base 的 source record，并仍要求独立 release-profile PASS；ReleaseEvidence 再绑定同一 release candidate、artifact manifest 与 public receipt。source record 不能直接充当后二者。

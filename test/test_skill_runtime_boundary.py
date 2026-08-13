@@ -118,6 +118,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
 
         commands = (ROOT / "desktop/src-tauri/src/commands/mod.rs").read_text()
         self.assertNotIn("mod skills;", commands)
+        self.assertFalse(
+            (ROOT / "desktop/src-tauri/src/commands/skills.rs").exists()
+        )
+        self.assertFalse((ROOT / "desktop/src-tauri/src/skill_manager").exists())
 
         catalog = json.loads((ROOT / "catalog/capabilities.v1.json").read_text())
         self.assertEqual(catalog["skills"], [])
@@ -1058,7 +1062,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "desktop/src-tauri/src/commands/runtime/lifecycle.rs",
             "desktop/src-tauri/src/commands/runtime/one_click.rs",
             "desktop/src-tauri/src/commands/runtime/gateway.rs",
-            "desktop/src-tauri/src/commands/skills.rs",
+            "desktop/src-tauri/src/commands/skill_install.rs",
             "desktop/src-tauri/src/lib.rs",
         )
         production = "\n".join(

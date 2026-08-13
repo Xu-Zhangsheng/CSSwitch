@@ -11,7 +11,7 @@
       "desktop/src/skill-page.js"
     ],
     "exclusions": [
-      "Unregistered commands in desktop/src-tauri/src/commands/skills.rs are not production surface.",
+      "Legacy commands/skills.rs and skill_manager/** are absent; no general Skill Manager command set is compiled or registered as production surface.",
       "Scratch probes without durable side effects remain transient; Codex scratch model discovery is a durable mutation because it publishes shared catalog cache/invalidation state and may refresh OAuth after upstream 401.",
       "Explicit pending_notice acknowledgement is a narrow config mutation; boot snapshot/event consumption is read-only and excluded from runtime operation plans.",
       "Migration backups, rolling config backups, and user-selected downgrade exports are frozen as ordered effects and failure outcomes where R0 requires them; they are not generalized into a repository-wide artifact ontology.",
