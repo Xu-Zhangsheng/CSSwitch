@@ -24,6 +24,18 @@ def sandbox_session_one_click_source():
     return "\n".join(path.read_text() for path in sources)
 
 
+def cold_one_click_flow_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = (
+        module_dir / "one_click.rs",
+        module_dir / "one_click/transaction.rs",
+        module_dir / "one_click/cold.rs",
+        module_dir / "one_click/cold/compensation.rs",
+        module_dir / "one_click/cold/science_phase.rs",
+    )
+    return "\n".join(path.read_text() for path in sources)
+
+
 def runtime_command_source():
     root = ROOT / "desktop/src-tauri/src/commands/runtime.rs"
     module_dir = ROOT / "desktop/src-tauri/src/commands/runtime"
@@ -834,26 +846,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("ScienceStopRequest::exact", science_lifecycle)
 
     def test_s4_science_host_adapter_owns_launch_health_receipt_and_stop_facade(self):
-        one_click = "\n".join(
-            (
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
-                ).read_text(),
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
-                ).read_text(),
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/compensation.rs"
-                ).read_text(),
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
-                ).read_text(),
-            )
-        )
+        one_click = cold_one_click_flow_source()
         runtime_lifecycle = runtime_command_module("lifecycle")
         host = (
             ROOT / "desktop/src-tauri/src/runtime/science/host_adapter.rs"
@@ -972,26 +965,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
             self.assertNotIn(bypass, production)
 
     def test_s5_authority_transaction_owns_capture_restore_cleanup_facade(self):
-        one_click = "\n".join(
-            (
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs"
-                ).read_text(),
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs"
-                ).read_text(),
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/compensation.rs"
-                ).read_text(),
-                (
-                    ROOT
-                    / "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs"
-                ).read_text(),
-            )
-        )
+        one_click = cold_one_click_flow_source()
         facade = (
             ROOT
             / "desktop/src-tauri/src/runtime/sandbox_session/authority_transaction.rs"

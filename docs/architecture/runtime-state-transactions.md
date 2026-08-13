@@ -62,24 +62,26 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 
 ## one-click / restore 当前边界基线
 
-Phase 4 基线源码审计：2026-08-14，production source
-`139f6ee235b67284e2edc852521f24b3f501d467`。本轮 Phase 5 implementation 是
-`codex/runtime-one-click-transaction-owner-phase5` 在
-`2e7cf48db667378655c078cdc51a550625074148` 之上的当前未提交 source candidate：
-one-click durable-journal identity/transition owner 已物理移入 private
-`runtime/sandbox_session/one_click/transaction.rs`。这只记录当前 source candidate 的
-所有权变化。4 个指定 focused exact tests 均 `PASS`；Desktop `cargo fmt --check` 与
-`clippy --all-targets -- -D warnings` 均 `PASS`，受控环境先构建 Gateway 后 Desktop suite
-为 564 passed / 0 failed / 40 ignored；Gateway fmt、clippy 与 test 均 `PASS`，test 为
-291 passed / 0 failed / 0 ignored；metadata validator `PASS`，quality kernel + runtime mutation
-inventory 共 21 tests `PASS`。canonical `bash test/run_all.sh --output-root
-/private/tmp/csg.POwoFR` 只运行一次，使用空 mode-0700 output root，但因当前未提交 diff 无法
-绑定 exact Git identity，在 preflight 以 RC 12 / internal-failure 退出；15 suites / observations
-未开始，未生成 run id、completion seal、evidence 或 source snapshot manifest。因此该项判为
-`PREFLIGHT/ENV-BLOCKED`，clean exact-SHA canonical gate 仍为 `NOT-RUN`，不是 source `PASS`
-也不是产品 `FAIL`；commit 仍需用户另行授权。artifact、installed/runtime、isolated-live、
-authorized provider、SSH、Skill/MCP、signing、notarization 与 release 均为 `NOT-RUN`，不得
-继承本基线或任何其它 SHA 的 PASS。
+Phase 4 基线源码审计为 2026-08-14 的 production source
+`139f6ee235b67284e2edc852521f24b3f501d467`。Phase 5 的 behavior-preserving owner
+变更现已提交为 exact commit `8687e79bb85303c27a1f0d7137bf9dca87a482be`：one-click
+durable-journal identity/transition owner 已物理移入 private
+`runtime/sandbox_session/one_click/transaction.rs`。这只记录该 commit 的所有权变化。
+
+该 exact commit 的唯一 canonical `bash test/run_all.sh --output-root /private/tmp/csg.VC5xLJ`
+run 为 `22038ed8087f38a0a0bcd20c61064ecb`，sealed `FAIL` / RC 10：15 suites 中 14
+`PASS`、1 `FAIL`。唯一失败为 `SUITE-ORPHAN-SKILL-BOUNDARY` 的
+`test_s5_authority_transaction_owns_capture_restore_cleanup_facade`。诊断是 S4/S5 手写
+source aggregation 漏列 `transaction.rs` 所致的 fixture drift；这不是产品 failure，也绝不能记为
+source `PASS`。completion seal SHA-256 为
+`e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`，evidence manifest
+SHA-256 为 `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548`，source snapshot
+manifest SHA-256 为 `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4`。证据 root
+`/private/tmp/csg.VC5xLJ` 可写但不得删除。
+
+因此 `SOURCE-GREEN` 尚未成立。先修复 fixture，再以新 commit 运行 final exact gate；新 commit
+仍需另行授权。artifact、installed/runtime、isolated-live、authorized provider、SSH、Skill/MCP、
+signing、notarization 与 release 均为 `NOT-RUN`，不得继承本 commit 或任何其它 SHA 的 PASS。
 
 ### 入口与五条实际路径
 
@@ -485,19 +487,22 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 
 ## 当前架构缺口
 
-- Phase 4 基线中的最窄物理边界已由本轮 Phase 5 未提交 source candidate 完成：one-click
-  durable-journal identity/transition owner 位于 private `one_click/transaction.rs`。根
+- Phase 4 基线中的最窄物理边界已由 Phase 5 exact commit
+  `8687e79bb85303c27a1f0d7137bf9dca87a482be` 完成：one-click durable-journal
+  identity/transition owner 位于 private `one_click/transaction.rs`。根
   `one_click.rs` 仍保留 façade/coordinator、entry/recovery policy、success-finalize replay、effect、
   read-model 与 failure glue；History、`config.rs` wire schema、private replay manifest 以及
   live/fresh compensation effect/replay owner 未移动，也没有被合并为同一事务；
-- 该 candidate 的 4 个 specified focused exact tests、Desktop/Gateway fmt + clippy、Desktop
-  564/0/40 suite、Gateway 291/0/0 tests、metadata validator 与 quality kernel + runtime mutation
-  inventory 21 tests 均 `PASS`。唯一一次 canonical full-gate 尝试使用空 mode-0700
-  `/private/tmp/csg.POwoFR`，但 dirty worktree 无 exact Git binding，故 preflight RC 12 / internal-failure，
-  15 suites / observations 未开始且无 run id、completion seal、evidence 或 source snapshot manifest；
-  判定为 `PREFLIGHT/ENV-BLOCKED`，exact-SHA canonical source gate 保持 `NOT-RUN`，不是 source
-  `PASS` 或产品 `FAIL`。commit 需另行授权；artifact、installed/runtime、isolated-live、authorized
-  provider、SSH、Skill/MCP、signing、notarization 与 release 一律 `NOT-RUN`，不继承历史 PASS；
+- canonical full gate 的唯一 run `22038ed8087f38a0a0bcd20c61064ecb` sealed `FAIL` / RC 10：
+  14/15 suites `PASS`，仅 `SUITE-ORPHAN-SKILL-BOUNDARY` 的
+  `test_s5_authority_transaction_owns_capture_restore_cleanup_facade` 失败。它是 S4/S5 手写 source
+  aggregation 遗漏 `transaction.rs` 的 fixture drift，不是产品 failure；completion seal
+  `e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`、evidence manifest
+  `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548` 与 source snapshot manifest
+  `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4` 均绑定
+  `/private/tmp/csg.VC5xLJ`。`SOURCE-GREEN` 未成立；fixture 修复、新 commit 与 final exact gate
+  pending，commit 仍需另行授权。artifact、installed/runtime、isolated-live、authorized provider、SSH、
+  Skill/MCP、signing、notarization 与 release 一律 `NOT-RUN`，不继承历史 PASS；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
   finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private

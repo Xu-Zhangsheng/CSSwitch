@@ -281,48 +281,29 @@ SSH、installed、签名和 release 不外推。该历史 tuple 的精确 identi
 `06b630b` exact tuple 的 `B-CORE-01` run `bcore-06b630b-r2` 只保留为历史 PASS；其 identity、DB
 observation 与 23 项 evidence closure 不得继承到当前 `a60c2ee` artifact，也不再链接当前调查。
 
-## Phase 4 one-click / restore 重新基线
+## Phase 5 one-click durable-journal owner
 
-本轮实时基线是分支 `codex/runtime-one-click-restore-rebaseline-phase4`、production source
-`139f6ee235b67284e2edc852521f24b3f501d467`。源码审计确认 entry、healthy reopen、cold、History
-restore/resume 与 interrupted-Gateway recovery 的当前 owner 和事务断裂，完整权威说明见
-[one-click / restore 当前边界基线](../../docs/architecture/runtime-state-transactions.md)。
-本轮没有修改产品源码，也没有运行 implementation/source gate；历史 SHA 的 PASS 不继承给该基线。
-本阶段证据状态固定为：`source/doc audit=COMPLETED`；`implementation=NOT-RUN`、
-`source gate=NOT-RUN`、`artifact=NOT-RUN`、`isolated/live=NOT-RUN`、
-`real provider=NOT-RUN`、`installed App=NOT-RUN`、`Skill/MCP=NOT-RUN`、`SSH=NOT-RUN`、
-`signing/notarization=NOT-RUN`、`release=NOT-RUN`。
+Phase 4 基线是 production source `139f6ee235b67284e2edc852521f24b3f501d467`。其后的
+behavior-preserving Phase 5 owner 变更已提交为 exact commit
+`8687e79bb85303c27a1f0d7137bf9dca87a482be`：private
+`runtime/sandbox_session/one_click/transaction.rs` 现在拥有 one-click durable-journal
+identity/transition；root `one_click.rs` 仍保留 façade/coordinator、entry/recovery policy、
+success-finalize replay/effect/read-model/failure glue。History、`config.rs` wire schema、private replay
+manifest 与 live/fresh compensation effect/replay owner 均未移动。
 
-**唯一 Phase 5 NEXT：抽出 one-click durable-journal transition owner。** 在
-`runtime/sandbox_session/one_click/transaction.rs` 建立 private owner，并从 `one_click.rs` 移入
-`OneClickTransactionIdentity`、`OneClickJournalProgress`、phase/exposure 与 exact-match helpers、
-prior-stop intent/outcome、八阶段 checkpoint、healthy terminal-handoff binding CAS，以及
-success-finalize intent/completion 和 `RuntimeCompensationJournal` 的纯 intent/step/outcome/completion
-CAS helpers。该项只做 behavior-preserving 物理边界闭合：
+该 commit 的唯一 canonical run `22038ed8087f38a0a0bcd20c61064ecb` 在
+`/private/tmp/csg.VC5xLJ` sealed `FAIL` / RC 10：15 suites 为 14 `PASS` / 1 `FAIL`。唯一失败为
+`SUITE-ORPHAN-SKILL-BOUNDARY` 中的
+`test_s5_authority_transaction_owns_capture_restore_cleanup_facade`。这是 S4/S5 手写 source
+aggregation 漏列 `transaction.rs` 造成的 fixture drift，不是产品 failure，也不能写成 source `PASS`。
+completion seal SHA-256 为 `e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`，
+evidence manifest SHA-256 为 `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548`，
+source snapshot manifest SHA-256 为 `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4`。
+该 evidence root 可写但不得删除。
 
-- owner 输入：config dir、冻结的 target / previous binding / optional interrupted-Gateway terminal
-  handoff、candidate fingerprint、registered snapshot ticket、expected complete V2 record / progress、
-  requested phase 或 finalize action；
-- owner 输出：exact next `RuntimeTransactionV2` / `OneClickJournalProgress` 或 fail-closed typed error；
-  不返回进程、文件树、credential、DTO 或 UI effect；
-- 必须保持：八个 one-click phase 与 exposure 映射、prior-stop intent → exact outcome、完整记录 CAS、
-  active profile + previous binding authority、transaction/fingerprint/ticket/binding/prior-stop/finalize
-  identity、History / Gateway affine handoff 只在既有接管点消费、binding/adoption finalize 语义与
-  public DTO/text/test identity 全部不变；
-- 明确排除：不改 `config.rs` wire schema，不统一 History transaction，不改变
-  `RuntimeCompensationJournal` 固定五步或状态机，不移动 private replay manifest、live/fresh
-  compensation effect 或 replay owner，不改 cold/healthy/Science/Gateway/authority effects，不碰
-  Skill/MCP、SSH、provider、installed App、artifact 或 release；
-- 建议验证：既有 `runtime_journal.rs` 的
-  `gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transitions`、
-  `one_click_v2_checkpoints_freeze_candidate_identity_and_ticket` 与
-  `one_click_compensation_journal_begin_and_finish_use_complete_record_cas`，以及
-  `transaction_contract.rs::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel`；
-  再运行 Rust fmt/clippy、Desktop Rust suite、quality metadata / inventory 与 canonical source gate。
-  artifact/live/provider/installed/signing/release 仍须另行授权和取证。
-
-Phase 4 不实施上述 NEXT。若目标文件同时开始拥有 compensation effect、History restore 或 DTO
-projection，或改变任何 wire/phase/CAS 语义，即已越过该唯一边界，必须停止并重新基线。
+`SOURCE-GREEN` 尚未成立。唯一后续是修复该 fixture、创建新 commit 并运行 final exact gate；commit
+仍需另行授权。artifact、isolated-live、authorized live、real provider、installed App/runtime、Skill/MCP、
+SSH、signing/notarization 与 release 全部 `NOT-RUN`。
 
 ## 当前源码问题
 
@@ -352,7 +333,7 @@ artifact receipt；SSH、signing 与 release 仍未建立。
 
 | 重要重构决策 | Production source | Exact artifact | Isolated-live | Authorized live |
 |---|---|---|---|---|
-| Phase 5 one-click durable-journal owner | `codex/runtime-one-click-transaction-owner-phase5` 在 `2e7cf48` 之上的当前未提交 source candidate 已将 identity/transition owner 物理移到 private `one_click/transaction.rs`；root `one_click.rs` 仍为 façade/coordinator、entry/recovery policy、success-finalize replay/effect/read-model/failure glue。History、`config.rs` wire schema、private replay manifest 与 live/fresh compensation effect/replay owner 未移动。4 个指定 focused exact tests `PASS`；Desktop fmt / clippy `PASS`，suite 564 passed / 0 failed / 40 ignored；Gateway fmt / clippy `PASS`，tests 291/0/0；metadata validator `PASS`；quality kernel + runtime mutation inventory 21 tests `PASS`。唯一一次 canonical `run_all.sh` 使用空 mode-0700 `/private/tmp/csg.POwoFR`，因未提交 dirty candidate 无法通过 Git binding preflight，以 RC 12 / internal-failure 退出；15 suites / observations 未开始且无 run id、completion seal、evidence 或 source snapshot manifest，故为 `PREFLIGHT/ENV-BLOCKED`，exact-SHA GATE-SOURCE 仍 `NOT-RUN`，不是 source `PASS` 或产品 `FAIL`。HEAD 仍为 Phase 4 基线 `2e7cf48`，commit 需另行授权，不继承 `d2cf95e` 或其它历史 tuple 的 PASS | `NOT-RUN` | `NOT-RUN`；未启动 Gateway / Science，未做 runtime live acceptance | `NOT-RUN`；真实 provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 均未运行 |
+| Phase 5 one-click durable-journal owner | exact commit `8687e79bb85303c27a1f0d7137bf9dca87a482be` 已将 identity/transition owner 物理移至 private `one_click/transaction.rs`；root `one_click.rs` 仍为 façade/coordinator、entry/recovery policy、success-finalize replay/effect/read-model/failure glue。History、`config.rs` wire schema、private replay manifest 与 live/fresh compensation effect/replay owner 未移动。唯一 canonical run `22038ed8087f38a0a0bcd20c61064ecb` sealed `FAIL` / RC 10，15 suites 为 14 `PASS` / 1 `FAIL`；唯一 `SUITE-ORPHAN-SKILL-BOUNDARY` failure 是 `test_s5_authority_transaction_owns_capture_restore_cleanup_facade`，诊断为 S4/S5 手写 source aggregation 漏 `transaction.rs` 的 fixture drift，不是产品 failure，亦非 source `PASS`。completion seal `e0aac034510949096e2f6ce38fc75064bde1b534ea9d582facd455b6bdeff65b`、evidence manifest `ff01251189b113f42f2b8982c1c03522c0429fa05200ff106489adde4ef98548` 与 source snapshot manifest `c8f359596c6be109cc9de52d6c1cca118072efe6046c9376165740a4c9ca0cf4` 均绑定可写但不得删除的 `/private/tmp/csg.VC5xLJ`。`SOURCE-GREEN` 未成立；fixture 修复、新 commit 与 final exact gate pending，commit 需另行授权 | `NOT-RUN` | `NOT-RUN`；未启动 Gateway / Science，未做 runtime live acceptance | `NOT-RUN`；真实 provider、installed App/runtime、Skill/MCP、SSH、signing、notarization 与 release 均未运行 |
 | 一键入口、Gateway / Science 启动与 finalize | `d2cf95e` fresh completion review + canonical 15-suite `PASS`；Gateway reservation / 锁外 spawn / full-owner CAS、rejected/uncertain child owner 与 destructive caller fail-closed 继续闭合 | 历史 `18a6788` Acceptance G1 与独立 normal artifact identity 均 `PASS`；当前 source candidate artifact `NOT-RUN` | 历史 `18a6788` adoption G2 `PASS(scope=science-adoption-isolated-live)`；当前 source candidate `NOT-RUN` | installed normal 历史 product path 已运行；Provider 分项见本表最后一行，非闭合项保持 INCONCLUSIVE / NOT-RUN |
 | runtime mutation 与 stop ownership | stop_all、set_mode、set_settings、native exit 与 downgrade cleanup 保持既有 owner / 锁外 wait / CAS；cold prior、managed DB restart、history prior stop、live compensation 与 fresh-process replay cleanup 已统一为 transaction-scoped 完整 owner + exact request / 锁外 wait / generation + full-owner CAS；历史 profile-switch rollback owner 已随 dead writer 删除；`d2cf95e` review/gate `PASS` | 历史 `18a6788` Test G1 / normal identity `PASS`；当前 source candidate `NOT-RUN` | 历史 healthy deferred/cold selected/reopen/cleanup `PASS`；replacement/race/crash 由 source fixture 证明，当前 source candidate live `NOT-RUN` | installed normal 历史 Provider Stop/cleanup `PASS` |
 | Science fixed active / pending update adoption | `9476be5` 已实现 managed-health proof + generation/full-owner CAS；该修复已纳入 `d2cf95e` 的 608-test Desktop Rust suite、frontend、metadata、inventory、fresh completion review 与 canonical 15-suite `PASS` source closure | `NOT-RUN`；不得继承 `18a6788` artifact | `NOT-RUN`；RM-21 必须按 active/pending 与 next-cold-start 合同重跑 | `NOT-RUN`；真实 updater/Science 需另行授权 |
