@@ -46,7 +46,6 @@ pub(super) fn run_cold_one_click<R: Runtime>(
     lifecycle: &lifecycle::Lifecycle,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     open_surface: bool,
-    mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
     trace: OperationTrace,
     dir: std::path::PathBuf,
     cfg: &config::Config,
@@ -58,7 +57,6 @@ pub(super) fn run_cold_one_click<R: Runtime>(
     running_runtime_to_stop: Option<ScienceRuntimeIdentity>,
     science_state: SandboxScienceState,
     remembered_runtime_was_present: bool,
-    profile_switch_handoff: Option<config::RuntimeTransactionV2>,
     gateway_terminal_handoff: Option<config::RuntimeTransactionV2>,
     interrupted_environment_runtime_id: Option<&str>,
 ) -> Result<Value, TypedOneClickFailure> {
@@ -116,7 +114,6 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             &active_profile.id,
             &candidate_fingerprint,
             cfg.runtime_binding.as_ref(),
-            profile_switch_handoff.as_ref(),
             gateway_terminal_handoff.as_ref(),
             recipe,
         )
@@ -232,9 +229,6 @@ pub(super) fn run_cold_one_click<R: Runtime>(
                 OperationStage::AuthoritySnapshot,
                 "phase=capture_end outcome=error prior_science=restored",
             );
-            if let Some(disposition) = reconcile_disposition.as_deref_mut() {
-                *disposition = PriorScienceDisposition::Restored;
-            }
             if let Some(expected) = prior_stop_record.as_ref() {
                 clear_prior_stop_transition(&dir, expected).map_err(|error| {
                     TypedOneClickFailure::new(
@@ -278,7 +272,6 @@ pub(super) fn run_cold_one_click<R: Runtime>(
         runtime_fingerprint: candidate_fingerprint,
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: cfg.runtime_binding.clone(),
-        profile_switch_handoff,
         gateway_terminal_handoff,
         prior_stop: prior_stop_record
             .as_ref()
@@ -665,7 +658,6 @@ pub(super) fn run_cold_one_click<R: Runtime>(
             &mut journal_progress,
             prior_science_for_compensation,
             failure,
-            reconcile_disposition,
         ),
     }
 }

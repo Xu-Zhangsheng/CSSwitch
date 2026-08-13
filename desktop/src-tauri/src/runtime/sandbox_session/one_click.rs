@@ -409,8 +409,6 @@ pub(crate) fn one_click_login<R: Runtime>(
         runtime_choice,
         auth_proof,
         true,
-        None,
-        None,
         OneClickEntryProgress::initial(None),
     )
 }
@@ -431,8 +429,6 @@ fn one_click_login_after_gateway_recovery<R: Runtime>(
         runtime_choice,
         auth_proof,
         true,
-        None,
-        None,
         OneClickEntryProgress::initial(terminal.as_ref()),
     )
 }
@@ -633,182 +629,6 @@ pub(crate) fn one_click_login_entry<R: Runtime>(
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum PriorScienceDisposition {
-    #[default]
-    RestartRequired,
-    Restored,
-    EnvironmentUncertain,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) enum ReconcileScienceError {
-    PriorScienceRestored { cause: String },
-    EnvironmentUncertain { cause: String },
-    RestartRequired { cause: String },
-}
-
-#[allow(dead_code)]
-impl ReconcileScienceError {
-    pub(crate) fn cause(&self) -> &str {
-        match self {
-            Self::PriorScienceRestored { cause }
-            | Self::EnvironmentUncertain { cause }
-            | Self::RestartRequired { cause } => cause,
-        }
-    }
-
-    pub(crate) fn prior_science_restored(&self) -> bool {
-        matches!(self, Self::PriorScienceRestored { .. })
-    }
-
-    pub(crate) fn environment_uncertain(&self) -> bool {
-        matches!(self, Self::EnvironmentUncertain { .. })
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn reconcile_science_for_active<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    state: SharedAppState,
-    lifecycle: &lifecycle::Lifecycle,
-    auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
-    profile_switch_transaction: &config::RuntimeTransactionV2,
-) -> Result<Value, ReconcileScienceError> {
-    let mut disposition = PriorScienceDisposition::RestartRequired;
-    one_click_login_with_options(
-        app,
-        state,
-        lifecycle,
-        None,
-        auth_proof,
-        false,
-        Some(profile_switch_transaction),
-        Some(&mut disposition),
-        OneClickEntryProgress::initial(None),
-    )
-    .map_err(|failure| {
-        let cause = failure.safe_detail;
-        match disposition {
-            PriorScienceDisposition::Restored => {
-                ReconcileScienceError::PriorScienceRestored { cause }
-            }
-            PriorScienceDisposition::EnvironmentUncertain => {
-                ReconcileScienceError::EnvironmentUncertain { cause }
-            }
-            PriorScienceDisposition::RestartRequired => {
-                ReconcileScienceError::RestartRequired { cause }
-            }
-        }
-    })
-}
-
-/// Rollback-only recovery path. The persisted config is already the old,
-/// authoritative profile. Do not trust its previous runtime binding to decide
-/// reuse: a healthy process may actually have loaded the failed candidate
-/// catalog. Stop only the exact in-memory Science identity and start the
-/// committed chain again from a clean process.
-#[allow(clippy::result_large_err)]
-pub(crate) fn force_restart_science_for_active<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    state: SharedAppState,
-    lifecycle: &lifecycle::Lifecycle,
-    auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
-) -> Result<Value, TypedOneClickFailure> {
-    let cfg = config::load_from(&config::default_dir())
-        .map_err(|error| typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string()))?;
-    let (remembered, confirmed_stopped) = {
-        let current = lock(&state);
-        (
-            current.science_runtime.clone(),
-            current.science_confirmed_stopped.clone(),
-        )
-    };
-    match remembered {
-        Some(runtime) => match ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime) {
-            SandboxScienceState::RunningHealthy => {
-                execute_transaction_science_stop_with(
-                    &state,
-                    lifecycle,
-                    TransactionScienceStopTarget::new(
-                        TransactionScienceStopBoundary::ProfileSwitchRollback,
-                        &runtime,
-                        cfg.sandbox_port,
-                    ),
-                    || {
-                        let receipt =
-                            ScienceHostAdapter::managed_receipt(cfg.sandbox_port, &runtime)
-                                .ok_or_else(|| {
-                                    crate::runtime::science::ScienceStopFailure::request_rejected(
-                                        "回滚时无法取得候选 Science 的精确受管启动身份。",
-                                    )
-                                })?;
-                        Ok(ScienceStopRequest::exact(
-                            &runtime,
-                            ScienceStopOwnershipReceipt::from_managed_launch(&receipt),
-                        ))
-                    },
-                    |request| ScienceHostAdapter::execute_stop(&app, request).into_parts(),
-                    |_state, _confirmed_runtime| {},
-                )
-                .map_err(|error| {
-                    typed_one_click_err(
-                        OneClickFailureKind::ScienceStop,
-                        format!(
-                            "回滚时停止候选 Science 失败，未猜测 PID 或按端口结束进程：{error}"
-                        ),
-                    )
-                })?;
-            }
-            SandboxScienceState::Stopped => {
-                return Err(typed_one_click_err(
-                    OneClickFailureKind::ScienceStop,
-                    "回滚时仅确认 Science 端口已关闭，未取得精确停止 receipt；已拒绝继续恢复 authority。",
-                ));
-            }
-            SandboxScienceState::Unknown => {
-                return Err(typed_one_click_err(
-                    OneClickFailureKind::ScienceStop,
-                    "回滚时 Science 可能正在运行，但身份无法确认；已拒绝猜测 PID 或按端口结束进程。",
-                ));
-            }
-        },
-        None if confirmed_stopped.is_some()
-            && !proc::loopback_port_in_use(
-                cfg.sandbox_port,
-                operation::LOCAL_HEALTH_TIMEOUT_MS,
-            ) => {}
-        None if proc::loopback_port_in_use(
-            cfg.sandbox_port,
-            operation::LOCAL_HEALTH_TIMEOUT_MS,
-        ) =>
-        {
-            return Err(typed_one_click_err(
-                OneClickFailureKind::ScienceStop,
-                "回滚时 Science 端口仍被占用，但没有可确认的 runtime 身份；已拒绝强制结束。",
-            ));
-        }
-        None => {
-            return Err(typed_one_click_err(
-                OneClickFailureKind::ScienceStop,
-                "回滚时 Science 端口已关闭，但没有 verified-stopped receipt；已拒绝继续恢复 authority。",
-            ));
-        }
-    }
-    one_click_login_with_options(
-        app,
-        state,
-        lifecycle,
-        None,
-        auth_proof,
-        false,
-        None,
-        None,
-        OneClickEntryProgress::initial(None),
-    )
-}
-
 fn typed_one_click_err(
     kind: OneClickFailureKind,
     message: impl Into<String>,
@@ -877,7 +697,6 @@ pub(super) struct OneClickTransactionIdentity {
     pub(super) runtime_fingerprint: String,
     pub(super) snapshot_ticket: config::RuntimeSnapshotTicket,
     pub(super) previous_binding: Option<config::RuntimeBindingCommit>,
-    pub(super) profile_switch_handoff: Option<config::RuntimeTransactionV2>,
     pub(super) gateway_terminal_handoff: Option<config::RuntimeTransactionV2>,
     pub(super) prior_stop: config::RuntimePriorStopState,
 }
@@ -1049,25 +868,6 @@ fn one_click_prior_stop_record_matches(
         && journal.finalize == config::RuntimeFinalizeState::NotStarted
 }
 
-fn profile_switch_handoff_matches(
-    journal: &config::RuntimeTransactionV2,
-    expected: &config::RuntimeTransactionV2,
-    active_profile_id: &str,
-    current_binding: Option<&config::RuntimeBindingCommit>,
-) -> bool {
-    journal == expected
-        && expected.schema_version == config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2
-        && expected.operation == config::RuntimeTransactionOperation::ProfileSwitch
-        && expected.target_profile_id == active_profile_id
-        && expected.phase == config::RuntimeTransactionPhase::StartFormalGateway
-        && expected.runtime_fingerprint.is_none()
-        && expected.environment_exposure == config::RuntimeEnvironmentExposure::NotExposed
-        && expected.snapshot_ticket.is_none()
-        && expected.previous_binding.as_ref() == current_binding
-        && expected.compensation == config::RuntimeCompensationState::NotStarted
-        && expected.gateway_stop_outcome == config::RuntimeGatewayStopOutcome::NotAttempted
-}
-
 fn config_authority_matches(
     current: &config::Config,
     target_profile_id: &str,
@@ -1127,80 +927,33 @@ pub(super) fn resolve_gateway_terminal_handoff(
 
 pub(super) fn healthy_reopen_transaction_matches(
     journal: Option<&config::RuntimeTransactionRecord>,
-    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
     expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
     active_profile_id: &str,
     current_binding: Option<&config::RuntimeBindingCommit>,
 ) -> bool {
     if let Some(expected) = expected_gateway_terminal_handoff {
-        return expected_profile_switch_transaction.is_none()
-            && matches!(
-                journal,
-                Some(config::RuntimeTransactionRecord::V2(typed))
-                    if gateway_terminal_handoff_matches(
-                        typed,
-                        expected,
-                        active_profile_id,
-                        current_binding,
-                    )
-            );
-    }
-    match expected_profile_switch_transaction {
-        Some(expected) => matches!(
+        return matches!(
             journal,
             Some(config::RuntimeTransactionRecord::V2(typed))
-                if profile_switch_handoff_matches(
+                if gateway_terminal_handoff_matches(
                     typed,
                     expected,
                     active_profile_id,
                     current_binding,
                 )
-        ),
-        None => !journal.is_some_and(config::RuntimeTransactionRecord::is_v2),
+        );
     }
-}
-
-pub(super) fn resolve_profile_switch_handoff(
-    journal: Option<&config::RuntimeTransactionRecord>,
-    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
-    reconcile_expected: bool,
-    active_profile_id: &str,
-    current_binding: Option<&config::RuntimeBindingCommit>,
-) -> Result<Option<config::RuntimeTransactionV2>, &'static str> {
-    match expected_profile_switch_transaction {
-        Some(expected) if reconcile_expected => match journal {
-            Some(config::RuntimeTransactionRecord::V2(typed))
-                if profile_switch_handoff_matches(
-                    typed,
-                    expected,
-                    active_profile_id,
-                    current_binding,
-                ) =>
-            {
-                Ok(Some(expected.clone()))
-            }
-            _ => Err(
-                "profile-switch handoff journal disappeared, regressed, or retargeted before reconcile",
-            ),
-        },
-        Some(_) => Err("profile-switch handoff was supplied outside the reconcile path"),
-        None if journal.is_some_and(config::RuntimeTransactionRecord::is_v2) => {
-            Err("interrupted typed runtime journal requires manual recovery")
-        }
-        None => Ok(None),
-    }
+    !journal.is_some_and(config::RuntimeTransactionRecord::is_v2)
 }
 
 pub(super) fn commit_healthy_reopen_binding(
     dir: &Path,
-    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
     expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
     committed: &config::RuntimeBindingCommit,
 ) -> Result<(), String> {
     config::update_result(dir, |config| {
         if !healthy_reopen_transaction_matches(
             config.runtime_transaction.as_ref(),
-            expected_profile_switch_transaction,
             expected_gateway_terminal_handoff,
             &config.active_id,
             config.runtime_binding.as_ref(),
@@ -1245,35 +998,25 @@ pub(super) fn begin_prior_stop_intent(
     target_profile_id: &str,
     runtime_fingerprint: &str,
     previous_binding: Option<&config::RuntimeBindingCommit>,
-    profile_switch_handoff: Option<&config::RuntimeTransactionV2>,
     gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
     recipe: config::RuntimePriorScienceRecipe,
 ) -> Result<config::RuntimeTransactionV2, String> {
     config::update_result(dir, |current| {
         let current_handoff_matches = match current.runtime_transaction.as_ref() {
-            Some(config::RuntimeTransactionRecord::V2(journal)) => {
-                profile_switch_handoff.is_some_and(|expected| {
-                    profile_switch_handoff_matches(
-                        journal,
-                        expected,
-                        target_profile_id,
-                        previous_binding,
-                    )
-                }) || gateway_terminal_handoff.is_some_and(|expected| {
+            Some(config::RuntimeTransactionRecord::V2(journal)) => gateway_terminal_handoff
+                .is_some_and(|expected| {
                     gateway_terminal_handoff_matches(
                         journal,
                         expected,
                         &current.active_id,
                         current.runtime_binding.as_ref(),
                     )
-                })
-            }
+                }),
             _ => false,
         };
         let config_authority_matches =
             config_authority_matches(current, target_profile_id, previous_binding);
-        let no_handoff_expected =
-            profile_switch_handoff.is_none() && gateway_terminal_handoff.is_none();
+        let no_handoff_expected = gateway_terminal_handoff.is_none();
         let replace_allowed = config_authority_matches
             && (current_handoff_matches
                 || (no_handoff_expected
@@ -1384,20 +1127,6 @@ pub(super) fn write_one_click_checkpoint(
     }
     let expected_record = progress.journaled_record().cloned();
     let next_record = config::update_result(dir, |current| {
-        let profile_switch_handoff_matches = match current.runtime_transaction.as_ref() {
-            Some(config::RuntimeTransactionRecord::V2(journal)) => identity
-                .profile_switch_handoff
-                .as_ref()
-                .is_some_and(|expected| {
-                    profile_switch_handoff_matches(
-                        journal,
-                        expected,
-                        &identity.target_profile_id,
-                        identity.previous_binding.as_ref(),
-                    )
-                }),
-            _ => false,
-        };
         let gateway_terminal_handoff_matches = match current.runtime_transaction.as_ref() {
             Some(config::RuntimeTransactionRecord::V2(journal)) => identity
                 .gateway_terminal_handoff
@@ -1444,7 +1173,7 @@ pub(super) fn write_one_click_checkpoint(
                 Ok((next, true))
             }
             (Some(config::RuntimeTransactionRecord::V2(_)), None)
-                if profile_switch_handoff_matches || gateway_terminal_handoff_matches =>
+                if gateway_terminal_handoff_matches =>
             {
                 let transaction_id = config::new_id();
                 let next = new_one_click_journal(identity, transaction_id, phase);
@@ -1456,8 +1185,7 @@ pub(super) fn write_one_click_checkpoint(
                 Err("one-click checkpoint identity changed; preserved the typed transaction".into())
             }
             (Some(config::RuntimeTransactionRecord::V1(_)) | None, None)
-                if identity.profile_switch_handoff.is_none()
-                    && identity.gateway_terminal_handoff.is_none() =>
+                if identity.gateway_terminal_handoff.is_none() =>
             {
                 let transaction_id = config::new_id();
                 let next = new_one_click_journal(identity, transaction_id, phase);
@@ -3067,7 +2795,6 @@ pub(super) fn test_compensate_one_click_failure<R: Runtime>(
         journal_progress,
         None,
         failure,
-        None,
     )
 }
 
@@ -3079,8 +2806,6 @@ fn one_click_login_with_options<R: Runtime>(
     runtime_choice: Option<&str>,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
     open_surface: bool,
-    expected_profile_switch_transaction: Option<&config::RuntimeTransactionV2>,
-    reconcile_disposition: Option<&mut PriorScienceDisposition>,
     entry_progress: OneClickEntryProgress<'_>,
 ) -> Result<Value, TypedOneClickFailure> {
     let trace = OperationTrace::start(OperationKind::OneClickLogin, "command=one_click_login");
@@ -3109,26 +2834,18 @@ fn one_click_login_with_options<R: Runtime>(
         )
         .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
     })?;
-    let profile_switch_handoff = if gateway_terminal_handoff.is_some() {
-        None
-    } else {
-        resolve_profile_switch_handoff(
-            cfg.runtime_transaction.as_ref(),
-            expected_profile_switch_transaction,
-            reconcile_disposition.is_some(),
-            &cfg.active_id,
-            cfg.runtime_binding.as_ref(),
+    if gateway_terminal_handoff.is_none()
+        && cfg
+            .runtime_transaction
+            .as_ref()
+            .is_some_and(config::RuntimeTransactionRecord::is_v2)
+    {
+        return Err(TypedOneClickFailure::new(
+            OneClickFailureKind::Prepare,
+            "检测到无法接管的 typed runtime journal；已保留当前事务并要求人工恢复；recovery_status=manual_recovery_required",
         )
-        .map_err(|detail| {
-            TypedOneClickFailure::new(
-                OneClickFailureKind::Prepare,
-                format!(
-                    "检测到无法接管的 runtime journal；已保留当前事务并要求人工恢复：{detail}；recovery_status=manual_recovery_required"
-                ),
-            )
-            .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED)
-        })?
-    };
+        .with_recovery(ProjectedRecovery::MANUAL_RECOVERY_REQUIRED));
+    }
     let interrupted_environment_state = cfg
         .runtime_transaction
         .as_ref()
@@ -3201,7 +2918,6 @@ fn one_click_login_with_options<R: Runtime>(
                     sport,
                     &running_runtime,
                     open_surface,
-                    profile_switch_handoff.as_ref(),
                     gateway_terminal_handoff.as_ref(),
                 )?;
                 if interrupted_environment_runtime_id.is_some() {
@@ -3232,8 +2948,6 @@ fn one_click_login_with_options<R: Runtime>(
                             runtime_choice,
                             auth_proof,
                             open_surface,
-                            expected_profile_switch_transaction,
-                            reconcile_disposition,
                             entry_progress.after_cleanup(),
                         );
                     }
@@ -3252,7 +2966,6 @@ fn one_click_login_with_options<R: Runtime>(
         lifecycle,
         auth_proof,
         open_surface,
-        reconcile_disposition,
         trace,
         dir,
         &cfg,
@@ -3264,7 +2977,6 @@ fn one_click_login_with_options<R: Runtime>(
         running_runtime_to_stop,
         science_state,
         remembered_runtime_was_present,
-        profile_switch_handoff,
         gateway_terminal_handoff,
         interrupted_environment_runtime_id,
     )

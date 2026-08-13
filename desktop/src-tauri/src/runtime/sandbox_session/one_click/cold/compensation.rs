@@ -180,10 +180,6 @@ impl CompensationOutcome {
             && self.prior_science_restart.completed_or_not_required()
     }
 
-    pub(in super::super::super) fn prior_science_restored(&self) -> bool {
-        self.authorities_restored() && self.prior_science_restart.succeeded()
-    }
-
     fn cleanup_required(&self) -> bool {
         matches!(
             &self.snapshot_cleanup,
@@ -296,7 +292,6 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     journal_progress: &mut OneClickJournalProgress,
     prior_science: Option<&PriorScienceContext>,
     failure: OneClickFailure,
-    mut reconcile_disposition: Option<&mut PriorScienceDisposition>,
 ) -> Result<Value, TypedOneClickFailure> {
     let original_kind = failure.typed.kind();
     if let OneClickJournalProgress::PreJournalAbort {
@@ -467,11 +462,6 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
     if let Err(cleanup_error) = cleanup.as_ref() {
         let outcome =
             CompensationOutcome::blocked_by_science_cleanup(cleanup_error.to_string(), environment);
-        if outcome.environment.is_uncertain() {
-            if let Some(disposition) = reconcile_disposition.as_deref_mut() {
-                *disposition = PriorScienceDisposition::EnvironmentUncertain;
-            }
-        }
         authority_transaction.preserve_recovery();
         if let Err(journal_error) = finish_one_click_compensation(dir, journal_progress) {
             trace.finish("error=compensation_failure_not_persisted");
@@ -594,14 +584,6 @@ pub(in super::super) fn compensate_one_click_failure<R: Runtime>(
         environment,
     };
     let authorities_restored = outcome.authorities_restored();
-    let prior_science_restored = outcome.prior_science_restored();
-    if let Some(disposition) = reconcile_disposition {
-        if outcome.environment.is_uncertain() {
-            *disposition = PriorScienceDisposition::EnvironmentUncertain;
-        } else if prior_science_restored {
-            *disposition = PriorScienceDisposition::Restored;
-        }
-    }
     persist_compensation_step_intent(
         dir,
         trace,

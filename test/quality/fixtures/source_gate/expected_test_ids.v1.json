@@ -532,7 +532,6 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_pending_cleanup_not_found_is_idempotent_and_neighbor_safe",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_post_spawn_failure_cleans_candidate",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
-        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_one_click_history_attention",
@@ -625,10 +624,6 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation": {
           "boundary": "acceptance",
           "reason": "explicit Acceptance-boundary prior Science cleanup degradation; temp HOME, managed fake Science, real local Gateway, and loopback only"
-        },
-        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science": {
-          "boundary": "acceptance",
-          "reason": "explicit Acceptance-boundary profile-switch snapshot rollback; temp HOME, managed fake Science, real local Gateway, and loopback only"
         },
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_d_lifecycle_command_contract": {
           "boundary": "acceptance",
@@ -829,7 +824,6 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_pending_cleanup_not_found_is_idempotent_and_neighbor_safe",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_post_spawn_failure_cleans_candidate",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_prior_science_restart_survives_snapshot_cleanup_degradation",
-        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_profile_switch_snapshot_failure_reuses_restored_prior_science",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_d_lifecycle_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_history_restore_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_r0_one_click_history_attention",
@@ -1108,9 +1102,6 @@
         "desktop/src-tauri/Cargo.toml::lib::runtime::profile::tests::update_connection_unknown_id_errors",
         "desktop/src-tauri/Cargo.toml::lib::runtime::profile::tests::update_metadata_does_not_touch_key",
         "desktop/src-tauri/Cargo.toml::lib::runtime::profile::tests::update_metadata_unknown_id_errors",
-        "desktop/src-tauri/Cargo.toml::lib::runtime::profile_switch::tests::candidate_profile_and_recovery_journal_are_published_as_one_config_state",
-        "desktop/src-tauri/Cargo.toml::lib::runtime::profile_switch::tests::rollback_to_codex_without_a_current_proof_stops_candidate_fail_closed",
-        "desktop/src-tauri/Cargo.toml::lib::runtime::profile_switch::tests::uncommitted_scratch_result_is_always_structured_as_an_error",
         "desktop/src-tauri/Cargo.toml::lib::runtime::provider::tests::api_key_public_projection_never_contains_key_material",
         "desktop/src-tauri/Cargo.toml::lib::runtime::provider::tests::codex_network_fingerprint_changes_formal_gateway_identity",
         "desktop/src-tauri/Cargo.toml::lib::runtime::provider::tests::codex_resolver_projects_opaque_credentials_by_trust_boundary",

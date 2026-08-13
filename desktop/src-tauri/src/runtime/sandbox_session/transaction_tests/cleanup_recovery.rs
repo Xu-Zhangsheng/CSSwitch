@@ -132,7 +132,6 @@ fn success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows(
             runtime_fingerprint: "a".repeat(64),
             snapshot_ticket: ticket.clone(),
             previous_binding: Some(previous.clone()),
-            profile_switch_handoff: None,
             gateway_terminal_handoff: None,
             prior_stop: config::RuntimePriorStopState::NotRequired,
         };

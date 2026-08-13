@@ -9,7 +9,6 @@ use crate::{lifecycle, lock, AppState, SharedAppState};
 pub(super) enum TransactionScienceStopBoundary {
     ColdPriorStop,
     ManagedDbRestart,
-    ProfileSwitchRollback,
     HistoryRecoveryPriorStop,
     LiveCompensationCleanup,
     CompensationReplayCleanup,
@@ -20,7 +19,6 @@ impl TransactionScienceStopBoundary {
         match self {
             Self::ColdPriorStop => "cold_prior_stop",
             Self::ManagedDbRestart => "managed_db_restart",
-            Self::ProfileSwitchRollback => "profile_switch_rollback",
             Self::HistoryRecoveryPriorStop => "history_recovery_prior_stop",
             Self::LiveCompensationCleanup => "live_compensation_cleanup",
             Self::CompensationReplayCleanup => "compensation_replay_cleanup",

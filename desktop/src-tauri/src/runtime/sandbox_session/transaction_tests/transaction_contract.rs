@@ -206,7 +206,6 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let compensation_source = include_str!("../one_click/cold/compensation.rs");
     let science_phase_source = include_str!("../one_click/cold/science_phase.rs");
     let healthy_reopen_source = include_str!("../one_click/healthy_reopen.rs");
-    let profile_reconcile_source = include_str!("../../profile_switch.rs");
     let auto_boot_source = include_str!("../../../lib.rs");
     let config_source = include_str!("../../../config.rs");
     let profile_source = include_str!("../../profile.rs");
@@ -495,7 +494,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let runtime_entry = source
         .split("pub(crate) fn one_click_login_entry")
         .nth(1)
-        .and_then(|tail| tail.split("enum PriorScienceDisposition").next())
+        .and_then(|tail| tail.split("fn typed_one_click_err").next())
         .expect("production runtime entry facade must remain discoverable");
     assert!(
         command_projection_source.contains("one_click_login_entry(")
@@ -623,20 +622,6 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
             && healthy_reopen_source.contains("primary.projected_recovery()"),
         "one-click and healthy reopen must preserve explicit typed recovery"
     );
-    let profile_reconcile = profile_reconcile_source
-        .split("if let Err(error) = crate::runtime::sandbox_session::reconcile_science_for_active")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("} else {\n        let clear_result = config::update_result")
-                .next()
-        })
-        .expect("profile reconcile projection must remain discoverable");
-    assert!(
-        profile_reconcile.contains("error.prior_science_restored()")
-            && profile_reconcile.contains("error.environment_uncertain()")
-            && !profile_reconcile.contains(".contains("),
-        "profile reconcile must derive recovery and environment from typed variants"
-    );
     let auto_boot_projection = auto_boot_source
         .split("fn run_boot_decision_with")
         .nth(1)
@@ -698,8 +683,7 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         environment: CompensationEnvironment::Quiescent,
     };
     assert!(
-        !incomplete_after_prior_restart.authorities_restored()
-            && !incomplete_after_prior_restart.prior_science_restored(),
+        !incomplete_after_prior_restart.authorities_restored(),
         "a successful prior Science restart must not publish Restored when SSH cleanup failed"
     );
     assert_eq!(
@@ -1086,7 +1070,6 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
 #[test]
 fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
     let owner_source = include_str!("../transaction_science_stop.rs");
-    let one_click_source = include_str!("../one_click.rs");
     let cold_source = include_str!("../one_click/cold.rs");
     let science_phase_source = include_str!("../one_click/cold/science_phase.rs");
     let compensation_source = include_str!("../one_click/cold/compensation.rs");
@@ -1142,11 +1125,6 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
     assert!(!cold_source.contains("ColdPriorScienceStopOwner"));
     assert!(!owner_source.contains("fn restart_managed_science_with_budget"));
 
-    let profile_rollback = one_click_source
-        .split("pub(crate) fn force_restart_science_for_active")
-        .nth(1)
-        .and_then(|tail| tail.split("fn typed_one_click_err").next())
-        .expect("profile-switch rollback stop boundary must remain discoverable");
     let history_prior_stop = history_source
         .split("pub(crate) fn restore_history_choice_entry")
         .nth(1)
@@ -1165,11 +1143,6 @@ fn transaction_scoped_science_stop_owner_covers_every_durable_boundary() {
             "managed DB restart",
             science_phase_source,
             "ManagedDbRestart",
-        ),
-        (
-            "profile-switch rollback",
-            profile_rollback,
-            "ProfileSwitchRollback",
         ),
         (
             "history recovery prior stop",

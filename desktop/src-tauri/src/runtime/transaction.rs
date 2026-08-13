@@ -23,6 +23,7 @@ pub(crate) fn decide_switch(scratch_ok: bool, real_healthy: bool) -> SwitchOutco
 /// 激活/切换是否跳过 scratch 上游校验（纯函数，修真机 P1）：只有用户显式 `skip_verify` 才跳；
 /// 原生 adapter 不再豁免（旧行为 `native || skip_verify` 会让原生无效 key 提交为 active 并谎报「已切到」，
 /// 首个真实推理才 401）。`native` 参数刻意保留：记录它曾是豁免条件、现已作废。
+#[cfg(test)]
 pub(crate) fn skip_scratch_verify(native: bool, skip_verify: bool) -> bool {
     let _ = native; // native 曾是豁免条件，现已作废（保留参数以固化回归防线）。
     skip_verify
@@ -30,6 +31,7 @@ pub(crate) fn skip_scratch_verify(native: bool, skip_verify: bool) -> bool {
 
 /// 回滚结果措辞（纯函数，P2-e）：restored=true 才说「已回滚到原配置」；恢复失败必须如实说明代理已停，
 /// 绝不谎称回滚成功（比照本项目「如实报告」铁律，掩盖代理已停会误导用户）。
+#[cfg(test)]
 pub(crate) fn rollback_status_clause(restored: bool) -> &'static str {
     if restored {
         "已回滚到原配置（沙箱未受影响）"

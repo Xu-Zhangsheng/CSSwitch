@@ -695,7 +695,6 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         runtime_fingerprint: runtime_id.clone(),
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: None,
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: config::RuntimePriorStopState::NotRequired,
     };
@@ -751,7 +750,6 @@ fn fresh_authority_snapshot_parent_is_private_and_cleanup_safe() {
         runtime_fingerprint: runtime_id,
         snapshot_ticket: panic_ticket.clone(),
         previous_binding: None,
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: config::RuntimePriorStopState::NotRequired,
     };

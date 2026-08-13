@@ -46,11 +46,10 @@ use one_click::replay_interrupted_one_click_compensation;
 #[cfg(test)]
 use one_click::{
     begin_one_click_compensation, begin_one_click_compensation_step, begin_one_click_finalize,
-    begin_prior_stop_intent, clear_one_click_transaction, commit_healthy_reopen_binding,
-    commit_runtime_binding, complete_one_click_finalize, finish_one_click_authority_restore_step,
-    finish_one_click_compensation, finish_one_click_compensation_step,
-    healthy_reopen_transaction_matches, one_click_phase_exposure, publish_prior_stop_outcome,
-    resolve_gateway_terminal_handoff, resolve_profile_switch_handoff,
+    begin_prior_stop_intent, clear_one_click_transaction, commit_runtime_binding,
+    complete_one_click_finalize, finish_one_click_authority_restore_step,
+    finish_one_click_compensation, finish_one_click_compensation_step, one_click_phase_exposure,
+    publish_prior_stop_outcome, resolve_gateway_terminal_handoff,
     runtime_environment_fingerprint_changed, science_health_control_error,
     test_begin_replayable_compensation, test_compensate_one_click_failure,
     test_replay_prior_restart_effect_without_outcome, write_one_click_checkpoint,
@@ -58,10 +57,9 @@ use one_click::{
 };
 #[allow(unused_imports)]
 pub(crate) use one_click::{
-    force_restart_science_for_active, interrupted_compensation_requires_pre_auth_replay,
-    one_click_login_entry, reconcile_science_for_active,
+    interrupted_compensation_requires_pre_auth_replay, one_click_login_entry,
     replay_interrupted_compensation_before_auth, replay_interrupted_one_click_finalize,
-    typed_interrupted_gateway_recovery_error, OneClickEntryPreflight, ReconcileScienceError,
+    typed_interrupted_gateway_recovery_error, OneClickEntryPreflight,
 };
 #[cfg(test)]
 use pending_cleanup::retry_pending_authority_cleanup;

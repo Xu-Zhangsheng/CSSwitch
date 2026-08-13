@@ -260,7 +260,6 @@ fn assert_v1_prior_restart_replay_hydrates_v2_receipt(env: &mut ScopedEnv) {
         &runtime.environment_transaction_id(),
         None,
         None,
-        None,
         recipe.clone(),
     )
     .unwrap();
@@ -278,7 +277,6 @@ fn assert_v1_prior_restart_replay_hydrates_v2_receipt(env: &mut ScopedEnv) {
         runtime_fingerprint: runtime.environment_transaction_id(),
         snapshot_ticket: ticket.clone(),
         previous_binding: None,
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: stopped.prior_stop.clone(),
     };
@@ -452,7 +450,6 @@ fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
         runtime_fingerprint: "d".repeat(64),
         snapshot_ticket: ticket.clone(),
         previous_binding: None,
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: config::RuntimePriorStopState::NotRequired,
     };
@@ -761,7 +758,6 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
             "target",
             &"c".repeat(64),
             Some(&previous),
-            None,
             Some(&accepted),
             recipe.clone(),
         )
@@ -778,7 +774,6 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         "target",
         &"c".repeat(64),
         Some(&previous),
-        None,
         Some(&accepted),
         recipe.clone(),
     )
@@ -807,7 +802,6 @@ fn gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transit
         runtime_fingerprint: "c".repeat(64),
         snapshot_ticket: ticket.clone(),
         previous_binding: Some(previous.clone()),
-        profile_switch_handoff: None,
         gateway_terminal_handoff: Some(accepted),
         prior_stop: stopped.prior_stop.clone(),
     };
@@ -1012,7 +1006,6 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         runtime_fingerprint: "a".repeat(64),
         snapshot_ticket: snapshot_ticket.clone(),
         previous_binding: Some(previous.clone()),
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: config::RuntimePriorStopState::NotRequired,
     };
@@ -1192,314 +1185,6 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         .runtime_transaction
         .is_none());
 
-    let profile_switch_transaction_id = "profile-switch-handoff".to_string();
-    let profile_switch_record =
-        config::RuntimeTransactionRecord::V2(config::RuntimeTransactionV2 {
-            schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
-            transaction_id: profile_switch_transaction_id.clone(),
-            operation: config::RuntimeTransactionOperation::ProfileSwitch,
-            target_profile_id: identity.target_profile_id.clone(),
-            phase: config::RuntimeTransactionPhase::StartFormalGateway,
-            runtime_fingerprint: None,
-            environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
-            snapshot_ticket: None,
-            previous_binding: identity.previous_binding.clone(),
-            previous_gateway: None,
-            compensation: config::RuntimeCompensationState::NotStarted,
-            gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
-            prior_stop: config::RuntimePriorStopState::NotRequired,
-            finalize: config::RuntimeFinalizeState::NotStarted,
-        });
-    config::update(&dir, |current| {
-        current.runtime_transaction = Some(profile_switch_record.clone());
-    })
-    .unwrap();
-    let before_retarget_rejection = std::fs::read(dir.join("config.json")).unwrap();
-    let mut retargeted_handoff_identity = identity.clone();
-    let mut retargeted_profile_switch = profile_switch_record.as_v2().unwrap().clone();
-    retargeted_profile_switch.transaction_id = "different-profile-switch-transaction".into();
-    retargeted_handoff_identity.profile_switch_handoff = Some(retargeted_profile_switch);
-    let mut retargeted_handoff_progress = OneClickJournalProgress::PreJournalAbort {
-        registered_ticket: snapshot_ticket.clone(),
-        runtime_transaction: Box::new(Some(profile_switch_record.clone())),
-    };
-    let handoff_error = write_one_click_checkpoint(
-        &dir,
-        &retargeted_handoff_identity,
-        &mut retargeted_handoff_progress,
-        config::RuntimeTransactionPhase::StartGateway,
-    )
-    .expect_err("a replaced profile-switch transaction must not be handed off");
-    assert!(handoff_error.contains("identity changed"));
-    assert_eq!(
-        std::fs::read(dir.join("config.json")).unwrap(),
-        before_retarget_rejection
-    );
-    let mut handoff_identity = identity.clone();
-    handoff_identity.profile_switch_handoff = Some(profile_switch_record.as_v2().unwrap().clone());
-
-    config::update(&dir, |current| {
-        current
-            .runtime_transaction
-            .as_mut()
-            .and_then(config::RuntimeTransactionRecord::as_v2_mut)
-            .unwrap()
-            .previous_gateway = Some(config::GatewayRuntimeJournalIdentity {
-            provider: "retargeted".into(),
-            shim: "off".into(),
-            launch_id: "retargeted-launch".into(),
-            provider_contract_id: "retargeted-contract".into(),
-            provider_contract_digest: "retargeted-digest".into(),
-            catalog_fp: "retargeted-catalog".into(),
-        });
-    })
-    .unwrap();
-    let before_field_drift_rejection = std::fs::read(dir.join("config.json")).unwrap();
-    let mut field_drift_progress = OneClickJournalProgress::PreJournalAbort {
-        registered_ticket: snapshot_ticket.clone(),
-        runtime_transaction: Box::new(config::load_from(&dir).unwrap().runtime_transaction),
-    };
-    let field_drift_error = write_one_click_checkpoint(
-        &dir,
-        &handoff_identity,
-        &mut field_drift_progress,
-        config::RuntimeTransactionPhase::StartGateway,
-    )
-    .expect_err("same-id previous Gateway drift must fail closed");
-    assert!(field_drift_error.contains("identity changed"));
-    assert_eq!(
-        std::fs::read(dir.join("config.json")).unwrap(),
-        before_field_drift_rejection
-    );
-
-    for (label, replacement) in [
-        ("missing", None),
-        (
-            "v1-regression",
-            Some(
-                config::RuntimeTransactionJournal {
-                    transaction_id: profile_switch_transaction_id.clone(),
-                    target_profile_id: identity.target_profile_id.clone(),
-                    stage: "start_formal_gateway".into(),
-                    previous_binding: identity.previous_binding.clone(),
-                    previous_gateway: None,
-                }
-                .into(),
-            ),
-        ),
-    ] {
-        config::update(&dir, |current| {
-            current.runtime_transaction = replacement.clone();
-        })
-        .unwrap();
-        let before = std::fs::read(dir.join("config.json")).unwrap();
-        let mut rejected_progress = OneClickJournalProgress::PreJournalAbort {
-            registered_ticket: snapshot_ticket.clone(),
-            runtime_transaction: Box::new(replacement.clone()),
-        };
-        let error = write_one_click_checkpoint(
-            &dir,
-            &handoff_identity,
-            &mut rejected_progress,
-            config::RuntimeTransactionPhase::StartGateway,
-        )
-        .expect_err("a disappeared or regressed profile-switch handoff must fail closed");
-        assert!(
-            error.contains("handoff journal disappeared or regressed"),
-            "{label}"
-        );
-        assert_eq!(std::fs::read(dir.join("config.json")).unwrap(), before);
-    }
-
-    config::update(&dir, |current| {
-        current.runtime_transaction = Some(profile_switch_record.clone());
-    })
-    .unwrap();
-    let typed_profile_switch = profile_switch_record.as_v2().unwrap();
-    let mut mismatched_profile_switch = typed_profile_switch.clone();
-    mismatched_profile_switch.compensation = config::RuntimeCompensationState::InProgress;
-    assert!(healthy_reopen_transaction_matches(
-        Some(&profile_switch_record),
-        Some(typed_profile_switch),
-        None,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    ));
-    assert!(!healthy_reopen_transaction_matches(
-        Some(&profile_switch_record),
-        Some(&mismatched_profile_switch),
-        None,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    ));
-    assert!(!healthy_reopen_transaction_matches(
-        None,
-        Some(typed_profile_switch),
-        None,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    ));
-    assert!(!healthy_reopen_transaction_matches(
-        Some(&profile_switch_record),
-        None,
-        None,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    ));
-    let legacy_profile_switch: config::RuntimeTransactionRecord =
-        config::RuntimeTransactionJournal {
-            transaction_id: profile_switch_transaction_id.clone(),
-            target_profile_id: identity.target_profile_id.clone(),
-            stage: "start_formal_gateway".into(),
-            previous_binding: identity.previous_binding.clone(),
-            previous_gateway: None,
-        }
-        .into();
-    assert_eq!(
-        resolve_profile_switch_handoff(
-            Some(&profile_switch_record),
-            Some(typed_profile_switch),
-            true,
-            &identity.target_profile_id,
-            identity.previous_binding.as_ref(),
-        )
-        .unwrap()
-        .as_ref(),
-        Some(typed_profile_switch)
-    );
-    for regressed in [None, Some(&legacy_profile_switch)] {
-        assert!(resolve_profile_switch_handoff(
-            regressed,
-            Some(typed_profile_switch),
-            true,
-            &identity.target_profile_id,
-            identity.previous_binding.as_ref(),
-        )
-        .is_err());
-    }
-    assert!(resolve_profile_switch_handoff(
-        Some(&profile_switch_record),
-        Some(&mismatched_profile_switch),
-        true,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    )
-    .is_err());
-    assert!(resolve_profile_switch_handoff(
-        Some(&profile_switch_record),
-        Some(typed_profile_switch),
-        false,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    )
-    .is_err());
-    assert!(resolve_profile_switch_handoff(
-        Some(&profile_switch_record),
-        None,
-        false,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    )
-    .is_err());
-    assert_eq!(
-        resolve_profile_switch_handoff(
-            Some(&legacy_profile_switch),
-            None,
-            false,
-            &identity.target_profile_id,
-            identity.previous_binding.as_ref(),
-        )
-        .unwrap(),
-        None
-    );
-    assert!(healthy_reopen_transaction_matches(
-        Some(&legacy_profile_switch),
-        None,
-        None,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    ));
-    assert!(healthy_reopen_transaction_matches(
-        None,
-        None,
-        None,
-        &identity.target_profile_id,
-        identity.previous_binding.as_ref(),
-    ));
-    assert_eq!(
-        typed_profile_switch.previous_binding.as_ref(),
-        identity.previous_binding.as_ref()
-    );
-
-    config::update(&dir, |current| {
-        current
-            .runtime_transaction
-            .as_mut()
-            .and_then(config::RuntimeTransactionRecord::as_v2_mut)
-            .unwrap()
-            .compensation = config::RuntimeCompensationState::InProgress;
-    })
-    .unwrap();
-    let before_commit_drift_rejection = std::fs::read(dir.join("config.json")).unwrap();
-    let committed_binding = RuntimeBindingCommit {
-        profile_id: identity.target_profile_id.clone(),
-        route_fp: "committed-route-fp".into(),
-        catalog_fp: "committed-catalog-fp".into(),
-        binding_fp: "committed-binding-fp".into(),
-        science_adoption_attempt_id: None,
-    };
-    let commit_error =
-        commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), None, &committed_binding)
-            .expect_err("same-id drift between healthy read and binding commit must fail closed");
-    assert!(commit_error.contains("retargeted healthy reopen"));
-    assert_eq!(
-        std::fs::read(dir.join("config.json")).unwrap(),
-        before_commit_drift_rejection
-    );
-
-    config::update(&dir, |current| {
-        current.runtime_transaction = Some(profile_switch_record.clone());
-    })
-    .unwrap();
-    commit_healthy_reopen_binding(&dir, Some(typed_profile_switch), None, &committed_binding)
-        .unwrap();
-    let committed_config = config::load_from(&dir).unwrap();
-    assert_eq!(
-        committed_config.runtime_binding.as_ref(),
-        Some(&committed_binding)
-    );
-    assert!(committed_config.runtime_transaction.is_none());
-
-    config::update(&dir, |current| {
-        current.runtime_binding = identity.previous_binding.clone();
-        current.runtime_transaction = Some(profile_switch_record.clone());
-    })
-    .unwrap();
-    let mut handoff_progress = OneClickJournalProgress::PreJournalAbort {
-        registered_ticket: snapshot_ticket.clone(),
-        runtime_transaction: Box::new(Some(profile_switch_record.clone())),
-    };
-    write_one_click_checkpoint(
-        &dir,
-        &handoff_identity,
-        &mut handoff_progress,
-        config::RuntimeTransactionPhase::StartGateway,
-    )
-    .unwrap();
-    let handed_off = config::load_from(&dir)
-        .unwrap()
-        .runtime_transaction
-        .unwrap();
-    let handed_off = handed_off.as_v2().unwrap();
-    assert_eq!(
-        handed_off.operation,
-        config::RuntimeTransactionOperation::OneClick
-    );
-    assert_ne!(handed_off.transaction_id, profile_switch_transaction_id);
-    assert_eq!(
-        handoff_progress.transaction_id(),
-        Some(handed_off.transaction_id.as_str())
-    );
     let _ = std::fs::remove_dir_all(dir);
 
     let _env_lock = TEST_ENV_LOCK
@@ -1536,7 +1221,6 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
         runtime_fingerprint: "c".repeat(64),
         snapshot_ticket: compensation_ticket.clone(),
         previous_binding: None,
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: config::RuntimePriorStopState::NotRequired,
     };
@@ -1666,7 +1350,6 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
         runtime_fingerprint: "d".repeat(64),
         snapshot_ticket: ticket.clone(),
         previous_binding: None,
-        profile_switch_handoff: None,
         gateway_terminal_handoff: None,
         prior_stop: config::RuntimePriorStopState::NotRequired,
     };

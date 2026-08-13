@@ -197,7 +197,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertNotIn("replay_interrupted_one_click_finalize", command)
 
         facade = source.split("pub(crate) fn one_click_login_entry", 1)[1].split(
-            "enum PriorScienceDisposition", 1
+            "fn typed_one_click_err", 1
         )[0]
         self.assertIn("decide_one_click_entry_recovery(", facade)
         self.assertLess(
@@ -671,18 +671,11 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertIn("Ok(verified) => verified.confirmed_runtime()", session)
         self.assertIn("current.science_confirmed_stopped = Some(confirmed_runtime.clone())", session)
-        force_restart = session.split(
-            "pub(crate) fn force_restart_science_for_active", 1
-        )[1].split("fn typed_one_click_err", 1)[0]
         history_restore = history_recovery.split(
             "pub(crate) fn restore_history_choice_entry", 1
         )[1]
-        for recovery_caller in (force_restart, history_restore):
-            self.assertIn("ScienceStopRequest::exact", recovery_caller)
-            self.assertIn("execute_transaction_science_stop_with", recovery_caller)
-        self.assertIn(
-            "TransactionScienceStopBoundary::ProfileSwitchRollback", force_restart
-        )
+        self.assertIn("ScienceStopRequest::exact", history_restore)
+        self.assertIn("execute_transaction_science_stop_with", history_restore)
         self.assertIn(
             "TransactionScienceStopBoundary::HistoryRecoveryPriorStop", history_restore
         )
@@ -706,19 +699,6 @@ class SkillRuntimeBoundary(unittest.TestCase):
             r"&& !remembered_runtime_was_present\s*"
             r"&& science_state == SandboxScienceState::Stopped",
         )
-        stopped_branch = force_restart.split("SandboxScienceState::Stopped =>", 1)[1].split(
-            "SandboxScienceState::Unknown", 1
-        )[0]
-        self.assertIn("return Err", stopped_branch)
-        self.assertNotIn("science_confirmed_stopped", stopped_branch)
-        no_runtime_branches = force_restart.split(
-            "None if confirmed_stopped.is_some()", 1
-        )[1]
-        self.assertIn("=> {}", no_runtime_branches)
-        self.assertIn("None if proc::loopback_port_in_use", no_runtime_branches)
-        no_receipt_branch = no_runtime_branches.rsplit("None =>", 1)[1]
-        self.assertIn("return Err", no_receipt_branch)
-        self.assertIn("没有 verified-stopped receipt", no_receipt_branch)
         self.assertIn(
             "app_state.science_confirmed_stopped = verified_stopped_runtime.clone()",
             session,

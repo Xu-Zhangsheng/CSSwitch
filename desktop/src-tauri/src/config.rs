@@ -2706,6 +2706,7 @@ fn write_versioned_backup_bytes_in(
 }
 
 /// 普通保存前的单份滚动备份 → config.json.bak。best-effort（调用方可忽略 Err），但写法仍原子/0600。
+#[cfg(test)]
 pub fn write_rolling_backup(dir: &Path) -> io::Result<()> {
     let access = config_access();
     ensure_config_access_open(&access)?;

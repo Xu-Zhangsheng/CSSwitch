@@ -13,7 +13,7 @@
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash 与可选的 32-hex Science adoption attempt id；旧值缺失 id 时不能授权 adoption finalize |
-| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery、compiled test-only profile-switch 与 interrupted-Gateway recovery writer 写 typed V2；V1 只保留兼容读取与原 wire 序列化 |
+| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery 与 interrupted-Gateway recovery writer 写 typed V2；历史 profile-switch V1/V2 journal 只保留兼容读取与恢复，不再有 profile-switch writer |
 | in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1/V2 | 持久；V1 只兼容读取并阻断 mutation；当前 V2 只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket、aggregate state、五个 typed step state 与最多两个 adoption attempt retention id；与 `runtime_transaction` 分离 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | stable path `science-managed-launch.v1.json` + live listener identity | schema v2 绑定 source/version/adoption attempt；schema v1 只读兼容且 provenance unknown |
@@ -74,7 +74,7 @@ RuntimeMutationLease(Intent | Destructive | HostBridge | Terminal)
 - `RuntimeMutationLease` 要求会改变 runtime context 的 production operation 先声明
   intent、destructive、host-bridge 或 terminal domain；四个 domain 复用现有
   `Lifecycle` mutex，保持 process-local 互斥与不可重入语义，而不是四把可并行锁；
-- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings`、native exit 与 downgrade cleanup 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，锁外取得 exact stop request；共享 transaction executor 在 probe 后、effect 前再次按 generation + 完整 owner identity 复核，随后继续锁外执行 stop script、TERM/KILL 与轮询等待，最后在锁内 CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。downgrade 先 bump generation；陈旧 Science 结果保留 replacement、仍按既有 terminal stop-all policy 停 Gateway，并在 export、backup 或 v2 publication 前失败。transaction-scoped Science stop 的中性 owner/CAS 模块覆盖 cold prior stop、managed DB restart、profile-switch rollback、history recovery prior stop、live compensation cleanup 与 fresh-process compensation replay cleanup；各事务仍各自拥有 durable intent、顺序、补偿与 outcome。replacement、generation drift 或 stop failure 都 fail closed，陈旧结果绝不清除或覆盖 replacement。Gateway reuse 先在 `AppState` 下冻结 generation 与 child PID、端口、secret、provider、gateway/shim、launch id、key fingerprint 和完整 launch recipe，锁外执行 HTTP health，再按 generation + 完整 owner identity CAS 接受结果；陈旧结果 fail closed，不能清理或覆盖 replacement Gateway。Gateway spawn 同样只在 `AppState` 下冻结 generation、空 slot、secret、完整 candidate owner 与 launch recipe；candidate log、命令与环境构造、Skill bridge 配置 staging、`Command::spawn()` 和 health poll 都在锁外，再按 generation + 完整 candidate owner CAS 接受 child。generation 漂移或 replacement 已出现时停止 candidate，绝不覆盖 replacement；无法确认退出的 child owner 移交独立 registry。typed `GatewayStopOutcome::Uncertain` 必须由 destructive caller 消费，并在 config、credential 或 binding commit 前 fail closed；
+- `stop_all`、切换到 official 的 `set_mode`、需要 teardown 的 `set_settings`、native exit 与 downgrade cleanup 先在锁内冻结 generation 与 Science runtime/confirmed-stopped/child/port/URL owner snapshot，锁外取得 exact stop request；共享 transaction executor 在 probe 后、effect 前再次按 generation + 完整 owner identity 复核，随后继续锁外执行 stop script、TERM/KILL 与轮询等待，最后在锁内 CAS 发布结果。陈旧 `set_mode` / `set_settings` 结果不会停止 replacement Gateway 或提交 mode/settings；`set_settings` 只在 current stop success 后按原顺序 bump generation、停 Gateway、撤销 SSH artifact 并提交设置。native exit 的陈旧结果也不得清 replacement Science，但其 best-effort policy 仍继续停 Gateway。downgrade 先 bump generation；陈旧 Science 结果保留 replacement、仍按既有 terminal stop-all policy 停 Gateway，并在 export、backup 或 v2 publication 前失败。transaction-scoped Science stop 的中性 owner/CAS 模块覆盖 cold prior stop、managed DB restart、history recovery prior stop、live compensation cleanup 与 fresh-process compensation replay cleanup；各事务仍各自拥有 durable intent、顺序、补偿与 outcome。replacement、generation drift 或 stop failure 都 fail closed，陈旧结果绝不清除或覆盖 replacement。Gateway reuse 先在 `AppState` 下冻结 generation 与 child PID、端口、secret、provider、gateway/shim、launch id、key fingerprint 和完整 launch recipe，锁外执行 HTTP health，再按 generation + 完整 owner identity CAS 接受结果；陈旧结果 fail closed，不能清理或覆盖 replacement Gateway。Gateway spawn 同样只在 `AppState` 下冻结 generation、空 slot、secret、完整 candidate owner 与 launch recipe；candidate log、命令与环境构造、Skill bridge 配置 staging、`Command::spawn()` 和 health poll 都在锁外，再按 generation + 完整 candidate owner CAS 接受 child。generation 漂移或 replacement 已出现时停止 candidate，绝不覆盖 replacement；无法确认退出的 child owner 移交独立 registry。typed `GatewayStopOutcome::Uncertain` 必须由 destructive caller 消费，并在 config、credential 或 binding commit 前 fail closed；
 - `Lifecycle.generation` 使锁外 probe 在 stop/clear/switch 后失效；
 - transaction-scoped executor 只负责 process-local owner/wait/CAS，不改变各事务的 durable
   顺序：cold prior stop 保留 `PriorStopIntent` → exact stop → typed outcome；history recovery
@@ -292,12 +292,8 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 - `set_active_profile` 只写 selection，不触碰运行态。
 - 真正应用由下一次一键开始执行。
 - mode 切到 official 时先 bump generation，停止受管 Science/Gateway，再持久化 mode；停机失败不提交。
-- 当前产品不执行运行中 profile switch transaction；`set_active_profile` 只提交 selection，下一次一键开始按新的 active profile 重新走完整启动与补偿链。源码中的 `set_active_profile_txn` / `PriorScienceRestored` 链是 `compiled + test-only` candidate，不属于当前 product-reachable 合同。
-- 该 test-only candidate 的 profile-switch V2 只能在同一进程、同一 reconcile 调用内按原
-  完整 typed record（含 transaction/target、previous binding/Gateway、operation/phase、
-  exposure、compensation 与 Gateway outcome）交给首个 one-click V2
-  checkpoint，或由 exact healthy-reopen CAS 提交 binding 并清除；当前 journal 消失、回退
-  V1 或 retarget 时均保留当前状态并拒绝覆盖。普通 one-click 或重启不会把该记录当作可接管事务。
+- 当前产品不执行运行中 profile switch transaction；`set_active_profile` 只提交 selection，下一次一键开始按新的 active profile 重新走完整启动与补偿链。已删除无生产 caller 的 `set_active_profile_txn` writer 及其 rollback/journal helpers。
+- 历史遗留的 profile-switch V1/V2 journal 仍由中断 Gateway recovery 严格读取、验证并按其既有 complete-record CAS 规则处理；selection 与普通 one-click 不会重新产生或接管这类旧 writer 的 handoff。
 
 ## 中断 Gateway 恢复
 
@@ -315,10 +311,9 @@ fingerprint、future nested schema、未知字段和重复字段均在 config lo
 绑定去除 journal 后的完整 Config authority；history phase 缺少该 64-hex identity 同样 fail-closed。
 当前生产可写 V2 的重启矩阵包括八个 one-click phases、history recovery 的
 `stop_old_science / authority_snapshot_active / history_credential_write_pending /
-history_credential_published / resume_after_history_restore`、test-only profile-switch
-`start_formal_gateway`，以及 interrupted-Gateway recovery 的
+history_credential_published / resume_after_history_restore`，以及 interrupted-Gateway recovery 的
 `pending|stopped|not_managed|signal_failed|exit_unconfirmed|absent_after_attempt`；其它组合
-不得由 reader 推断为可恢复语义。
+不得由 reader 推断为可恢复语义。历史 profile-switch journal 只作为该 recovery 的输入，不是当前可写 phase。
 
 通过 path secret、初始公开 Gateway identity/contract 与 packaged binary 可用性检查后，recovery
 先用调用方读取的**完整原记录** CAS 发布
