@@ -1348,7 +1348,14 @@ fn durable_authority_v2_preflight_preserves_pending_and_in_progress_journal() {
     let authority_file = auth_dir.join("active-org.json");
     std::fs::write(&authority_file, b"before\n").unwrap();
     std::fs::set_permissions(&authority_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let initial = runtime_journal_test_config(None, None);
+    let authority_toml = auth_dir.join("config.toml");
+    std::fs::write(&authority_toml, b"candidate = true\n").unwrap();
+    std::fs::set_permissions(&authority_toml, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let port_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let sandbox_port = port_probe.local_addr().unwrap().port();
+    drop(port_probe);
+    let mut initial = runtime_journal_test_config(None, None);
+    initial.sandbox_port = sandbox_port;
     config::save_to(&dir, &initial).unwrap();
     let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
     let authority =
@@ -1471,18 +1478,9 @@ fn durable_authority_v2_preflight_preserves_pending_and_in_progress_journal() {
     assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
     assert!(recovery_root.exists());
     std::fs::rename(&authority_v1, &authority_v2).unwrap();
-    let pending_before = std::fs::read(config::default_dir().join("config.json")).unwrap();
-    assert!(replay_interrupted_one_click_compensation(
-        app.handle(),
-        &state,
-        &lifecycle,
-        None,
-        &config::load_from(&dir).unwrap(),
-    )
-    .is_err());
-    assert_eq!(
-        std::fs::read(config::default_dir().join("config.json")).unwrap(),
-        pending_before
+    assert!(
+        authority_v2.is_file(),
+        "strict v2 authority manifest is restored"
     );
     assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
     assert_eq!(
@@ -1514,40 +1512,195 @@ fn durable_authority_v2_preflight_preserves_pending_and_in_progress_journal() {
         mismatch_before
     );
     drop(durable);
-    config::update_result(&dir, |current| {
-        let journal = current
-            .runtime_compensation
-            .as_mut()
-            .ok_or("test compensation disappeared before authority intent")?;
-        let authority_step = journal
-            .steps
-            .iter_mut()
-            .find(|step| step.step == config::RuntimeCompensationStep::AuthorityRestore)
-            .ok_or("test authority step missing")?;
-        if authority_step.outcome != config::RuntimeCompensationStepState::Pending {
-            return Err("test authority step was not pending".into());
-        }
-        authority_step.outcome = config::RuntimeCompensationStepState::InProgress;
-        Ok(((), true))
-    })
-    .unwrap();
-    let in_progress_before = std::fs::read(config::default_dir().join("config.json")).unwrap();
-    assert!(replay_interrupted_one_click_compensation(
-        app.handle(),
-        &state,
-        &lifecycle,
-        None,
-        &config::load_from(&dir).unwrap(),
-    )
-    .is_err());
     assert_eq!(
-        std::fs::read(config::default_dir().join("config.json")).unwrap(),
-        in_progress_before
+        crate::lock(&state).sandbox_port,
+        0,
+        "durable authority replay must exercise a genuinely fresh AppState"
     );
-    assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
+    let exact_journal = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    let inputs = crate::runtime::sandbox_session::recovery::AuthorityRestoreReplayInputs {
+        sandbox_port: initial.sandbox_port,
+        compensation_id: exact_journal.compensation_id.clone(),
+        snapshot_ticket: identity.snapshot_ticket.clone(),
+    };
+    let durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    durable
+        .preflight_durable_authority_restore(&dir, &None, &exact_journal, &inputs)
+        .unwrap();
+    {
+        let _listener = TcpListener::bind(("127.0.0.1", initial.sandbox_port)).unwrap();
+        assert!(durable
+            .prepare_durable_authority_restore(&state, &inputs)
+            .expect_err("fresh AppState with a live durable port must fail closed")
+            .contains("port is not quiescent"));
+    }
+    let receipt = dir.join("science-managed-launch.v1.json");
+    std::fs::write(&receipt, b"foreign receipt").unwrap();
+    assert!(durable
+        .prepare_durable_authority_restore(&state, &inputs)
+        .expect_err("fresh AppState with a managed receipt must fail closed")
+        .contains("receipt is present"));
+    std::fs::remove_file(&receipt).unwrap();
+    drop(durable);
+    let reservation = recovery_root.join("authority-restore-reservation.v1.json");
+    let stage = auth_dir.join(format!(
+        ".csswitch-authority-{}-2-stage",
+        identity.snapshot_ticket.managed_id
+    ));
+    let stage_observation = tmp.join("authority-stage-journal-observation");
+    {
+        let _crash =
+            test_arm_durable_authority_stage_crash_after_copy(2, stage_observation.clone());
+        assert!(replay_interrupted_one_click_compensation(
+            app.handle(),
+            &state,
+            &lifecycle,
+            None,
+            &config::load_from(&dir).unwrap(),
+        )
+        .unwrap());
+    }
+    assert!(
+        reservation.is_file()
+            && stage.exists()
+            && std::fs::read(&stage_observation).unwrap() == b"in_progress"
+            && !recovery_root
+                .join("authority-restore-effect.v1.2.staged.json")
+                .exists(),
+        "fresh production replay must reserve, advance AuthorityRestore, and crash after stage effect"
+    );
     assert_eq!(
-        std::fs::read(&sandbox_ssh_config).unwrap(),
-        preexisting_stub.as_bytes()
+        crate::lock(&state).sandbox_port,
+        0,
+        "production fresh replay must not adopt the durable port as process-local ownership"
+    );
+    let exact_journal = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    let mut durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    let tombstone = auth_dir.join(format!(
+        ".csswitch-authority-{}-2-tombstone",
+        identity.snapshot_ticket.managed_id
+    ));
+    {
+        let _crash = test_arm_durable_authority_tombstone_crash_after_rename(2);
+        assert!(durable
+            .restore_durable_authority(&dir, &state, &None, &exact_journal, &inputs)
+            .is_err());
+    }
+    assert!(
+        recovery_root
+            .join("authority-restore-effect.v1.2.tombstone-intent.json")
+            .is_file()
+            && !recovery_root
+                .join("authority-restore-effect.v1.2.tombstoned.json")
+                .exists()
+            && tombstone.is_file()
+            && std::fs::read(&tombstone).unwrap() == b"candidate\n"
+            && !authority_file.exists(),
+        "post-rename crash must retain intent and exact tombstone without a terminal marker"
+    );
+    drop(durable);
+    let mut durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    {
+        let _crash = test_arm_durable_authority_outcome_crash_after_promotion(5);
+        assert!(durable
+            .restore_durable_authority(&dir, &state, &None, &exact_journal, &inputs)
+            .is_err());
+    }
+    let toml_tombstone = auth_dir.join(format!(
+        ".csswitch-authority-{}-5-tombstone",
+        identity.snapshot_ticket.managed_id
+    ));
+    assert!(
+        recovery_root
+            .join("authority-restore-effect.v1.5.outcome-intent.json")
+            .is_file()
+            && !recovery_root
+                .join("authority-restore-effect.v1.5.outcome.json")
+                .exists()
+            && authority_toml.is_file()
+            && toml_tombstone.is_file()
+            && std::fs::read(&toml_tombstone).unwrap() == b"candidate = true\n"
+            && recovery_root
+                .join("authority-restore-effect.v1.2.outcome.json")
+                .is_file()
+            && !tombstone.exists(),
+        "post-promotion crash must retain OutcomeIntent, exact tombstone, and no Outcome"
+    );
+    drop(durable);
+    let mut durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    durable
+        .restore_durable_authority(&dir, &state, &None, &exact_journal, &inputs)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(&authority_file).unwrap(),
+        b"before\n",
+        "durable staged/tombstone replay must restore the captured authority"
+    );
+    assert_eq!(
+        crate::lock(&state).sandbox_port,
+        0,
+        "fresh replay must not silently publish a durable port as process-local ownership"
+    );
+    assert!(
+        recovery_root
+            .join("authority-restore-effect.v1.2.staged.json")
+            .is_file()
+            && recovery_root
+                .join("authority-restore-effect.v1.2.tombstoned.json")
+                .is_file()
+            && recovery_root
+                .join("authority-restore-effect.v1.2.outcome.json")
+                .is_file(),
+        "each per-target staged/tombstone/outcome boundary must be durable"
+    );
+    drop(durable);
+    let mut durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    durable
+        .restore_durable_authority(&dir, &state, &None, &exact_journal, &inputs)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(&authority_file).unwrap(),
+        b"before\n",
+        "post-outcome cleanup may leave no tombstone and must fresh-replay idempotently"
+    );
+    let outcome_path = recovery_root.join("authority-restore-effect.v1.2.outcome.json");
+    let outcome_bytes = std::fs::read(&outcome_path).unwrap();
+    std::fs::remove_file(&outcome_path).unwrap();
+    let tombstone_drift = durable
+        .restore_durable_authority(&dir, &state, &None, &exact_journal, &inputs)
+        .expect_err("missing tombstone before a durable outcome must fail closed");
+    assert!(tombstone_drift.contains("tombstone drifted before outcome"));
+    assert_eq!(
+        std::fs::read(&authority_file).unwrap(),
+        b"before\n",
+        "tombstone drift must not overwrite the completed target"
+    );
+    std::fs::write(&outcome_path, outcome_bytes).unwrap();
+    drop(durable);
+    let mut durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    let foreign_authority = auth_dir.join("foreign-authority");
+    std::fs::write(&foreign_authority, b"cooperating-drift\n").unwrap();
+    std::fs::rename(&foreign_authority, &authority_file).unwrap();
+    let drift = durable
+        .restore_durable_authority(&dir, &state, &None, &exact_journal, &inputs)
+        .expect_err("unknown completed target identity must fail closed");
+    assert!(drift.contains("identity drifted"));
+    assert_eq!(
+        std::fs::read(&authority_file).unwrap(),
+        b"cooperating-drift\n",
+        "durable replay must not overwrite a drifted cooperating writer"
     );
     assert!(recovery_root.exists());
     let _ = std::fs::remove_dir_all(tmp);

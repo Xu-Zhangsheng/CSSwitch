@@ -311,7 +311,7 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
             if let Some(manifest) = manifest.as_ref() {
                 validate_replay_manifest(journal, manifest)?;
             }
-            let durable_authority = if step == config::RuntimeCompensationStep::AuthorityRestore
+            let mut durable_authority = if step == config::RuntimeCompensationStep::AuthorityRestore
             {
                 Some(OneClickAuthoritySnapshot::load_durable(
                     state,
@@ -338,7 +338,7 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
                     journal,
                     &inputs,
                 )?;
-                unreachable!("B1a1 authority effects are disabled");
+                authority.prepare_durable_authority_restore(state, &inputs)?;
             }
             let restored_runtime_transaction = durable_authority
                 .as_ref()
@@ -376,9 +376,15 @@ pub(in super::super) fn replay_interrupted_one_click_compensation<R: Runtime>(
                         &authority_bypass,
                     )
                 }
-                config::RuntimeCompensationStep::AuthorityRestore => unreachable!(
-                    "B1a1 authority restore must reject before journal progression"
-                ),
+                config::RuntimeCompensationStep::AuthorityRestore => {
+                    let manifest = manifest
+                        .as_ref()
+                        .expect("authority replay requires its private manifest");
+                    let authority = durable_authority
+                        .as_mut()
+                        .expect("authority replay requires its durable snapshot");
+                    replay_authority_restore(app, state, authority, manifest, &progress)
+                }
                 config::RuntimeCompensationStep::PriorScienceRestart => replay_prior_restart(
                     app,
                     state,
@@ -624,6 +630,130 @@ fn replay_ssh_cleanup(
     match result {
         Ok(_) => config::RuntimeCompensationStepState::Succeeded,
         Err(_) => config::RuntimeCompensationStepState::Failed,
+    }
+}
+
+fn replay_authority_restore<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    authority: &mut OneClickAuthoritySnapshot,
+    manifest: &CompensationReplayManifest,
+    progress: &OneClickJournalProgress,
+) -> config::RuntimeCompensationStepState {
+    let OneClickJournalProgress::Compensating {
+        active_runtime_transaction,
+        compensation,
+        ..
+    } = progress
+    else {
+        return config::RuntimeCompensationStepState::Failed;
+    };
+    let inputs = crate::runtime::sandbox_session::recovery::AuthorityRestoreReplayInputs {
+        sandbox_port: manifest.sandbox_port,
+        compensation_id: manifest.compensation_id.clone(),
+        snapshot_ticket: manifest.snapshot_ticket.clone(),
+    };
+    if replay_candidate_gateway_cleanup(app, state, manifest).is_err() {
+        return config::RuntimeCompensationStepState::Failed;
+    }
+    match authority.restore_durable_authority(
+        &config::default_dir(),
+        state,
+        active_runtime_transaction.as_ref(),
+        compensation,
+        &inputs,
+    ) {
+        Ok(()) => config::RuntimeCompensationStepState::Succeeded,
+        Err(_) => config::RuntimeCompensationStepState::Failed,
+    }
+}
+
+fn replay_candidate_gateway_cleanup<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    manifest: &CompensationReplayManifest,
+) -> Result<(), String> {
+    let Some(cleanup) = manifest.gateway_cleanup.as_ref() else {
+        return Ok(());
+    };
+    let port = match cleanup {
+        DurableGatewayCleanup::Absent { port } | DurableGatewayCleanup::Managed { port, .. } => {
+            *port
+        }
+    };
+    if !proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
+        let mut current = lock(state);
+        if current
+            .proxy
+            .as_mut()
+            .and_then(|child| child.try_wait().ok())
+            .is_some_and(|status| status.is_some())
+        {
+            current.proxy = None;
+        } else if current.proxy.is_some() {
+            return Err(
+                "process-local Gateway owner no longer matches the durable candidate port".into(),
+            );
+        }
+        return Ok(());
+    }
+    let DurableGatewayCleanup::Managed {
+        secret,
+        provider,
+        shim,
+        launch_id,
+        provider_contract_id,
+        provider_contract_digest,
+        catalog_fp,
+        ..
+    } = cleanup
+    else {
+        return Err("candidate Gateway appeared after durable absence proof".into());
+    };
+    let health_matches = || {
+        proc::http_gateway_health(port, Some(secret), operation::LOCAL_HEALTH_TIMEOUT_MS)
+            .is_some_and(|health| {
+                health.gateway == "rust"
+                    && health.intent == "formal"
+                    && health.provider == *provider
+                    && health.shim == *shim
+                    && health.launch_id == *launch_id
+                    && health.provider_contract_id == *provider_contract_id
+                    && health.provider_contract_digest == *provider_contract_digest
+                    && health.catalog_fp == *catalog_fp
+            })
+    };
+    if !health_matches() {
+        return Err("candidate Gateway durable health identity changed".into());
+    }
+    let binary = crate::runtime::proxy_lifecycle::gateway_bin_path(app)
+        .ok_or("candidate Gateway binary is unavailable")?;
+    match crate::runtime::legacy_proxy::stop_managed_gateway_on_port(port, &binary, health_matches)
+    {
+        crate::runtime::legacy_proxy::ManagedGatewayCleanup::Stopped(pid) => {
+            let mut current = lock(state);
+            if current
+                .proxy
+                .as_ref()
+                .is_some_and(|child| child.id() != pid)
+            {
+                return Err(
+                    "process-local Gateway owner changed during exact candidate cleanup".into(),
+                );
+            }
+            if current.proxy.is_some() {
+                current.stop_proxy().require_stopped(
+                    "补偿重放停止已由外部确认退出的 Gateway 时仍无法确认 process-local child 退出",
+                )?;
+            }
+            Ok(())
+        }
+        crate::runtime::legacy_proxy::ManagedGatewayCleanup::NotManaged => {
+            Err("candidate Gateway listener is not the packaged managed process".into())
+        }
+        crate::runtime::legacy_proxy::ManagedGatewayCleanup::StopUnknown { .. } => {
+            Err("candidate Gateway exact stop could not be confirmed".into())
+        }
     }
 }
 

@@ -20,6 +20,9 @@ pub(super) struct SandboxSessionTestSeams {
     pub(super) prior_restart_post_spawn_identity: Option<(u32, String)>,
     pub(super) rollback_diagnostic_canary: Option<String>,
     pub(super) rollback_diagnostic_snapshot: Option<PathBuf>,
+    pub(super) durable_authority_stage_crash_after_copy: Option<(usize, PathBuf)>,
+    pub(super) durable_authority_tombstone_crash_after_rename: Option<usize>,
+    pub(super) durable_authority_outcome_crash_after_promotion: Option<usize>,
 }
 
 #[cfg(test)]
@@ -212,6 +215,40 @@ pub(crate) fn test_prior_restart_post_spawn_identity() -> Option<(u32, String)> 
         .unwrap_or_else(|error| error.into_inner())
         .prior_restart_post_spawn_identity
         .clone()
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_durable_authority_stage_crash_after_copy(
+    target: usize,
+    observation: PathBuf,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_stage_crash_after_copy = Some((target, observation));
+    SandboxSessionTestSeamGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_durable_authority_tombstone_crash_after_rename(
+    target: usize,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_tombstone_crash_after_rename = Some(target);
+    SandboxSessionTestSeamGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_durable_authority_outcome_crash_after_promotion(
+    target: usize,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_outcome_crash_after_promotion = Some(target);
+    SandboxSessionTestSeamGuard
 }
 
 #[cfg(test)]

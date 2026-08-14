@@ -35,6 +35,8 @@ use super::pending_cleanup::{
 };
 
 pub(super) const DURABLE_AUTHORITY_REPLAY_MANIFEST: &str = "authority-replay.v2.json";
+const DURABLE_AUTHORITY_RESTORE_RESERVATION: &str = "authority-restore-reservation.v1.json";
+const DURABLE_AUTHORITY_RESTORE_EFFECT_PREFIX: &str = "authority-restore-effect.v1";
 const MAX_DURABLE_PRIVATE_MANIFEST_BYTES: u64 = config::MAX_CONFIG_FILE_BYTES + 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -65,6 +67,53 @@ pub(super) struct AuthorityRestoreReplayInputs {
     pub(super) sandbox_port: u16,
     pub(super) compensation_id: String,
     pub(super) snapshot_ticket: config::RuntimeSnapshotTicket,
+}
+
+/// A durable, deliberately small description of a name that the authority
+/// replay is allowed to move.  It is not a pathname CAS: the compensation EX
+/// lease serializes cooperating writers; a same-UID non-cooperating pathname
+/// attacker remains an explicit fail-closed case.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+enum DurableAuthorityTargetIdentity {
+    Absent,
+    Entry {
+        device: u64,
+        inode: u64,
+        kind: libc::mode_t,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableScienceQuiescenceReservation {
+    schema_version: u32,
+    compensation_id: String,
+    snapshot_ticket: config::RuntimeSnapshotTicket,
+    sandbox_port: u16,
+    targets: Vec<DurableAuthorityTargetIdentity>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DurableAuthorityEffectPhase {
+    StageIntent,
+    Staged,
+    TombstoneIntent,
+    Tombstoned,
+    OutcomeIntent,
+    Outcome,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableAuthorityEffectMarker {
+    schema_version: u32,
+    compensation_id: String,
+    snapshot_ticket: config::RuntimeSnapshotTicket,
+    target: usize,
+    phase: DurableAuthorityEffectPhase,
+    identity: DurableAuthorityTargetIdentity,
 }
 
 pub(super) fn read_registered_private_manifest(
@@ -1328,7 +1377,600 @@ impl OneClickAuthoritySnapshot {
         }
         config::validate_runtime_ports(self.config.proxy_port, inputs.sandbox_port)
             .map_err(|_| "durable authority replay ports are invalid; preserved current state")?;
-        Err("durable authority replay v2 effect state machine is not enabled; refused before any effect".into())
+        Ok(())
+    }
+
+    /// Publish (or exactly re-open) the reservation before the AuthorityRestore
+    /// journal step is allowed to advance.  The reservation binds the observed
+    /// quiescent Science boundary and every target's pre-effect identity.
+    pub(super) fn prepare_durable_authority_restore(
+        &self,
+        state: &SharedAppState,
+        inputs: &AuthorityRestoreReplayInputs,
+    ) -> Result<(), String> {
+        self.require_durable_science_quiescence(state, inputs.sandbox_port)?;
+        match read_registered_private_manifest(
+            state,
+            &inputs.snapshot_ticket,
+            DURABLE_AUTHORITY_RESTORE_RESERVATION,
+        ) {
+            Ok(bytes) => {
+                let reservation: DurableScienceQuiescenceReservation =
+                    serde_json::from_slice(&bytes)
+                        .map_err(|_| "durable authority reservation format is invalid")?;
+                if reservation.schema_version != 1
+                    || reservation.compensation_id != inputs.compensation_id
+                    || reservation.snapshot_ticket != inputs.snapshot_ticket
+                    || reservation.sandbox_port != inputs.sandbox_port
+                    || reservation.targets.len() != self.trees.len()
+                {
+                    return Err(
+                        "durable authority reservation identity drifted; preserved ActiveRecovery"
+                            .into(),
+                    );
+                }
+                return self.require_durable_science_quiescence(state, inputs.sandbox_port);
+            }
+            Err(error) if !error.contains("manifest open failed") => return Err(error),
+            Err(_) => {}
+        }
+        let targets = self
+            .trees
+            .iter()
+            .map(Self::durable_tree_identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        let reservation = DurableScienceQuiescenceReservation {
+            schema_version: 1,
+            compensation_id: inputs.compensation_id.clone(),
+            snapshot_ticket: inputs.snapshot_ticket.clone(),
+            sandbox_port: inputs.sandbox_port,
+            targets,
+        };
+        self.persist_or_validate_durable_marker(
+            state,
+            &inputs.snapshot_ticket,
+            DURABLE_AUTHORITY_RESTORE_RESERVATION,
+            &reservation,
+        )?;
+        // A reservation is not an assertion that the port remains closed.  A
+        // second proof makes the interval between durable intent and the first
+        // target effect fail closed for cooperating lifecycle writers.
+        self.require_durable_science_quiescence(state, inputs.sandbox_port)
+    }
+
+    fn require_durable_science_quiescence(
+        &self,
+        state: &SharedAppState,
+        sandbox_port: u16,
+    ) -> Result<(), String> {
+        let app = lock(state);
+        let fresh_unowned = app.sandbox_port == 0
+            && app.sandbox.is_none()
+            && app.science_runtime.is_none()
+            && app.science_confirmed_stopped.is_none()
+            && app.sandbox_url.is_none();
+        if app.sandbox.is_some()
+            || app.science_runtime.is_some()
+            || app.science_confirmed_stopped.is_some()
+            || app.sandbox_url.is_some()
+            || (!fresh_unowned && app.sandbox_port != sandbox_port)
+        {
+            return Err("durable authority restore Science ownership is not quiescent; preserved ActiveRecovery".into());
+        }
+        drop(app);
+        if crate::proc::loopback_port_in_use(
+            sandbox_port,
+            crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+        ) {
+            return Err(
+                "durable authority restore Science port is not quiescent; preserved ActiveRecovery"
+                    .into(),
+            );
+        }
+        match std::fs::symlink_metadata(config::default_dir().join("science-managed-launch.v1.json")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err("durable authority restore managed Science receipt is present; preserved ActiveRecovery".into()),
+            Err(_) => Err("durable authority restore managed Science receipt identity is unknown; preserved ActiveRecovery".into()),
+        }
+    }
+
+    fn durable_tree_identity(
+        tree: &AuthorityTreeSnapshot,
+    ) -> Result<DurableAuthorityTargetIdentity, String> {
+        let parent = tree
+            .source_parent
+            .as_ref()
+            .ok_or("durable authority target parent identity is unknown")?;
+        let name = tree
+            .source_name
+            .as_deref()
+            .ok_or("durable authority target name identity is unknown")?;
+        durable_authority_entry_identity(parent, name)
+    }
+
+    fn persist_or_validate_durable_marker<T: Serialize + for<'de> Deserialize<'de> + Eq>(
+        &self,
+        state: &SharedAppState,
+        ticket: &config::RuntimeSnapshotTicket,
+        name: &str,
+        value: &T,
+    ) -> Result<(), String> {
+        let bytes = serde_json::to_vec(value)
+            .map_err(|error| format!("durable authority marker encode failed: {error}"))?;
+        match self.persist_private_manifest(name, &bytes) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                let existing = read_registered_private_manifest(state, ticket, name)?;
+                let parsed = serde_json::from_slice::<T>(&existing)
+                    .map_err(|_| "durable authority marker format is invalid")?;
+                if parsed == *value {
+                    Ok(())
+                } else {
+                    Err(
+                        "durable authority marker identity drifted; preserved ActiveRecovery"
+                            .into(),
+                    )
+                }
+            }
+        }
+    }
+
+    fn read_durable_effect_marker(
+        state: &SharedAppState,
+        ticket: &config::RuntimeSnapshotTicket,
+        target: usize,
+        phase: DurableAuthorityEffectPhase,
+    ) -> Result<Option<DurableAuthorityEffectMarker>, String> {
+        let name = durable_authority_effect_marker_name(target, phase);
+        match read_registered_private_manifest(state, ticket, &name) {
+            Ok(bytes) => {
+                let marker = serde_json::from_slice::<DurableAuthorityEffectMarker>(&bytes)
+                    .map_err(|_| "durable authority effect marker format is invalid")?;
+                if marker.schema_version != 1 || marker.target != target || marker.phase != phase {
+                    return Err(
+                        "durable authority effect marker retargeted; preserved ActiveRecovery"
+                            .into(),
+                    );
+                }
+                Ok(Some(marker))
+            }
+            Err(error) if error.contains("manifest open failed") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn durable_effect_marker(
+        inputs: &AuthorityRestoreReplayInputs,
+        target: usize,
+        phase: DurableAuthorityEffectPhase,
+        identity: DurableAuthorityTargetIdentity,
+    ) -> DurableAuthorityEffectMarker {
+        DurableAuthorityEffectMarker {
+            schema_version: 1,
+            compensation_id: inputs.compensation_id.clone(),
+            snapshot_ticket: inputs.snapshot_ticket.clone(),
+            target,
+            phase,
+            identity,
+        }
+    }
+
+    pub(super) fn restore_durable_authority(
+        &mut self,
+        config_dir: &Path,
+        state: &SharedAppState,
+        expected_runtime_transaction: &Option<config::RuntimeTransactionRecord>,
+        expected_compensation: &config::RuntimeCompensationJournal,
+        inputs: &AuthorityRestoreReplayInputs,
+    ) -> Result<(), String> {
+        self.require_durable_science_quiescence(state, inputs.sandbox_port)?;
+        let reservation = read_registered_private_manifest(
+            state,
+            &inputs.snapshot_ticket,
+            DURABLE_AUTHORITY_RESTORE_RESERVATION,
+        )?;
+        let reservation: DurableScienceQuiescenceReservation = serde_json::from_slice(&reservation)
+            .map_err(|_| "durable authority reservation format is invalid")?;
+        if reservation.schema_version != 1
+            || reservation.compensation_id != inputs.compensation_id
+            || reservation.snapshot_ticket != inputs.snapshot_ticket
+            || reservation.sandbox_port != inputs.sandbox_port
+            || reservation.targets.len() != self.trees.len()
+        {
+            return Err(
+                "durable authority reservation identity drifted; preserved ActiveRecovery".into(),
+            );
+        }
+        let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
+        let mut restored_config = self.config.clone();
+        restored_config.runtime_compensation = Some(expected_compensation.clone());
+        let already_restored = current == restored_config;
+        if current.runtime_compensation.as_ref() != Some(expected_compensation)
+            || (!already_restored && current.runtime_transaction != *expected_runtime_transaction)
+        {
+            return Err("durable compensation replay found drifted config authority; preserved current state".into());
+        }
+        self.validate_science_restore_root()?;
+        for (index, tree) in self.trees.iter().enumerate() {
+            self.replay_durable_authority_tree(
+                state,
+                tree,
+                index,
+                &reservation.targets[index],
+                inputs,
+            )?;
+        }
+        if !already_restored {
+            let before = self.config.clone();
+            config::update_result(config_dir, |current| {
+                if current.runtime_transaction != *expected_runtime_transaction
+                    || current.runtime_compensation.as_ref() != Some(expected_compensation)
+                {
+                    return Err("durable compensation replay authority changed during restore; preserved current config".into());
+                }
+                *current = before.clone();
+                current.runtime_compensation = Some(expected_compensation.clone());
+                Ok(((), true))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn replay_durable_authority_tree(
+        &self,
+        state: &SharedAppState,
+        tree: &AuthorityTreeSnapshot,
+        index: usize,
+        expected: &DurableAuthorityTargetIdentity,
+        inputs: &AuthorityRestoreReplayInputs,
+    ) -> Result<(), String> {
+        let parent = tree
+            .source_parent
+            .as_ref()
+            .ok_or("durable authority target parent identity is unknown")?;
+        let source = tree
+            .source_name
+            .as_deref()
+            .ok_or("durable authority target name identity is unknown")?;
+        let stage_path = durable_authority_side_path(tree, inputs, index, "stage")?;
+        let tombstone_path = durable_authority_side_path(tree, inputs, index, "tombstone")?;
+        let stage = AuthorityTreeSnapshot::destination_name(&stage_path)?;
+        let tombstone = AuthorityTreeSnapshot::destination_name(&tombstone_path)?;
+        let staged = Self::read_durable_effect_marker(
+            state,
+            &inputs.snapshot_ticket,
+            index,
+            DurableAuthorityEffectPhase::Staged,
+        )?;
+        let staged_identity = match staged {
+            Some(marker) => {
+                validate_durable_effect_marker(&marker, inputs, index)?;
+                marker.identity
+            }
+            None => {
+                let stage_intent = Self::read_durable_effect_marker(
+                    state,
+                    &inputs.snapshot_ticket,
+                    index,
+                    DurableAuthorityEffectPhase::StageIntent,
+                )?;
+                match stage_intent {
+                    Some(marker) => {
+                        validate_durable_effect_marker(&marker, inputs, index)?;
+                        if marker.identity != *expected {
+                            return Err("durable authority stage intent identity drifted; preserved ActiveRecovery".into());
+                        }
+                    }
+                    None => {
+                        if durable_authority_entry_identity(parent, source)? != *expected
+                            || durable_authority_entry_identity(parent, &stage)?
+                                != DurableAuthorityTargetIdentity::Absent
+                        {
+                            return Err("durable authority target drifted before stage intent; preserved ActiveRecovery".into());
+                        }
+                        let marker = Self::durable_effect_marker(
+                            inputs,
+                            index,
+                            DurableAuthorityEffectPhase::StageIntent,
+                            expected.clone(),
+                        );
+                        self.persist_or_validate_durable_marker(
+                            state,
+                            &inputs.snapshot_ticket,
+                            &durable_authority_effect_marker_name(
+                                index,
+                                DurableAuthorityEffectPhase::StageIntent,
+                            ),
+                            &marker,
+                        )?;
+                    }
+                }
+                if durable_authority_entry_identity(parent, source)? != *expected {
+                    return Err(
+                        "durable authority target drifted before staging; preserved ActiveRecovery"
+                            .into(),
+                    );
+                }
+                let identity = if tree.existed {
+                    tree.validate_backup_identity()?;
+                    let backup_parent = tree
+                        .backup_parent
+                        .as_ref()
+                        .ok_or("durable authority backup parent is unknown")?;
+                    let backup_name = tree
+                        .backup_name
+                        .as_deref()
+                        .ok_or("durable authority backup name is unknown")?;
+                    match durable_authority_entry_identity(parent, &stage)? {
+                        DurableAuthorityTargetIdentity::Absent => {
+                            let mut budget = AuthorityCopyBudget::default();
+                            AuthorityTreeSnapshot::copy_tree_from_at(
+                                &tree.backup,
+                                backup_parent,
+                                backup_name,
+                                parent,
+                                &stage,
+                                &mut budget,
+                                false,
+                                tree.scope,
+                                &tree.backup,
+                            )?;
+                            #[cfg(test)]
+                            if test_durable_authority_stage_crash_after_copy(index) {
+                                return Err("test-only durable authority crash after stage effect".into());
+                            }
+                        }
+                        _ if durable_authority_tree_matches(&tree.backup, &stage_path)? => {}
+                        _ => return Err("durable authority staged target identity is unknown; preserved ActiveRecovery".into()),
+                    }
+                    durable_authority_entry_identity(parent, &stage)?
+                } else {
+                    DurableAuthorityTargetIdentity::Absent
+                };
+                let marker = Self::durable_effect_marker(
+                    inputs,
+                    index,
+                    DurableAuthorityEffectPhase::Staged,
+                    identity.clone(),
+                );
+                self.persist_or_validate_durable_marker(
+                    state,
+                    &inputs.snapshot_ticket,
+                    &durable_authority_effect_marker_name(
+                        index,
+                        DurableAuthorityEffectPhase::Staged,
+                    ),
+                    &marker,
+                )?;
+                identity
+            }
+        };
+        if staged_identity != DurableAuthorityTargetIdentity::Absent
+            && durable_authority_entry_identity(parent, &stage)? != staged_identity
+            && durable_authority_entry_identity(parent, source)? != staged_identity
+        {
+            return Err(
+                "durable authority staged target identity drifted; preserved ActiveRecovery".into(),
+            );
+        }
+        let tombstoned = Self::read_durable_effect_marker(
+            state,
+            &inputs.snapshot_ticket,
+            index,
+            DurableAuthorityEffectPhase::Tombstoned,
+        )?;
+        if let Some(marker) = tombstoned.as_ref() {
+            validate_durable_effect_marker(marker, inputs, index)?;
+            if marker.identity != *expected {
+                return Err(
+                    "durable authority tombstone marker identity drifted; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+        } else {
+            let tombstone_intent = Self::read_durable_effect_marker(
+                state,
+                &inputs.snapshot_ticket,
+                index,
+                DurableAuthorityEffectPhase::TombstoneIntent,
+            )?;
+            match tombstone_intent {
+                Some(marker) => {
+                    validate_durable_effect_marker(&marker, inputs, index)?;
+                    if marker.identity != *expected {
+                        return Err("durable authority tombstone intent identity drifted; preserved ActiveRecovery".into());
+                    }
+                }
+                None => {
+                    if durable_authority_entry_identity(parent, source)? != *expected
+                        || durable_authority_entry_identity(parent, &tombstone)?
+                            != DurableAuthorityTargetIdentity::Absent
+                    {
+                        return Err("durable authority target drifted before tombstone intent; preserved ActiveRecovery".into());
+                    }
+                    let marker = Self::durable_effect_marker(
+                        inputs,
+                        index,
+                        DurableAuthorityEffectPhase::TombstoneIntent,
+                        expected.clone(),
+                    );
+                    self.persist_or_validate_durable_marker(
+                        state,
+                        &inputs.snapshot_ticket,
+                        &durable_authority_effect_marker_name(
+                            index,
+                            DurableAuthorityEffectPhase::TombstoneIntent,
+                        ),
+                        &marker,
+                    )?;
+                }
+            }
+            let current = durable_authority_entry_identity(parent, source)?;
+            let tombstone_current = durable_authority_entry_identity(parent, &tombstone)?;
+            if current == *expected && tombstone_current == DurableAuthorityTargetIdentity::Absent {
+                if current != DurableAuthorityTargetIdentity::Absent {
+                    durable_authority_rename(parent, source, &tombstone)?;
+                    if durable_authority_entry_identity(parent, &tombstone)? != *expected {
+                        return Err("durable authority tombstone identity changed; preserved ActiveRecovery".into());
+                    }
+                    #[cfg(test)]
+                    if test_durable_authority_tombstone_crash_after_rename(index) {
+                        return Err(
+                            "test-only durable authority crash after tombstone rename".into()
+                        );
+                    }
+                }
+            } else if current != DurableAuthorityTargetIdentity::Absent
+                || tombstone_current != *expected
+            {
+                return Err(
+                    "durable authority target drifted before tombstone; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+            let marker = Self::durable_effect_marker(
+                inputs,
+                index,
+                DurableAuthorityEffectPhase::Tombstoned,
+                expected.clone(),
+            );
+            self.persist_or_validate_durable_marker(
+                state,
+                &inputs.snapshot_ticket,
+                &durable_authority_effect_marker_name(
+                    index,
+                    DurableAuthorityEffectPhase::Tombstoned,
+                ),
+                &marker,
+            )?;
+        }
+        let outcome = Self::read_durable_effect_marker(
+            state,
+            &inputs.snapshot_ticket,
+            index,
+            DurableAuthorityEffectPhase::Outcome,
+        )?;
+        if let Some(marker) = outcome.as_ref() {
+            validate_durable_effect_marker(marker, inputs, index)?;
+            if marker.identity != staged_identity {
+                return Err(
+                    "durable authority outcome marker identity drifted; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+        } else {
+            // Tombstoned proves the rename happened, not that the quarantined
+            // pre-effect entry is still present. Before durable Outcome there
+            // is no legitimate cleanup state: a missing or replaced tombstone
+            // is unknown drift and must not authorize promotion.
+            if expected != &DurableAuthorityTargetIdentity::Absent
+                && durable_authority_entry_identity(parent, &tombstone)? != *expected
+            {
+                return Err(
+                    "durable authority tombstone drifted before outcome; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+            let outcome_intent = Self::read_durable_effect_marker(
+                state,
+                &inputs.snapshot_ticket,
+                index,
+                DurableAuthorityEffectPhase::OutcomeIntent,
+            )?;
+            match outcome_intent {
+                Some(marker) => {
+                    validate_durable_effect_marker(&marker, inputs, index)?;
+                    if marker.identity != staged_identity {
+                        return Err("durable authority outcome intent identity drifted; preserved ActiveRecovery".into());
+                    }
+                }
+                None => {
+                    if durable_authority_entry_identity(parent, source)?
+                        != DurableAuthorityTargetIdentity::Absent
+                        || (staged_identity != DurableAuthorityTargetIdentity::Absent
+                            && durable_authority_entry_identity(parent, &stage)? != staged_identity)
+                    {
+                        return Err("durable authority target drifted before outcome intent; preserved ActiveRecovery".into());
+                    }
+                    let marker = Self::durable_effect_marker(
+                        inputs,
+                        index,
+                        DurableAuthorityEffectPhase::OutcomeIntent,
+                        staged_identity.clone(),
+                    );
+                    self.persist_or_validate_durable_marker(
+                        state,
+                        &inputs.snapshot_ticket,
+                        &durable_authority_effect_marker_name(
+                            index,
+                            DurableAuthorityEffectPhase::OutcomeIntent,
+                        ),
+                        &marker,
+                    )?;
+                }
+            }
+            let current = durable_authority_entry_identity(parent, source)?;
+            if current == DurableAuthorityTargetIdentity::Absent {
+                if staged_identity != DurableAuthorityTargetIdentity::Absent {
+                    if durable_authority_entry_identity(parent, &stage)? != staged_identity {
+                        return Err(
+                            "durable authority staged target is missing; preserved ActiveRecovery"
+                                .into(),
+                        );
+                    }
+                    durable_authority_rename(parent, &stage, source)?;
+                    #[cfg(test)]
+                    if test_durable_authority_outcome_crash_after_promotion(index) {
+                        return Err(
+                            "test-only durable authority crash after outcome promotion".into()
+                        );
+                    }
+                }
+            } else if current != staged_identity {
+                return Err(
+                    "durable authority target drifted before promotion; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+            if durable_authority_entry_identity(parent, source)? != staged_identity {
+                return Err(
+                    "durable authority promotion identity changed; preserved ActiveRecovery".into(),
+                );
+            }
+            let marker = Self::durable_effect_marker(
+                inputs,
+                index,
+                DurableAuthorityEffectPhase::Outcome,
+                staged_identity.clone(),
+            );
+            self.persist_or_validate_durable_marker(
+                state,
+                &inputs.snapshot_ticket,
+                &durable_authority_effect_marker_name(index, DurableAuthorityEffectPhase::Outcome),
+                &marker,
+            )?;
+        }
+        if durable_authority_entry_identity(parent, source)? != staged_identity {
+            return Err(
+                "durable authority completed target identity drifted; preserved ActiveRecovery"
+                    .into(),
+            );
+        }
+        if expected != &DurableAuthorityTargetIdentity::Absent {
+            let tombstone_identity = durable_authority_entry_identity(parent, &tombstone)?;
+            if tombstone_identity == DurableAuthorityTargetIdentity::Absent {
+                // Outcome is durable before tombstone cleanup. A crash after
+                // cleanup must resume as completed, not as foreign drift.
+                return Ok(());
+            }
+            if tombstone_identity != *expected {
+                return Err(
+                    "durable authority tombstone identity drifted; preserved ActiveRecovery".into(),
+                );
+            }
+            AuthorityTreeSnapshot::remove_current_at(tree.scope, parent, &tombstone)?;
+        }
+        Ok(())
     }
 
     pub(super) fn cleanup_when_expendable(
@@ -1396,6 +2038,229 @@ impl OneClickAuthoritySnapshot {
             let _ = self.cleanup_when_expendable();
         }
     }
+}
+
+fn durable_authority_effect_marker_name(
+    target: usize,
+    phase: DurableAuthorityEffectPhase,
+) -> String {
+    let phase = match phase {
+        DurableAuthorityEffectPhase::StageIntent => "stage-intent",
+        DurableAuthorityEffectPhase::Staged => "staged",
+        DurableAuthorityEffectPhase::TombstoneIntent => "tombstone-intent",
+        DurableAuthorityEffectPhase::Tombstoned => "tombstoned",
+        DurableAuthorityEffectPhase::OutcomeIntent => "outcome-intent",
+        DurableAuthorityEffectPhase::Outcome => "outcome",
+    };
+    format!("{DURABLE_AUTHORITY_RESTORE_EFFECT_PREFIX}.{target}.{phase}.json")
+}
+
+fn durable_authority_side_path(
+    tree: &AuthorityTreeSnapshot,
+    inputs: &AuthorityRestoreReplayInputs,
+    target: usize,
+    kind: &str,
+) -> Result<PathBuf, String> {
+    let parent = tree
+        .source
+        .parent()
+        .ok_or("durable authority target has no parent")?;
+    if !inputs
+        .snapshot_ticket
+        .managed_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+    {
+        return Err("durable authority snapshot ticket name is invalid".into());
+    }
+    Ok(parent.join(format!(
+        ".csswitch-authority-{}-{target}-{kind}",
+        inputs.snapshot_ticket.managed_id
+    )))
+}
+
+fn durable_authority_entry_identity(
+    parent: &std::fs::File,
+    name: &std::ffi::CStr,
+) -> Result<DurableAuthorityTargetIdentity, String> {
+    match AuthorityTreeSnapshot::stat_destination_at(parent, name) {
+        Ok(metadata) => {
+            let kind = metadata.st_mode & libc::S_IFMT;
+            if !matches!(kind, libc::S_IFDIR | libc::S_IFREG) {
+                return Err(
+                    "durable authority target identity is unknown; preserved ActiveRecovery".into(),
+                );
+            }
+            Ok(DurableAuthorityTargetIdentity::Entry {
+                device: u64::try_from(metadata.st_dev)
+                    .map_err(|_| "durable authority target device is invalid")?,
+                inode: inode_u64(metadata.st_ino)
+                    .ok_or("durable authority target inode is invalid")?,
+                kind,
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(DurableAuthorityTargetIdentity::Absent)
+        }
+        Err(_) => {
+            Err("durable authority target identity is unknown; preserved ActiveRecovery".into())
+        }
+    }
+}
+
+fn durable_authority_rename(
+    parent: &std::fs::File,
+    from: &std::ffi::CStr,
+    to: &std::ffi::CStr,
+) -> Result<(), String> {
+    let result = unsafe {
+        libc::renameat(
+            parent.as_raw_fd(),
+            from.as_ptr(),
+            parent.as_raw_fd(),
+            to.as_ptr(),
+        )
+    };
+    if result == 0 {
+        parent.sync_all().map_err(|_| {
+            "durable authority rename sync failed; preserved ActiveRecovery".to_string()
+        })
+    } else {
+        Err("durable authority rename failed; preserved ActiveRecovery".into())
+    }
+}
+
+fn validate_durable_effect_marker(
+    marker: &DurableAuthorityEffectMarker,
+    inputs: &AuthorityRestoreReplayInputs,
+    target: usize,
+) -> Result<(), String> {
+    if marker.compensation_id != inputs.compensation_id
+        || marker.snapshot_ticket != inputs.snapshot_ticket
+        || marker.target != target
+    {
+        return Err(
+            "durable authority effect marker identity drifted; preserved ActiveRecovery".into(),
+        );
+    }
+    Ok(())
+}
+
+/// Re-open an interrupted stage only when it is byte-for-byte the captured
+/// backup tree. This is a recovery validation, not a pathname CAS claim: a
+/// same-UID non-cooperating writer can still race pathname operations and is
+/// intentionally handled by fail-closed identity checks at every boundary.
+fn durable_authority_tree_matches(backup: &Path, stage: &Path) -> Result<bool, String> {
+    let left = std::fs::symlink_metadata(backup)
+        .map_err(|_| "durable authority backup identity is unknown")?;
+    let right = match std::fs::symlink_metadata(stage) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("durable authority staged target identity is unknown".into()),
+    };
+    if left.file_type().is_symlink() != right.file_type().is_symlink()
+        || left.is_dir() != right.is_dir()
+        || left.is_file() != right.is_file()
+        || left.permissions().mode() & 0o777 != right.permissions().mode() & 0o777
+    {
+        return Ok(false);
+    }
+    if left.file_type().is_symlink() {
+        return std::fs::read_link(backup)
+            .map_err(|_| "durable authority backup symlink is unreadable".to_string())
+            .and_then(|target| {
+                std::fs::read_link(stage)
+                    .map(|candidate| candidate == target)
+                    .map_err(|_| "durable authority staged symlink is unreadable".into())
+            });
+    }
+    if left.is_file() {
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        return std::fs::read(backup)
+            .map_err(|_| "durable authority backup file is unreadable".to_string())
+            .and_then(|expected| {
+                std::fs::read(stage)
+                    .map(|candidate| candidate == expected)
+                    .map_err(|_| "durable authority staged file is unreadable".into())
+            });
+    }
+    if !left.is_dir() {
+        return Ok(false);
+    }
+    let names = |path: &Path| -> Result<std::collections::BTreeSet<std::ffi::OsString>, String> {
+        std::fs::read_dir(path)
+            .map_err(|_| "durable authority tree is unreadable".to_string())?
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.file_name())
+                    .map_err(|_| "durable authority tree entry is unreadable".to_string())
+            })
+            .collect()
+    };
+    let left_names = names(backup)?;
+    if left_names != names(stage)? {
+        return Ok(false);
+    }
+    left_names.into_iter().try_fold(true, |matches, name| {
+        if !matches {
+            return Ok(false);
+        }
+        durable_authority_tree_matches(&backup.join(&name), &stage.join(name))
+    })
+}
+
+#[cfg(test)]
+fn test_durable_authority_stage_crash_after_copy(target: usize) -> bool {
+    let seam = super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_stage_crash_after_copy
+        .clone();
+    let Some((configured_target, observation)) = seam else {
+        return false;
+    };
+    if configured_target != target {
+        return false;
+    }
+    let observed = config::load_from(&config::default_dir())
+        .ok()
+        .and_then(|cfg| cfg.runtime_compensation)
+        .and_then(|journal| {
+            journal
+                .steps
+                .into_iter()
+                .find(|step| step.step == config::RuntimeCompensationStep::AuthorityRestore)
+        })
+        .is_some_and(|step| step.outcome == config::RuntimeCompensationStepState::InProgress);
+    let _ = std::fs::write(
+        observation,
+        if observed {
+            &b"in_progress"[..]
+        } else {
+            &b"other"[..]
+        },
+    );
+    true
+}
+
+#[cfg(test)]
+fn test_durable_authority_tombstone_crash_after_rename(target: usize) -> bool {
+    super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_tombstone_crash_after_rename
+        == Some(target)
+}
+
+#[cfg(test)]
+fn test_durable_authority_outcome_crash_after_promotion(target: usize) -> bool {
+    super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_outcome_crash_after_promotion
+        == Some(target)
 }
 
 impl Drop for OneClickAuthoritySnapshot {
