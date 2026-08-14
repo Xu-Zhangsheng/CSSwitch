@@ -3,8 +3,8 @@
   "change": {
     "id": "CHG-RUNTIME-MUTATION-R0-H",
     "version": "v0.8.4-dev",
-    "title": "Prepare final closure of the R0 runtime mutation inventory",
-    "summary": "Completes command-level lifecycle characterization across the registered runtime surface and binds every required executable identity into the trusted source catalog. The R0 inventory remains requirements-open until the exact source gate and independent completion review pass on a frozen candidate. Product runtime behavior is unchanged.",
+    "title": "Close the R0 runtime mutation inventory",
+    "summary": "Completes command-level lifecycle characterization across the registered runtime surface and binds every required executable identity into the trusted source catalog. All 96 required identities are executable with no required identity ignored or skipped; exact source gate run cdb5aea62b19f8e8768de42058a01eee and a separate clean-context completion review both passed on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb. Product runtime behavior is unchanged.",
     "status": "active",
     "owner": "quality-kernel",
     "changed_paths": [
@@ -56,7 +56,7 @@
         "metadata"
       ]
     },
-    "claim_state": "NOT-RUN",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -72,8 +72,8 @@
       "basis": [
         "machine reconciliation finds all 96 required characterization identities executable with no required identity ignored or skipped",
         "temporary HOME, fake processes and Science identities, private state, and dynamic loopback ports",
-        "exact-SHA 15-suite GATE-SOURCE completion seal is NOT-RUN on the frozen reconciliation candidate",
-        "clean-context independent completion review is NOT-RUN on the frozen reconciliation candidate"
+        "exact-SHA 15-suite GATE-SOURCE run cdb5aea62b19f8e8768de42058a01eee passed with runner exit 0 on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb",
+        "clean-context independent completion review passed on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb with no BLOCK, HIGH, MEDIUM, or LOW findings"
       ]
     },
     "does_not_claim_fix": true,

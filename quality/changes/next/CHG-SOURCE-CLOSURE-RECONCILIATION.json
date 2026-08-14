@@ -82,7 +82,7 @@
         "metadata"
       ]
     },
-    "claim_state": "NOT-RUN",
+    "claim_state": "confirmed",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -101,7 +101,8 @@
         "Rust and frontend source tests bind the same version-neutral capability notices for OpenCode Go, Grok, and Gemini",
         "the installed-provider fixture routes fake sidecar termination through a bounded mock and asserts the exact fake PID and signal instead of signaling the host process table",
         "the frozen f7594c61f9922f3430675f36abfadea9b3a3fda0 predecessor has a PASS exact-SHA fifteen-suite GATE-SOURCE completion seal from run a5ab0c9f478a4fa1fad19036660be2a8, but its clean-context completion review was FAIL",
-        "the current reviewer-repair candidate has NOT-RUN exact-SHA GATE-SOURCE and NOT-RUN fresh clean-context completion review, so this record remains NOT-RUN and does not claim SOURCE-GREEN",
+        "exact-SHA fifteen-suite GATE-SOURCE run cdb5aea62b19f8e8768de42058a01eee passed with runner exit 0 on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb",
+        "a fresh clean-context independent completion review passed on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb with no BLOCK, HIGH, MEDIUM, or LOW findings",
         "no artifact, installed App, live provider, live Science, credentials, signing, notarization, or public release evidence is claimed"
       ]
     },

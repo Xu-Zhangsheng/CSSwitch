@@ -15,8 +15,8 @@ NEXT、实施授权或验收结论。
 ## 一句话判断
 
 重构已经进入**后半程**：核心 runtime owner、事务、恢复、Science host 边界和负向清理已经
-成形；source-closure reconciliation 已冻结到 `f7594c6`，其 canonical seal 为 `PASS`，但 fresh review
-因 machine claim 提前确认和 Context 过期而为 `FAIL`；当前 reviewer-repair 候选尚未取得自己的 seal/review。
+成形；reviewer-repair candidate `50820da` 的 canonical 15-suite seal 与 fresh clean-context review 均为
+`PASS`；据此生成的 metadata-promotion 候选尚未取得自己的 exact-SHA seal/review。
 跨 owner mutation receipt、Science 三套控制执行面、Skill Phase 3
 和所有下游动态证据仍未闭合。因此不能称“整体完成”，
 也不是“刚开始”。
@@ -55,9 +55,9 @@ NEXT、实施授权或验收结论。
 
 | 层 | 当前状态 | 解释 |
 |---|---|---|
-| Current source candidate | `PENDING` | 当前 reviewer-repair 候选以实时解析的 clean `next` HEAD 为准；它是 `f7594c61f9922f3430675f36abfadea9b3a3fda0` 的后继，本页不预写尚未生成的提交 identity |
-| Canonical source gate | `NOT-RUN` on current reviewer-repair candidate | `f7594c6` 的 exact gate 在 run `a5ab0c9f478a4fa1fad19036660be2a8` 为 `PASS`，但修改 review finding 后必须在新 SHA 重跑，旧 seal 不得继承 |
-| Fresh clean-context completion review | `NOT-RUN` on current reviewer-repair candidate | `f7594c6` 的 review 因一项 HIGH 和一项 MEDIUM 为 `FAIL`；修复后必须换用新的 clean-context reviewer，不能继承旧 review |
+| Current source candidate | `PENDING` | 当前 metadata-promotion 候选以实时解析的 clean `next` HEAD 为准；它是已验收 `50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb` 的后继，本页不预写尚未生成的提交 identity |
+| Canonical source gate | `NOT-RUN` on current metadata-promotion candidate | `50820da` 的 exact gate 在 run `cdb5aea62b19f8e8768de42058a01eee` 为 `PASS`；metadata promotion 后必须在新 SHA 重跑，旧 seal 不得继承 |
+| Fresh clean-context completion review | `NOT-RUN` on current metadata-promotion candidate | `50820da` 的 clean-context review 为 `PASS` 且无 findings；metadata promotion 后必须换用新的 reviewer，旧 review 不得继承 |
 | Exact artifact | `NOT-RUN` | 本轮未获构建授权 |
 | Isolated / installed / authorized live | `NOT-RUN` | 本轮未获 runtime、Science、Provider、Skill、SSH 或账号授权 |
 | Signing / notarization / public release | `NOT-RUN` | 不是 source refactor closure 的 blocker；只有产品/发布 ready 才进入 |
@@ -73,9 +73,9 @@ NEXT、实施授权或验收结论。
 - `SNAPSHOT_DIRTY` 已定位：普通 Git status 不显示 ignored 路径，而 source snapshot 会对 checkout
   目录身份做 no-follow 稳定性检查；复用主 checkout 中约 74 万 build/runtime ignored 路径会导致
   捕获窗口漂移。同一 SHA 在零 ignored 隔离 worktree 已通过 SNAPSHOT；不修改 gate，也不清理用户数据。
-- R0 inventory 与 ChangeRecord 已对齐为 `requirements-open/pending` 与 `NOT-RUN`；96 个必需
-  characterization identity 全部 executable，和 ignored/skipped 的交集均为空，但只有冻结候选的
-  exact gate/review PASS 后才能提升为 complete/confirmed。
+- R0 inventory 与 ChangeRecord 已依据 `50820da` 的 exact gate/review `PASS` 对齐为
+  `complete/complete` 与 `confirmed`；96 个必需 characterization identity 全部 executable，和
+  ignored/skipped 的交集均为空。metadata-promotion commit 仍必须取得自己的 exact gate/review。
 - 四个 trusted-source-gate 旧 bug 已迁移到 `source-reproduced/source-fixed-product-pending`；Gateway
   recovery、Science reattach、tool-arg 三份记录中的已消失 source path 已替换为当前 owner。
 - 内置模板与 preview 的旧 `0.8.1 limited` 已替换为版本中性、按当前 capability gate 限界的精确声明，
@@ -125,7 +125,7 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 唯一立即 NEXT
 
-下一任务只做 **P0 source closure 验收**：冻结当前 reviewer-finding 修复，在零 ignored 的隔离 checkout
+下一任务只做 **P0 source closure 验收**：冻结当前 metadata promotion，在零 ignored 的隔离 checkout
 对实时解析的同一 clean exact HEAD 执行 canonical 15-suite gate，再换用新的 clean-context reviewer
 对该 SHA 做 completion review。只有 completion seal 与 review 都 PASS 才把该候选写成
 `SOURCE-GREEN`；不得跳到

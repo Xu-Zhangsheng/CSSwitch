@@ -18,9 +18,9 @@
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
       "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
     ],
-    "test_identity_semantics": "characterization_tests lists the stable identities required for R0 completion. The current worktree changes this inventory and its Science update-check behavior, so focused execution may inform review but exact source-gate identity and a separate clean-context completion review remain required; this remains source-only behavior characterization and does not authorize R1-R11 or promote artifact/live evidence.",
-    "characterization_status": "requirements-open",
-    "completion_review_status": "pending"
+    "test_identity_semantics": "characterization_tests lists the stable identities required for R0 completion. Exact source gate run cdb5aea62b19f8e8768de42058a01eee and a separate clean-context completion review both passed on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb; this remains source-only behavior characterization and does not authorize R1-R11 or promote artifact/live evidence.",
+    "characterization_status": "complete",
+    "completion_review_status": "complete"
   },
   "state_owners": [
     {

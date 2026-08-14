@@ -11,8 +11,8 @@
 
 | 层 | 当前可声明的事实 |
 |---|---|
-| Current audited source | 本轮全仓审计绑定最初 clean 的 `next@cfc4008a64d9ef41a9e4238507f85b52095f7c1f`；reconciliation lineage 已冻结到 `f7594c61f9922f3430675f36abfadea9b3a3fda0`，当前 reviewer-repair 候选以实时解析的 clean `next` HEAD 为准，本页不预写尚未生成的提交 identity |
-| Current source closure | `NOT-RUN on current reviewer-repair candidate`：`f7594c61f9922f3430675f36abfadea9b3a3fda0` 的 canonical 15-suite gate 在 run `a5ab0c9f478a4fa1fad19036660be2a8` 为 `PASS`，但其 fresh review 因提前确认 machine claim 和过期 Context 为 `FAIL`。当前修复不能继承该 seal/review，必须在新 exact SHA 上重跑；因此不得声明 `SOURCE-GREEN` |
+| Current audited source | 本轮全仓审计绑定最初 clean 的 `next@cfc4008a64d9ef41a9e4238507f85b52095f7c1f`；reviewer-repair candidate 已冻结到 `50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb`，当前 metadata-promotion 候选以实时解析的 clean `next` HEAD 为准，本页不预写尚未生成的提交 identity |
+| Current source closure | `NOT-RUN on current metadata-promotion candidate`：`50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb` 的 canonical 15-suite gate 在 run `cdb5aea62b19f8e8768de42058a01eee` 为 `PASS`，fresh clean-context review 也为 `PASS` 且无 findings。该前驱证据允许把 R0 metadata 提升为 complete/confirmed，但 promotion commit 必须在新 exact SHA 上取得自己的 seal/review 后才能声明最终 `SOURCE-GREEN` |
 | Latest accepted full source / test lineage | `next@d2cf95e877aa110013a8360d6fcd72c1b38bcfb3` 的 canonical 15-suite gate 与 fresh completion review 均为 `PASS`。该结论只绑定该历史 exact SHA；后续 production/test 改动不得继承 |
 | Historical exact artifact / Science adoption | `18a67881c7e7d760fa8deb7f53e6ba246a32d94d` 的 Acceptance artifact、Science 0.1.25 adoption、normal artifact、installed smoke 与逐 operation Provider 结果保留为日期化历史证据；它们不能证明当前 `cfc4008a`，也不能证明 Science 0.1.27 compatibility |
 | Current exact artifact | `NOT-RUN`；本轮没有构建 artifact，也没有读取、替换或启动已安装 App |
