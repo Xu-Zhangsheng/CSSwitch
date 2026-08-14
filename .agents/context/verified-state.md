@@ -2,7 +2,7 @@
 
 状态：当前；按 source、artifact、installed、live、signing 与 public 分层汇总
 
-最后复核：2026-08-14（Asia/Taipei）
+最后复核：2026-08-15（Asia/Taipei）
 
 失效条件：受审 source、artifact identity、安装 App、Science / Gateway runtime、Provider
 结果、签名或公开 Release 任一相关事实改变时，对应层立即失效；未受影响层仍按 exact identity 判断。
@@ -11,18 +11,18 @@
 
 | 层 | 当前可声明的事实 |
 |---|---|
-| Current audited source | 本轮全仓审计绑定最初 clean 的 `next@cfc4008a64d9ef41a9e4238507f85b52095f7c1f`；reviewer-repair candidate 已冻结到 `50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb`，当前 metadata-promotion 候选以实时解析的 clean `next` HEAD 为准，本页不预写尚未生成的提交 identity |
-| Current source closure | `NOT-RUN on current metadata-promotion candidate`：`50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb` 的 canonical 15-suite gate 在 run `cdb5aea62b19f8e8768de42058a01eee` 为 `PASS`，fresh clean-context review 也为 `PASS` 且无 findings。该前驱证据允许把 R0 metadata 提升为 complete/confirmed，但 promotion commit 必须在新 exact SHA 上取得自己的 seal/review 后才能声明最终 `SOURCE-GREEN` |
-| Latest accepted full source / test lineage | `next@d2cf95e877aa110013a8360d6fcd72c1b38bcfb3` 的 canonical 15-suite gate 与 fresh completion review 均为 `PASS`。该结论只绑定该历史 exact SHA；后续 production/test 改动不得继承 |
-| Historical exact artifact / Science adoption | `18a67881c7e7d760fa8deb7f53e6ba246a32d94d` 的 Acceptance artifact、Science 0.1.25 adoption、normal artifact、installed smoke 与逐 operation Provider 结果保留为日期化历史证据；它们不能证明当前 `cfc4008a`，也不能证明 Science 0.1.27 compatibility |
+| Accepted exact source candidate | `5f9f0e2ab23b871e23d030c05f7941eabcd154b3` 是唯一 accepted exact candidate。其 metadata ChangeRecord coverage 与 impact-release 为 `PASS`；已由 immutable record `quality/source-candidates/5f9f0e2ab23b871e23d030c05f7941eabcd154b3.json`（SHA-256 `4b306aeb779f62f7f8befd4f51a879a878a7aa41c34cb8ddb73d0bc72d8c1aa3`）绑定 |
+| Current source closure | `SOURCE-GREEN`：retained 0700 root `/private/tmp/g7.zZxLau` 的 canonical run `bb3c7bcdadbe314f29f2fdee32068061`，completion seal 为 `evidence/runs/bb3c7bcdadbe314f29f2fdee32068061/completion-seal.json`，SHA-256 `69d92a63b562bd5e888ec3b81ac9461a3ca3540fe234474fea99c67dff23f7bf`；aggregate `PASS`、runner exit `0`、15/15 suites、34 artifacts、15 results + 15 observations、missing `0`、residual `0`，并有 fresh clean-context completion review `PASS` |
+| P0 impact-release repair | `CLOSED`：真实 carry-forward ChangeRecord 精确覆盖 11 个既有 post-v0.8.4 production paths 加 record 自身；没有借此扩展 validator、focused test、identity fixture 或 catalog 改动 |
 | Current exact artifact | `NOT-RUN`；本轮没有构建 artifact，也没有读取、替换或启动已安装 App |
-| Current isolated / installed / authorized live | `NOT-RUN`；没有启动 Gateway / Science、没有读取真实 Science data-dir，也没有发出真实 Provider、Skill、SSH 或账号请求 |
-| Current signing / notarization | `NOT-RUN`；历史已知安装测试 artifact 只有 ad-hoc signing 的结论不能继承给当前 source 或未来 artifact |
-| Public release | 仓库当前发布证据仍以 `v0.8.4` 为最近公开层；本轮未创建 tag、DMG 或 Release，也未改变公开层 |
+| Temporary / installed runtime | `NOT-RUN`；没有启动 Gateway / Science 或 temporary/installed runtime |
+| Live Provider / Science / SSH / account | `NOT-RUN`；没有发出真实 Provider、Science、SSH 或账号请求，也没有读取真实 Science data-dir、账号数据库、Keychain、token / API Key 或 SSH 私钥 |
+| Current signing / notarization / Gatekeeper | `NOT-RUN`；source 结论不能继承为任何 artifact 或安装包的签名、notarization 或 Gatekeeper 结论 |
+| Public release | `NOT-RUN`；仓库历史最近公开层仍为 `v0.8.4`，本轮未创建 tag、DMG 或 Release，亦未改变公开层 |
 
-Claude Science 官方 changelog 在本轮复核时已列出 `0.1.27`，而仓库最近的 exact
-artifact/live 兼容证据绑定 `0.1.25`。两者之间的 source、package、artifact、adoption、installed
-和 authorized-live 兼容性均不得继承，当前为 `NOT-RUN`。
+g6 的较早 canonical 尝试因外层 sandbox 权限条件保留为 `FAIL` 诊断，不能作为 accepted
+source evidence；它未被删除，也不改变 g7 对上列 exact candidate 的独立 `PASS` 结论。旧 SHA、
+旧 root、旧 seal 和旧 completion review 均不能继承给当前 candidate。
 
 ## 历史证据入口
 

@@ -2,11 +2,11 @@
 
 状态：当前；唯一工程路线；验收层级和执行合同以[生产链路验收](../../docs/operations/real-machine-acceptance.md)为准
 
-最后复核：2026-08-14（Asia/Taipei）
+最后复核：2026-08-15（Asia/Taipei）
 
-审计基线：最初 clean 的 `next@cfc4008a64d9ef41a9e4238507f85b52095f7c1f`
+当前 accepted source candidate：`5f9f0e2ab23b871e23d030c05f7941eabcd154b3`
 
-失效条件：production owner / caller、候选 source、source-gate 状态、artifact identity、Science / Gateway runtime、Provider capability、质量元数据、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
+失效条件：production owner / caller、candidate source、artifact identity、Science / Gateway runtime、Provider capability、质量元数据、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
 本页是唯一当前路线，只保存“现在到哪、还缺什么、下一步是什么”。稳定机制放在 `docs/`，
 exact SHA / run / artifact / 环境的历史证据放在日期化 audit/evidence；旧阶段编号不能提供当前
@@ -14,12 +14,10 @@ NEXT、实施授权或验收结论。
 
 ## 一句话判断
 
-重构已经进入**后半程**：核心 runtime owner、事务、恢复、Science host 边界和负向清理已经
-成形；reviewer-repair candidate `50820da` 的 canonical 15-suite seal 与 fresh clean-context review 均为
-`PASS`；据此生成的 metadata-promotion 候选尚未取得自己的 exact-SHA seal/review。
-跨 owner mutation receipt、Science 三套控制执行面、Skill Phase 3
-和所有下游动态证据仍未闭合。因此不能称“整体完成”，
-也不是“刚开始”。
+P0 source-candidate closure 已持久化闭合：`5f9f0e2ab23b871e23d030c05f7941eabcd154b3`
+的 metadata ChangeRecord coverage 与 impact-release 均为 `PASS`，其 exact canonical source gate、
+fresh completion review 和 immutable source-candidate record 均已验收。此结论只覆盖 source；
+不能升级为 artifact、runtime、Provider、Science、SSH、账号、签名或公开 Release 完成。
 
 ## 已完成的结构
 
@@ -55,35 +53,30 @@ NEXT、实施授权或验收结论。
 
 | 层 | 当前状态 | 解释 |
 |---|---|---|
-| Current source candidate | `PENDING` | 当前 metadata-promotion 候选以实时解析的 clean `next` HEAD 为准；它是已验收 `50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb` 的后继，本页不预写尚未生成的提交 identity |
-| Canonical source gate | `NOT-RUN` on current metadata-promotion candidate | `50820da` 的 exact gate 在 run `cdb5aea62b19f8e8768de42058a01eee` 为 `PASS`；metadata promotion 后必须在新 SHA 重跑，旧 seal 不得继承 |
-| Fresh clean-context completion review | `NOT-RUN` on current metadata-promotion candidate | `50820da` 的 clean-context review 为 `PASS` 且无 findings；metadata promotion 后必须换用新的 reviewer，旧 review 不得继承 |
-| Exact artifact | `NOT-RUN` | 本轮未获构建授权 |
-| Isolated / installed / authorized live | `NOT-RUN` | 本轮未获 runtime、Science、Provider、Skill、SSH 或账号授权 |
-| Signing / notarization / public release | `NOT-RUN` | 不是 source refactor closure 的 blocker；只有产品/发布 ready 才进入 |
+| Accepted exact source candidate | `SOURCE-GREEN` | `5f9f0e2ab23b871e23d030c05f7941eabcd154b3`；metadata ChangeRecord coverage 与 impact-release 均为 `PASS`；immutable record 为 `quality/source-candidates/5f9f0e2ab23b871e23d030c05f7941eabcd154b3.json`，SHA-256 `4b306aeb779f62f7f8befd4f51a879a878a7aa41c34cb8ddb73d0bc72d8c1aa3` |
+| Canonical source gate | `PASS` | retained 0700 root `/private/tmp/g7.zZxLau`；run `bb3c7bcdadbe314f29f2fdee32068061`；seal `evidence/runs/bb3c7bcdadbe314f29f2fdee32068061/completion-seal.json` 的 SHA-256 为 `69d92a63b562bd5e888ec3b81ac9461a3ca3540fe234474fea99c67dff23f7bf`；runner exit `0`、15/15 suites、34 artifacts、15 results + 15 observations、missing `0`、residual `0` |
+| Fresh clean-context completion review | `PASS` | 独立 review 只接受上述 exact candidate；没有把旧 SHA 的 review 继承为当前结论 |
+| Exact artifact | `NOT-RUN` | 本轮未构建 artifact |
+| Temporary / installed runtime | `NOT-RUN` | 本轮未启动临时或已安装 runtime，也未读取、替换或启动已安装 App |
+| Live Provider / Science / SSH / account | `NOT-RUN` | 没有真实 Provider、Science、SSH 或账号请求；真实凭证与 data-dir 未读取 |
+| Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
+| Public release | `NOT-RUN` | 未创建 tag、DMG 或 Release；不得虚构 release readiness |
 
-历史 `18a67881` 的 artifact、Science 0.1.25 adoption、installed smoke 和 Provider 分项只保留为
-历史 exact tuple。Claude Science 官方当前文档已进入 0.1.27，当前 source / artifact 对该版本的
-兼容性没有验证。
+证据时间线：较早的 g6 canonical 尝试因外层 sandbox 权限条件保留为 `FAIL` 诊断，
+不是 accepted evidence，未被 g7 的 `PASS` 覆盖或删除。已验收 root 是上表明确的 retained g7；
+任何新 SHA、source 修改或运行环境变化都不能继承它的 seal。
+
+## P0 source closure 已闭合
+
+- `CHG-SOURCE-CANDIDATE-IMPACT-COVERAGE` 的 current ChangeRecord 覆盖已闭合 11 条既有
+  post-v0.8.4 production path，并与 record 自身精确绑定；这正是本 P0 的范围，未扩展为全仓
+  requirement enforcement、validator、focused test、identity fixture 或 catalog 改动。
+- immutable source-candidate record 已由 fail-closed 工具从 retained g7 生成并读回验证；不得修改、
+  覆写或把它当作可随 Context 一同编辑的文件。
+- 旧 source-candidate 的 `PENDING` / `NOT-RUN`、旧唯一 P0 `NEXT` 和旧 SHA/root/seal 都已退役，
+  不再构成当前 closure 的依据。
 
 ## 仍开放的工程缺口
-
-### P0｜事实与 source closure
-
-- `SNAPSHOT_DIRTY` 已定位：普通 Git status 不显示 ignored 路径，而 source snapshot 会对 checkout
-  目录身份做 no-follow 稳定性检查；复用主 checkout 中约 74 万 build/runtime ignored 路径会导致
-  捕获窗口漂移。同一 SHA 在零 ignored 隔离 worktree 已通过 SNAPSHOT；不修改 gate，也不清理用户数据。
-- R0 inventory 与 ChangeRecord 已依据 `50820da` 的 exact gate/review `PASS` 对齐为
-  `complete/complete` 与 `confirmed`；96 个必需 characterization identity 全部 executable，和
-  ignored/skipped 的交集均为空。metadata-promotion commit 仍必须取得自己的 exact gate/review。
-- 四个 trusted-source-gate 旧 bug 已迁移到 `source-reproduced/source-fixed-product-pending`；Gateway
-  recovery、Science reattach、tool-arg 三份记录中的已消失 source path 已替换为当前 owner。
-- 内置模板与 preview 的旧 `0.8.1 limited` 已替换为版本中性、按当前 capability gate 限界的精确声明，
-  并由后端 Rust 与 frontend source test 绑定一致文案。
-
-完成条件：machine metadata、用户可见 copy 与当前 source 互不矛盾；clean exact candidate 获得固定
-15-suite completion seal 和 fresh clean-context completion review。两者都 PASS 才能写
-`SOURCE-GREEN`。
 
 ### P1｜Science control bounded primitive
 
@@ -125,11 +118,10 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 唯一立即 NEXT
 
-下一任务只做 **P0 source closure 验收**：冻结当前 metadata promotion，在零 ignored 的隔离 checkout
-对实时解析的同一 clean exact HEAD 执行 canonical 15-suite gate，再换用新的 clean-context reviewer
-对该 SHA 做 completion review。只有 completion seal 与 review 都 PASS 才把该候选写成
-`SOURCE-GREEN`；不得跳到
-artifact/live，也不得清理复用主 checkout 的用户 ignored 数据。
+下一阶段只建议、尚未授权实施 P1：为 Desktop、Gateway 与 skill-package 的 Science control
+调用者定义 bounded primitive 的职责边界与最小变更候选。它不得自动启动 artifact、temporary/installed
+runtime、live Provider、Science、SSH、账号、signing、notarization、Gatekeeper 或 public release 工作；
+这些层当前全部仍是 `NOT-RUN`。
 
 ## 文档退役状态
 
