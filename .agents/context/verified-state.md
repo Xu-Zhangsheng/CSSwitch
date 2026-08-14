@@ -11,8 +11,8 @@
 
 | 层 | 当前可声明的事实 |
 |---|---|
-| Current audited source | 本轮全仓审计绑定最初 clean 的 `next@cfc4008a64d9ef41a9e4238507f85b52095f7c1f`。它相对上一条完整 accepted lineage `d2cf95e` 前进 21 个提交、涉及 92 个文件；当前工作树另含文档、quality metadata 与兼容文案 reconciliation，尚未冻结为 exact candidate |
-| Current source closure | `NOT-RUN on final candidate`：旧 `cfc4008a` gate 的 `SNAPSHOT_DIRTY` 已定位为复用 checkout 内约 74 万 ignored build/runtime 路径参与 snapshot 稳定性检查；同一 SHA 的零 ignored 隔离 worktree 已通过 SNAPSHOT 并实际进入 15 suites。该诊断不替代最终候选的 completion seal；fresh clean-context completion review 仍为 `NOT-RUN`，因此不得声明 `SOURCE-GREEN` |
+| Current audited source | 本轮全仓审计绑定最初 clean 的 `next@cfc4008a64d9ef41a9e4238507f85b52095f7c1f`；reconciliation lineage 已冻结到 `f7594c61f9922f3430675f36abfadea9b3a3fda0`，当前 reviewer-repair 候选以实时解析的 clean `next` HEAD 为准，本页不预写尚未生成的提交 identity |
+| Current source closure | `NOT-RUN on current reviewer-repair candidate`：`f7594c61f9922f3430675f36abfadea9b3a3fda0` 的 canonical 15-suite gate 在 run `a5ab0c9f478a4fa1fad19036660be2a8` 为 `PASS`，但其 fresh review 因提前确认 machine claim 和过期 Context 为 `FAIL`。当前修复不能继承该 seal/review，必须在新 exact SHA 上重跑；因此不得声明 `SOURCE-GREEN` |
 | Latest accepted full source / test lineage | `next@d2cf95e877aa110013a8360d6fcd72c1b38bcfb3` 的 canonical 15-suite gate 与 fresh completion review 均为 `PASS`。该结论只绑定该历史 exact SHA；后续 production/test 改动不得继承 |
 | Historical exact artifact / Science adoption | `18a67881c7e7d760fa8deb7f53e6ba246a32d94d` 的 Acceptance artifact、Science 0.1.25 adoption、normal artifact、installed smoke 与逐 operation Provider 结果保留为日期化历史证据；它们不能证明当前 `cfc4008a`，也不能证明 Science 0.1.27 compatibility |
 | Current exact artifact | `NOT-RUN`；本轮没有构建 artifact，也没有读取、替换或启动已安装 App |
@@ -26,7 +26,7 @@ artifact/live 兼容证据绑定 `0.1.25`。两者之间的 source、package、a
 
 ## 历史证据入口
 
-- `d2cf95e` 以前的 source seal、当前 `cfc4008a` 的全仓审计与本轮 pre-suite gate 阻断见
+- `d2cf95e` 以前的 source seal、`cfc4008a` 的全仓审计与最初 pre-suite gate 阻断见
   [2026-08-14 全仓审计](../../docs/audits/2026-08-14-next-repository-docs-architecture-review.md)。
 - `18a67881` 的 artifact、Science 0.1.25 adoption、installed 与 Provider 分项见
   [2026-08-12 日期化验收](../../docs/evidence/investigations/2026-08-12-csswitch-18a67881-adoption-installed-live-acceptance.md)。

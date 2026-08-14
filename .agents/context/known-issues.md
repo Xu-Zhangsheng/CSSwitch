@@ -15,8 +15,9 @@ NEXT、实施授权或验收结论。
 ## 一句话判断
 
 重构已经进入**后半程**：核心 runtime owner、事务、恢复、Science host 边界和负向清理已经
-成形；当前 source-closure 候选的 machine metadata 与兼容文案已经对齐，但尚未冻结 exact SHA、取得
-canonical seal 和 fresh review。跨 owner mutation receipt、Science 三套控制执行面、Skill Phase 3
+成形；source-closure reconciliation 已冻结到 `f7594c6`，其 canonical seal 为 `PASS`，但 fresh review
+因 machine claim 提前确认和 Context 过期而为 `FAIL`；当前 reviewer-repair 候选尚未取得自己的 seal/review。
+跨 owner mutation receipt、Science 三套控制执行面、Skill Phase 3
 和所有下游动态证据仍未闭合。因此不能称“整体完成”，
 也不是“刚开始”。
 
@@ -54,9 +55,9 @@ canonical seal 和 fresh review。跨 owner mutation receipt、Science 三套控
 
 | 层 | 当前状态 | 解释 |
 |---|---|---|
-| Current source candidate | `PENDING` | 以最初 clean 的 `cfc4008a` 加本轮文档/metadata/copy reconciliation 为候选内容；尚未提交并冻结 exact SHA |
-| Canonical source gate | `NOT-RUN` on final candidate | `cfc4008a` 的旧 `INCONCLUSIVE` 已定位为复用 checkout 中约 74 万 ignored/runtime 路径参与 snapshot 稳定性检查；同一 SHA 的零 ignored 隔离 worktree 已通过 SNAPSHOT 并进入 15 suites，但该诊断运行不是最终候选 seal |
-| Fresh clean-context completion review | `NOT-RUN` | 不能继承 `d2cf95e` 或后续单 slice 的旧 review |
+| Current source candidate | `PENDING` | 当前 reviewer-repair 候选以实时解析的 clean `next` HEAD 为准；它是 `f7594c61f9922f3430675f36abfadea9b3a3fda0` 的后继，本页不预写尚未生成的提交 identity |
+| Canonical source gate | `NOT-RUN` on current reviewer-repair candidate | `f7594c6` 的 exact gate 在 run `a5ab0c9f478a4fa1fad19036660be2a8` 为 `PASS`，但修改 review finding 后必须在新 SHA 重跑，旧 seal 不得继承 |
+| Fresh clean-context completion review | `NOT-RUN` on current reviewer-repair candidate | `f7594c6` 的 review 因一项 HIGH 和一项 MEDIUM 为 `FAIL`；修复后必须换用新的 clean-context reviewer，不能继承旧 review |
 | Exact artifact | `NOT-RUN` | 本轮未获构建授权 |
 | Isolated / installed / authorized live | `NOT-RUN` | 本轮未获 runtime、Science、Provider、Skill、SSH 或账号授权 |
 | Signing / notarization / public release | `NOT-RUN` | 不是 source refactor closure 的 blocker；只有产品/发布 ready 才进入 |
@@ -124,9 +125,10 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 唯一立即 NEXT
 
-下一任务只做 **P0 source closure 验收**：在用户明确授权提交后冻结当前有界候选，使用零 ignored 的
-隔离 worktree 执行 canonical 15-suite gate，再对同一 exact SHA 做 fresh clean-context completion
-review。只有 completion seal 与 review 都 PASS 才把该候选写成 `SOURCE-GREEN`；不得跳到
+下一任务只做 **P0 source closure 验收**：冻结当前 reviewer-finding 修复，在零 ignored 的隔离 checkout
+对实时解析的同一 clean exact HEAD 执行 canonical 15-suite gate，再换用新的 clean-context reviewer
+对该 SHA 做 completion review。只有 completion seal 与 review 都 PASS 才把该候选写成
+`SOURCE-GREEN`；不得跳到
 artifact/live，也不得清理复用主 checkout 的用户 ignored 数据。
 
 ## 文档退役状态
