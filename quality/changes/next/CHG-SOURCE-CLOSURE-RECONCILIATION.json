@@ -4,7 +4,7 @@
     "id": "CHG-SOURCE-CLOSURE-RECONCILIATION",
     "version": "v0.8.4-dev",
     "title": "Reconcile source-closure metadata, documentation, and compatibility claims",
-    "summary": "Reconciles the current repository audit and route documents with live source ownership, aligns the completed R0 mutation inventory with its ChangeRecord, migrates repaired trusted-source-gate bugs to the source-fixed state, replaces stale bug paths, and makes built-in provider compatibility notices version-neutral and capability-bounded. Product runtime behavior and downstream evidence are unchanged.",
+    "summary": "Reconciles the current repository audit and route documents with live source ownership, aligns the R0 mutation-inventory closure state with its ChangeRecord, migrates repaired trusted-source-gate bugs to the source-fixed state, replaces stale bug paths, makes built-in provider compatibility notices version-neutral and capability-bounded, and prevents a fake process fixture from signaling an unrelated host PID during teardown. Product runtime behavior and downstream evidence are unchanged.",
     "status": "active",
     "owner": "quality-kernel",
     "changed_paths": [
@@ -38,7 +38,8 @@
       "quality/changes/next/CHG-RUNTIME-MUTATION-R0-H.json",
       "quality/changes/next/CHG-SOURCE-CLOSURE-RECONCILIATION.json",
       "test/profile_preview_mock.test.mjs",
-      "test/quality/test_quality_kernel.py"
+      "test/quality/test_quality_kernel.py",
+      "test/test_installed_provider_matrix.py"
     ],
     "requirement_ids": [
       "REQ-083-REGISTRY",
@@ -98,6 +99,7 @@
         "machine validation proves all 96 required R0 characterization identities are executable and none is ignored or skipped",
         "focused metadata tests bind repaired source-gate lifecycle states and require every affected source path in the three corrected bug records to exist",
         "Rust and frontend source tests bind the same version-neutral capability notices for OpenCode Go, Grok, and Gemini",
+        "the installed-provider fixture routes fake sidecar termination through a bounded mock and asserts the exact fake PID and signal instead of signaling the host process table",
         "exact-SHA fifteen-suite GATE-SOURCE completion seal",
         "clean-context independent completion review with zero BLOCK, HIGH, or MEDIUM findings",
         "no artifact, installed App, live provider, live Science, credentials, signing, notarization, or public release evidence is claimed"

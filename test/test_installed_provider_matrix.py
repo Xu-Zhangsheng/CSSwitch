@@ -876,7 +876,16 @@ class InstalledProviderMatrixTests(unittest.TestCase):
         ]
         inspector.executables = {301: app_exe, 302: gateway_exe}
         inspector.alive = {301, 302}
-        with self._session("relay-force", inspector) as session:
+
+        def stop_fake_sidecar(pid, signal):
+            self.assertEqual((pid, signal), (302, 15))
+            inspector.alive.discard(pid)
+
+        with mocklib.patch.object(
+            controller_module.os,
+            "kill",
+            side_effect=stop_fake_sidecar,
+        ) as kill, self._session("relay-force", inspector) as session:
             inspector.listeners.add((302, session.proxy_port))
             observed = session.observe_app(timeout_seconds=0.05)
             self.assertEqual(observed["pid"], 301)
@@ -887,6 +896,7 @@ class InstalledProviderMatrixTests(unittest.TestCase):
             session._runtime_records["restarted"] = {"pid": 303, "launch_id": "launch-b"}
             self.assertTrue(session.compare_runtime("first", "reused", "reuse")["ok"])
             self.assertTrue(session.compare_runtime("first", "restarted", "restart")["ok"])
+        kill.assert_called_once_with(302, 15)
 
     def test_guarded_reopen_preserves_one_exact_primary_process(self):
         inspector = FakeInspector()
