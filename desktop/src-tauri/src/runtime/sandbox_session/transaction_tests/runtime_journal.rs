@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::sandbox_session::SCIENCE_PROTECTED_AUTHORITY_ENTRIES;
 
 fn runtime_journal_test_config(
     binding: Option<RuntimeBindingCommit>,
@@ -1704,4 +1705,445 @@ fn durable_authority_v2_preflight_preserves_pending_and_in_progress_journal() {
     );
     assert!(recovery_root.exists());
     let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn durable_authority_replay_crash_matrix_reloads_every_manifest_target() {
+    const CHILD_MODE: &str = "CSSWITCH_PHASE6C_AUTHORITY_REPLAY_MODE";
+    const CHILD_TARGET: &str = "CSSWITCH_PHASE6C_AUTHORITY_REPLAY_TARGET";
+    const CHILD_BOUNDARY: &str = "CSSWITCH_PHASE6C_AUTHORITY_REPLAY_BOUNDARY";
+    const TEST_NAME: &str = "runtime::sandbox_session::transaction_tests::runtime_journal::durable_authority_replay_crash_matrix_reloads_every_manifest_target";
+
+    if let Some(mode) = std::env::var_os(CHILD_MODE) {
+        let target = std::env::var(CHILD_TARGET)
+            .expect("child crash matrix target must be present")
+            .parse::<usize>()
+            .expect("child crash matrix target must be numeric");
+        let boundary =
+            std::env::var(CHILD_BOUNDARY).expect("child crash matrix boundary must be present");
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle = crate::lifecycle::Lifecycle::default();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        match mode.to_str() {
+            Some("crash") => {
+                let _crash = test_arm_durable_authority_crash_after_boundary(target, &boundary);
+                let result = replay_interrupted_one_click_compensation(
+                    app.handle(),
+                    &state,
+                    &lifecycle,
+                    None,
+                    &config::load_from(&config::default_dir()).unwrap(),
+                );
+                panic!(
+                    "durable authority crash seam did not terminate the process: result={result:?} journal={:?}",
+                    config::load_from(&config::default_dir())
+                        .unwrap()
+                        .runtime_compensation
+                );
+            }
+            Some("replay") => {
+                assert!(replay_interrupted_one_click_compensation(
+                    app.handle(),
+                    &state,
+                    &lifecycle,
+                    None,
+                    &config::load_from(&config::default_dir()).unwrap(),
+                )
+                .unwrap());
+                assert!(matches!(
+                    config::load_from(&config::default_dir())
+                        .unwrap()
+                        .runtime_compensation
+                        .as_ref()
+                        .and_then(|journal| journal.steps.iter().find(|step| {
+                            step.step == config::RuntimeCompensationStep::AuthorityRestore
+                        }))
+                        .map(|step| step.outcome),
+                    Some(config::RuntimeCompensationStepState::Succeeded)
+                ));
+            }
+            Some("idempotent") => {
+                let cfg = config::load_from(&config::default_dir()).unwrap();
+                let journal = cfg.runtime_compensation.as_ref().unwrap();
+                let mut authority =
+                    OneClickAuthoritySnapshot::load_durable(&state, &journal.snapshot_ticket)
+                        .unwrap();
+                authority
+                    .restore_durable_authority(
+                        &config::default_dir(),
+                        &state,
+                        &cfg.runtime_transaction,
+                        journal,
+                        &crate::runtime::sandbox_session::recovery::AuthorityRestoreReplayInputs {
+                            sandbox_port: cfg.sandbox_port,
+                            compensation_id: journal.compensation_id.clone(),
+                            snapshot_ticket: journal.snapshot_ticket.clone(),
+                        },
+                    )
+                    .unwrap();
+            }
+            Some("content-drift") => {
+                let cfg = config::load_from(&config::default_dir()).unwrap();
+                let journal = cfg.runtime_compensation.as_ref().unwrap();
+                let mut authority =
+                    OneClickAuthoritySnapshot::load_durable(&state, &journal.snapshot_ticket)
+                        .unwrap();
+                let error = authority
+                    .restore_durable_authority(
+                        &config::default_dir(),
+                        &state,
+                        &cfg.runtime_transaction,
+                        journal,
+                        &crate::runtime::sandbox_session::recovery::AuthorityRestoreReplayInputs {
+                            sandbox_port: cfg.sandbox_port,
+                            compensation_id: journal.compensation_id.clone(),
+                            snapshot_ticket: journal.snapshot_ticket.clone(),
+                        },
+                    )
+                    .expect_err("in-place authority content drift must fail closed");
+                assert!(error.contains("target content drifted"));
+            }
+            Some("version-drift") => {
+                let error = replay_interrupted_one_click_compensation(
+                    app.handle(),
+                    &state,
+                    &lifecycle,
+                    None,
+                    &config::load_from(&config::default_dir()).unwrap(),
+                )
+                .expect_err("legacy reservation must remain explicit manual recovery");
+                assert!(error.contains("reservation version is unsupported"));
+            }
+            Some("identity-drift") => {
+                let cfg = config::load_from(&config::default_dir()).unwrap();
+                let journal = cfg.runtime_compensation.as_ref().unwrap();
+                let mut authority =
+                    OneClickAuthoritySnapshot::load_durable(&state, &journal.snapshot_ticket)
+                        .unwrap();
+                let error = authority
+                    .restore_durable_authority(
+                        &config::default_dir(),
+                        &state,
+                        &cfg.runtime_transaction,
+                        journal,
+                        &crate::runtime::sandbox_session::recovery::AuthorityRestoreReplayInputs {
+                            sandbox_port: cfg.sandbox_port,
+                            compensation_id: journal.compensation_id.clone(),
+                            snapshot_ticket: journal.snapshot_ticket.clone(),
+                        },
+                    )
+                    .expect_err("rebound authority entry must fail closed");
+                assert!(error.contains("target drifted before staging"));
+            }
+            Some("complete") => {
+                for _ in 0..5 {
+                    if config::load_from(&config::default_dir())
+                        .unwrap()
+                        .runtime_compensation
+                        .is_none()
+                    {
+                        break;
+                    }
+                    assert!(replay_interrupted_one_click_compensation(
+                        app.handle(),
+                        &state,
+                        &lifecycle,
+                        None,
+                        &config::load_from(&config::default_dir()).unwrap(),
+                    )
+                    .unwrap());
+                }
+                let completed = config::load_from(&config::default_dir()).unwrap();
+                assert!(completed.runtime_compensation.is_none());
+                assert!(completed.runtime_transaction.is_none());
+            }
+            _ => panic!("unknown child crash matrix mode"),
+        }
+        return;
+    }
+
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let boundaries = [
+        "stage-intent",
+        "stage-copy",
+        "staged",
+        "tombstone-intent",
+        "tombstone-rename",
+        "tombstoned",
+        "outcome-intent",
+        "promotion",
+        "outcome",
+        "cleanup",
+    ];
+    let run_child = |home: &Path, mode: &str, target: usize, boundary: &str| {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(TEST_NAME)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("HOME", home)
+            .env(CHILD_MODE, mode)
+            .env(CHILD_TARGET, target.to_string())
+            .env(CHILD_BOUNDARY, boundary)
+            .output()
+            .unwrap();
+        assert!(
+            (mode == "crash" && output.status.code() == Some(86))
+                || (mode != "crash" && output.status.success()),
+            "fresh {mode} child failed for target={target} boundary={boundary}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    };
+
+    for target in 0..SCIENCE_PROTECTED_AUTHORITY_ENTRIES.len() + 3 {
+        for boundary in boundaries {
+            if target == SCIENCE_PROTECTED_AUTHORITY_ENTRIES.len() + 2
+                && ["stage-copy", "tombstone-rename", "promotion", "cleanup"].contains(&boundary)
+            {
+                // The managed receipt is an intentional absent authority
+                // target: quiescence requires it absent, so it has no rename
+                // or cleanup effect to crash between.
+                continue;
+            }
+            let tmp = isolated_tmpdir(&format!("phase6c-authority-{target}-{boundary}"));
+            let home = tmp.join("home");
+            let mut env = ScopedEnv::new();
+            env.set("HOME", &home);
+            let dir = config::default_dir();
+            let sandbox_home = dir.join("sandbox/home");
+            let auth_dir = sandbox_home.join(".claude-science");
+            std::fs::create_dir_all(&auth_dir).unwrap();
+            let authority_directories = [".oauth-tokens", ".key-backups", "mcp", "orgs"];
+            for (index, entry) in SCIENCE_PROTECTED_AUTHORITY_ENTRIES.iter().enumerate() {
+                let path = auth_dir.join(entry);
+                if authority_directories.contains(entry) {
+                    std::fs::create_dir_all(&path).unwrap();
+                    std::fs::write(path.join("prior"), format!("prior-{index}\n")).unwrap();
+                } else {
+                    std::fs::write(&path, format!("prior-{index}\n")).unwrap();
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .unwrap();
+                }
+            }
+            let sandbox_state = sandbox_home.parent().unwrap().join("state");
+            let csswitch_runtime = dir.join("runtime");
+            std::fs::create_dir_all(&sandbox_state).unwrap();
+            std::fs::create_dir_all(&csswitch_runtime).unwrap();
+            std::fs::write(sandbox_state.join("prior"), b"sandbox-prior\n").unwrap();
+            std::fs::write(csswitch_runtime.join("prior"), b"runtime-prior\n").unwrap();
+            let managed_receipt = dir.join("science-managed-launch.v1.json");
+            let expected_auth = tree(&auth_dir);
+            let expected_state = tree(&sandbox_state);
+            let expected_runtime = tree(&csswitch_runtime);
+            let cfg = runtime_journal_test_config(None, None);
+            config::save_to(&dir, &cfg).unwrap();
+            let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+            let authority =
+                AuthorityTransaction::capture(&dir, &sandbox_home, &auth_dir, &cfg, &state)
+                    .unwrap();
+            let recovery_root = authority.recovery_path().to_path_buf();
+            let ticket = authority.registered_snapshot_ticket().unwrap();
+            let mut identity = OneClickTransactionIdentity {
+                target_profile_id: "target".into(),
+                runtime_fingerprint: "6".repeat(64),
+                snapshot_ticket: ticket.clone(),
+                previous_binding: None,
+                gateway_terminal_handoff: None,
+                prior_stop: config::RuntimePriorStopState::NotRequired,
+            };
+            let mut progress = OneClickJournalProgress::PreJournalAbort {
+                registered_ticket: ticket,
+                runtime_transaction: Box::new(None),
+            };
+            let science_bin = tmp.join("science");
+            std::fs::write(&science_bin, b"#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&science_bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let launch_runtime = crate::runtime::science::test_runtime_identity(science_bin);
+            identity.runtime_fingerprint = launch_runtime.environment_transaction_id();
+            test_begin_replayable_compensation(
+                &dir,
+                &authority,
+                &state,
+                &identity,
+                &mut progress,
+                launch_runtime,
+                None,
+                false,
+            )
+            .unwrap();
+            let durable =
+                OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+            assert_eq!(
+                durable.trees.len(),
+                SCIENCE_PROTECTED_AUTHORITY_ENTRIES.len() + 3,
+                "matrix target count must match the actual durable manifest plan"
+            );
+            drop(durable);
+            record_compensation_step(
+                &dir,
+                &mut progress,
+                config::RuntimeCompensationStep::ScienceCleanup,
+                config::RuntimeCompensationStepState::Skipped {
+                    cause: config::RuntimeCompensationSkipCause::NoScienceCandidate,
+                },
+            );
+            record_compensation_step(
+                &dir,
+                &mut progress,
+                config::RuntimeCompensationStep::SshCleanup,
+                config::RuntimeCompensationStepState::Succeeded,
+            );
+            for (index, entry) in SCIENCE_PROTECTED_AUTHORITY_ENTRIES.iter().enumerate() {
+                let path = auth_dir.join(entry);
+                if authority_directories.contains(entry) {
+                    std::fs::write(path.join("candidate"), format!("candidate-{index}\n")).unwrap();
+                } else {
+                    std::fs::write(&path, format!("candidate-{index}\n")).unwrap();
+                }
+            }
+            std::fs::write(sandbox_state.join("candidate"), b"sandbox-candidate\n").unwrap();
+            std::fs::write(csswitch_runtime.join("candidate"), b"runtime-candidate\n").unwrap();
+            drop(authority);
+
+            run_child(&home, "crash", target, boundary);
+            if target == 0 && boundary == "stage-intent" {
+                let content_drift_target = auth_dir.join(SCIENCE_PROTECTED_AUTHORITY_ENTRIES[0]);
+                let before = std::fs::metadata(&content_drift_target).unwrap().ino();
+                std::fs::write(&content_drift_target, b"same-inode-content-drift\n").unwrap();
+                assert_eq!(
+                    std::fs::metadata(&content_drift_target).unwrap().ino(),
+                    before
+                );
+                run_child(&home, "content-drift", target, boundary);
+                assert_eq!(
+                    std::fs::read(&content_drift_target).unwrap(),
+                    b"same-inode-content-drift\n"
+                );
+                drop(env);
+                let _ = std::fs::remove_dir_all(tmp);
+                continue;
+            }
+            if [(1, "staged"), (10, "staged"), (11, "staged")].contains(&(target, boundary)) {
+                let nested = match target {
+                    1 => auth_dir.join(".oauth-tokens/prior"),
+                    10 => sandbox_state.join("prior"),
+                    11 => csswitch_runtime.join("prior"),
+                    _ => unreachable!(),
+                };
+                let parent = nested.parent().unwrap();
+                let inode = std::fs::metadata(parent).unwrap().ino();
+                std::fs::write(&nested, b"same-directory-inode-content-drift\n").unwrap();
+                assert_eq!(std::fs::metadata(parent).unwrap().ino(), inode);
+                run_child(&home, "content-drift", target, boundary);
+                assert_eq!(
+                    std::fs::read(&nested).unwrap(),
+                    b"same-directory-inode-content-drift\n"
+                );
+                drop(env);
+                let _ = std::fs::remove_dir_all(tmp);
+                continue;
+            }
+            if target == 1 && boundary == "stage-intent" {
+                let rebound = auth_dir.join(SCIENCE_PROTECTED_AUTHORITY_ENTRIES[1]);
+                let displaced = auth_dir.join("displaced-authority-directory");
+                std::fs::rename(&rebound, &displaced).unwrap();
+                std::fs::create_dir(&rebound).unwrap();
+                std::fs::write(rebound.join("foreign"), b"foreign-directory-entry\n").unwrap();
+                run_child(&home, "identity-drift", target, boundary);
+                assert_eq!(
+                    std::fs::read(rebound.join("foreign")).unwrap(),
+                    b"foreign-directory-entry\n"
+                );
+                assert!(displaced.join("candidate").is_file());
+                drop(env);
+                let _ = std::fs::remove_dir_all(tmp);
+                continue;
+            }
+            if target == 2 && boundary == "stage-intent" {
+                let reservation = recovery_root.join("authority-restore-reservation.v1.json");
+                let mut legacy: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&reservation).unwrap()).unwrap();
+                legacy["schema_version"] = serde_json::json!(1);
+                std::fs::write(&reservation, serde_json::to_vec(&legacy).unwrap()).unwrap();
+                run_child(&home, "version-drift", target, boundary);
+                drop(env);
+                let _ = std::fs::remove_dir_all(tmp);
+                continue;
+            }
+            run_child(&home, "replay", target, boundary);
+            run_child(&home, "idempotent", target, boundary);
+            let side_parent = if target < SCIENCE_PROTECTED_AUTHORITY_ENTRIES.len() {
+                &auth_dir
+            } else if target == SCIENCE_PROTECTED_AUTHORITY_ENTRIES.len() {
+                sandbox_home.parent().unwrap()
+            } else {
+                &dir
+            };
+            for kind in ["stage", "tombstone"] {
+                assert!(
+                    !side_parent
+                        .join(format!(
+                            ".csswitch-authority-{}-{target}-{kind}",
+                            identity.snapshot_ticket.managed_id
+                        ))
+                        .exists(),
+                    "target={target} boundary={boundary} left a {kind} residue"
+                );
+            }
+            run_child(&home, "complete", target, boundary);
+            assert!(
+                !recovery_root.exists(),
+                "target={target} boundary={boundary} must remove the private recovery root after SnapshotCleanup"
+            );
+            let cleanup_manifest = config::read_pending_authority_cleanup_manifest(&dir)
+                .unwrap()
+                .unwrap();
+            let cleanup_manifest: serde_json::Value =
+                serde_json::from_slice(&cleanup_manifest).unwrap();
+            assert_eq!(
+                cleanup_manifest["entries"].as_array().map(Vec::len),
+                Some(0)
+            );
+            let completed = config::load_from(&dir).unwrap();
+            assert!(completed.runtime_compensation.is_none());
+            assert!(completed.runtime_transaction.is_none());
+            for kind in ["stage", "tombstone"] {
+                assert!(
+                    !side_parent
+                        .join(format!(
+                            ".csswitch-authority-{}-{target}-{kind}",
+                            identity.snapshot_ticket.managed_id
+                        ))
+                        .exists(),
+                    "target={target} boundary={boundary} left a {kind} residue after cleanup"
+                );
+            }
+            assert_eq!(
+                tree(&auth_dir),
+                expected_auth,
+                "target={target} boundary={boundary}"
+            );
+            assert_eq!(
+                tree(&sandbox_state),
+                expected_state,
+                "target={target} boundary={boundary}"
+            );
+            assert_eq!(
+                tree(&csswitch_runtime),
+                expected_runtime,
+                "target={target} boundary={boundary}"
+            );
+            assert!(
+                !managed_receipt.exists(),
+                "managed receipt is an absent-but-authoritative sibling under the durable quiescence contract"
+            );
+            drop(env);
+            let _ = std::fs::remove_dir_all(tmp);
+        }
+    }
 }

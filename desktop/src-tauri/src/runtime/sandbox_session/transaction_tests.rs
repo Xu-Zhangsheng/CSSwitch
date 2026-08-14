@@ -14,7 +14,7 @@ use super::{
     test_arm_authority_snapshot_completion_sync_failure,
     test_arm_authority_snapshot_directory_barrier,
     test_arm_authority_snapshot_fallback_create_failure,
-    test_arm_authority_snapshot_parent_barrier,
+    test_arm_authority_snapshot_parent_barrier, test_arm_durable_authority_crash_after_boundary,
     test_arm_durable_authority_outcome_crash_after_promotion,
     test_arm_durable_authority_stage_crash_after_copy,
     test_arm_durable_authority_tombstone_crash_after_rename, test_begin_replayable_compensation,

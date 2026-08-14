@@ -3,11 +3,13 @@
 
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tauri::Runtime;
 
 use crate::config;
@@ -23,8 +25,8 @@ use crate::{lifecycle, lock, HistoryRecoverySession, SharedAppState};
 #[cfg(test)]
 use super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS;
 use super::authority_snapshot::{
-    inode_u64, AuthorityCopyBudget, AuthoritySnapshotScope, AuthorityTreeSnapshot,
-    SCIENCE_OWNED_OPAQUE_ROOTS, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
+    inode_u64, AuthorityCopyBudget, AuthoritySnapshotCategory, AuthoritySnapshotScope,
+    AuthorityTreeSnapshot, SCIENCE_OWNED_OPAQUE_ROOTS, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
 };
 use super::pending_cleanup::{
     finalize_failed_authority_snapshot, finalize_registered_authority_cleanup,
@@ -36,6 +38,7 @@ use super::pending_cleanup::{
 
 pub(super) const DURABLE_AUTHORITY_REPLAY_MANIFEST: &str = "authority-replay.v2.json";
 const DURABLE_AUTHORITY_RESTORE_RESERVATION: &str = "authority-restore-reservation.v1.json";
+const DURABLE_AUTHORITY_RESERVATION_SCHEMA_VERSION: u32 = 2;
 const DURABLE_AUTHORITY_RESTORE_EFFECT_PREFIX: &str = "authority-restore-effect.v1";
 const MAX_DURABLE_PRIVATE_MANIFEST_BYTES: u64 = config::MAX_CONFIG_FILE_BYTES + 1024 * 1024;
 
@@ -92,6 +95,7 @@ struct DurableScienceQuiescenceReservation {
     snapshot_ticket: config::RuntimeSnapshotTicket,
     sandbox_port: u16,
     targets: Vec<DurableAuthorityTargetIdentity>,
+    target_content_digests: Vec<Option<String>>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1395,14 +1399,12 @@ impl OneClickAuthoritySnapshot {
             DURABLE_AUTHORITY_RESTORE_RESERVATION,
         ) {
             Ok(bytes) => {
-                let reservation: DurableScienceQuiescenceReservation =
-                    serde_json::from_slice(&bytes)
-                        .map_err(|_| "durable authority reservation format is invalid")?;
-                if reservation.schema_version != 1
-                    || reservation.compensation_id != inputs.compensation_id
+                let reservation = decode_durable_authority_reservation(&bytes)?;
+                if reservation.compensation_id != inputs.compensation_id
                     || reservation.snapshot_ticket != inputs.snapshot_ticket
                     || reservation.sandbox_port != inputs.sandbox_port
                     || reservation.targets.len() != self.trees.len()
+                    || reservation.target_content_digests.len() != self.trees.len()
                 {
                     return Err(
                         "durable authority reservation identity drifted; preserved ActiveRecovery"
@@ -1419,12 +1421,18 @@ impl OneClickAuthoritySnapshot {
             .iter()
             .map(Self::durable_tree_identity)
             .collect::<Result<Vec<_>, _>>()?;
+        let target_content_digests = self
+            .trees
+            .iter()
+            .map(durable_authority_tree_digest)
+            .collect::<Result<Vec<_>, _>>()?;
         let reservation = DurableScienceQuiescenceReservation {
-            schema_version: 1,
+            schema_version: DURABLE_AUTHORITY_RESERVATION_SCHEMA_VERSION,
             compensation_id: inputs.compensation_id.clone(),
             snapshot_ticket: inputs.snapshot_ticket.clone(),
             sandbox_port: inputs.sandbox_port,
             targets,
+            target_content_digests,
         };
         self.persist_or_validate_durable_marker(
             state,
@@ -1569,13 +1577,12 @@ impl OneClickAuthoritySnapshot {
             &inputs.snapshot_ticket,
             DURABLE_AUTHORITY_RESTORE_RESERVATION,
         )?;
-        let reservation: DurableScienceQuiescenceReservation = serde_json::from_slice(&reservation)
-            .map_err(|_| "durable authority reservation format is invalid")?;
-        if reservation.schema_version != 1
-            || reservation.compensation_id != inputs.compensation_id
+        let reservation = decode_durable_authority_reservation(&reservation)?;
+        if reservation.compensation_id != inputs.compensation_id
             || reservation.snapshot_ticket != inputs.snapshot_ticket
             || reservation.sandbox_port != inputs.sandbox_port
             || reservation.targets.len() != self.trees.len()
+            || reservation.target_content_digests.len() != self.trees.len()
         {
             return Err(
                 "durable authority reservation identity drifted; preserved ActiveRecovery".into(),
@@ -1592,6 +1599,22 @@ impl OneClickAuthoritySnapshot {
         }
         self.validate_science_restore_root()?;
         for (index, tree) in self.trees.iter().enumerate() {
+            let source_parent = tree
+                .source_parent
+                .as_ref()
+                .ok_or("durable authority target parent identity is unknown")?;
+            let source_name = tree
+                .source_name
+                .as_deref()
+                .ok_or("durable authority target name identity is unknown")?;
+            if durable_authority_entry_identity(source_parent, source_name)?
+                == reservation.targets[index]
+                && durable_authority_tree_digest(tree)? != reservation.target_content_digests[index]
+            {
+                return Err(
+                    "durable authority target content drifted; preserved ActiveRecovery".into(),
+                );
+            }
             self.replay_durable_authority_tree(
                 state,
                 tree,
@@ -1683,6 +1706,10 @@ impl OneClickAuthoritySnapshot {
                             ),
                             &marker,
                         )?;
+                        #[cfg(test)]
+                        if test_durable_authority_crash_after_boundary(index, "stage-intent") {
+                            test_durable_authority_exit_after_boundary();
+                        }
                     }
                 }
                 if durable_authority_entry_identity(parent, source)? != *expected {
@@ -1716,6 +1743,10 @@ impl OneClickAuthoritySnapshot {
                                 &tree.backup,
                             )?;
                             #[cfg(test)]
+                            if test_durable_authority_crash_after_boundary(index, "stage-copy") {
+                                test_durable_authority_exit_after_boundary();
+                            }
+                            #[cfg(test)]
                             if test_durable_authority_stage_crash_after_copy(index) {
                                 return Err("test-only durable authority crash after stage effect".into());
                             }
@@ -1742,6 +1773,10 @@ impl OneClickAuthoritySnapshot {
                     ),
                     &marker,
                 )?;
+                #[cfg(test)]
+                if test_durable_authority_crash_after_boundary(index, "staged") {
+                    test_durable_authority_exit_after_boundary();
+                }
                 identity
             }
         };
@@ -1803,6 +1838,10 @@ impl OneClickAuthoritySnapshot {
                         ),
                         &marker,
                     )?;
+                    #[cfg(test)]
+                    if test_durable_authority_crash_after_boundary(index, "tombstone-intent") {
+                        test_durable_authority_exit_after_boundary();
+                    }
                 }
             }
             let current = durable_authority_entry_identity(parent, source)?;
@@ -1812,6 +1851,10 @@ impl OneClickAuthoritySnapshot {
                     durable_authority_rename(parent, source, &tombstone)?;
                     if durable_authority_entry_identity(parent, &tombstone)? != *expected {
                         return Err("durable authority tombstone identity changed; preserved ActiveRecovery".into());
+                    }
+                    #[cfg(test)]
+                    if test_durable_authority_crash_after_boundary(index, "tombstone-rename") {
+                        test_durable_authority_exit_after_boundary();
                     }
                     #[cfg(test)]
                     if test_durable_authority_tombstone_crash_after_rename(index) {
@@ -1843,6 +1886,10 @@ impl OneClickAuthoritySnapshot {
                 ),
                 &marker,
             )?;
+            #[cfg(test)]
+            if test_durable_authority_crash_after_boundary(index, "tombstoned") {
+                test_durable_authority_exit_after_boundary();
+            }
         }
         let outcome = Self::read_durable_effect_marker(
             state,
@@ -1907,6 +1954,10 @@ impl OneClickAuthoritySnapshot {
                         ),
                         &marker,
                     )?;
+                    #[cfg(test)]
+                    if test_durable_authority_crash_after_boundary(index, "outcome-intent") {
+                        test_durable_authority_exit_after_boundary();
+                    }
                 }
             }
             let current = durable_authority_entry_identity(parent, source)?;
@@ -1924,6 +1975,10 @@ impl OneClickAuthoritySnapshot {
                         return Err(
                             "test-only durable authority crash after outcome promotion".into()
                         );
+                    }
+                    #[cfg(test)]
+                    if test_durable_authority_crash_after_boundary(index, "promotion") {
+                        test_durable_authority_exit_after_boundary();
                     }
                 }
             } else if current != staged_identity {
@@ -1949,6 +2004,10 @@ impl OneClickAuthoritySnapshot {
                 &durable_authority_effect_marker_name(index, DurableAuthorityEffectPhase::Outcome),
                 &marker,
             )?;
+            #[cfg(test)]
+            if test_durable_authority_crash_after_boundary(index, "outcome") {
+                test_durable_authority_exit_after_boundary();
+            }
         }
         if durable_authority_entry_identity(parent, source)? != staged_identity {
             return Err(
@@ -1969,6 +2028,10 @@ impl OneClickAuthoritySnapshot {
                 );
             }
             AuthorityTreeSnapshot::remove_current_at(tree.scope, parent, &tombstone)?;
+            #[cfg(test)]
+            if test_durable_authority_crash_after_boundary(index, "cleanup") {
+                test_durable_authority_exit_after_boundary();
+            }
         }
         Ok(())
     }
@@ -2106,6 +2169,197 @@ fn durable_authority_entry_identity(
             Err("durable authority target identity is unknown; preserved ActiveRecovery".into())
         }
     }
+}
+
+fn decode_durable_authority_reservation(
+    bytes: &[u8],
+) -> Result<DurableScienceQuiescenceReservation, String> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| "durable authority reservation format is invalid")?;
+    if value["schema_version"].as_u64()
+        != Some(u64::from(DURABLE_AUTHORITY_RESERVATION_SCHEMA_VERSION))
+    {
+        return Err(
+            "durable authority reservation version is unsupported; preserved ActiveRecovery for manual recovery"
+                .into(),
+        );
+    }
+    serde_json::from_value(value)
+        .map_err(|_| "durable authority reservation format is invalid".into())
+}
+
+/// The descriptor/inode check anchors the parent name, while this bounded
+/// content digest catches in-place writes that keep the target inode. It is
+/// still not a pathname CAS claim against a same-UID non-cooperating writer.
+fn durable_authority_tree_digest(tree: &AuthorityTreeSnapshot) -> Result<Option<String>, String> {
+    let Some(parent) = tree.source_parent.as_ref() else {
+        return Ok(None);
+    };
+    let name = tree
+        .source_name
+        .as_deref()
+        .ok_or("durable authority target name identity is unknown")?;
+    match AuthorityTreeSnapshot::stat_destination_at(parent, name) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+                    .into(),
+            )
+        }
+    }
+    let mut budget = AuthorityCopyBudget::default();
+    let mut digest = Sha256::new();
+    durable_authority_digest_bytes(&mut digest, b"format", b"csswitch-authority-content-v1");
+    durable_authority_digest_entry(parent, name, &mut budget, &mut digest)?;
+    Ok(Some(format!("{:x}", digest.finalize())))
+}
+
+fn durable_authority_digest_entry(
+    parent: &std::fs::File,
+    name: &std::ffi::CStr,
+    budget: &mut AuthorityCopyBudget,
+    digest: &mut Sha256,
+) -> Result<(), String> {
+    let before = AuthorityTreeSnapshot::stat_destination_at(parent, name).map_err(|_| {
+        "durable authority target content identity is unknown; preserved ActiveRecovery"
+    })?;
+    let kind = before.st_mode & libc::S_IFMT;
+    durable_authority_digest_bytes(digest, b"entry-name", name.to_bytes());
+    durable_authority_digest_u64(digest, b"mode", u64::from(before.st_mode & 0o777));
+    match kind {
+        libc::S_IFREG => {
+            let bytes = u64::try_from(before.st_size).map_err(|_| {
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+            })?;
+            AuthorityTreeSnapshot::charge_entry(
+                budget,
+                bytes,
+                AuthoritySnapshotScope::Test,
+                AuthoritySnapshotCategory::Other,
+            )?;
+            durable_authority_digest_bytes(digest, b"entry-kind", b"regular");
+            durable_authority_digest_u64(digest, b"file-length", bytes);
+            let mut file = AuthorityTreeSnapshot::open_destination_at(
+                parent.as_raw_fd(),
+                name,
+                libc::O_RDONLY,
+                0,
+            )
+            .map_err(|_| {
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+            })?;
+            let opened = file.metadata().map_err(|_| {
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+            })?;
+            if !AuthorityTreeSnapshot::destination_entry_matches_file(
+                &before,
+                &opened,
+                libc::S_IFREG,
+            ) {
+                return Err(
+                    "durable authority target content identity changed; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+            durable_authority_digest_header(digest, b"file-contents", bytes);
+            let copied = std::io::copy(&mut file, digest).map_err(|_| {
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+            })?;
+            if copied != bytes {
+                return Err(
+                    "durable authority target content identity changed; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+        }
+        libc::S_IFDIR => {
+            AuthorityTreeSnapshot::charge_entry(
+                budget,
+                0,
+                AuthoritySnapshotScope::Test,
+                AuthoritySnapshotCategory::Other,
+            )?;
+            durable_authority_digest_bytes(digest, b"entry-kind", b"directory");
+            let directory = AuthorityTreeSnapshot::open_directory_at(parent.as_raw_fd(), name)
+                .map_err(|_| {
+                    "durable authority target content identity is unknown; preserved ActiveRecovery"
+                })?;
+            let metadata = directory.metadata().map_err(|_| {
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+            })?;
+            if !AuthorityTreeSnapshot::destination_entry_matches_file(
+                &before,
+                &metadata,
+                libc::S_IFDIR,
+            ) {
+                return Err(
+                    "durable authority target content identity changed; preserved ActiveRecovery"
+                        .into(),
+                );
+            }
+            let children =
+                AuthorityTreeSnapshot::read_directory_names(&directory).map_err(|_| {
+                    "durable authority target content identity is unknown; preserved ActiveRecovery"
+                })?;
+            durable_authority_digest_u64(digest, b"directory-child-count", children.len() as u64);
+            for child in children {
+                let child = std::ffi::CString::new(child.as_bytes()).map_err(|_| {
+                    "durable authority target content identity is unknown; preserved ActiveRecovery"
+                })?;
+                durable_authority_digest_entry(&directory, &child, budget, digest)?;
+            }
+            durable_authority_digest_bytes(digest, b"directory-end", b"");
+        }
+        libc::S_IFLNK => {
+            AuthorityTreeSnapshot::charge_entry(
+                budget,
+                0,
+                AuthoritySnapshotScope::Test,
+                AuthoritySnapshotCategory::Other,
+            )?;
+            durable_authority_digest_bytes(digest, b"entry-kind", b"symlink");
+            let size = usize::try_from(before.st_size).map_err(|_| {
+                "durable authority target content identity is unknown; preserved ActiveRecovery"
+            })?;
+            let target = AuthorityTreeSnapshot::readlink_destination_at(parent, name, size)
+                .map_err(|_| {
+                    "durable authority target content identity is unknown; preserved ActiveRecovery"
+                })?;
+            durable_authority_digest_bytes(digest, b"symlink-target", &target);
+        }
+        _ => {
+            return Err(
+                "durable authority target content identity is unsafe; preserved ActiveRecovery"
+                    .into(),
+            )
+        }
+    }
+    let after = AuthorityTreeSnapshot::stat_destination_at(parent, name).map_err(|_| {
+        "durable authority target content identity changed; preserved ActiveRecovery"
+    })?;
+    if !AuthorityTreeSnapshot::stat_entry_stable(&before, &after) {
+        return Err(
+            "durable authority target content identity changed; preserved ActiveRecovery".into(),
+        );
+    }
+    Ok(())
+}
+
+fn durable_authority_digest_u64(digest: &mut Sha256, label: &[u8], value: u64) {
+    durable_authority_digest_bytes(digest, label, &value.to_be_bytes());
+}
+
+fn durable_authority_digest_bytes(digest: &mut Sha256, label: &[u8], bytes: &[u8]) {
+    durable_authority_digest_header(digest, label, bytes.len() as u64);
+    digest.update(bytes);
+}
+
+fn durable_authority_digest_header(digest: &mut Sha256, label: &[u8], value_len: u64) {
+    digest.update((label.len() as u64).to_be_bytes());
+    digest.update(label);
+    digest.update(value_len.to_be_bytes());
 }
 
 fn durable_authority_rename(
@@ -2263,11 +2517,107 @@ fn test_durable_authority_outcome_crash_after_promotion(target: usize) -> bool {
         == Some(target)
 }
 
+#[cfg(test)]
+fn test_durable_authority_crash_after_boundary(target: usize, boundary: &str) -> bool {
+    super::authority_snapshot::SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_crash_after_boundary
+        .as_ref()
+        .is_some_and(|(configured_target, configured_boundary)| {
+            *configured_target == target && configured_boundary == boundary
+        })
+}
+
+#[cfg(test)]
+fn test_durable_authority_exit_after_boundary() -> ! {
+    // The matrix only arms this seam in a dedicated subprocess.  Exit avoids
+    // unwinding/destructors, matching the durable state a crash leaves behind.
+    std::process::exit(86)
+}
+
 impl Drop for OneClickAuthoritySnapshot {
     fn drop(&mut self) {
         // Drop can run during panic unwinding after protected state changed.
         // Only explicit success or fully successful compensation may publish
         // ActiveRecovery -> CleanupOnly and remove the recovery snapshot.
         self.preserve_recovery = true;
+    }
+}
+
+#[cfg(test)]
+mod durable_authority_digest_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn canonical_tree_digest_separates_legacy_concatenation_collision() {
+        let requested_root = std::env::temp_dir().join(format!(
+            "csswitch-authority-digest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&requested_root).unwrap();
+        // macOS commonly exposes the temporary directory through `/var`, a
+        // symlink. The descriptor-anchored opener correctly rejects that path,
+        // so canonicalize the fixture before building its parent descriptor.
+        let root = requested_root.canonicalize().unwrap();
+        let source = root.join("authority");
+        std::fs::create_dir(&source).unwrap();
+        let mode = libc::mode_t::try_from(0o600).unwrap().to_le_bytes();
+        // The old raw stream had no child count/end framing. One child whose
+        // bytes embed a second child record collides with two child records.
+        let mut embedded = b"Xb".to_vec();
+        embedded.extend(mode);
+        embedded.extend(b"fileY");
+        let mut legacy_one = b"a".to_vec();
+        legacy_one.extend(mode);
+        legacy_one.extend(b"file");
+        legacy_one.extend(&embedded);
+        let mut legacy_two = b"a".to_vec();
+        legacy_two.extend(mode);
+        legacy_two.extend(b"fileXb");
+        legacy_two.extend(mode);
+        legacy_two.extend(b"fileY");
+        assert_eq!(
+            legacy_one, legacy_two,
+            "fixture must collide under the old raw concatenation"
+        );
+        std::fs::write(source.join("a"), &embedded).unwrap();
+        std::fs::set_permissions(source.join("a"), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let snapshot = AuthorityTreeSnapshot {
+            scope: AuthoritySnapshotScope::Test,
+            source: source.clone(),
+            backup: root.join("unused-backup"),
+            existed: true,
+            source_parent: Some(AuthorityTreeSnapshot::open_absolute_directory(&root).unwrap()),
+            source_name: Some(AuthorityTreeSnapshot::destination_name(&source).unwrap()),
+            backup_identity: None,
+            backup_parent: None,
+            backup_name: None,
+        };
+        let source_inode = std::fs::metadata(&source).unwrap().ino();
+        let first = durable_authority_tree_digest(&snapshot).unwrap();
+        std::fs::remove_file(source.join("a")).unwrap();
+        std::fs::write(source.join("a"), b"X").unwrap();
+        std::fs::write(source.join("b"), b"Y").unwrap();
+        for name in ["a", "b"] {
+            std::fs::set_permissions(source.join(name), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        assert_eq!(
+            std::fs::metadata(&source).unwrap().ino(),
+            source_inode,
+            "the collision counterexample must retain the authority root identity"
+        );
+        let second = durable_authority_tree_digest(&snapshot).unwrap();
+        assert_ne!(
+            first, second,
+            "canonical node/count/end framing must reject the old ambiguous tree stream"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -5413,6 +5413,35 @@ mod tests {
     }
 
     #[test]
+    fn authority_writer_guard_rebind_after_ex_window_fails_closed() {
+        let dir = tmpdir().join("authority-writer-rebind-after-ex");
+        save_to(&dir, &Config::default()).unwrap();
+        let replay = acquire_runtime_compensation_replay_lease(&dir).unwrap();
+        let (entered, received) = std::sync::mpsc::channel();
+        let waiting_dir = dir.clone();
+        let writer = std::thread::spawn(move || {
+            entered.send(()).unwrap();
+            acquire_authority_writer_guard_at(&waiting_dir)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+        received
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let lock_path = dir.join(RUNTIME_COMPENSATION_AUTH_LOCK_FILE);
+        let replacement = dir.join("replacement-authority-fence");
+        fs::write(&replacement, b"replacement\n").unwrap();
+        fs::rename(&replacement, &lock_path).unwrap();
+        drop(replay);
+        let error = match writer.join().unwrap() {
+            Ok(()) => panic!("writer must reject a lock entry rebound during the EX window"),
+            Err(error) => error,
+        };
+        assert!(error.contains("被替换"));
+    }
+
+    #[test]
     fn authority_writer_guard_early_return_releases_sh() {
         fn early_return(dir: &Path) -> io::Result<()> {
             let _guard = acquire_authority_writer_guard_at(dir)?;

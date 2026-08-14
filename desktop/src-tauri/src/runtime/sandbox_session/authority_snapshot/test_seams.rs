@@ -23,6 +23,7 @@ pub(super) struct SandboxSessionTestSeams {
     pub(super) durable_authority_stage_crash_after_copy: Option<(usize, PathBuf)>,
     pub(super) durable_authority_tombstone_crash_after_rename: Option<usize>,
     pub(super) durable_authority_outcome_crash_after_promotion: Option<usize>,
+    pub(super) durable_authority_crash_after_boundary: Option<(usize, String)>,
 }
 
 #[cfg(test)]
@@ -248,6 +249,18 @@ pub(crate) fn test_arm_durable_authority_outcome_crash_after_promotion(
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .durable_authority_outcome_crash_after_promotion = Some(target);
+    SandboxSessionTestSeamGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_durable_authority_crash_after_boundary(
+    target: usize,
+    boundary: &str,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .durable_authority_crash_after_boundary = Some((target, boundary.to_string()));
     SandboxSessionTestSeamGuard
 }
 

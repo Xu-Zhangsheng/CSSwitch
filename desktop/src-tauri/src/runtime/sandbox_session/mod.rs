@@ -84,7 +84,7 @@ use transaction_science_stop::{
 #[cfg(test)]
 pub(crate) use authority_snapshot::{
     test_arm_authority_snapshot_capture_failure, test_arm_authority_snapshot_cleanup_fault,
-    test_arm_authority_snapshot_directory_barrier,
+    test_arm_authority_snapshot_directory_barrier, test_arm_durable_authority_crash_after_boundary,
     test_arm_durable_authority_outcome_crash_after_promotion,
     test_arm_durable_authority_stage_crash_after_copy,
     test_arm_durable_authority_tombstone_crash_after_rename, test_arm_gateway_catalog_bypass,
