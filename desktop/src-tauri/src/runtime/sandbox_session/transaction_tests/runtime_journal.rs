@@ -439,6 +439,15 @@ fn assert_v1_prior_restart_replay_hydrates_v2_receipt(env: &mut ScopedEnv) {
 }
 
 #[test]
+fn legacy_v1_prior_restart_replay_hydrates_v2_receipt_regression() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut env = ScopedEnv::new();
+    assert_v1_prior_restart_replay_hydrates_v2_receipt(&mut env);
+}
+
+#[test]
 fn one_click_compensation_journal_begin_and_finish_use_complete_record_cas() {
     let dir = isolated_tmpdir("durable-compensation-journal");
     let ticket = config::RuntimeSnapshotTicket::verified(
@@ -1306,7 +1315,7 @@ fn one_click_v2_checkpoints_freeze_candidate_identity_and_ticket() {
 }
 
 #[test]
-fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
+fn durable_authority_v2_preflight_preserves_pending_and_in_progress_journal() {
     let _env_lock = TEST_ENV_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -1441,6 +1450,70 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
         preexisting_stub.as_bytes(),
         "durable SSH compensation must preserve the exact pre-one-click stub"
     );
+    let recovery_root = authority.recovery_path().to_path_buf();
+    drop(authority);
+    let authority_v2 = recovery_root.join("authority-replay.v2.json");
+    let authority_v1 = recovery_root.join("authority-replay.v1.json");
+    std::fs::rename(&authority_v2, &authority_v1).unwrap();
+    let legacy_before = std::fs::read(config::default_dir().join("config.json")).unwrap();
+    assert!(replay_interrupted_one_click_compensation(
+        app.handle(),
+        &state,
+        &lifecycle,
+        None,
+        &config::load_from(&dir).unwrap(),
+    )
+    .is_err());
+    assert_eq!(
+        std::fs::read(config::default_dir().join("config.json")).unwrap(),
+        legacy_before
+    );
+    assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
+    assert!(recovery_root.exists());
+    std::fs::rename(&authority_v1, &authority_v2).unwrap();
+    let pending_before = std::fs::read(config::default_dir().join("config.json")).unwrap();
+    assert!(replay_interrupted_one_click_compensation(
+        app.handle(),
+        &state,
+        &lifecycle,
+        None,
+        &config::load_from(&dir).unwrap(),
+    )
+    .is_err());
+    assert_eq!(
+        std::fs::read(config::default_dir().join("config.json")).unwrap(),
+        pending_before
+    );
+    assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
+    assert_eq!(
+        std::fs::read(&sandbox_ssh_config).unwrap(),
+        preexisting_stub.as_bytes()
+    );
+    assert!(recovery_root.exists());
+    let mismatch_before = std::fs::read(config::default_dir().join("config.json")).unwrap();
+    let mismatch_journal = config::load_from(&dir)
+        .unwrap()
+        .runtime_compensation
+        .unwrap();
+    let durable =
+        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
+    assert!(durable
+        .preflight_durable_authority_restore(
+            &dir,
+            &None,
+            &mismatch_journal,
+            &crate::runtime::sandbox_session::recovery::AuthorityRestoreReplayInputs {
+                sandbox_port: 0,
+                compensation_id: mismatch_journal.compensation_id.clone(),
+                snapshot_ticket: identity.snapshot_ticket.clone(),
+            },
+        )
+        .is_err());
+    assert_eq!(
+        std::fs::read(config::default_dir().join("config.json")).unwrap(),
+        mismatch_before
+    );
+    drop(durable);
     config::update_result(&dir, |current| {
         let journal = current
             .runtime_compensation
@@ -1458,75 +1531,24 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
         Ok(((), true))
     })
     .unwrap();
-    let recovery_root = authority.recovery_path().to_path_buf();
-    drop(authority);
-
-    let authority_crash_journal = config::load_from(&dir)
-        .unwrap()
-        .runtime_compensation
-        .unwrap();
-    let mut durable_authority =
-        OneClickAuthoritySnapshot::load_durable(&state, &identity.snapshot_ticket).unwrap();
-    durable_authority
-        .restore_durable_authority(&dir, &state, &None, &authority_crash_journal)
-        .unwrap();
-    drop(durable_authority);
-    let after_effect_crash = config::load_from(&dir).unwrap();
+    let in_progress_before = std::fs::read(config::default_dir().join("config.json")).unwrap();
+    assert!(replay_interrupted_one_click_compensation(
+        app.handle(),
+        &state,
+        &lifecycle,
+        None,
+        &config::load_from(&dir).unwrap(),
+    )
+    .is_err());
     assert_eq!(
-        after_effect_crash.runtime_transaction,
-        initial.runtime_transaction
+        std::fs::read(config::default_dir().join("config.json")).unwrap(),
+        in_progress_before
     );
-    assert_eq!(
-        after_effect_crash
-            .runtime_compensation
-            .as_ref()
-            .unwrap()
-            .steps
-            .iter()
-            .find(|step| step.step == config::RuntimeCompensationStep::AuthorityRestore)
-            .map(|step| step.outcome),
-        Some(config::RuntimeCompensationStepState::InProgress),
-        "fixture must crash after authority effect but before durable outcome"
-    );
-
-    for _ in 0..8 {
-        let current = config::load_from(&dir).unwrap();
-        if current.runtime_compensation.is_none() {
-            break;
-        }
-        assert!(
-            replay_interrupted_one_click_compensation(
-                app.handle(),
-                &state,
-                &lifecycle,
-                None,
-                &current,
-            )
-            .unwrap(),
-            "each replay turn must either advance one durable step or finish"
-        );
-    }
-    let converged = config::load_from(&dir).unwrap();
-    assert!(converged.runtime_compensation.is_none());
-    assert!(
-        !replay_interrupted_one_click_compensation(
-            app.handle(),
-            &state,
-            &lifecycle,
-            None,
-            &converged,
-        )
-        .unwrap(),
-        "fresh replay after convergence must be an idempotent no-op"
-    );
-    assert_eq!(converged.runtime_transaction, initial.runtime_transaction);
-    assert_eq!(std::fs::read(&authority_file).unwrap(), b"before\n");
+    assert_eq!(std::fs::read(&authority_file).unwrap(), b"candidate\n");
     assert_eq!(
         std::fs::read(&sandbox_ssh_config).unwrap(),
-        preexisting_stub.as_bytes(),
-        "fresh replay must preserve the exact SSH stub that predated one-click"
+        preexisting_stub.as_bytes()
     );
-    assert!(!recovery_root.exists());
+    assert!(recovery_root.exists());
     let _ = std::fs::remove_dir_all(tmp);
-    assert_v1_prior_restart_replay_hydrates_v2_receipt(&mut env);
 }

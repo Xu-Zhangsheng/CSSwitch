@@ -34,12 +34,12 @@ use super::pending_cleanup::{
     RegisteredAuthorityCleanup,
 };
 
-pub(super) const DURABLE_AUTHORITY_REPLAY_MANIFEST: &str = "authority-replay.v1.json";
+pub(super) const DURABLE_AUTHORITY_REPLAY_MANIFEST: &str = "authority-replay.v2.json";
 const MAX_DURABLE_PRIVATE_MANIFEST_BYTES: u64 = config::MAX_CONFIG_FILE_BYTES + 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct DurableAuthorityTree {
+struct DurableAuthorityTreeV2 {
     scope: AuthoritySnapshotScope,
     source: PathBuf,
     backup_relative: PathBuf,
@@ -50,14 +50,21 @@ struct DurableAuthorityTree {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct DurableAuthorityReplayManifest {
+struct DurableAuthorityReplayManifestV2 {
     schema_version: u32,
     managed_id: String,
     config: config::Config,
-    trees: Vec<DurableAuthorityTree>,
+    trees: Vec<DurableAuthorityTreeV2>,
     science_root_path: PathBuf,
     science_root_identity: Option<(u64, u64)>,
     science_opaque_bindings: [Option<(u64, u64)>; SCIENCE_OWNED_OPAQUE_ROOTS.len()],
+}
+
+#[derive(Clone)]
+pub(super) struct AuthorityRestoreReplayInputs {
+    pub(super) sandbox_port: u16,
+    pub(super) compensation_id: String,
+    pub(super) snapshot_ticket: config::RuntimeSnapshotTicket,
 }
 
 pub(super) fn read_registered_private_manifest(
@@ -311,9 +318,9 @@ impl OneClickAuthoritySnapshot {
         {
             return Err("durable authority replay manifest changed while reading".into());
         }
-        let manifest: DurableAuthorityReplayManifest = serde_json::from_slice(&bytes)
+        let manifest: DurableAuthorityReplayManifestV2 = serde_json::from_slice(&bytes)
             .map_err(|_| "durable authority replay manifest format is invalid")?;
-        if manifest.schema_version != 1
+        if manifest.schema_version != 2
             || manifest.managed_id != ticket.managed_id
             || manifest.managed_id != cleanup_context.managed_id
         {
@@ -497,7 +504,7 @@ impl OneClickAuthoritySnapshot {
                         Ok::<_, String>((metadata.dev(), metadata.ino()))
                     })
                     .transpose()?;
-                Ok(DurableAuthorityTree {
+                Ok(DurableAuthorityTreeV2 {
                     scope: tree.scope,
                     source: tree.source.clone(),
                     backup_relative,
@@ -517,8 +524,8 @@ impl OneClickAuthoritySnapshot {
                 Ok::<_, String>((metadata.dev(), metadata.ino()))
             })
             .transpose()?;
-        let manifest = DurableAuthorityReplayManifest {
-            schema_version: 1,
+        let manifest = DurableAuthorityReplayManifestV2 {
+            schema_version: 2,
             managed_id: self.cleanup_context.managed_id.clone(),
             config: self.config.clone(),
             trees,
@@ -1294,77 +1301,34 @@ impl OneClickAuthoritySnapshot {
         }
     }
 
-    pub(super) fn restore_durable_authority(
-        &mut self,
+    pub(super) fn preflight_durable_authority_restore(
+        &self,
         config_dir: &Path,
-        state: &SharedAppState,
         expected_runtime_transaction: &Option<config::RuntimeTransactionRecord>,
         expected_compensation: &config::RuntimeCompensationJournal,
+        inputs: &AuthorityRestoreReplayInputs,
     ) -> Result<(), String> {
         let current = config::load_from(config_dir).map_err(|error| error.to_string())?;
-        let mut restored_config = self.config.clone();
-        restored_config.runtime_compensation = Some(expected_compensation.clone());
-        let already_restored = current == restored_config;
         if current.runtime_compensation.as_ref() != Some(expected_compensation)
-            || (!already_restored && current.runtime_transaction != *expected_runtime_transaction)
+            || current.runtime_transaction != *expected_runtime_transaction
         {
             return Err(
                 "durable compensation replay found drifted config authority; preserved current state"
                     .into(),
             );
         }
+        let ticket = self.registered_snapshot_ticket()?;
+        if inputs.snapshot_ticket != ticket
+            || inputs.compensation_id != expected_compensation.compensation_id
+            || inputs.sandbox_port != self.config.sandbox_port
         {
-            let app = lock(state);
-            if app.proxy.is_some() || app.sandbox.is_some() {
-                return Err(
-                    "durable compensation replay found process-local runtime owners; refused stale authority restore"
-                        .into(),
-                );
-            }
+            return Err(
+                "durable authority replay identity mismatch; preserved current state".into(),
+            );
         }
-        if already_restored {
-            return Ok(());
-        }
-        let mut errors = Vec::new();
-        let science_restore_allowed = match self.validate_science_restore_root() {
-            Ok(()) => true,
-            Err(error) => {
-                errors.push(error);
-                false
-            }
-        };
-        for tree in &mut self.trees {
-            if tree.scope == AuthoritySnapshotScope::ScienceData && !science_restore_allowed {
-                continue;
-            }
-            if let Err(error) = tree.restore() {
-                errors.push(error);
-            }
-        }
-        if errors.is_empty() {
-            let before = self.config.clone();
-            if let Err(error) = config::update_result(config_dir, |current| {
-                if current.runtime_transaction != *expected_runtime_transaction
-                    || current.runtime_compensation.as_ref() != Some(expected_compensation)
-                {
-                    return Err(
-                        "durable compensation replay authority changed during restore; preserved current config"
-                            .into(),
-                    );
-                }
-                *current = before.clone();
-                current.runtime_compensation = Some(expected_compensation.clone());
-                Ok(((), true))
-            }) {
-                errors.push(error);
-            }
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            self.preserve_recovery = true;
-            Err(errors.join("; "))
-        }
+        config::validate_runtime_ports(self.config.proxy_port, inputs.sandbox_port)
+            .map_err(|_| "durable authority replay ports are invalid; preserved current state")?;
+        Err("durable authority replay v2 effect state machine is not enabled; refused before any effect".into())
     }
 
     pub(super) fn cleanup_when_expendable(

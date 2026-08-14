@@ -257,14 +257,20 @@ virtual-login/history credential 写入、managed SSH stub 的补偿/撤销、SS
 注册/route-state 以及 Skill bridge runtime key publish；EX owner 只能通过其借用期内、不可跨线程的 scoped
 bypass 调用这些 leaf，不能靠进程全局的“正在 replay”标志绕过 flock。这个协作协议不把同 UID 对 0700 config
 目录的非合作 `rename`/`unlink` 宣称为 path-level CAS；获取 SH 后的 identity recheck 遇到该类 drift 必须
-fail closed。managed-launch receipt 的 write/clear 与 prior-restart/lifecycle 传播尚未纳入这组 SH writers，
-在其 scoped-bypass call graph 完整落地前仍是明确的后续缺口，不能据此扩大本段已覆盖范围。
+fail closed。managed-launch receipt 的 write/clear 与 prior-restart/lifecycle 传播已纳入同一 SH writer
+协议；EX replay owner 通过 scoped bypass 进入这些 leaf，避免嵌套 SH 自锁。该保证仍只覆盖 cooperating
+CSSwitch writers，不声称对同 UID noncooperative pathname tamper 的 CAS。
 replay owner 在 provider auth 前循环重采 config，校验 public record、private manifest、
 snapshot ticket 与完整 business record，然后重放或观察一个 `pending|in_progress` step。若同进程补偿替换过
 Gateway，私有 manifest 只保存其受管 health identity、path secret 与端口；fresh authority step 必须再以当前
 打包 binary、uid、唯一 listener 和二次 health 复核精确停止该 candidate，不序列化或伪造 process-local
 `GatewayReceipt`。authority restore 只恢复 durable filesystem/config authority，不把上个进程的 AppState/Gateway
 child ownership 当作可恢复事实；完整 restored config 是“effect 已成功、outcome 未落盘”的幂等 commit marker。
+
+B1a1 将 authority replay 初始私有清单升级为 immutable v2 tree plan。production AuthorityRestore 在读取
+validated compensation manifest、v2 snapshot、exact journal/ticket/managed-id/port binding 后，仍在任何
+step begin 或 filesystem/config effect 前 fail closed；因此 pending 与 in-progress journal 都不推进并保留
+`ActiveRecovery`。Science quiescence、progress 和 per-target effect state machine 留给 B1a2/B1b。
 SSH cleanup 重放原 transaction 而不是按 marker 广泛删除；prior Science 使用 durable stop recipe、精确 absent
 的旧 receipt 路径、
 预分配 launch id 与 fresh runtime identity 重新建立，只有 receipt 的 launch id 精确相等才允许 fresh owner 认领。
