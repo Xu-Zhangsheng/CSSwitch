@@ -60,6 +60,26 @@ class QualityKernelFocused(unittest.TestCase):
             )
             self.assertEqual(len(bug["change_ids"]), 1)
             self.assertTrue(any(gate.startswith("GATE-") for gate in bug["expected_gate_ids"]))
+        for bug_id in {
+            "BUG-083-ORPHANS",
+            "BUG-083-RC",
+            "BUG-083-RETRY",
+            "BUG-083-RUST-COVERAGE",
+        }:
+            bug = validator.bugs[bug_id]
+            self.assertEqual(bug["status"], "active")
+            self.assertEqual(bug["reproduction_state"], "source-reproduced")
+            self.assertEqual(bug["resolution_state"], "source-fixed-product-pending")
+        for bug_id in {
+            "BUG-083-GATEWAY-RECOVERY",
+            "BUG-083-SCIENCE-REATTACH",
+            "BUG-083-TOOL-ARG-EXCLUSIVITY",
+        }:
+            for affected_path in validator.bugs[bug_id]["affected_paths"]:
+                self.assertTrue(
+                    (ROOT / affected_path).exists(),
+                    f"{bug_id} affected path is stale: {affected_path}",
+                )
         ssh_late = validator.bugs["BUG-083-SSH-LATE"]
         self.assertEqual(
             ssh_late["resolution_state"],

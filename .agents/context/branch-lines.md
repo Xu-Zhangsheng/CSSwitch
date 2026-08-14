@@ -12,8 +12,8 @@
 | `codex/<slice>` | 单刀工作分支 | 从 `next` 开出，审完 FF 回 `next` |
 
 `next` 会随 source-only 工程切片推进，本文不再复制易漂移的 HEAD、tested candidate 或 sole NEXT。
-实时 commit/worktree 必须现场复核；当前缺口、证据层与唯一建议 NEXT 从
-[known issues](known-issues.md) 进入，日期化 source 结论从该页链接的最新 audit 进入。无论 `next`
+实时 commit/worktree 必须现场复核；当前路线、证据层与唯一建议 NEXT 从
+[当前重构路线](known-issues.md) 进入，日期化 source 结论从该页链接的最新 audit 进入。无论 `next`
 领先多少 commit，都不能把它称为公开 release 身份。
 
 历史治理/调查分支与 worktree 多数已被 `main` 吸收，默认不必继续使用；删除前须用户明确授权。

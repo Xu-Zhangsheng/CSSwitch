@@ -9,8 +9,8 @@
     "owner": "quality-kernel",
     "severity": "P1",
     "claim_state": "confirmed",
-    "reproduction_state": "inventory-confirmed",
-    "resolution_state": "open-not-fixed",
+    "reproduction_state": "source-reproduced",
+    "resolution_state": "source-fixed-product-pending",
     "affected_paths": [
       "desktop/codex-network/Cargo.toml",
       "desktop/gateway/Cargo.toml",

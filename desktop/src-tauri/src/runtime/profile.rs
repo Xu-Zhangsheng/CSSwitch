@@ -1530,14 +1530,20 @@ mod tests {
             "opencode-go-openai",
             "opencode-go-anthropic",
             "grok",
-            "gemini",
         ] {
             let template = v.iter().find(|template| template["id"] == id).unwrap();
             assert_eq!(template["capabilities"]["model_required"], true);
-            assert!(template["compatibility_notice"]
-                .as_str()
-                .is_some_and(|notice| notice.contains("limited")));
+            assert_eq!(
+                template["compatibility_notice"],
+                "兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"
+            );
         }
+        let gemini = v.iter().find(|template| template["id"] == "gemini").unwrap();
+        assert_eq!(gemini["capabilities"]["model_required"], true);
+        assert_eq!(
+            gemini["compatibility_notice"],
+            "兼容范围：仅按官方 OpenAI compatibility 接入；文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"
+        );
 
         let enabled = build_list_templates(true);
         assert_eq!(enabled.len(), 16);

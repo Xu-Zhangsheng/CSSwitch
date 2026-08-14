@@ -62,60 +62,13 @@ module surface 与测试 identity 的 façade；状态所有权仍由 `AppState`
 
 ## one-click / restore 当前边界基线
 
-Phase 4 基线源码审计为 2026-08-14 的 production source
-`139f6ee235b67284e2edc852521f24b3f501d467`。Phase 5 的 production/test-bearing final candidate 是
-`f60a55ec1be3d101702c4b710ea8bfd3bd5be0d9`：其父提交
-`8687e79bb85303c27a1f0d7137bf9dca87a482be` 完成 one-click durable-journal
-identity/transition 到 private `runtime/sandbox_session/one_click/transaction.rs` 的物理移动；
-`f60a55e` 修复对应 fixture、关闭该项 MEDIUM，不改变该 owner 边界；本次 evidence-only descendant
-再回填该 candidate 的 source-gate 状态。
+one-click durable-journal identity 与 transition 的稳定 owner 是 private
+`runtime/sandbox_session/one_click/transaction.rs`；wire schema/validator 仍由 `config.rs` 拥有，
+根 `one_click.rs` 只通过受限接口向 sibling coordinator、recovery 和 tests 暴露所需能力。
 
-唯一 canonical `bash test/run_all.sh --output-root /private/tmp/csg.9RP1pi` run 为
-`0be6cd1e570a33cc5cfbdbad8a67a473`，runner exit 0：15/15 suites、15/15 observations
-均为 `PASS`，executed/passed/ignored/failed/skipped/not-run 为
-`1480/1436/44/0/0/0`。completion seal SHA-256 为
-`24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`，evidence manifest 为
-`d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`，run manifest 为
-`14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`，source snapshot manifest 为
-`0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb`，input digest 为
-`6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831`。evidence root
-`/private/tmp/csg.9RP1pi` 保留，不得删除。
-
-此前 `8687e79` 的 run `22038ed8087f38a0a0bcd20c61064ecb`（`/private/tmp/csg.VC5xLJ`）仍是
-sealed `FAIL` / RC 10 的历史 attempt：14/15 suites `PASS`、
-`SUITE-ORPHAN-SKILL-BOUNDARY` 因手写 source aggregation 漏列 `transaction.rs` 而 fixture drift；
-该 drift 已由 `f60a55e` 修复，旧 attempt 不得混作 PASS。
-
-回填上述状态的 evidence-only commit `070bd0b4e223960263b91d8119a278bdc86f3678` 也没有继承该 seal。
-其唯一 canonical run `2247f8e529a24c9846c1040a176e634b`（`/private/tmp/csg.Y2ZbTS`）sealed
-`FAIL` / RC 12：14/15 suites `PASS`，唯一 `SUITE-RUST-DESKTOP` observation 为 `INFRA_ERROR` /
-`ADAPTER_MALFORMED` / `TEST_IDENTITY_MISMATCH`；counts 为 `1480/1435/44/1/0/0`，唯一 failed ID 是
-`desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore`。
-completion seal、
-evidence manifest、run manifest、source snapshot manifest 与 input digest 分别为
-`756715cb68973d5d471a90b67fe9507db2f76e9adf4e30df299ab156c1b1a7ff`、
-`dd14c0a4fea9e6136a809781f5b11e12cf7df2afbd7f7feaf5d1690aef9e9bc2`、
-`330712c1be06b31509c64a515a8d1d77ca107f48cfab066a442b7a93fc53816d`、
-`06ff544bbdab26531aa05bc84cf3903d7443979bcf958a08a794d41b8d3401e0` 与
-`69f405934b2e819789090e0a4251254f3d24aa545472439e07a7274e310deafe`。执行方报告随后该 exact wrapper
-的单次非 canonical focused diagnosis `PASS`（1 passed、603 filtered、2.99s）；但该运行没有 canonical
-manifest 或 retained receipt，当前正文不能独立复核，只能作为单点未复现的诊断线索，不能替代 seal。
-
-`c9cf1e6a989663c8cc57ae9d837be003bed17144` 只删除失败后会受 authority rollback 影响的辅助
-`serve` call-count 断言；存活 unbound PID、精确 authority mutation、blocked restore、无 listener / receipt
-与 attributable cleanup 的强断言均保留，production source 未改变。该 clean exact SHA 的 canonical
-run `7dee16001e4d3c7d7e5b51be212aee68`（`/private/tmp/p5g.VPWbWg`）runner exit 0、15/15 suites 与
-15/15 observations 均为 `PASS`。completion seal、evidence manifest、run manifest、source snapshot
-manifest 与 input digest 分别为 `0d162b0599b57d1526ded8b49e7a15d5571e6ff0cafd59844ed14d210839a6b3`、
-`2cae27dd1d444cc1515d3deb493503dcf353ef8c33543aa91c786b5d87ca17a9`、
-`03ca831b4f5400f458501c75e28c08676268ca61bf94a75fcc3ce3d1eeeb2cb8`、
-`6daed8512c3cc417d15cc352adbe8986d7f85c7aea02bd7877abf35683a3b496` 与
-`e4e087feb61aa138b4fc573819393b4df59aa253ba9b02a964e4976ced4789d6`。
-
-因此 `f60a55e` 与 `c9cf1e6` 分别只为各自 exact SHA 建立 `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`，
-`070bd0b` 保持 sealed `FAIL`。本 evidence-only descendant 不继承任一历史 seal，其 exact 状态仍只由
-绑定该 SHA 的外部 canonical completion seal 判定。artifact、isolated-live、authorized-live、installed、
-Skill/MCP、SSH、provider、signing、notarization 与 release 均为 `NOT-RUN`，不得继承。
+本节只说明当前机制和实际 production path，不保存某次 Phase、SHA、run、hash 或临时 evidence root。
+exact source closure 与下游证据从[已验证状态](../../.agents/context/verified-state.md)和
+[日期化审计/证据](../audits/README.md)进入；任何后继 source 都不能继承旧 seal。
 
 ### 入口与五条实际路径
 
@@ -135,7 +88,7 @@ handoff、旧 facts 或旧 listener observation 都不能跨 effect 直接复用
 ### `one_click.rs` 仍承担的 owner
 
 `runtime/sandbox_session/one_click.rs` 仍是 production/test 混合的根 façade/coordinator，
-不是只做 re-export 的纯 façade。本轮 candidate 已将 durable-journal identity/transition
+不是只做 re-export 的纯 façade。当前 source 已将 durable-journal identity/transition
 物理闭合到 private `one_click/transaction.rs`；根文件保留的 owner 如下：
 
 | owner 类别 | 当前符号 / 路径 | 判定 |
@@ -537,37 +490,22 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
 - Codex auth/catalog 错误通常只阻断对应 Codex 操作；但 active profile 为 Codex，或 prior running Gateway 仍是 Codex 而下一次一键开始需要先取得其 proof 时，也会阻断该次启动；
 - provider/Gateway、authority snapshot、runtime preflight、port identity、Science launch/health 可阻断一键开始。
 
-## 当前架构缺口
+## 稳定边界与开放范围
 
-- Phase 5 的最窄物理 owner 边界由 `8687e79` 完成，production/test-bearing final candidate
-  `f60a55e` 修复 fixture 后已取得唯一 canonical run `0be6cd1e570a33cc5cfbdbad8a67a473`：runner
-  exit 0、15/15 suites 与 observations `PASS`、`1480/1436/44/0/0/0`
-  executed/passed/ignored/failed/skipped/not-run。其 completion seal
-  `24a6d68971538e3e589d89b193fbfebfec2a80f3a3a8b67dd2cd1ae7650323b8`、evidence manifest
-  `d0119908c673ec972d745612ba07dbc67d9be0014b5184608027c870464d75e2`、run manifest
-  `14479ee89886e162c33edd08d55e00dda8ccbb8a625915754198d586c63f60b5`、source snapshot manifest
-  `0cfcd8a25c99b9d1691443c6fd6c1826f3fd087627d9c9c15b0c6f03599790eb` 与 input digest
-  `6e55b508df7c5c11f9409cae6d265a80db8d6a73f29c9b565aa3757044226831` 均绑定保留的
-  `/private/tmp/csg.9RP1pi`。`8687e79` 的 `22038ed…` sealed `FAIL` 只保留为 fixture-drift 历史
-  attempt。`f60a55e` 的 `0be6cd1e…` 只为该 exact SHA 建立 source green；evidence-only `070bd0b`
-  的 `2247f8e…` sealed `FAIL` / RC 12（14/15，唯一 Desktop wrapper identity observation failed），
-  随后单次 exact focused test `PASS` 但不能替代 seal。任一 evidence-only descendant 不继承历史
-  PASS/FAIL。`c9cf1e6` 只删除不稳定的辅助 serve-count 断言，production source 未变；其 clean exact-SHA
-  canonical run `7dee1600…` 为 15/15 `PASS`，completion/evidence/run/source manifest 与 input digest
-  分别为 `0d162b05…` / `2cae27dd…` / `03ca831b…` / `6daed851…` / `e4e087fe…`，绑定保留的
-  `/private/tmp/p5g.VPWbWg`。本 evidence-only descendant 不继承该 seal，其 exact source-closure 身份
-  只由绑定该 SHA 的外部 canonical completion seal 判定。artifact、isolated-live、
-  authorized-live、installed、Skill/MCP、
-  SSH、provider、signing/notarization 与 release 仍一律 `NOT-RUN`；
 - cold one-click 已与 entry/healthy owner 分离，managed Science launch 与 aggregate compensation 也有
   各自 phase owner；coordinator 仍顺序拥有 prior stop、authority、Gateway、phase dispatch、route 与
-  finalize。O1-E3 已让五个 top-level compensation effect 在 fresh production entry 中按 exact private
-  manifest 与 registered snapshot 自动重放/收敛；V1 与 typed incomplete V2 仍明确保留为人工边界；
-- canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
-  protected snapshot、唯一跨进程 effect owner 与 durable restore outcome 收敛 credential publication 和 full-snapshot
-  restore。one-click 的 registered snapshot 已闭合其跨 config / sibling authority multi-file crash boundary；其他直接
-  full-snapshot restore 仍不因此自动获得同一 closure；
-- history restore durable commit 之后的 one-click 失败不会回滚用户已选择的历史；默认 restore-only
-  与以后单独点击的一键开始仍是两个 operation，只有显式 restore-and-resume 使用同一 backend handoff；
-- `stop_all`、`set_mode`、teardown `set_settings`、native exit 与 downgrade cleanup 已锁外等待并使用各自的 process-local owner/CAS publication；六个 transaction-scoped Science stop 边界已统一使用共享 executor，同时保留各自 durable intent/effect/outcome、lease 与 crash recovery 顺序。one-click sibling multi-file crash boundary 已由 registered snapshot、typed quiescence 与 per-target replay closure；这不放松 cooperating-writer/same-UID tamper 的 fail-closed 边界，也不能外推为 artifact、isolated/live、provider 或 release 证据；
-- MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。
+  finalize。五个 top-level compensation effect 可在 fresh production entry 中按 exact private manifest
+  与 registered snapshot 重放/收敛；V1 与 typed incomplete V2 保留为人工边界。
+- canonical config writer 有独立跨进程 advisory fence；authority filesystem 的普通 cooperating writer
+  使用共享 fence，durable replay/history restore 的 exclusive owner 只通过 scoped、不可跨线程的 bypass
+  调用同一 writer leaf。两类 fence 不能互相替代。
+- history recovery 以 complete-record CAS、protected snapshot、唯一跨进程 effect owner 与 durable
+  restore outcome 收敛 credential publication 和 full-snapshot restore；one-click 的 registered snapshot
+  不会让其他 direct restore 自动获得相同 closure。
+- history durable commit 后的 one-click 失败不会回滚用户已选择的历史；restore-only 与以后单独点击
+  的 one-click 是两个 operation，只有显式 restore-and-resume 使用 typed terminal handoff。
+- cold prior stop、managed DB restart、history prior stop、live compensation 与 fresh replay 五条
+  transaction-scoped Science stop path 共享 process-local executor，同时保留各自 durable intent、effect、
+  outcome、lease 与 crash recovery 顺序。
+- current evidence gaps、Skill/MCP/SSH 动态 gate 与下一步只在
+  [当前重构路线](../../.agents/context/known-issues.md)维护；本架构正文不保存候选运行结果。

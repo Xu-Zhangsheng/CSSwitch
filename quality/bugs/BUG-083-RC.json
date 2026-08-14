@@ -9,8 +9,8 @@
     "owner": "quality-kernel",
     "severity": "P0",
     "claim_state": "confirmed",
-    "reproduction_state": "historical-observed",
-    "resolution_state": "open-not-fixed",
+    "reproduction_state": "source-reproduced",
+    "resolution_state": "source-fixed-product-pending",
     "affected_paths": [
       "test/run_all.sh",
       "test/test_run_all_aggregator.sh"

@@ -12,7 +12,7 @@
     "reproduction_state": "historical-observed",
     "resolution_state": "open-not-fixed",
     "affected_paths": [
-      "desktop/gateway/src/anthropic.rs",
+      "desktop/gateway/src/anthropic_compat.rs",
       "desktop/gateway/src/openai_chat.rs",
       "desktop/gateway/src/openai_responses.rs",
       "desktop/gateway/src/server/inference_dispatch.rs",

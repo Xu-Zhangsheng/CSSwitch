@@ -156,6 +156,12 @@ attempt id；fresh probe 只从身份已验证的 V2 receipt 回填该 id，pref
 attempt id；private manifest 中 candidate/prior attempt 的同值有界索引随 V2 compensation journal
 发布，避免 authority restore 后只剩 private replay 引用时对应记录被压缩。
 
+managed receipt 的 write/clear 属于 authority filesystem mutation。普通 launch/stop path 在同一
+writer leaf 外取得共享 `AuthorityWriterGuard`；已经持有 exclusive replay/history effect lease 的
+owner 只能传入 scoped、不可跨线程的 `AuthorityWriterBypass`，避免嵌套 SH 自锁，同时让 EX lifetime
+继续拥有序列化责任。该 fence 与 config writer fence 是不同边界；锁序、per-target replay 和五条
+transaction stop path 见[运行时状态与事务](runtime-state-transactions.md)。
+
 ledger 位于 CSSwitch 私有 data root，不在 Science data-dir 内；目录 / 文件分别收紧为 owner-only，
 读取有硬上限并使用 no-follow，更新由跨进程 writer lock、期望 identity / bytes 复核与原子替换
 保护。最多保留 64 条；live receipt、durable prior-stop、active compensation retention id 以及未完成 selected attempt 不能被压缩；

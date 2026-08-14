@@ -4,7 +4,7 @@
 
 ## 当前权威入口
 
-- [当前已知问题与证据缺口](../.agents/context/known-issues.md)：当前决策门、仍有效的问题和证据边界；使用前先复核实时 Git / artifact / runtime。
+- [当前重构路线与证据缺口](../.agents/context/known-issues.md)：唯一当前 NEXT、阶段完成条件、仍有效的问题和证据边界；使用前先复核实时 Git / artifact / runtime。
 - [架构索引](architecture/README.md)：稳定边界、所有权、状态、数据流和失败链路。
 - [功能合同索引](features/README.md)：用户可见行为、能力边界、信任边界和非目标。
 - [运维索引](operations/README.md)：开发、测试、质量、生产链路验收、发布、升级回滚和文档治理。
@@ -19,7 +19,7 @@ Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agent
 - [Science 探针合同](operations/science-probe-spec.md)：在生产链路映射下维护 Science 的 source、exact artifact、isolated-live 与逐项 authorized-live probe card，不记录 actual result。
 - [v0.8.4 发布证据](evidence/releases/v0.8.4.md)：只记录该 release 绑定的 source、artifact、installed identity、signing 与 public 层；未列层不得补写为 PASS。
 
-旧 R3–R11、R4/R5、S7、Post-D0/Post-Q0 及其他阶段编号路线已全部退役，只能从历史审计查证当时的决定和证据；它们不再是当前 NEXT、实施授权或验收顺序。
+旧 R3–R11、R4/R5、S7 与 Post-D0/Post-Q0 路线已全部退役，只能从历史审计查证当时的决定和证据。后来 audit/evidence 中的 Phase 1/2/5、O1、F1 等编号只标识其绑定 slice，不是当前 NEXT、实施授权或验收顺序。
 
 ## 历史审计
 

@@ -4,6 +4,7 @@
 
 ## 最新基线与完成证据
 
+- [`next` 全仓文件、文档与 Science/CSSwitch 链路审计（2026-08-14）](2026-08-14-next-repository-docs-architecture-review.md)：绑定最初 clean 的 `cfc4008a`，覆盖 595 个 tracked files / 167 份 tracked Markdown 的分类、重构阶段、当前事实漂移、Science/CSSwitch production chain、文档退役与后续路线；当前 source gate 在 snapshot 阶段 `INCONCLUSIVE`，不构成 source/artifact/live PASS。
 - [`next` 全仓重构收尾审查（2026-08-10）](2026-08-10-next-comprehensive-refactor-review.md)：固定 `00a63088` 的全代码面、架构、Science/CSSwitch 链路与 source-gate 审查；4 个二审确认 HIGH、MEDIUM/LOW、测试边界和建议修复顺序，不构成当前 source/artifact/live PASS。
 - [Downgrade cleanup stop owner（2026-08-10）](2026-08-10-downgrade-stop-owner.md)：terminal downgrade 的 process-local owner、锁外 wait、replacement preservation、独立审查与 exact-SHA source gate closure。
 - [R3 Codex mutation stop owner（2026-08-06）](2026-08-06-r3-codex-mutation-stop-owner.md)：Codex 共享 mutation 的 process-local owner、双窗口 CAS、独立复审与 exact-SHA source gate closure。

@@ -12,9 +12,10 @@
     "reproduction_state": "historical-observed",
     "resolution_state": "open-not-fixed",
     "affected_paths": [
-      "desktop/src-tauri/src/runtime/gateway.rs",
+      "desktop/src-tauri/src/lib.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/",
       "desktop/src-tauri/src/runtime/sandbox_session/",
-      "desktop/src-tauri/src/runtime/state.rs",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/commands/runtime/",
       "test/test_gateway_rust.py"

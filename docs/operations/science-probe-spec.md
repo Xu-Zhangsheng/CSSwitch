@@ -4,7 +4,7 @@
 
 适用范围：当前 CSSwitch production source、由同一 exact source 生成的 artifact、manifest 中固定身份的 Claude Science executable/package，以及由本合同逐项授权的 isolated-live / authorized-live。
 
-最后复核：2026-08-07
+最后复核：2026-08-14
 
 失效条件：CSSwitch production owner / registered IPC / caller、artifact composition、Claude Science identity、能力边界、证据词表、安全隔离合同或 probe 目标发生变化时，受影响 card 立即失效并复核；actual result 继续留在 dated evidence，不用旧结果重写本合同。
 
@@ -245,6 +245,32 @@ egress。
   或无法证明进程归属。
 - **停止与清理 / 输出**：任何真实路径/8765/外连触发全局停止；输出 lifecycle
   timeline、PID/executable inventory、port ownership、status response 与 cleanup。
+
+### B-ADOPTION-01｜pending update、cold adoption 与 provenance
+
+- **目标能力**：从健康运行的 exact candidate A，经 production scheduler/status/action surface
+  发现 exact candidate B、发布 pending、接受或保留选择，并只在下一次 cold start 采用 B；同时闭合
+  adoption attempt、managed receipt v2、runtime binding、finalize、reopen 与 predecessor/diff provenance。
+- **前置与 fixture**：G2；A-IPC、A-EVIDENCE、EXACT-ARTIFACT 与 B-RUNTIME-01 PASS；固定同一
+  CSSwitch artifact、两个已校验 Science snapshot A/B 及来源 fingerprint；全新隔离 HOME/data-dir、
+  loopback provider、动态端口和可控 due-time fixture。source 层必须另行证明普通 authority/managed
+  receipt writer 在共享 fence 内执行，exclusive replay/history owner 只使用 scoped bypass；isolated-live
+  不用竞态破坏真实 runtime。
+- **允许 / 禁止访问**：允许 probe 根、loopback 和 manifest 固定的 A/B executable；禁止真实 updater、
+  `/Applications` 用户实例、真实 HOME、8765、外网和现有 daemon，不得修改或清理来源 App。
+- **所需授权**：仅 B 阶段隔离动态执行授权；不包含下载、安装、替换 App、真实账号或 provider。
+- **目标证据层**：`EXACT-ARTIFACT` identity +
+  `ISOLATED-LIVE(scope=science-pending-cold-adoption,loopback-provider-fixture)`；分别记录。
+- **PASS**：健康 A 只产生一个 B pending 和一次事件且 PID/listener 不变；keep/activate 都要求 expected
+  SHA CAS，activate 只改变下一次 cold start；下一次 cold start 执行 B，receipt v2、selected attempt、
+  binding/finalize attempt id 与 runtime identity 一致，reopen 复用 B；ledger 记录 exact predecessor、
+  candidate、normalized diff 和 milestone，cleanup 后无归属进程/端口。
+- **FAIL**：有效 fixture 下后台检查重启 A、重复提醒、绕过 expected SHA、同一运行热切 B、采用未固定
+  bytes、receipt/binding/attempt/runtime 不一致、错误 predecessor/diff，或清理遗留归属对象。
+- **INCONCLUSIVE**：A/B identity、due-time、事件、receipt、ledger 或 cold-start observation 任一无法
+  绑定到 exact artifact/runtime；当前官方版本变化但未提供固定 package 也属于不充分前置。
+- **停止与清理 / 输出**：任何真实路径、外连或 source drift 立即停止；输出 pending/action timeline、
+  A/B PID/executable inventory、selection/ledger/receipt/binding 的脱敏 identity、事件计数和 cleanup。
 
 ### B-CORE-01｜project、文件、artifact、annotation 与 permission
 

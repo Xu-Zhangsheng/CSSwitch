@@ -3,8 +3,8 @@
   "change": {
     "id": "CHG-RUNTIME-MUTATION-R0-H",
     "version": "v0.8.4-dev",
-    "title": "Close the R0 runtime mutation inventory",
-    "summary": "Completes command-level lifecycle characterization across the registered runtime surface, binds every required executable identity into the trusted source catalog, and closes the R0 inventory only after the exact source gate and independent completion review. Product runtime behavior is unchanged.",
+    "title": "Prepare final closure of the R0 runtime mutation inventory",
+    "summary": "Completes command-level lifecycle characterization across the registered runtime surface and binds every required executable identity into the trusted source catalog. The R0 inventory remains requirements-open until the exact source gate and independent completion review pass on a frozen candidate. Product runtime behavior is unchanged.",
     "status": "active",
     "owner": "quality-kernel",
     "changed_paths": [
@@ -15,7 +15,7 @@
       "desktop/src-tauri/src/lib.rs",
       "desktop/src-tauri/src/runtime/legacy_proxy.rs",
       "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs",
-      "quality/changes/v0.8.3/CHG-RUNTIME-MUTATION-R0-H.json",
+      "quality/changes/next/CHG-RUNTIME-MUTATION-R0-H.json",
       "quality/runtime-mutation-inventory.v1.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
@@ -56,7 +56,7 @@
         "metadata"
       ]
     },
-    "claim_state": "confirmed",
+    "claim_state": "NOT-RUN",
     "evidence_boundary": {
       "allowed_layers": [
         "source-test"
@@ -70,9 +70,10 @@
         "public"
       ],
       "basis": [
-        "exact-SHA 15-suite GATE-SOURCE completion seal and trusted source identity reconciliation",
+        "machine reconciliation finds all 96 required characterization identities executable with no required identity ignored or skipped",
         "temporary HOME, fake processes and Science identities, private state, and dynamic loopback ports",
-        "clean-context independent completion review with zero BLOCK, HIGH, or MEDIUM findings"
+        "exact-SHA 15-suite GATE-SOURCE completion seal is NOT-RUN on the frozen reconciliation candidate",
+        "clean-context independent completion review is NOT-RUN on the frozen reconciliation candidate"
       ]
     },
     "does_not_claim_fix": true,

@@ -152,9 +152,10 @@ egress 先按语义责任分为四类：
 因此非 loopback HTTPS 即使属于 `SCIENCE-EXTERNAL`，当前也可能先以 raw
 `CONNECT` 穿过 Gateway：
 
-- Gateway 只拥有 CONNECT target parsing、Anthropic/Claude hostname denylist、
-  当前无独立 deadline 的 DNS resolution、解析返回后共享剩余十秒预算的 dial、
-  tunnel lifecycle 与 transport status；
+- Gateway 只拥有 CONNECT target parsing、Anthropic/Claude hostname denylist、DNS resolution、
+  dial、tunnel lifecycle 与 transport status。DNS 与所有地址的 dial 共享同一个十秒 absolute
+  deadline；标准 resolver 无取消 API，超时后仍停留在 libc 的 resolver thread 由全局最多 8 个
+  permit 限制，预算耗尽即 fail closed，解析完成后的每次 dial 只消费剩余时间；
 - path secret、provider model routing、HTTP MCP/OAuth/tool discovery/tool call
   不属于这条 raw CONNECT 合同；
 - 非 HTTPS、显式 bypass 或不遵循进程 proxy environment 的 client 可能使用不同

@@ -40,7 +40,7 @@ You need an Apple Silicon Mac, [Claude Science](https://claude.com/download), an
 
 ## Providers and models
 
-- **Built-in providers:** DeepSeek, Qwen, GLM, Xiaomi MiMo, SiliconFlow, Kimi, MiniMax, and OpenRouter.
+- **Built-in providers:** DeepSeek, Qwen, GLM, Xiaomi MiMo, SiliconFlow, Kimi, MiniMax, OpenRouter, OpenCode Go (OpenAI Chat / Anthropic Messages), Grok (xAI), and Gemini (OpenAI compatible).
 - **Custom endpoints:** Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses-compatible APIs. Exact model names can be entered without discovery.
 - **Model selection:** A regular profile can use one model for every role, or separate Quality, Balanced, Fast, and Fable models. Science shows the real model name instead of a `default` placeholder.
 - **Codex:** Uses a separate CSSwitch browser login and dynamic account catalog. Native `~/.codex` login is never read or modified.

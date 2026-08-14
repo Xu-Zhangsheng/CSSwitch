@@ -1,5 +1,12 @@
 # 系统 SSH 配置复用
 
+状态：当前 Feature Contract
+
+最后复核：2026-08-14（Asia/Taipei）
+
+失效条件：Science SSH/parser surface、CSSwitch SSH production owner、packaged wrapper、授权边界或
+任一 source/artifact/runtime 证据改变时，受影响段立即复核。
+
 该功能自 v0.5.0 起提供，v0.8.1 补充了隔离 Science 的 SSH 前置校验桥接。它让隔离 Science 在用户明确授权后，按系统 OpenSSH 语义复用真实 `~/.ssh/config`；它不是 SSH server、端口转发 UI 或公网暴露功能。
 
 ## 默认与 opt-in
@@ -60,7 +67,7 @@ Include "<真实 ~/.ssh/config 的绝对路径>"
 
 | Gate | 要证明什么 | 当前边界 |
 |---|---|---|
-| 1. Science parser acceptance | 当前 Science 接受 alias inventory、`ssh_hosts` 与 V2 stub | source 建立生成/事务链；当前 0.1.25 动态结果未运行 |
+| 1. Science parser acceptance | 当前 Science 接受 alias inventory、`ssh_hosts` 与 V2 stub | source 已建立生成/事务链；动态 acceptance 必须绑定 exact package/runtime，当前判定从[已验证状态](../../.agents/context/verified-state.md)读取，不得从历史 Science 版本继承 |
 | 2. OpenSSH invocation | Science 实际选择 wrapper；wrapper 调用 `/usr/bin/ssh -F <real config>` 并保留参数/env | wrapper source 已建立；需隔离 recorder，不连真实 server |
 | 3. real server connectivity | key/agent/known_hosts、DNS/network、server 与远端命令成功 | 只在另行授权后验证；不能由 Gate 1/2 推出 |
 

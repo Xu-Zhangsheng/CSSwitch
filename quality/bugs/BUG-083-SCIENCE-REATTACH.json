@@ -17,7 +17,8 @@
       "desktop/src-tauri/src/runtime/science/",
       "desktop/src-tauri/src/commands/runtime.rs",
       "desktop/src-tauri/src/commands/runtime/",
-      "desktop/src-tauri/src/runtime/process_ownership.rs",
+      "desktop/src-tauri/src/runtime/science/host_adapter.rs",
+      "desktop/src-tauri/src/runtime/science/managed_launch.rs",
       "test/test_process_ownership_policy.py",
       "test/test_scripts.sh"
     ],
