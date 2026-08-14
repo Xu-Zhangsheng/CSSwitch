@@ -1708,11 +1708,11 @@ fn durable_authority_v2_preflight_preserves_pending_and_in_progress_journal() {
 }
 
 #[test]
-fn durable_authority_replay_crash_matrix_reloads_every_manifest_target() {
+fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
     const CHILD_MODE: &str = "CSSWITCH_PHASE6C_AUTHORITY_REPLAY_MODE";
     const CHILD_TARGET: &str = "CSSWITCH_PHASE6C_AUTHORITY_REPLAY_TARGET";
     const CHILD_BOUNDARY: &str = "CSSWITCH_PHASE6C_AUTHORITY_REPLAY_BOUNDARY";
-    const TEST_NAME: &str = "runtime::sandbox_session::transaction_tests::runtime_journal::durable_authority_replay_crash_matrix_reloads_every_manifest_target";
+    const TEST_NAME: &str = "runtime::sandbox_session::transaction_tests::runtime_journal::o1_e3_fresh_process_replays_durable_compensation_to_convergence";
 
     if let Some(mode) = std::env::var_os(CHILD_MODE) {
         let target = std::env::var(CHILD_TARGET)
@@ -1858,6 +1858,25 @@ fn durable_authority_replay_crash_matrix_reloads_every_manifest_target() {
                 let completed = config::load_from(&config::default_dir()).unwrap();
                 assert!(completed.runtime_compensation.is_none());
                 assert!(completed.runtime_transaction.is_none());
+            }
+            Some("converged-no-op") => {
+                let before = std::fs::read(config::default_dir().join("config.json")).unwrap();
+                assert!(
+                    !replay_interrupted_one_click_compensation(
+                        app.handle(),
+                        &state,
+                        &lifecycle,
+                        None,
+                        &config::load_from(&config::default_dir()).unwrap(),
+                    )
+                    .unwrap(),
+                    "fresh replay after convergence must be an idempotent no-op"
+                );
+                assert_eq!(
+                    std::fs::read(config::default_dir().join("config.json")).unwrap(),
+                    before,
+                    "a converged production replay must not republish the durable config"
+                );
             }
             _ => panic!("unknown child crash matrix mode"),
         }
@@ -2011,6 +2030,22 @@ fn durable_authority_replay_crash_matrix_reloads_every_manifest_target() {
             drop(authority);
 
             run_child(&home, "crash", target, boundary);
+            if boundary == "promotion" {
+                assert!(
+                    matches!(
+                        config::load_from(&dir)
+                            .unwrap()
+                            .runtime_compensation
+                            .as_ref()
+                            .and_then(|journal| journal.steps.iter().find(|step| {
+                                step.step == config::RuntimeCompensationStep::AuthorityRestore
+                            }))
+                            .map(|step| step.outcome),
+                        Some(config::RuntimeCompensationStepState::InProgress)
+                    ),
+                    "fixture must crash after authority effect but before durable outcome"
+                );
+            }
             if target == 0 && boundary == "stage-intent" {
                 let content_drift_target = auth_dir.join(SCIENCE_PROTECTED_AUTHORITY_ENTRIES[0]);
                 let before = std::fs::metadata(&content_drift_target).unwrap().ino();
@@ -2096,6 +2131,7 @@ fn durable_authority_replay_crash_matrix_reloads_every_manifest_target() {
                 );
             }
             run_child(&home, "complete", target, boundary);
+            run_child(&home, "converged-no-op", target, boundary);
             assert!(
                 !recovery_root.exists(),
                 "target={target} boundary={boundary} must remove the private recovery root after SnapshotCleanup"

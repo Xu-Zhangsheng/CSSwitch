@@ -270,7 +270,11 @@ child ownership 当作可恢复事实；完整 restored config 是“effect 已�
 B1a1 将 authority replay 初始私有清单升级为 immutable v2 tree plan。production AuthorityRestore 在读取
 validated compensation manifest、v2 snapshot、exact journal/ticket/managed-id/port binding 后，仍在任何
 step begin 或 filesystem/config effect 前 fail closed；因此 pending 与 in-progress journal 都不推进并保留
-`ActiveRecovery`。Science quiescence、progress 和 per-target effect state machine 留给 B1a2/B1b。
+`ActiveRecovery`。Science typed quiescence、durable progress 与 per-target effect state machine 已落地：fresh
+owner 逐项复核 port、managed receipt 与 manifest identity，并将每个 tree target 的 stage、tombstone、promotion、outcome
+与 cleanup 边界持久化；effect 后、outcome 前的 crash 由下一 fresh production replay 从同一 target 收敛，已终结 target
+重放为 no-op。这个 registered snapshot 同时覆盖 protected Science tree、sandbox state、CSSwitch runtime 和必须 absent
+的 managed receipt，所以 one-click 的 sibling multi-file crash closure 已完成。
 SSH cleanup 重放原 transaction 而不是按 marker 广泛删除；prior Science 使用 durable stop recipe、精确 absent
 的旧 receipt 路径、
 预分配 launch id 与 fresh runtime identity 重新建立，只有 receipt 的 launch id 精确相等才允许 fresh owner 认领。
@@ -561,8 +565,9 @@ Science stop 不能只信 CLI 退出码。必须结合 pre/post 唯一 listener 
   manifest 与 registered snapshot 自动重放/收敛；V1 与 typed incomplete V2 仍明确保留为人工边界；
 - canonical config writer 已有跨进程 advisory fence；history recovery 已用 typed complete-record CAS、
   protected snapshot、唯一跨进程 effect owner 与 durable restore outcome 收敛 credential publication 和 full-snapshot
-  restore。其他直接 full-snapshot restore 与跨 config / sibling authority 的 multi-file crash boundary 仍未统一；
+  restore。one-click 的 registered snapshot 已闭合其跨 config / sibling authority multi-file crash boundary；其他直接
+  full-snapshot restore 仍不因此自动获得同一 closure；
 - history restore durable commit 之后的 one-click 失败不会回滚用户已选择的历史；默认 restore-only
   与以后单独点击的一键开始仍是两个 operation，只有显式 restore-and-resume 使用同一 backend handoff；
-- `stop_all`、`set_mode`、teardown `set_settings`、native exit 与 downgrade cleanup 已锁外等待并使用各自的 process-local owner/CAS publication；六个 transaction-scoped Science stop 边界已统一使用共享 executor，同时保留各自 durable intent/effect/outcome、lease 与 crash recovery 顺序。该源码问题已关闭；sibling multi-file crash boundary 仍是独立缺口，不能由本项外推；
+- `stop_all`、`set_mode`、teardown `set_settings`、native exit 与 downgrade cleanup 已锁外等待并使用各自的 process-local owner/CAS publication；六个 transaction-scoped Science stop 边界已统一使用共享 executor，同时保留各自 durable intent/effect/outcome、lease 与 crash recovery 顺序。one-click sibling multi-file crash boundary 已由 registered snapshot、typed quiescence 与 per-target replay closure；这不放松 cooperating-writer/same-UID tamper 的 fail-closed 边界，也不能外推为 artifact、isolated/live、provider 或 release 证据；
 - MCP 与 SSH 的产品动态 gate 仍开放；具体当前证据缺口见 [known issues](../../.agents/context/known-issues.md)。

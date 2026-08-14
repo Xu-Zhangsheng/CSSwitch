@@ -456,7 +456,7 @@
       "format": "CSSwitch-managed isolated ~/.ssh/config v2 stub",
       "authority_owner": "authority.private",
       "fields": ["device", "expected_hosts", "expected_system_config", "inode", "marker", "stub_bytes"],
-      "writers": [{"path": "scripts/launch-virtual-sandbox.sh", "symbol": "prepare_sandbox_ssh_config()"}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn compensate(&self"}],
+      "writers": [{"path": "scripts/launch-virtual-sandbox.sh", "symbol": "prepare_sandbox_ssh_config()"}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn compensate_with_authority_bypass("}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn compensate_durable_with_authority_bypass("}],
       "readers": [{"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn capture("}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "validate_managed_sandbox_ssh_stub"}],
       "source_anchor": {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) struct ManagedSshStubTransaction"},
       "known_gap": "Science creates the candidate stub out of process; compensation deletes or restores only when exact captured identity/content still matches."
