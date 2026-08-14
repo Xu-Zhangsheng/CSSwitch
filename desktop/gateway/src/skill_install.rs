@@ -1784,6 +1784,7 @@ fn rename_no_replace(source: &Path, target: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::os::unix::fs::OpenOptionsExt;
+    use std::process::Stdio;
 
     const TEST_BRIDGE_TOKEN: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2005,6 +2006,8 @@ mod tests {
                 "CSSWITCH_AUTHORITY_FENCE_NONCE",
                 authority_fence_test_binding(),
             )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         wait_for_authority_fence_test_path(&about).unwrap();
@@ -2078,6 +2081,8 @@ mod tests {
                 "CSSWITCH_AUTHORITY_FENCE_NONCE",
                 authority_fence_test_binding(),
             )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         wait_for_authority_fence_test_path(&about).unwrap();
@@ -2132,6 +2137,8 @@ mod tests {
                 "CSSWITCH_AUTHORITY_FENCE_NONCE",
                 authority_fence_test_binding(),
             )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .output()
             .unwrap();
         assert!(output.status.success());

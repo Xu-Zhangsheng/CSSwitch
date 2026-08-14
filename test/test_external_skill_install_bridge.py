@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import pathlib
@@ -32,6 +33,29 @@ def gateway_bin():
 
 class ExternalSkillInstallBridge(unittest.TestCase):
     BRIDGE_TOKEN = "0123456789abcdef" * 4
+
+    def authority_fence_env(self, root):
+        authority_dir = root / "authority"
+        authority_dir.mkdir(mode=0o700)
+        authority_dir.chmod(0o700)
+        lock = authority_dir / ".runtime-compensation.auth.lock"
+        lock.write_text("", encoding="utf-8")
+        lock.chmod(0o600)
+        directory_stat = authority_dir.stat()
+        lock_stat = lock.stat()
+        fd = os.open(authority_dir, os.O_RDONLY)
+        binding = hashlib.sha256(
+            b"csswitch-skill-authority-fence-v1\0"
+            + self.BRIDGE_TOKEN.encode("ascii")
+        ).hexdigest()
+        return fd, {
+            "CSSWITCH_AUTHORITY_FENCE_FD": str(fd),
+            "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE": str(directory_stat.st_dev),
+            "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE": str(directory_stat.st_ino),
+            "CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE": str(lock_stat.st_dev),
+            "CSSWITCH_AUTHORITY_FENCE_LOCK_INODE": str(lock_stat.st_ino),
+            "CSSWITCH_AUTHORITY_FENCE_NONCE": binding,
+        }
 
     def mcp_env(self):
         handle = tempfile.NamedTemporaryFile(
@@ -89,6 +113,7 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             bridge_dir.mkdir(mode=0o700)
             skills_dir.mkdir(parents=True)
             (data_dir / "active-org.json").write_text('{"org_uuid":"org-test"}\n')
+            authority_fd, authority_env = self.authority_fence_env(root)
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
                 port = probe.getsockname()[1]
@@ -102,9 +127,11 @@ class ExternalSkillInstallBridge(unittest.TestCase):
                     "CSSWITCH_SKILL_BRIDGE_TOKEN": self.BRIDGE_TOKEN,
                 }
             )
+            env.update(authority_env)
             process = subprocess.Popen(
                 [str(binary), "--provider", "deepseek", "--port", str(port)],
                 env=env,
+                pass_fds=(authority_fd,),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -168,6 +195,7 @@ class ExternalSkillInstallBridge(unittest.TestCase):
                     process.wait(timeout=3)
                 if process.stderr is not None:
                     process.stderr.close()
+                os.close(authority_fd)
 
     def test_stdio_mcp_all_mode_keeps_compatibility_and_name_only_needs_url(self):
         binary = gateway_bin()
