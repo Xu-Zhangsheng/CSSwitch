@@ -6913,7 +6913,7 @@ exec '{}' "$@""#,
     }
 
     #[test]
-    #[ignore = "source-gate parent executes exact isolated P2-A cases with temp HOME, managed local Gateway/fake auth sidecar, and dynamic loopback ports"]
+    #[ignore = "source-gate parent executes exact isolated P2-A Codex disable receipt cases with temp HOME, managed local Gateway, fake auth sidecar, and dynamic loopback ports"]
     fn isolated_p2a_codex_disable_durable_mutation_receipt() {
         let requested = env::var("CSSWITCH_TEST_P2A_CASE").unwrap_or_default();
         assert!(matches!(
