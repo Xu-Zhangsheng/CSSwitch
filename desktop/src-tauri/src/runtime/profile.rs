@@ -1526,11 +1526,7 @@ mod tests {
             "openai_models_or_manual"
         );
         assert_eq!(custom["capabilities"]["base_url_required"], true);
-        for id in [
-            "opencode-go-openai",
-            "opencode-go-anthropic",
-            "grok",
-        ] {
+        for id in ["opencode-go-openai", "opencode-go-anthropic", "grok"] {
             let template = v.iter().find(|template| template["id"] == id).unwrap();
             assert_eq!(template["capabilities"]["model_required"], true);
             assert_eq!(
@@ -1538,7 +1534,10 @@ mod tests {
                 "兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"
             );
         }
-        let gemini = v.iter().find(|template| template["id"] == "gemini").unwrap();
+        let gemini = v
+            .iter()
+            .find(|template| template["id"] == "gemini")
+            .unwrap();
         assert_eq!(gemini["capabilities"]["model_required"], true);
         assert_eq!(
             gemini["compatibility_notice"],

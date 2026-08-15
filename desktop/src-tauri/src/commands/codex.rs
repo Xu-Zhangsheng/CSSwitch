@@ -1240,6 +1240,20 @@ fn resolve_science_runtime_action(
     }
 }
 
+fn codex_disable_requires_gateway_claim(
+    action: AuthRuntimeAction,
+    tracked: TrackedProxyState,
+) -> Result<bool, String> {
+    match (action, tracked) {
+        (AuthRuntimeAction::StopManagedCodex, TrackedProxyState::Running) => Ok(true),
+        (AuthRuntimeAction::StopManagedCodex, TrackedProxyState::Unknown) => Err(
+            "受管 Codex Gateway 状态不确定，无法建立可持久化的精确停止计划；实验开关未变更。"
+                .into(),
+        ),
+        _ => Ok(false),
+    }
+}
+
 fn tracked_proxy_state(st: &mut AppState) -> TrackedProxyState {
     let Some(child) = st.proxy.as_mut() else {
         return TrackedProxyState::Absent;
@@ -1358,9 +1372,9 @@ fn plan_experimental_codex_disable(
         }
         None => None,
     };
-    let gateway = if proxy_action == AuthRuntimeAction::StopManagedCodex
-        && tracked == TrackedProxyState::Running
-    {
+    let requires_gateway_claim = codex_disable_requires_gateway_claim(proxy_action, tracked)
+        .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?;
+    let gateway = if requires_gateway_claim {
         GatewayController::claim_stop(state, lifecycle)
             .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?
             .ok_or_else(|| CodexDisableCommandError::failed("identity_unproven", "intent"))?
@@ -5079,6 +5093,32 @@ mod tests {
         );
         assert!(decide_auth_runtime_action("", TrackedProxyState::Absent, true).is_err());
         assert!(decide_auth_runtime_action("codex", TrackedProxyState::Exited, true).is_err());
+
+        assert!(codex_disable_requires_gateway_claim(
+            AuthRuntimeAction::StopManagedCodex,
+            TrackedProxyState::Unknown,
+        )
+        .is_err());
+        assert!(codex_disable_requires_gateway_claim(
+            resolve_science_runtime_action(
+                AuthRuntimeAction::StopManagedCodex,
+                false,
+                SandboxScienceState::Stopped,
+            )
+            .unwrap(),
+            TrackedProxyState::Running,
+        )
+        .unwrap());
+        assert!(codex_disable_requires_gateway_claim(
+            resolve_science_runtime_action(
+                AuthRuntimeAction::StopManagedCodex,
+                false,
+                SandboxScienceState::RunningHealthy,
+            )
+            .unwrap(),
+            TrackedProxyState::Unknown,
+        )
+        .is_err());
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
