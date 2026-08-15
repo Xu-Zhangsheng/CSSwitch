@@ -13,6 +13,8 @@
       "quality/changes/next/CHG-P1-SCIENCE-CONTROL.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py",
       "test/test_external_skill_install_bridge.py"
     ],
     "requirement_ids": [
@@ -29,7 +31,9 @@
         "SUITE-QUALITY-FOCUSED",
         "SUITE-QUALITY-INVENTORY",
         "SUITE-ORPHAN-SKILL-BRIDGE",
-        "SUITE-RUST-DESKTOP"
+        "SUITE-RUN-EVIDENCE-CONTRACT",
+        "SUITE-RUST-DESKTOP",
+        "SUITE-SOURCE-GATE-CONTRACT"
       ],
       "required_gate_ids": [
         "GATE-SOURCE",
@@ -60,6 +64,7 @@
         "focused Desktop tests for success, spawn failure, nonzero exit, absolute timeout, stdout and stderr limits, descendant cleanup, cleanup-failure reaper ownership, invalid JSON, and incomplete response",
         "existing Science control runner timeout, environment, and descendant-cleanup regression tests",
         "Python source-contract coverage for fixed Gateway argv and environment-only control URL",
+        "source-gate and run-evidence contract coverage with the updated Rust Desktop test inventory count",
         "pre-commit and exact-commit clean-context independent source reviews plus the exact-commit recursive GATE-SOURCE completion seal"
       ]
     },
