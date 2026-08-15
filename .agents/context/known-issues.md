@@ -4,7 +4,7 @@
 
 最后复核：2026-08-15（Asia/Taipei）
 
-当前 accepted source candidate：`5f9f0e2ab23b871e23d030c05f7941eabcd154b3`
+当前 accepted source candidate：`d077a1c18892c8ccbfc0b70d049445a799d83fb7`
 
 失效条件：production owner / caller、candidate source、artifact identity、Science / Gateway runtime、Provider capability、质量元数据、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
@@ -14,7 +14,7 @@ NEXT、实施授权或验收结论。
 
 ## 一句话判断
 
-P0 source-candidate closure 已持久化闭合：`5f9f0e2ab23b871e23d030c05f7941eabcd154b3`
+P1 Science control bounded primitive 已持久化闭合：`d077a1c18892c8ccbfc0b70d049445a799d83fb7`
 的 metadata ChangeRecord coverage 与 impact-release 均为 `PASS`，其 exact canonical source gate、
 fresh completion review 和 immutable source-candidate record 均已验收。此结论只覆盖 source；
 不能升级为 artifact、runtime、Provider、Science、SSH、账号、签名或公开 Release 完成。
@@ -32,6 +32,8 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
   compensation 已覆盖 per-target replay、authority restore、Gateway cleanup、prior Science restart
   和 snapshot cleanup。
 - `ScienceHostAdapter` 已类型化 launch encoding、health/listener proof、managed receipt 与 stop surface。
+- Desktop post-start `configure-third-party` caller 已改用 same-crate bounded primitive，具备 caller 起算的
+  absolute deadline、双流 output cap、private process group、异常 cleanup/reap 与 typed outcomes。
 - Skill 扩展面已完成 Phase 2 inspect-only、in-memory package adapter；它不等于 plan、apply、安装或
   runtime 可达。
 
@@ -42,8 +44,8 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 - one-click façade仍协调 prior stop、authority、Gateway、Science phase、route 与 finalize；
   `AuthorityTransaction` 并未拥有全部 ordering / journal / compensation policy。
 - Desktop bounded Science control runner、Skill package 的 `claude-science url` runner、Gateway
-  Science HTTP control 是三套职责不同但 primitive 重复的控制面；Desktop route reconcile 仍有
-  裸 `.output()`，缺统一 absolute deadline、process-group 与 bounded output 合同。
+  Science HTTP control 仍是三套职责不同的控制面；本 P1 只闭合 Desktop post-start caller，没有为
+  “统一”跨 crate 重构，也没有改变 Gateway HTTP policy 或 skill-package 合同。
 - Desktop 与 Gateway 共同读取同一 provider contract JSON，但仍各自定义类型和验证逻辑；共享
   digest 能防字节漂移，不能防解释逻辑漂移。
 - 大文件不是单独 blocker。只有能形成新的类型 owner、visibility boundary 或 failure contract 时才拆；
@@ -53,8 +55,8 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 
 | 层 | 当前状态 | 解释 |
 |---|---|---|
-| Accepted exact source candidate | `SOURCE-GREEN` | `5f9f0e2ab23b871e23d030c05f7941eabcd154b3`；metadata ChangeRecord coverage 与 impact-release 均为 `PASS`；immutable record 为 `quality/source-candidates/5f9f0e2ab23b871e23d030c05f7941eabcd154b3.json`，SHA-256 `4b306aeb779f62f7f8befd4f51a879a878a7aa41c34cb8ddb73d0bc72d8c1aa3` |
-| Canonical source gate | `PASS` | retained 0700 root `/private/tmp/g7.zZxLau`；run `bb3c7bcdadbe314f29f2fdee32068061`；seal `evidence/runs/bb3c7bcdadbe314f29f2fdee32068061/completion-seal.json` 的 SHA-256 为 `69d92a63b562bd5e888ec3b81ac9461a3ca3540fe234474fea99c67dff23f7bf`；runner exit `0`、15/15 suites、34 artifacts、15 results + 15 observations、missing `0`、residual `0` |
+| Accepted exact source candidate | `SOURCE-GREEN` | `d077a1c18892c8ccbfc0b70d049445a799d83fb7`；metadata ChangeRecord coverage 与 impact-release 均为 `PASS`；immutable record 为 `quality/source-candidates/d077a1c18892c8ccbfc0b70d049445a799d83fb7.json`，SHA-256 `fda8192674363dedafbc302e0ced85c66315f9cd113b99657a27dcf797cd867b` |
+| Canonical source gate | `PASS` | retained 0700 root `/private/tmp/csg.d5IAF2`；run `508066b928442d0f95af34cecaf68c85`；seal `evidence/runs/508066b928442d0f95af34cecaf68c85/completion-seal.json` 的 SHA-256 为 `453b15ef5c3349d377e3da1d6af5795c23661481485ae371630b65d08d539eda`；runner exit `0`、15/15 suites、15 results + 15 observations |
 | Fresh clean-context completion review | `PASS` | 独立 review 只接受上述 exact candidate；没有把旧 SHA 的 review 继承为当前结论 |
 | Exact artifact | `NOT-RUN` | 本轮未构建 artifact |
 | Temporary / installed runtime | `NOT-RUN` | 本轮未启动临时或已安装 runtime，也未读取、替换或启动已安装 App |
@@ -62,9 +64,9 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 | Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
 | Public release | `NOT-RUN` | 未创建 tag、DMG 或 Release；不得虚构 release readiness |
 
-证据时间线：较早的 g6 canonical 尝试因外层 sandbox 权限条件保留为 `FAIL` 诊断，
-不是 accepted evidence，未被 g7 的 `PASS` 覆盖或删除。已验收 root 是上表明确的 retained g7；
-任何新 SHA、source 修改或运行环境变化都不能继承它的 seal。
+证据时间线：旧 accepted candidate `5f9f0e2ab23b871e23d030c05f7941eabcd154b3` 的 seal 与 review
+没有继承给 P1。已验收 root 是上表明确的 `/private/tmp/csg.d5IAF2`；任何新 SHA、source 修改或
+运行环境变化都不能继承它的 seal。
 
 ## P0 source closure 已闭合
 
@@ -76,17 +78,18 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 - 旧 source-candidate 的 `PENDING` / `NOT-RUN`、旧唯一 P0 `NEXT` 和旧 SHA/root/seal 都已退役，
   不再构成当前 closure 的依据。
 
+## P1 source slice 已闭合
+
+- Desktop/Tauri、Gateway 与 `desktop/skill-package` 的 Science control 职责已先行冻结；production
+  改动只落在 Desktop same-crate runner 与 `skill_install_bridge.rs` caller，没有跨 crate 统一。
+- absolute deadline、bounded stdout/stderr、private process group、timeout/异常 descendant cleanup、
+  direct-child reap/reaper ownership 与 typed failure/timeout/output-limit outcomes 均已闭合。
+- success、spawn failure、nonzero、timeout、双流 oversized output、descendant/no residue、cleanup
+  handoff、invalid JSON 与 incomplete contract 均有 replacement-preserving tests；固定 Gateway argv、
+  environment-only control URL、loopback/JSON/connector/用户错误合同保持不变。
+- 本 slice 没有开始 Skill inspect → plan → confirm → apply，也没有进入 artifact/live/release。
+
 ## 仍开放的工程缺口
-
-### P1｜Science control bounded primitive
-
-- 先冻结 Desktop、Gateway、skill-package 三者职责，再抽取或统一 absolute deadline、bounded
-  stdout/stderr、process-group cleanup 与 typed timeout。
-- 最窄首刀是替换 `runtime/skill_install_bridge.rs` 中 route reconcile 的裸 `.output()`；不在同一
-  slice 开始 Skill plan/apply。
-
-完成条件：production caller 使用同一可审计 primitive 或明确不同 contract；timeout、output cap、
-child cleanup 与 replacement fixture 闭合。
 
 ### P2｜非 one-click mutation receipt
 
@@ -118,10 +121,10 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 唯一立即 NEXT
 
-下一阶段只建议、尚未授权实施 P1：为 Desktop、Gateway 与 skill-package 的 Science control
-调用者定义 bounded primitive 的职责边界与最小变更候选。它不得自动启动 artifact、temporary/installed
-runtime、live Provider、Science、SSH、账号、signing、notarization、Gatekeeper 或 public release 工作；
-这些层当前全部仍是 `NOT-RUN`。
+本轮停在已闭合的 P1 source slice；P2/P3 均未开始。若后续另获授权，唯一下一工程 slice 才是
+P2 非 one-click mutation receipt 的只读 scope freeze 与最小候选，不得由本轮自动进入实现，也不得
+自动启动 artifact、temporary/installed runtime、live Provider、Science、SSH、账号、signing、
+notarization、Gatekeeper 或 public release；这些层当前全部仍为 `NOT-RUN`。
 
 ## 文档退役状态
 
