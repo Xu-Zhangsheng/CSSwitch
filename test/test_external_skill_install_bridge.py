@@ -421,6 +421,9 @@ class ExternalSkillInstallBridge(unittest.TestCase):
         self.assertIn('x-operon-csrf', gateway)
         self.assertIn('CSSWITCH_SCIENCE_CONTROL_URL', bridge)
         self.assertNotIn('.arg(control_url)', bridge)
+        self.assertIn('run_bounded_control_command(', bridge)
+        self.assertNotIn('.output()', bridge)
+        self.assertIn('.stdin(Stdio::null())', bridge)
         self.assertIn(
             "let control_url = ScienceHostAdapter::url(port, runtime);", session
         )

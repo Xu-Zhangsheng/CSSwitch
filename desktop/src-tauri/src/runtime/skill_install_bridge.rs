@@ -3,14 +3,17 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tauri::Runtime;
 
 use crate::runtime::external_skill_route::{ensure_route_skill, inspect_route_skill, SKILL_NAME};
 use crate::runtime::proxy_lifecycle::gateway_bin_path;
+use crate::runtime::science::{
+    run_bounded_control_command, BoundedControlCommandError, BoundedControlCommandFailure,
+};
 
 const INSTALL_SERVER_NAME: &str = "csswitch-skill-installer";
 const UNINSTALL_SERVER_NAME: &str = "csswitch-skill-uninstaller";
@@ -18,6 +21,8 @@ const MANAGED_MARKER: &str = "[managed-by:csswitch]";
 const ROUTE_STATE_FILE: &str = ".csswitch-route-state.json";
 const ROUTE_STATE_SCHEMA: u64 = 1;
 const ROUTE_POLICY_REVISION: u64 = 3;
+const THIRD_PARTY_CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+const THIRD_PARTY_CONTROL_OUTPUT_LIMIT: u64 = 64 * 1024;
 #[cfg(any(test, feature = "acceptance-build"))]
 const ACCEPTANCE_GITHUB_BASE_URL_ENV: &str = "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL";
 #[cfg(any(test, feature = "acceptance-build"))]
@@ -101,6 +106,9 @@ pub(crate) fn configure_third_party_after_science_start<R: Runtime>(
     app: &tauri::AppHandle<R>,
     control_url: &str,
 ) -> Result<(), String> {
+    let deadline = Instant::now()
+        .checked_add(THIRD_PARTY_CONTROL_TIMEOUT)
+        .ok_or("Science 未接受 CSSwitch 第三方能力配置")?;
     #[cfg(test)]
     if let Some(log) = TEST_THIRD_PARTY_PARTIAL_FAILURE.with(|slot| slot.borrow().clone()) {
         let mut options = OpenOptions::new();
@@ -124,17 +132,54 @@ pub(crate) fn configure_third_party_after_science_start<R: Runtime>(
         return Ok(());
     }
     let gateway = gateway_bin_path(app).ok_or("找不到 csswitch-gateway sidecar")?;
-    let output = Command::new(gateway)
+    configure_third_party_with_gateway_before(&gateway, control_url, deadline)
+        .map_err(|error| error.user_message().to_string())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThirdPartyConfigureError {
+    Command(BoundedControlCommandError),
+    NonzeroExit,
+    InvalidJson,
+    IncompleteContract,
+}
+
+impl ThirdPartyConfigureError {
+    fn user_message(self) -> &'static str {
+        match self {
+            Self::Command(BoundedControlCommandError::Failed(
+                BoundedControlCommandFailure::OutputSetup | BoundedControlCommandFailure::Spawn,
+            )) => "启动本地 Science 第三方能力配置命令失败",
+            Self::Command(_) | Self::NonzeroExit => "Science 未接受 CSSwitch 第三方能力配置",
+            Self::InvalidJson => "本地 Science 第三方能力配置响应非法",
+            Self::IncompleteContract => "本地 Science 第三方能力配置结果不完整",
+        }
+    }
+}
+
+fn configure_third_party_with_gateway_before(
+    gateway: &Path,
+    control_url: &str,
+    deadline: Instant,
+) -> Result<(), ThirdPartyConfigureError> {
+    let mut command = Command::new(gateway);
+    command
+        .stdin(Stdio::null())
         .arg("science-control")
         .arg("configure-third-party")
-        .env("CSSWITCH_SCIENCE_CONTROL_URL", control_url)
-        .output()
-        .map_err(|_| "启动本地 Science 第三方能力配置命令失败")?;
+        .env("CSSWITCH_SCIENCE_CONTROL_URL", control_url);
+    let output = run_bounded_control_command(
+        command,
+        deadline,
+        THIRD_PARTY_CONTROL_OUTPUT_LIMIT,
+        THIRD_PARTY_CONTROL_OUTPUT_LIMIT,
+    )
+    .map_err(ThirdPartyConfigureError::Command)?;
     if !output.status.success() {
-        return Err("Science 未接受 CSSwitch 第三方能力配置".into());
+        return Err(ThirdPartyConfigureError::NonzeroExit);
     }
     let value: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| "本地 Science 第三方能力配置响应非法")?;
+        .map_err(|_| ThirdPartyConfigureError::InvalidJson)?;
     let connectors = value
         .get("connector_ids")
         .and_then(Value::as_array)
@@ -146,7 +191,7 @@ pub(crate) fn configure_third_party_after_science_start<R: Runtime>(
         || value.get("disabled_skill").and_then(Value::as_str) != Some("customize")
         || value.get("custom_prompt_managed").and_then(Value::as_bool) != Some(true)
     {
-        return Err("本地 Science 第三方能力配置结果不完整".into());
+        return Err(ThirdPartyConfigureError::IncompleteContract);
     }
     Ok(())
 }
@@ -571,6 +616,8 @@ fn reject_symlink_path(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const VALID_THIRD_PARTY_RESPONSE: &str = r#"{"status":"CONFIGURED","skill_name":"csswitch-external-skill-tools","connector_ids":["local:csswitch-skill-installer"],"disabled_skill":"customize","custom_prompt_managed":true}"#;
+
     fn temp_dir(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -582,6 +629,27 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn control_script(root: &Path, label: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = root.join(label);
+        fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    fn run_test_control(
+        gateway: &Path,
+        control_url: &str,
+        timeout: Duration,
+    ) -> Result<(), ThirdPartyConfigureError> {
+        configure_third_party_with_gateway_before(
+            gateway,
+            control_url,
+            Instant::now().checked_add(timeout).unwrap(),
+        )
     }
 
     fn expected(command: &str, data: &Path) -> Value {
@@ -837,6 +905,259 @@ mod tests {
         let missing = root.join("missing-data-dir");
         assert!(mark_route_configuration_current(&missing, "science-v1").is_err());
         assert!(!route_state_path(&missing).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_replacement_preserves_fixed_invocation_and_success_contract() {
+        let root = temp_dir("third-party-success");
+        let gateway = control_script(
+            &root,
+            "gateway",
+            &format!(
+                "[ \"$#\" -eq 2 ] || exit 91\n[ \"$1\" = science-control ] || exit 92\n[ \"$2\" = configure-third-party ] || exit 93\n[ \"${{CSSWITCH_SCIENCE_CONTROL_URL:-}}\" = 'http://127.0.0.1:19090/?nonce=test-only' ] || exit 94\nprintf '%s\\n' '{}'",
+                VALID_THIRD_PARTY_RESPONSE
+            ),
+        );
+
+        assert_eq!(
+            run_test_control(
+                &gateway,
+                "http://127.0.0.1:19090/?nonce=test-only",
+                Duration::from_secs(5),
+            ),
+            Ok(())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_reports_typed_spawn_and_preserves_nonzero_errors() {
+        let root = temp_dir("third-party-failures");
+        let missing = root.join("missing-gateway");
+        let spawn = run_test_control(&missing, "control-url", Duration::from_secs(1)).unwrap_err();
+        assert_eq!(
+            spawn,
+            ThirdPartyConfigureError::Command(BoundedControlCommandError::Failed(
+                BoundedControlCommandFailure::Spawn
+            ))
+        );
+        assert_eq!(
+            spawn.user_message(),
+            "启动本地 Science 第三方能力配置命令失败"
+        );
+
+        let nonzero = control_script(&root, "nonzero-gateway", "exit 7");
+        let error = run_test_control(&nonzero, "control-url", Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error, ThirdPartyConfigureError::NonzeroExit);
+        assert_eq!(
+            error.user_message(),
+            "Science 未接受 CSSwitch 第三方能力配置"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_times_out_with_absolute_deadline_and_reaps() {
+        let root = temp_dir("third-party-timeout");
+        let not_started = root.join("expired-deadline-started");
+        let expired = control_script(
+            &root,
+            "expired-gateway",
+            &format!(": > '{}'", not_started.display()),
+        );
+        assert_eq!(
+            configure_third_party_with_gateway_before(&expired, "control-url", Instant::now(),),
+            Err(ThirdPartyConfigureError::Command(
+                BoundedControlCommandError::Timeout
+            ))
+        );
+        assert!(!not_started.exists());
+
+        let gateway = control_script(&root, "gateway", "exec /bin/sleep 30");
+        let started = Instant::now();
+        let error =
+            run_test_control(&gateway, "control-url", Duration::from_millis(100)).unwrap_err();
+        assert_eq!(
+            error,
+            ThirdPartyConfigureError::Command(BoundedControlCommandError::Timeout)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_cleanup_failure_is_typed_bounded_and_reaper_owned() {
+        let root = temp_dir("third-party-cleanup-handoff");
+        let started_marker = root.join("descendant-started");
+        let late_marker = root.join("descendant-late");
+        let pid_file = root.join("descendant-pid");
+        let gateway = control_script(
+            &root,
+            "gateway",
+            &format!(
+                "( : > '{}'; /bin/sleep 30; : > '{}' ) &\nchild_pid=$!\nprintf '%s\\n' \"$child_pid\" > '{}'\nwhile [ ! -f '{}' ]; do /bin/sleep 0.01; done\nexec /bin/sleep 30",
+                started_marker.display(),
+                late_marker.display(),
+                pid_file.display(),
+                started_marker.display(),
+            ),
+        );
+        let mut command = Command::new(&gateway);
+        command
+            .stdin(Stdio::null())
+            .arg("science-control")
+            .arg("configure-third-party")
+            .env("CSSWITCH_SCIENCE_CONTROL_URL", "control-url")
+            .env(
+                crate::runtime::science::TEST_FORCE_GROUP_KILL_FAILURE_ENV,
+                "1",
+            );
+        let started = Instant::now();
+        let error = run_bounded_control_command(
+            command,
+            Instant::now().checked_add(Duration::from_secs(1)).unwrap(),
+            THIRD_PARTY_CONTROL_OUTPUT_LIMIT,
+            THIRD_PARTY_CONTROL_OUTPUT_LIMIT,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            BoundedControlCommandError::Failed(BoundedControlCommandFailure::Cleanup)
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(
+            ThirdPartyConfigureError::Command(error).user_message(),
+            "Science 未接受 CSSwitch 第三方能力配置"
+        );
+
+        let descendant_pid: i32 = fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = (0..100).any(|_| {
+            // SAFETY: signal 0 only probes the test-owned descendant pid.
+            if unsafe { libc::kill(descendant_pid, 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            false
+        });
+        assert!(started_marker.exists());
+        assert!(
+            gone,
+            "the reaper must retain and clean descendant ownership"
+        );
+        assert!(!late_marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_distinguishes_oversized_stdout_and_stderr() {
+        use crate::runtime::science::BoundedControlOutputStream;
+
+        let root = temp_dir("third-party-output-limit");
+        for (label, body, stream) in [
+            (
+                "stdout-gateway",
+                "exec /usr/bin/yes stdout",
+                BoundedControlOutputStream::Stdout,
+            ),
+            (
+                "stderr-gateway",
+                "exec /usr/bin/yes stderr >&2",
+                BoundedControlOutputStream::Stderr,
+            ),
+        ] {
+            let gateway = control_script(&root, label, body);
+            let error =
+                run_test_control(&gateway, "control-url", Duration::from_secs(5)).unwrap_err();
+            assert_eq!(
+                error,
+                ThirdPartyConfigureError::Command(BoundedControlCommandError::OutputLimit(stream)),
+                "{label}"
+            );
+            assert_eq!(
+                error.user_message(),
+                "Science 未接受 CSSwitch 第三方能力配置"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_kills_output_inheriting_descendant_without_residue() {
+        let root = temp_dir("third-party-descendant");
+        let started_marker = root.join("descendant-started");
+        let late_marker = root.join("descendant-late");
+        let pid_file = root.join("descendant-pid");
+        let gateway = control_script(
+            &root,
+            "gateway",
+            &format!(
+                "( : > '{}'; /bin/sleep 2; : > '{}' ) &\nchild_pid=$!\nprintf '%s\\n' \"$child_pid\" > '{}'\nwhile [ ! -f '{}' ]; do /bin/sleep 0.01; done\nprintf '%s\\n' '{}'",
+                started_marker.display(),
+                late_marker.display(),
+                pid_file.display(),
+                started_marker.display(),
+                VALID_THIRD_PARTY_RESPONSE
+            ),
+        );
+
+        run_test_control(&gateway, "control-url", Duration::from_secs(5)).unwrap();
+        let descendant_pid: i32 = fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = (0..100).any(|_| {
+            // SAFETY: signal 0 only probes the test-owned pid recorded by the
+            // private process group; it does not send a signal.
+            if unsafe { libc::kill(descendant_pid, 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            false
+        });
+        assert!(started_marker.exists());
+        assert!(
+            gone,
+            "the output-inheriting descendant must not survive return"
+        );
+        std::thread::sleep(Duration::from_millis(2_100));
+        assert!(!late_marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_preserves_invalid_json_error_contract() {
+        let root = temp_dir("third-party-invalid-json");
+        let gateway = control_script(&root, "gateway", "printf '%s\\n' 'not-json'");
+        let error = run_test_control(&gateway, "control-url", Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error, ThirdPartyConfigureError::InvalidJson);
+        assert_eq!(error.user_message(), "本地 Science 第三方能力配置响应非法");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_gateway_preserves_incomplete_response_error_contract() {
+        let root = temp_dir("third-party-incomplete");
+        let gateway = control_script(
+            &root,
+            "gateway",
+            "printf '%s\\n' '{\"status\":\"CONFIGURED\"}'",
+        );
+        let error = run_test_control(&gateway, "control-url", Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error, ThirdPartyConfigureError::IncompleteContract);
+        assert_eq!(
+            error.user_message(),
+            "本地 Science 第三方能力配置结果不完整"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
