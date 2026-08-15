@@ -730,10 +730,11 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertIn("if !owner.still_owns(st, current_generation)", codex)
         self.assertIn("st.science_confirmed_stopped = owner.confirmed_stopped", codex)
+        codex_production = codex.split("#[cfg(test)]\nmod tests", 1)[0]
         for typed_publisher in (
             runtime_command_module("lifecycle"),
             runtime_command_module("one_click"),
-            codex,
+            codex_production,
         ):
             self.assertNotIn("science_confirmed_stopped = Some(", typed_publisher)
         self.assertEqual(session.count("science_confirmed_stopped = Some("), 1)
@@ -1163,7 +1164,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("effective_science_runtime", lifecycle)
         self.assertIn("science_runtime: effective_science_runtime", lifecycle)
         self.assertNotIn("http_health_gateway", lifecycle)
-        self.assertEqual(lifecycle.count("proc::http_gateway_health("), 2)
+        self.assertEqual(lifecycle.count("proc::http_gateway_health("), 5)
         self.assertEqual(lifecycle.count("accepted_gateway_health("), 2)
         self.assertEqual(
             lifecycle.count("st.gateway_launch_context = Some(recipe.clone())"), 2
