@@ -20,6 +20,7 @@
       "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
       "desktop/src-tauri/src/runtime/science/contracts.rs",
+      "desktop/src-tauri/src/runtime/skill_install_bridge.rs",
       "desktop/src/codex-controller.js",
       "desktop/src/codex-disable-protocol.js",
       "quality/changes/next/CHG-P2A-CODEX-DISABLE-RECEIPT.json",

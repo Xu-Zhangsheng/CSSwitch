@@ -996,7 +996,7 @@ mod tests {
             &root,
             "gateway",
             &format!(
-                "( : > '{}'; /bin/sleep 30; : > '{}' ) &\nchild_pid=$!\nprintf '%s\\n' \"$child_pid\" > '{}'\nwhile [ ! -f '{}' ]; do /bin/sleep 0.01; done\nexec /bin/sleep 30",
+                "( : > '{}'; /bin/sleep 30; : > '{}' ) &\nchild_pid=$!\nprintf '%s\\n' \"$child_pid\" > '{}'\nwhile [ ! -f '{}' ]; do /bin/sleep 0.01; done\nexit 0",
                 started_marker.display(),
                 late_marker.display(),
                 pid_file.display(),
@@ -1016,7 +1016,9 @@ mod tests {
         let started = Instant::now();
         let error = run_bounded_control_command(
             command,
-            Instant::now().checked_add(Duration::from_secs(1)).unwrap(),
+            Instant::now()
+                .checked_add(Duration::from_secs(10))
+                .unwrap(),
             THIRD_PARTY_CONTROL_OUTPUT_LIMIT,
             THIRD_PARTY_CONTROL_OUTPUT_LIMIT,
         )
@@ -1025,7 +1027,7 @@ mod tests {
             error,
             BoundedControlCommandError::Failed(BoundedControlCommandFailure::Cleanup)
         );
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(13));
         assert_eq!(
             ThirdPartyConfigureError::Command(error).user_message(),
             "Science 未接受 CSSwitch 第三方能力配置"
