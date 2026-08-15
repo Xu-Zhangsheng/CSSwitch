@@ -181,6 +181,12 @@ impl ScienceStopOwnershipReceipt {
 }
 
 impl ScienceManagedLaunchToken {
+    pub(crate) fn durable_receipt_digest(&self) -> Result<String, String> {
+        let encoded = serde_json::to_vec(&self.record)
+            .map_err(|_| "Science managed launch identity cannot be encoded")?;
+        Ok(format!("{:x}", Sha256::digest(&encoded)))
+    }
+
     pub(crate) fn durable_prior_stop_recipe(
         &self,
         runtime: &ScienceRuntimeIdentity,
@@ -189,9 +195,7 @@ impl ScienceManagedLaunchToken {
         if self.record.port != port || !record_matches_runtime(&self.record, port, runtime) {
             return Err("prior Science managed launch identity is not current".into());
         }
-        let encoded = serde_json::to_vec(&self.record)
-            .map_err(|_| "prior Science managed launch identity cannot be encoded")?;
-        let launch_receipt_digest = format!("{:x}", Sha256::digest(&encoded));
+        let launch_receipt_digest = self.durable_receipt_digest()?;
         Ok(config::RuntimePriorScienceRecipe {
             port,
             runtime_path: runtime.path.clone(),

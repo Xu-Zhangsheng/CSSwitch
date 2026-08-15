@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -16,8 +17,12 @@ use crate::codex_auth_supervisor::{
 };
 use crate::lifecycle::RuntimeMutationDomain;
 use crate::proc::ChildLiveness;
-use crate::runtime::proxy_lifecycle::gateway_bin_path;
-use crate::runtime::science::{SandboxScienceState, ScienceHostAdapter};
+use crate::runtime::proxy_lifecycle::{
+    gateway_bin_path, DurableGatewayObservation, GatewayController, GatewayStopClaim,
+};
+use crate::runtime::science::{
+    SandboxScienceState, ScienceHostAdapter, ScienceStopOwnershipReceipt, ScienceStopRequest,
+};
 use crate::runtime::system::kill_child;
 use crate::{config, lock, proc, run_blocking, AppState, SharedAppState, SharedLifecycle};
 
@@ -71,16 +76,718 @@ impl CodexAuthCommandError {
     }
 }
 
+const CODEX_DISABLE_RECEIPT_SCHEMA_VERSION: u32 = 1;
+const MAX_CODEX_DISABLE_RECEIPT_BYTES: usize = 64 * 1024;
+
+#[cfg(test)]
+static CODEX_DISABLE_GATEWAY_STOP_FAILURE: std::sync::LazyLock<
+    std::sync::Mutex<Option<std::thread::ThreadId>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CodexDisablePhaseFailureMode {
+    ExactBeforeImage,
+    ConfigDrift,
+}
+
+#[cfg(test)]
+static CODEX_DISABLE_PHASE_FAILURE: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::thread::ThreadId, CodexDisablePhaseFailureMode)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
+struct CodexDisableGatewayStopFailureGuard;
+
+#[cfg(test)]
+impl Drop for CodexDisableGatewayStopFailureGuard {
+    fn drop(&mut self) {
+        *CODEX_DISABLE_GATEWAY_STOP_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+fn test_arm_codex_disable_gateway_stop_failure() -> CodexDisableGatewayStopFailureGuard {
+    *CODEX_DISABLE_GATEWAY_STOP_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(std::thread::current().id());
+    CodexDisableGatewayStopFailureGuard
+}
+
+#[cfg(test)]
+struct CodexDisablePhaseFailureGuard;
+
+#[cfg(test)]
+impl Drop for CodexDisablePhaseFailureGuard {
+    fn drop(&mut self) {
+        *CODEX_DISABLE_PHASE_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+fn test_arm_codex_disable_gateway_phase_failure(
+    mode: CodexDisablePhaseFailureMode,
+) -> CodexDisablePhaseFailureGuard {
+    *CODEX_DISABLE_PHASE_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some((std::thread::current().id(), mode));
+    CodexDisablePhaseFailureGuard
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct CodexDisableCommandError {
+    code: &'static str,
+    cause: &'static str,
+    phase: &'static str,
+    retryable: bool,
+    attention_required: bool,
+    config_state: &'static str,
+}
+
+impl CodexDisableCommandError {
+    fn failed(cause: &'static str, phase: &'static str) -> Self {
+        Self {
+            code: "codex_disable_failed",
+            cause,
+            phase,
+            retryable: true,
+            attention_required: false,
+            config_state: "unchanged",
+        }
+    }
+
+    fn attention(cause: &'static str, phase: &'static str, config_committed: bool) -> Self {
+        Self {
+            code: "codex_disable_attention",
+            cause,
+            phase,
+            retryable: false,
+            attention_required: true,
+            config_state: if config_committed {
+                "disabled"
+            } else {
+                "unchanged"
+            },
+        }
+    }
+
+    pub(crate) fn safe_message(&self) -> &'static str {
+        if self.attention_required {
+            "Codex disable 恢复状态需要人工注意；durable receipt 已保留。"
+        } else {
+            "Codex 实验入口未更改；运行态已保持或精确恢复。"
+        }
+    }
+
+    fn project_boot_attention(&self) -> Value {
+        json!({
+            "schema_version": CODEX_DISABLE_RECEIPT_SCHEMA_VERSION,
+            "status": "attention",
+            "operation": "experimental_codex_disable",
+            "error": self,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexDisableIntentPublishError {
+    Retryable { cause: &'static str },
+    Attention { cause: &'static str },
+}
+
+impl CodexDisableIntentPublishError {
+    fn into_command_error(self) -> CodexDisableCommandError {
+        match self {
+            Self::Retryable { cause } => CodexDisableCommandError::failed(cause, "intent"),
+            Self::Attention { cause } => {
+                CodexDisableCommandError::attention(cause, "intent", false)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CodexDisableAttentionCause {
+    ReceiptIo,
+    ConfigDrift,
+    IdentityDrift,
+    StopUncertain,
+    RestoreFailed,
+    RestoreUncertain,
+    ReceiptCleanupFailed,
+}
+
+impl CodexDisableAttentionCause {
+    fn code(self) -> &'static str {
+        match self {
+            Self::ReceiptIo => "receipt_io",
+            Self::ConfigDrift => "config_drift",
+            Self::IdentityDrift => "identity_drift",
+            Self::StopUncertain => "stop_uncertain",
+            Self::RestoreFailed => "restore_failed",
+            Self::RestoreUncertain => "restore_uncertain",
+            Self::ReceiptCleanupFailed => "receipt_cleanup_failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CodexDisableConfigReference {
+    schema_version: u32,
+    active_profile_id: String,
+    proxy_port: u16,
+    sandbox_port: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CodexDisableGatewayPlan {
+    profile_id: String,
+    identity: config::GatewayRuntimeJournalIdentity,
+    restore_launch_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CodexDisableSciencePlan {
+    prior: config::RuntimePriorScienceRecipe,
+    restore_launch_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CodexDisableDurablePlan {
+    owner_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    science: Option<CodexDisableSciencePlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gateway: Option<CodexDisableGatewayPlan>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CodexDisableComponent {
+    Science,
+    Gateway,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+enum CodexDisableReceiptPhase {
+    Intent,
+    Stopping {
+        component: CodexDisableComponent,
+        science_stopped: bool,
+        gateway_stopped: bool,
+    },
+    EffectsApplied {
+        science_stopped: bool,
+        gateway_stopped: bool,
+    },
+    Restoring {
+        science_stopped: bool,
+        gateway_stopped: bool,
+    },
+    Restored {
+        science_stopped: bool,
+        gateway_stopped: bool,
+    },
+    ConfigCommitted,
+    Attention {
+        cause: CodexDisableAttentionCause,
+    },
+}
+
+impl CodexDisableReceiptPhase {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Intent => "intent",
+            Self::Stopping { .. } => "stopping",
+            Self::EffectsApplied { .. } => "effects_applied",
+            Self::Restoring { .. } => "restoring",
+            Self::Restored { .. } => "restored",
+            Self::ConfigCommitted => "config_committed",
+            Self::Attention { .. } => "attention",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CodexDisableOperationReceipt {
+    schema_version: u32,
+    operation_id: String,
+    operation: String,
+    before_config_fingerprint: String,
+    after_config_fingerprint: String,
+    config_reference: CodexDisableConfigReference,
+    plan: CodexDisableDurablePlan,
+    phase: CodexDisableReceiptPhase,
+}
+
+struct OpenCodexDisableReceipt {
+    record: CodexDisableOperationReceipt,
+    bytes: Vec<u8>,
+}
+
+fn valid_lower_hex(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn valid_gateway_launch_id(value: &str) -> bool {
+    (24..=128).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_prior_science_recipe(recipe: &config::RuntimePriorScienceRecipe) -> bool {
+    recipe.port != 0
+        && recipe.port != 8765
+        && recipe.runtime_path.is_absolute()
+        && matches!(
+            recipe.runtime_source.as_str(),
+            "explicit" | "official_updated" | "installed_app" | "cached_once"
+        )
+        && valid_lower_hex(&recipe.runtime_fingerprint, 64)
+        && valid_lower_hex(&recipe.launch_receipt_digest, 64)
+        && recipe
+            .runtime_adoption_attempt_id
+            .as_deref()
+            .is_some_and(|value| valid_lower_hex(value, 32))
+}
+
+fn validate_codex_disable_receipt(receipt: &CodexDisableOperationReceipt) -> Result<(), String> {
+    if receipt.schema_version != CODEX_DISABLE_RECEIPT_SCHEMA_VERSION
+        || receipt.operation != "experimental_codex_disable"
+        || !valid_lower_hex(&receipt.operation_id, 32)
+        || !valid_lower_hex(&receipt.before_config_fingerprint, 64)
+        || !valid_lower_hex(&receipt.after_config_fingerprint, 64)
+        || receipt.before_config_fingerprint == receipt.after_config_fingerprint
+        || receipt.config_reference.schema_version != config::CURRENT_SCHEMA_VERSION
+        || receipt.config_reference.proxy_port == 0
+        || receipt.config_reference.sandbox_port == 0
+        || receipt.config_reference.proxy_port == receipt.config_reference.sandbox_port
+        || receipt.config_reference.proxy_port == 8765
+        || receipt.config_reference.sandbox_port == 8765
+        || (receipt.plan.science.is_none() && receipt.plan.gateway.is_none())
+        || receipt.plan.owner_generation == 0
+    {
+        return Err("Codex disable receipt identity/schema 非法".into());
+    }
+    if let Some(science) = receipt.plan.science.as_ref() {
+        if !valid_prior_science_recipe(&science.prior)
+            || science.prior.port != receipt.config_reference.sandbox_port
+            || !valid_lower_hex(&science.restore_launch_id, 32)
+        {
+            return Err("Codex disable Science receipt plan 非法".into());
+        }
+    }
+    if let Some(gateway) = receipt.plan.gateway.as_ref() {
+        let identity = &gateway.identity;
+        if gateway.profile_id.is_empty()
+            || identity.provider != "codex"
+            || identity.shim.is_empty()
+            || !valid_gateway_launch_id(&identity.launch_id)
+            || identity.provider_contract_id.is_empty()
+            || identity.provider_contract_digest.is_empty()
+            || !valid_lower_hex(&gateway.restore_launch_id, 32)
+        {
+            return Err("Codex disable Gateway receipt plan 非法".into());
+        }
+    }
+    if let CodexDisableReceiptPhase::Stopping {
+        component,
+        science_stopped,
+        gateway_stopped,
+    } = receipt.phase
+    {
+        let target_planned = match component {
+            CodexDisableComponent::Science => receipt.plan.science.is_some() && !science_stopped,
+            CodexDisableComponent::Gateway => receipt.plan.gateway.is_some() && !gateway_stopped,
+        };
+        if !target_planned
+            || (science_stopped && receipt.plan.science.is_none())
+            || (gateway_stopped && receipt.plan.gateway.is_none())
+        {
+            return Err("Codex disable receipt stopping progress 非法".into());
+        }
+    }
+    if let CodexDisableReceiptPhase::EffectsApplied {
+        science_stopped,
+        gateway_stopped,
+    }
+    | CodexDisableReceiptPhase::Restoring {
+        science_stopped,
+        gateway_stopped,
+    }
+    | CodexDisableReceiptPhase::Restored {
+        science_stopped,
+        gateway_stopped,
+    } = receipt.phase
+    {
+        if (!science_stopped && !gateway_stopped)
+            || (science_stopped && receipt.plan.science.is_none())
+            || (gateway_stopped && receipt.plan.gateway.is_none())
+        {
+            return Err("Codex disable receipt effect progress 非法".into());
+        }
+    }
+    Ok(())
+}
+
+fn codex_disable_config_fingerprint(cfg: &config::Config) -> Result<String, String> {
+    config::codex_disable_config_fingerprint(cfg)
+        .map_err(|_| "无法编码 Codex disable config fingerprint".into())
+}
+
+fn codex_disable_intent_digest(receipt: &CodexDisableOperationReceipt) -> Result<String, String> {
+    let mut intent = receipt.clone();
+    intent.phase = CodexDisableReceiptPhase::Intent;
+    let bytes = encode_codex_disable_receipt(&intent)?;
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-codex-disable-intent-v1\0");
+    digest.update(bytes);
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn codex_disable_config_fence(
+    receipt: &CodexDisableOperationReceipt,
+) -> Result<config::CodexDisableOperationFence, String> {
+    Ok(config::CodexDisableOperationFence::new(
+        receipt.operation_id.clone(),
+        codex_disable_intent_digest(receipt)?,
+        receipt.before_config_fingerprint.clone(),
+        receipt.after_config_fingerprint.clone(),
+    ))
+}
+
+fn codex_disable_after_config(cfg: &config::Config) -> config::Config {
+    let mut after = cfg.clone();
+    after.experimental_codex_enabled = false;
+    after
+}
+
+fn encode_codex_disable_receipt(receipt: &CodexDisableOperationReceipt) -> Result<Vec<u8>, String> {
+    validate_codex_disable_receipt(receipt)?;
+    let bytes = serde_json::to_vec(receipt).map_err(|_| "无法编码 Codex disable receipt")?;
+    if bytes.is_empty() || bytes.len() > MAX_CODEX_DISABLE_RECEIPT_BYTES {
+        return Err("Codex disable receipt 大小非法".into());
+    }
+    Ok(bytes)
+}
+
+fn read_codex_disable_receipt_at(dir: &Path) -> Result<Option<OpenCodexDisableReceipt>, String> {
+    let Some(bytes) = config::read_codex_disable_operation_receipt(dir)
+        .map_err(|_| "Codex disable receipt 不可读取")?
+    else {
+        return Ok(None);
+    };
+    if bytes.is_empty() || bytes.len() > MAX_CODEX_DISABLE_RECEIPT_BYTES {
+        return Err("Codex disable receipt 大小非法".into());
+    }
+    let record: CodexDisableOperationReceipt =
+        serde_json::from_slice(&bytes).map_err(|_| "Codex disable receipt 无法解析")?;
+    validate_codex_disable_receipt(&record)?;
+    Ok(Some(OpenCodexDisableReceipt { record, bytes }))
+}
+
+impl OpenCodexDisableReceipt {
+    fn publish_intent(
+        dir: &Path,
+        expected_config: &config::Config,
+        record: CodexDisableOperationReceipt,
+    ) -> Result<Self, CodexDisableIntentPublishError> {
+        let bytes = encode_codex_disable_receipt(&record).map_err(|_| {
+            CodexDisableIntentPublishError::Retryable {
+                cause: "receipt_io",
+            }
+        })?;
+        let fence = codex_disable_config_fence(&record).map_err(|_| {
+            CodexDisableIntentPublishError::Retryable {
+                cause: "receipt_io",
+            }
+        })?;
+        let _ = config::begin_codex_disable_operation(dir, expected_config, &fence, &bytes);
+
+        // The begin call can fail either before publishing anything (for
+        // example, an exact before-image race) or after leaving durable state.
+        // Reconcile the disk state before choosing the user-visible outcome so
+        // that "receipt retained" is never claimed for a proven-empty begin.
+        let opened = read_codex_disable_receipt_at(dir).map_err(|_| {
+            CodexDisableIntentPublishError::Attention {
+                cause: "receipt_io",
+            }
+        })?;
+        let current =
+            config::load_from(dir).map_err(|_| CodexDisableIntentPublishError::Attention {
+                cause: "receipt_io",
+            })?;
+        let current_fence = current.codex_disable_operation_fence().map_err(|_| {
+            CodexDisableIntentPublishError::Attention {
+                cause: "config_drift",
+            }
+        })?;
+
+        match opened {
+            Some(opened) if opened.bytes == bytes && current_fence.as_ref() == Some(&fence) => {
+                Ok(opened)
+            }
+            Some(_) => Err(CodexDisableIntentPublishError::Attention {
+                cause: if current_fence.as_ref() == Some(&fence) {
+                    "mutation_conflict"
+                } else {
+                    "config_drift"
+                },
+            }),
+            None if current_fence.is_some() => Err(CodexDisableIntentPublishError::Attention {
+                cause: if current_fence.as_ref() == Some(&fence) {
+                    "receipt_io"
+                } else {
+                    "mutation_conflict"
+                },
+            }),
+            None if current == *expected_config => Err(CodexDisableIntentPublishError::Retryable {
+                cause: "receipt_io",
+            }),
+            None => Err(CodexDisableIntentPublishError::Retryable {
+                cause: "config_drift",
+            }),
+        }
+    }
+
+    fn transition(&mut self, dir: &Path, phase: CodexDisableReceiptPhase) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            let phase_failure = CODEX_DISABLE_PHASE_FAILURE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .filter(|(thread, _)| *thread == std::thread::current().id())
+                .map(|(_, mode)| *mode);
+            if matches!(
+                &phase,
+                CodexDisableReceiptPhase::Stopping {
+                    component: CodexDisableComponent::Gateway,
+                    ..
+                }
+            ) {
+                if let Some(mode) = phase_failure {
+                    if mode == CodexDisablePhaseFailureMode::ConfigDrift {
+                        let mut drifted = config::load_from(dir)
+                            .map_err(|_| "test-only Codex disable Config drift load failed")?;
+                        drifted.reuse_system_ssh = !drifted.reuse_system_ssh;
+                        config::test_save_to_without_history_authority_guard(dir, &drifted)
+                            .map_err(|_| "test-only Codex disable Config drift save failed")?;
+                    }
+                    return Err("test-only Codex disable Gateway phase publication failure".into());
+                }
+            }
+        }
+        let fence = codex_disable_config_fence(&self.record)?;
+        let current =
+            config::load_from(dir).map_err(|_| "Codex disable receipt phase 前 Config 不可读取")?;
+        if current
+            .codex_disable_operation_fence()
+            .map_err(|_| "Codex disable receipt phase 前 fence 不可解析")?
+            .as_ref()
+            != Some(&fence)
+        {
+            return Err("Codex disable receipt phase 前 fence 已变化；当前 receipt 已保留".into());
+        }
+        let terminal_fingerprint = match &phase {
+            CodexDisableReceiptPhase::ConfigCommitted => {
+                Some(&self.record.after_config_fingerprint)
+            }
+            CodexDisableReceiptPhase::Attention { .. } => None,
+            CodexDisableReceiptPhase::Intent
+            | CodexDisableReceiptPhase::Stopping { .. }
+            | CodexDisableReceiptPhase::EffectsApplied { .. }
+            | CodexDisableReceiptPhase::Restoring { .. }
+            | CodexDisableReceiptPhase::Restored { .. } => {
+                Some(&self.record.before_config_fingerprint)
+            }
+        };
+        if terminal_fingerprint.is_some_and(|expected| {
+            codex_disable_config_fingerprint(&current).as_ref() != Ok(expected)
+        }) {
+            return Err(
+                "Codex disable receipt phase 前 Config 不匹配 exact terminal image；当前 receipt 已保留"
+                    .into(),
+            );
+        }
+        let mut next = self.record.clone();
+        next.phase = phase;
+        let bytes = encode_codex_disable_receipt(&next)?;
+        config::write_codex_disable_operation_receipt(dir, &bytes, &self.bytes)
+            .map_err(|_| "Codex disable receipt phase 无法持久化")?;
+        let opened = read_codex_disable_receipt_at(dir)?
+            .ok_or("Codex disable receipt phase 持久化后缺失")?;
+        if opened.bytes != bytes {
+            return Err("Codex disable receipt phase 持久化后回读不一致".into());
+        }
+        *self = opened;
+        Ok(())
+    }
+
+    fn terminal_cleanup_cause(
+        &self,
+        dir: &Path,
+        terminal_image: config::CodexDisableTerminalConfigImage,
+    ) -> CodexDisableAttentionCause {
+        let Ok(fence) = codex_disable_config_fence(&self.record) else {
+            return CodexDisableAttentionCause::ReceiptIo;
+        };
+        let Ok(current) = config::load_from(dir) else {
+            return CodexDisableAttentionCause::ReceiptIo;
+        };
+        if current
+            .codex_disable_operation_fence()
+            .ok()
+            .flatten()
+            .as_ref()
+            != Some(&fence)
+        {
+            return CodexDisableAttentionCause::ConfigDrift;
+        }
+        let expected = match terminal_image {
+            config::CodexDisableTerminalConfigImage::Before => {
+                &self.record.before_config_fingerprint
+            }
+            config::CodexDisableTerminalConfigImage::After => &self.record.after_config_fingerprint,
+        };
+        if codex_disable_config_fingerprint(&current).as_ref() != Ok(expected) {
+            CodexDisableAttentionCause::ConfigDrift
+        } else {
+            CodexDisableAttentionCause::ReceiptCleanupFailed
+        }
+    }
+
+    fn phase_publication_cause(
+        &self,
+        dir: &Path,
+        config_image: config::CodexDisableTerminalConfigImage,
+    ) -> CodexDisableAttentionCause {
+        match self.terminal_cleanup_cause(dir, config_image) {
+            CodexDisableAttentionCause::ConfigDrift => CodexDisableAttentionCause::ConfigDrift,
+            _ => CodexDisableAttentionCause::ReceiptIo,
+        }
+    }
+
+    fn clear_terminal(
+        &self,
+        dir: &Path,
+        terminal_image: config::CodexDisableTerminalConfigImage,
+    ) -> Result<(), CodexDisableAttentionCause> {
+        let fence = codex_disable_config_fence(&self.record)
+            .map_err(|_| CodexDisableAttentionCause::ReceiptIo)?;
+        let cause = || self.terminal_cleanup_cause(dir, terminal_image);
+        config::clear_codex_disable_operation_receipt(dir, &self.bytes, &fence, terminal_image)
+            .map_err(|_| cause())?;
+        if config::read_codex_disable_operation_receipt(dir)
+            .map_err(|_| CodexDisableAttentionCause::ReceiptCleanupFailed)?
+            .is_some()
+        {
+            return Err(CodexDisableAttentionCause::ReceiptCleanupFailed);
+        }
+        config::clear_codex_disable_operation_fence(dir, &fence, terminal_image)
+            .map_err(|_| cause())?;
+        Ok(())
+    }
+
+    fn clear_before(&self, dir: &Path) -> Result<(), CodexDisableAttentionCause> {
+        self.clear_terminal(dir, config::CodexDisableTerminalConfigImage::Before)
+    }
+
+    fn clear_after(&self, dir: &Path) -> Result<(), CodexDisableAttentionCause> {
+        self.clear_terminal(dir, config::CodexDisableTerminalConfigImage::After)
+    }
+}
+
+fn require_no_codex_disable_receipt(dir: &Path) -> Result<(), CodexDisableCommandError> {
+    match read_codex_disable_receipt_at(dir) {
+        Ok(None) => match config::load_from(dir) {
+            Ok(cfg) => match cfg.codex_disable_operation_fence() {
+                Ok(None) => Ok(()),
+                Ok(Some(fence)) => {
+                    let fingerprint = codex_disable_config_fingerprint(&cfg).ok();
+                    let cause = if fingerprint.as_deref()
+                        == Some(fence.before_config_fingerprint.as_str())
+                        || fingerprint.as_deref() == Some(fence.after_config_fingerprint.as_str())
+                    {
+                        "receipt_open"
+                    } else {
+                        "config_drift"
+                    };
+                    Err(CodexDisableCommandError::attention(
+                        cause,
+                        "attention",
+                        !cfg.experimental_codex_enabled,
+                    ))
+                }
+                Err(_) => Err(CodexDisableCommandError::attention(
+                    "receipt_invalid",
+                    "attention",
+                    false,
+                )),
+            },
+            Err(_) => Err(CodexDisableCommandError::attention(
+                "receipt_io",
+                "attention",
+                false,
+            )),
+        },
+        Ok(Some(open)) => Err(CodexDisableCommandError::attention(
+            "receipt_open",
+            open.record.phase.code(),
+            codex_disable_current_config_state(dir, &open.record) == Some("disabled"),
+        )),
+        Err(_) => Err(CodexDisableCommandError::attention(
+            "receipt_invalid",
+            "attention",
+            false,
+        )),
+    }
+}
+
+fn codex_disable_current_config_state(
+    dir: &Path,
+    receipt: &CodexDisableOperationReceipt,
+) -> Option<&'static str> {
+    let current = config::load_from(dir).ok()?;
+    let fingerprint = codex_disable_config_fingerprint(&current).ok()?;
+    if fingerprint == receipt.before_config_fingerprint {
+        Some("unchanged")
+    } else if fingerprint == receipt.after_config_fingerprint {
+        Some("disabled")
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub(crate) enum RuntimeCommandError {
     Auth(CodexAuthCommandError),
+    Disable(CodexDisableCommandError),
     Message(String),
 }
 
 impl From<CodexAuthCommandError> for RuntimeCommandError {
     fn from(error: CodexAuthCommandError) -> Self {
         Self::Auth(error)
+    }
+}
+
+impl From<CodexDisableCommandError> for RuntimeCommandError {
+    fn from(error: CodexDisableCommandError) -> Self {
+        Self::Disable(error)
     }
 }
 
@@ -100,6 +807,7 @@ impl std::fmt::Display for RuntimeCommandError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Message(message) => formatter.write_str(message),
+            Self::Disable(error) => formatter.write_str(error.safe_message()),
             Self::Auth(error) => formatter.write_str(match error.code {
                 "codex_login_required" => "Codex 尚未登录或本地认证记录不完整。",
                 "codex_auth_busy" => "另一项 Codex 认证或启动操作正在进行。",
@@ -398,6 +1106,25 @@ enum AuthRuntimeAction {
     StopManagedCodex,
 }
 
+enum ExperimentalCodexDisablePlan {
+    Noop,
+    PreserveOtherProvider,
+    StopManagedCodex(Box<CodexDisableStopPlan>),
+}
+
+struct CodexDisableScienceStop {
+    runtime: crate::runtime::science::ScienceRuntimeIdentity,
+    ownership: crate::runtime::science::ScienceManagedLaunchToken,
+}
+
+struct CodexDisableStopPlan {
+    before_config: config::Config,
+    receipt: CodexDisableOperationReceipt,
+    science_owner: CodexScienceOwnerSnapshot,
+    science: Option<CodexDisableScienceStop>,
+    gateway: Option<GatewayStopClaim>,
+}
+
 enum DowngradeCommandOutcome {
     Committed(Value),
     SafeFailure(String),
@@ -556,6 +1283,798 @@ impl CodexScienceOwnerSnapshot {
     }
 }
 
+fn plan_experimental_codex_disable(
+    dir: &Path,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+) -> Result<ExperimentalCodexDisablePlan, CodexDisableCommandError> {
+    require_no_codex_disable_receipt(dir)?;
+    let cfg = config::load_from(dir)
+        .map_err(|_| CodexDisableCommandError::failed("config_unavailable", "intent"))?;
+    config::require_no_runtime_transaction(&cfg)
+        .map_err(|_| CodexDisableCommandError::failed("mutation_conflict", "intent"))?;
+    if !cfg.experimental_codex_enabled {
+        return Ok(ExperimentalCodexDisablePlan::Noop);
+    }
+    let active_profile_is_codex = cfg
+        .active_profile()
+        .is_some_and(|profile| profile.template_id == "codex");
+    let (provider, tracked, owner, version_cache) = {
+        let mut current = lock(state);
+        let provider = current.provider.clone();
+        let tracked = tracked_proxy_state(&mut current);
+        let owner = CodexScienceOwnerSnapshot::claim(&current, lifecycle.current_generation());
+        (
+            provider,
+            tracked,
+            owner,
+            current.science_version_cache.clone(),
+        )
+    };
+    let untracked_proxy_port_occupied = matches!(
+        tracked,
+        TrackedProxyState::Absent | TrackedProxyState::Exited
+    ) && proc::loopback_port_in_use(cfg.proxy_port, 100);
+    let proxy_action =
+        decide_auth_runtime_action(&provider, tracked, untracked_proxy_port_occupied)
+            .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?;
+    if proxy_action == AuthRuntimeAction::PreserveOtherProvider {
+        return Ok(ExperimentalCodexDisablePlan::PreserveOtherProvider);
+    }
+    if proxy_action == AuthRuntimeAction::Noop && !active_profile_is_codex {
+        return Ok(ExperimentalCodexDisablePlan::Noop);
+    }
+    let remembered_runtime = owner
+        .runtime
+        .clone()
+        .or_else(|| owner.confirmed_stopped.clone());
+    let (science_state, detected_runtime) = match remembered_runtime {
+        Some(runtime) => {
+            let observed = ScienceHostAdapter::probe_known(cfg.sandbox_port, &runtime);
+            let detected = (observed == SandboxScienceState::RunningHealthy).then_some(runtime);
+            (observed, detected)
+        }
+        None => ScienceHostAdapter::probe_cached(cfg.sandbox_port, &version_cache)
+            .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?,
+    };
+    let action =
+        resolve_science_runtime_action(proxy_action, active_profile_is_codex, science_state)
+            .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?;
+    if action != AuthRuntimeAction::StopManagedCodex {
+        return Ok(ExperimentalCodexDisablePlan::Noop);
+    }
+
+    let science = match detected_runtime {
+        Some(runtime) => {
+            let ownership = ScienceHostAdapter::managed_receipt(cfg.sandbox_port, &runtime)
+                .ok_or_else(|| CodexDisableCommandError::failed("identity_unproven", "intent"))?;
+            if !ScienceHostAdapter::receipt_is_current(&ownership, &runtime) {
+                return Err(CodexDisableCommandError::failed(
+                    "identity_unproven",
+                    "intent",
+                ));
+            }
+            Some(CodexDisableScienceStop { runtime, ownership })
+        }
+        None => None,
+    };
+    let gateway = if proxy_action == AuthRuntimeAction::StopManagedCodex
+        && tracked == TrackedProxyState::Running
+    {
+        GatewayController::claim_stop(state, lifecycle)
+            .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?
+            .ok_or_else(|| CodexDisableCommandError::failed("identity_unproven", "intent"))?
+            .into()
+    } else {
+        None
+    };
+    if science.is_none() && gateway.is_none() {
+        return Ok(ExperimentalCodexDisablePlan::Noop);
+    }
+
+    let science_plan = science
+        .as_ref()
+        .map(|science| {
+            science
+                .ownership
+                .durable_prior_stop_recipe(&science.runtime, cfg.sandbox_port)
+                .map(|prior| CodexDisableSciencePlan {
+                    prior,
+                    restore_launch_id: config::new_id(),
+                })
+        })
+        .transpose()
+        .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?;
+    let gateway_plan = gateway
+        .as_ref()
+        .map(|claim: &GatewayStopClaim| CodexDisableGatewayPlan {
+            profile_id: claim.profile_id().to_string(),
+            identity: claim.durable_identity(),
+            restore_launch_id: config::new_id(),
+        });
+    let before_config_fingerprint = codex_disable_config_fingerprint(&cfg)
+        .map_err(|_| CodexDisableCommandError::failed("config_unavailable", "intent"))?;
+    let after_config_fingerprint =
+        codex_disable_config_fingerprint(&codex_disable_after_config(&cfg))
+            .map_err(|_| CodexDisableCommandError::failed("config_unavailable", "intent"))?;
+    let receipt = CodexDisableOperationReceipt {
+        schema_version: CODEX_DISABLE_RECEIPT_SCHEMA_VERSION,
+        operation_id: config::new_id(),
+        operation: "experimental_codex_disable".into(),
+        before_config_fingerprint,
+        after_config_fingerprint,
+        config_reference: CodexDisableConfigReference {
+            schema_version: cfg.schema_version,
+            active_profile_id: cfg.active_id.clone(),
+            proxy_port: cfg.proxy_port,
+            sandbox_port: cfg.sandbox_port,
+        },
+        plan: CodexDisableDurablePlan {
+            owner_generation: owner.generation,
+            science: science_plan,
+            gateway: gateway_plan,
+        },
+        phase: CodexDisableReceiptPhase::Intent,
+    };
+    validate_codex_disable_receipt(&receipt)
+        .map_err(|_| CodexDisableCommandError::failed("identity_unproven", "intent"))?;
+    Ok(ExperimentalCodexDisablePlan::StopManagedCodex(Box::new(
+        CodexDisableStopPlan {
+            before_config: cfg,
+            receipt,
+            science_owner: owner,
+            science,
+            gateway,
+        },
+    )))
+}
+
+#[allow(clippy::result_large_err)]
+fn execute_planned_codex_science_stop<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    owner: CodexScienceOwnerSnapshot,
+    science: CodexDisableScienceStop,
+) -> crate::runtime::science::ScienceStopOutcome {
+    let expected = science.runtime.clone();
+    let request = ScienceStopRequest::exact(
+        &science.runtime,
+        ScienceStopOwnershipReceipt::from_managed_launch(&science.ownership),
+    );
+    super::runtime::execute_process_local_science_stop_with(
+        app,
+        state,
+        lifecycle,
+        move |current, generation| {
+            if !owner.still_owns(current, generation) {
+                return Err(codex_science_owner_changed());
+            }
+            current.science_runtime = Some(expected.clone());
+            Ok(())
+        },
+        move |_| Ok(request),
+        |app, request| ScienceHostAdapter::execute_stop(app, request).into_parts(),
+        |_| Ok(()),
+    )
+    .and_then(|verified| verified.require_exact_stop_of(&science.runtime))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CodexDisableComponentObservation {
+    Original,
+    Absent,
+    Restored,
+    Replacement,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CodexDisableReplayDecision {
+    Clear,
+    Restore {
+        science_stopped: bool,
+        gateway_stopped: bool,
+    },
+    Attention(CodexDisableAttentionCause),
+}
+
+fn decide_codex_disable_before_image_replay(
+    phase: CodexDisableReceiptPhase,
+    science: Option<CodexDisableComponentObservation>,
+    gateway: Option<CodexDisableComponentObservation>,
+) -> CodexDisableReplayDecision {
+    if let CodexDisableReceiptPhase::Attention { cause } = phase {
+        return CodexDisableReplayDecision::Attention(cause);
+    }
+    if phase == CodexDisableReceiptPhase::ConfigCommitted {
+        return CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::ConfigDrift);
+    }
+    if science == Some(CodexDisableComponentObservation::Replacement)
+        || gateway == Some(CodexDisableComponentObservation::Replacement)
+    {
+        return CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::IdentityDrift);
+    }
+    let (science_stopped, gateway_stopped) = match phase {
+        CodexDisableReceiptPhase::Intent => {
+            let all_original = science
+                .is_none_or(|value| value == CodexDisableComponentObservation::Original)
+                && gateway.is_none_or(|value| value == CodexDisableComponentObservation::Original);
+            if !all_original {
+                return CodexDisableReplayDecision::Attention(
+                    CodexDisableAttentionCause::IdentityDrift,
+                );
+            }
+            (false, false)
+        }
+        CodexDisableReceiptPhase::Stopping {
+            component,
+            science_stopped,
+            gateway_stopped,
+        } => {
+            let target = match component {
+                CodexDisableComponent::Science => science,
+                CodexDisableComponent::Gateway => gateway,
+            };
+            // `Stopping` is only a pre-effect WAL record.  Current absence
+            // cannot prove that this operation executed the stop: a terminal
+            // stop, an external kill, or a start->stop ABA has the same fresh
+            // observation.  Only a later post-stop progress CAS
+            // (`EffectsApplied`, or `Restoring` entered from the exact live
+            // outcome) may grant inverse authority; this phase therefore fails
+            // closed whenever the target is no longer the exact original.
+            if target != Some(CodexDisableComponentObservation::Original) {
+                return CodexDisableReplayDecision::Attention(
+                    CodexDisableAttentionCause::StopUncertain,
+                );
+            }
+            (science_stopped, gateway_stopped)
+        }
+        CodexDisableReceiptPhase::EffectsApplied {
+            science_stopped,
+            gateway_stopped,
+        }
+        | CodexDisableReceiptPhase::Restoring {
+            science_stopped,
+            gateway_stopped,
+        }
+        | CodexDisableReceiptPhase::Restored {
+            science_stopped,
+            gateway_stopped,
+        } => (science_stopped, gateway_stopped),
+        CodexDisableReceiptPhase::ConfigCommitted | CodexDisableReceiptPhase::Attention { .. } => {
+            unreachable!()
+        }
+    };
+    let consistent =
+        |observation: Option<CodexDisableComponentObservation>, stopped: bool| match observation {
+            None => !stopped,
+            Some(CodexDisableComponentObservation::Original) => !stopped,
+            Some(
+                CodexDisableComponentObservation::Absent
+                | CodexDisableComponentObservation::Restored,
+            ) => stopped,
+            Some(CodexDisableComponentObservation::Replacement) => false,
+        };
+    if !consistent(science, science_stopped) || !consistent(gateway, gateway_stopped) {
+        return CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::IdentityDrift);
+    }
+    if !science_stopped && !gateway_stopped {
+        CodexDisableReplayDecision::Clear
+    } else {
+        CodexDisableReplayDecision::Restore {
+            science_stopped,
+            gateway_stopped,
+        }
+    }
+}
+
+fn observe_codex_disable_science(
+    plan: &CodexDisableSciencePlan,
+) -> CodexDisableComponentObservation {
+    let Ok(runtime) = crate::runtime::science::runtime_identity_from_prior_recipe(&plan.prior)
+    else {
+        return CodexDisableComponentObservation::Replacement;
+    };
+    let mut restored = runtime.clone();
+    if crate::runtime::science::hydrate_runtime_from_v2_managed_launch(
+        plan.prior.port,
+        &mut restored,
+        &plan.restore_launch_id,
+    )
+    .is_ok()
+        && ScienceHostAdapter::probe_known(plan.prior.port, &restored)
+            == SandboxScienceState::RunningHealthy
+    {
+        return CodexDisableComponentObservation::Restored;
+    }
+    if ScienceHostAdapter::probe_known(plan.prior.port, &runtime)
+        == SandboxScienceState::RunningHealthy
+    {
+        return ScienceHostAdapter::managed_receipt(plan.prior.port, &runtime)
+            .and_then(|token| token.durable_receipt_digest().ok())
+            .filter(|digest| digest == &plan.prior.launch_receipt_digest)
+            .map(|_| CodexDisableComponentObservation::Original)
+            .unwrap_or(CodexDisableComponentObservation::Replacement);
+    }
+    if !proc::loopback_port_in_use(
+        plan.prior.port,
+        crate::runtime::operation::LOCAL_HEALTH_TIMEOUT_MS,
+    ) && crate::runtime::science::prior_restart_receipt_is_absent(&plan.prior, &runtime)
+    {
+        CodexDisableComponentObservation::Absent
+    } else {
+        CodexDisableComponentObservation::Replacement
+    }
+}
+
+fn restored_gateway_identity(
+    plan: &CodexDisableGatewayPlan,
+) -> config::GatewayRuntimeJournalIdentity {
+    let mut identity = plan.identity.clone();
+    identity.launch_id.clone_from(&plan.restore_launch_id);
+    identity
+}
+
+fn observe_codex_disable_gateway(
+    cfg: &config::Config,
+    plan: &CodexDisableGatewayPlan,
+) -> CodexDisableComponentObservation {
+    match GatewayController::observe_durable_untracked(cfg.proxy_port, &cfg.secret, &plan.identity)
+    {
+        DurableGatewayObservation::Exact => CodexDisableComponentObservation::Original,
+        DurableGatewayObservation::Absent => CodexDisableComponentObservation::Absent,
+        DurableGatewayObservation::Replacement => {
+            if GatewayController::observe_durable_untracked(
+                cfg.proxy_port,
+                &cfg.secret,
+                &restored_gateway_identity(plan),
+            ) == DurableGatewayObservation::Exact
+            {
+                CodexDisableComponentObservation::Restored
+            } else {
+                CodexDisableComponentObservation::Replacement
+            }
+        }
+    }
+}
+
+fn retain_codex_disable_attention(
+    dir: &Path,
+    open: &mut OpenCodexDisableReceipt,
+    cause: CodexDisableAttentionCause,
+    config_committed: bool,
+) -> CodexDisableCommandError {
+    let phase = open.record.phase.code();
+    if open
+        .transition(dir, CodexDisableReceiptPhase::Attention { cause })
+        .is_err()
+    {
+        // The only valid receipt-free error window is after exact receipt
+        // unlink and before exact fence clear.  Preserve the self-describing
+        // fence and the original typed cause instead of degrading Config drift
+        // to generic receipt I/O; boot will make the same fail-closed decision.
+        let fence_still_durable =
+            codex_disable_config_fence(&open.record)
+                .ok()
+                .is_some_and(|expected| {
+                    read_codex_disable_receipt_at(dir).ok().flatten().is_none()
+                        && config::load_from(dir)
+                            .ok()
+                            .and_then(|cfg| cfg.codex_disable_operation_fence().ok().flatten())
+                            .as_ref()
+                            == Some(&expected)
+                });
+        if fence_still_durable {
+            return CodexDisableCommandError::attention(cause.code(), phase, config_committed);
+        }
+        CodexDisableCommandError::attention("receipt_io", phase, config_committed)
+    } else {
+        CodexDisableCommandError::attention(cause.code(), phase, config_committed)
+    }
+}
+
+/// Project attention without erasing replayable inverse progress.  Once a
+/// post-stop phase grants inverse authority, a transient auth/launch/clear
+/// failure must leave `EffectsApplied`, `Restoring`, or `Restored` durable so a
+/// genuinely fresh process can adopt exact restored components and continue.
+fn project_codex_disable_recovery_attention(
+    open: &OpenCodexDisableReceipt,
+    cause: CodexDisableAttentionCause,
+    config_committed: bool,
+) -> CodexDisableCommandError {
+    CodexDisableCommandError::attention(cause.code(), open.record.phase.code(), config_committed)
+}
+
+fn codex_disable_phase_has_inverse_progress(phase: CodexDisableReceiptPhase) -> bool {
+    match phase {
+        CodexDisableReceiptPhase::Stopping {
+            science_stopped,
+            gateway_stopped,
+            ..
+        } => science_stopped || gateway_stopped,
+        CodexDisableReceiptPhase::EffectsApplied { .. }
+        | CodexDisableReceiptPhase::Restoring { .. }
+        | CodexDisableReceiptPhase::Restored { .. } => true,
+        CodexDisableReceiptPhase::Intent
+        | CodexDisableReceiptPhase::ConfigCommitted
+        | CodexDisableReceiptPhase::Attention { .. } => false,
+    }
+}
+
+fn retain_or_project_codex_disable_attention(
+    dir: &Path,
+    open: &mut OpenCodexDisableReceipt,
+    cause: CodexDisableAttentionCause,
+    config_committed: bool,
+) -> CodexDisableCommandError {
+    if codex_disable_phase_has_inverse_progress(open.record.phase) {
+        project_codex_disable_recovery_attention(open, cause, config_committed)
+    } else {
+        retain_codex_disable_attention(dir, open, cause, config_committed)
+    }
+}
+
+fn codex_disable_config_is_exact_before(
+    dir: &Path,
+    receipt: &CodexDisableOperationReceipt,
+) -> Result<config::Config, CodexDisableAttentionCause> {
+    let cfg = config::load_from(dir).map_err(|_| CodexDisableAttentionCause::ReceiptIo)?;
+    let expected_fence =
+        codex_disable_config_fence(receipt).map_err(|_| CodexDisableAttentionCause::ReceiptIo)?;
+    if cfg
+        .codex_disable_operation_fence()
+        .map_err(|_| CodexDisableAttentionCause::ReceiptIo)?
+        .as_ref()
+        != Some(&expected_fence)
+    {
+        return Err(CodexDisableAttentionCause::ConfigDrift);
+    }
+    let fingerprint = codex_disable_config_fingerprint(&cfg)
+        .map_err(|_| CodexDisableAttentionCause::ReceiptIo)?;
+    if fingerprint != receipt.before_config_fingerprint {
+        return Err(CodexDisableAttentionCause::ConfigDrift);
+    }
+    Ok(cfg)
+}
+
+fn acquire_codex_disable_effect_lease(
+    dir: &Path,
+    receipt: &CodexDisableOperationReceipt,
+    lifecycle: &crate::lifecycle::Lifecycle,
+) -> Result<config::CodexDisableEffectLease, CodexDisableAttentionCause> {
+    if lifecycle.current_generation() != receipt.plan.owner_generation {
+        return Err(CodexDisableAttentionCause::IdentityDrift);
+    }
+    let fence =
+        codex_disable_config_fence(receipt).map_err(|_| CodexDisableAttentionCause::ReceiptIo)?;
+    let lease = config::acquire_codex_disable_effect_lease(dir, &fence)
+        .map_err(|_| CodexDisableAttentionCause::ConfigDrift)?;
+    let fingerprint = codex_disable_config_fingerprint(lease.config())
+        .map_err(|_| CodexDisableAttentionCause::ReceiptIo)?;
+    if fingerprint != receipt.before_config_fingerprint
+        || !lease.config().experimental_codex_enabled
+    {
+        return Err(CodexDisableAttentionCause::ConfigDrift);
+    }
+    Ok(lease)
+}
+
+#[derive(Clone, Copy)]
+enum CodexDisableRestoreOrigin {
+    Live,
+    Fresh,
+}
+
+fn restore_stopped_codex_components<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    dir: &Path,
+    open: &mut OpenCodexDisableReceipt,
+    science_stopped: bool,
+    gateway_stopped: bool,
+    origin: CodexDisableRestoreOrigin,
+) -> Result<(), CodexDisableCommandError> {
+    if matches!(origin, CodexDisableRestoreOrigin::Live)
+        && !matches!(
+            lifecycle.current_generation(),
+            generation if generation == open.record.plan.owner_generation
+                || generation == open.record.plan.owner_generation.saturating_add(1)
+        )
+    {
+        return Err(project_codex_disable_recovery_attention(
+            open,
+            CodexDisableAttentionCause::IdentityDrift,
+            false,
+        ));
+    }
+    let cfg = match codex_disable_config_is_exact_before(dir, &open.record) {
+        Ok(cfg) => cfg,
+        Err(cause) => return Err(project_codex_disable_recovery_attention(open, cause, false)),
+    };
+    if science_stopped {
+        let Some(plan) = open.record.plan.science.as_ref() else {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::IdentityDrift,
+                false,
+            ));
+        };
+        if !matches!(
+            observe_codex_disable_science(plan),
+            CodexDisableComponentObservation::Absent | CodexDisableComponentObservation::Restored
+        ) {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::IdentityDrift,
+                false,
+            ));
+        }
+    }
+    if gateway_stopped {
+        let Some(plan) = open.record.plan.gateway.as_ref() else {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::IdentityDrift,
+                false,
+            ));
+        };
+        if !matches!(
+            observe_codex_disable_gateway(&cfg, plan),
+            CodexDisableComponentObservation::Absent | CodexDisableComponentObservation::Restored
+        ) {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::IdentityDrift,
+                false,
+            ));
+        }
+    }
+    if open
+        .transition(
+            dir,
+            CodexDisableReceiptPhase::Restoring {
+                science_stopped,
+                gateway_stopped,
+            },
+        )
+        .is_err()
+    {
+        let cause =
+            open.phase_publication_cause(dir, config::CodexDisableTerminalConfigImage::Before);
+        return Err(project_codex_disable_recovery_attention(open, cause, false));
+    }
+
+    let prepared = if gateway_stopped {
+        let Some(plan) = open.record.plan.gateway.as_ref() else {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::IdentityDrift,
+                false,
+            ));
+        };
+        match prepare_provider_auth(
+            app,
+            "codex",
+            CodexPreflightTarget::Profile(plan.profile_id.clone()),
+        ) {
+            Ok(proof) => proof,
+            Err(_) => {
+                return Err(project_codex_disable_recovery_attention(
+                    open,
+                    CodexDisableAttentionCause::RestoreFailed,
+                    false,
+                ))
+            }
+        }
+    } else {
+        None
+    };
+
+    if science_stopped {
+        let Some(plan) = open.record.plan.science.as_ref() else {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::IdentityDrift,
+                false,
+            ));
+        };
+        match observe_codex_disable_science(plan) {
+            CodexDisableComponentObservation::Absent
+            | CodexDisableComponentObservation::Restored => {}
+            CodexDisableComponentObservation::Original
+            | CodexDisableComponentObservation::Replacement => {
+                return Err(project_codex_disable_recovery_attention(
+                    open,
+                    CodexDisableAttentionCause::IdentityDrift,
+                    false,
+                ))
+            }
+        }
+        let restore = crate::runtime::sandbox_session::restore_science_from_durable_recipe(
+            app,
+            state,
+            lifecycle,
+            prepared.as_ref().map(PreparedCodexAuth::proof),
+            &plan.prior,
+            &plan.restore_launch_id,
+        );
+        if let Err(error) = restore {
+            let cause = match error {
+                crate::runtime::sandbox_session::DurableScienceRestoreError::Failed => {
+                    CodexDisableAttentionCause::RestoreFailed
+                }
+                crate::runtime::sandbox_session::DurableScienceRestoreError::Uncertain => {
+                    CodexDisableAttentionCause::RestoreUncertain
+                }
+            };
+            return Err(project_codex_disable_recovery_attention(open, cause, false));
+        }
+    }
+
+    if gateway_stopped {
+        let plan = open
+            .record
+            .plan
+            .gateway
+            .as_ref()
+            .expect("validated Gateway restore plan");
+        let restored_identity = restored_gateway_identity(plan);
+        match observe_codex_disable_gateway(&cfg, plan) {
+            CodexDisableComponentObservation::Absent => {}
+            CodexDisableComponentObservation::Restored => {
+                if GatewayController::clear_durable_untracked(
+                    app,
+                    cfg.proxy_port,
+                    &cfg.secret,
+                    &restored_identity,
+                )
+                .is_err()
+                {
+                    return Err(project_codex_disable_recovery_attention(
+                        open,
+                        CodexDisableAttentionCause::RestoreUncertain,
+                        false,
+                    ));
+                }
+            }
+            CodexDisableComponentObservation::Original
+            | CodexDisableComponentObservation::Replacement => {
+                return Err(project_codex_disable_recovery_attention(
+                    open,
+                    CodexDisableAttentionCause::IdentityDrift,
+                    false,
+                ))
+            }
+        }
+        let Some(profile) = cfg.profile_by_id(&plan.profile_id).cloned() else {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::ConfigDrift,
+                false,
+            ));
+        };
+        let science_runtime = lock(state).science_runtime.clone();
+        if GatewayController::restore_for(
+            app,
+            state,
+            lifecycle,
+            &profile,
+            science_runtime.as_ref(),
+            prepared.as_ref().map(PreparedCodexAuth::proof),
+            &plan.restore_launch_id,
+        )
+        .is_err()
+            || GatewayController::observe_durable_untracked(
+                cfg.proxy_port,
+                &cfg.secret,
+                &restored_identity,
+            ) != DurableGatewayObservation::Exact
+        {
+            return Err(project_codex_disable_recovery_attention(
+                open,
+                CodexDisableAttentionCause::RestoreFailed,
+                false,
+            ));
+        }
+    }
+
+    if science_stopped
+        && open.record.plan.science.as_ref().is_none_or(|plan| {
+            observe_codex_disable_science(plan) != CodexDisableComponentObservation::Restored
+        })
+    {
+        return Err(project_codex_disable_recovery_attention(
+            open,
+            CodexDisableAttentionCause::RestoreUncertain,
+            false,
+        ));
+    }
+    if open
+        .transition(
+            dir,
+            CodexDisableReceiptPhase::Restored {
+                science_stopped,
+                gateway_stopped,
+            },
+        )
+        .is_err()
+    {
+        let cause =
+            open.phase_publication_cause(dir, config::CodexDisableTerminalConfigImage::Before);
+        return Err(project_codex_disable_recovery_attention(open, cause, false));
+    }
+    open.clear_before(dir)
+        .map_err(|cause| project_codex_disable_recovery_attention(open, cause, false))
+}
+
+fn unrecorded_components_remain_original(
+    dir: &Path,
+    receipt: &CodexDisableOperationReceipt,
+    science_stopped: bool,
+    gateway_stopped: bool,
+) -> bool {
+    let Ok(cfg) = codex_disable_config_is_exact_before(dir, receipt) else {
+        return false;
+    };
+    (!receipt.plan.science.as_ref().is_some_and(|plan| {
+        !science_stopped
+            && observe_codex_disable_science(plan) != CodexDisableComponentObservation::Original
+    })) && (!receipt.plan.gateway.as_ref().is_some_and(|plan| {
+        !gateway_stopped
+            && observe_codex_disable_gateway(&cfg, plan)
+                != CodexDisableComponentObservation::Original
+    }))
+}
+
+fn handle_codex_disable_pre_effect_phase_failure(
+    dir: &Path,
+    open: &mut OpenCodexDisableReceipt,
+) -> CodexDisableCommandError {
+    if let Err(cause) = codex_disable_config_is_exact_before(dir, &open.record) {
+        return retain_codex_disable_attention(dir, open, cause, false);
+    }
+    if unrecorded_components_remain_original(dir, &open.record, false, false) {
+        match open.clear_before(dir) {
+            Ok(()) => return CodexDisableCommandError::failed("receipt_io", "intent"),
+            Err(cause) => return retain_codex_disable_attention(dir, open, cause, false),
+        }
+    }
+    retain_codex_disable_attention(dir, open, CodexDisableAttentionCause::StopUncertain, false)
+}
+
+fn commit_codex_disable_config(
+    dir: &Path,
+    receipt: &CodexDisableOperationReceipt,
+) -> Result<(), String> {
+    let expected = receipt.before_config_fingerprint.clone();
+    let fence = codex_disable_config_fence(receipt)?;
+    config::update_codex_disable_operation(dir, &fence, move |cfg| {
+        if codex_disable_config_fingerprint(cfg)? != expected || !cfg.experimental_codex_enabled {
+            return Err("Codex disable config before-image 已变化；拒绝提交".into());
+        }
+        cfg.experimental_codex_enabled = false;
+        Ok(((), true))
+    })
+}
+
+fn execute_planned_codex_gateway_stop(
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    claim: GatewayStopClaim,
+) -> Result<config::GatewayRuntimeJournalIdentity, String> {
+    #[cfg(test)]
+    if CODEX_DISABLE_GATEWAY_STOP_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|thread| *thread == std::thread::current().id())
+    {
+        return Err("test-only Codex disable Gateway stop failure".into());
+    }
+    GatewayController::execute_claimed_stop(state, lifecycle, claim)
+}
+
 struct CodexScienceObservation {
     state: SandboxScienceState,
     detected_runtime: Option<crate::runtime::science::ScienceRuntimeIdentity>,
@@ -658,6 +2177,8 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
     state: &SharedAppState,
     lifecycle: &crate::lifecycle::Lifecycle,
 ) -> Result<AuthRuntimeAction, String> {
+    require_no_codex_disable_receipt(&config::default_dir())
+        .map_err(|error| error.safe_message().to_string())?;
     let cfg = config::load_from(&config::default_dir()).map_err(|error| {
         format!("读取配置失败；为避免遗漏残留 Codex Science，认证未变更：{error}")
     })?;
@@ -722,6 +2243,7 @@ fn set_experimental_codex_enabled_at(
     enabled: bool,
     before_disable: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
+    require_no_codex_disable_receipt(dir).map_err(|error| error.safe_message().to_string())?;
     let preflight = config::load_from(dir).map_err(|error| error.to_string())?;
     config::require_no_runtime_transaction(&preflight)?;
     if !enabled {
@@ -729,11 +2251,568 @@ fn set_experimental_codex_enabled_at(
     }
     config::update_result(dir, move |cfg| {
         config::require_no_runtime_transaction(cfg)?;
+        let changed = cfg.experimental_codex_enabled != enabled;
         cfg.experimental_codex_enabled = enabled;
-        Ok(((), true))
+        Ok(((), changed))
     })
     .map_err(|error| error.to_string())?;
     Ok(json!({ "experimental_codex_enabled": enabled }))
+}
+
+fn commit_experimental_codex_disable_without_runtime(
+    dir: &Path,
+) -> Result<Value, CodexDisableCommandError> {
+    require_no_codex_disable_receipt(dir)?;
+    let preflight = config::load_from(dir)
+        .map_err(|_| CodexDisableCommandError::failed("config_unavailable", "intent"))?;
+    config::require_no_runtime_transaction(&preflight)
+        .map_err(|_| CodexDisableCommandError::failed("mutation_conflict", "intent"))?;
+    let update = config::update_result(dir, |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
+        let changed = cfg.experimental_codex_enabled;
+        cfg.experimental_codex_enabled = false;
+        Ok(((), changed))
+    });
+    if update.is_err() {
+        if let Err(attention) = require_no_codex_disable_receipt(dir) {
+            return Err(attention);
+        }
+        if config::load_from(dir)
+            .ok()
+            .is_some_and(|cfg| config::require_no_runtime_transaction(&cfg).is_err())
+        {
+            return Err(CodexDisableCommandError::failed(
+                "mutation_conflict",
+                "intent",
+            ));
+        }
+        return Err(CodexDisableCommandError::failed(
+            "config_commit_failed",
+            "intent",
+        ));
+    }
+    Ok(json!({ "experimental_codex_enabled": false }))
+}
+
+fn execute_experimental_codex_enabled<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    supervisor: &SharedCodexAuthSupervisor,
+    enabled: bool,
+) -> Result<Value, RuntimeCommandError> {
+    let dir = config::default_dir();
+    if enabled {
+        return set_experimental_codex_enabled_at(&dir, true, || Ok(()))
+            .map_err(RuntimeCommandError::from);
+    }
+
+    let mut mutation = Some(
+        CodexAuthSupervisor::begin_mutation(supervisor)
+            .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?,
+    );
+    let plan = plan_experimental_codex_disable(&dir, state, lifecycle)?;
+    let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+        return commit_experimental_codex_disable_without_runtime(&dir)
+            .map_err(RuntimeCommandError::from);
+    };
+    let CodexDisableStopPlan {
+        before_config,
+        receipt,
+        science_owner,
+        science,
+        gateway,
+    } = *plan;
+    let mut open = OpenCodexDisableReceipt::publish_intent(&dir, &before_config, receipt)
+        .map_err(|error| RuntimeCommandError::from(error.into_command_error()))?;
+    let mut science_stopped = false;
+    let mut gateway_stopped = false;
+
+    if let Some(science) = science {
+        if open
+            .transition(
+                &dir,
+                CodexDisableReceiptPhase::Stopping {
+                    component: CodexDisableComponent::Science,
+                    science_stopped,
+                    gateway_stopped,
+                },
+            )
+            .is_err()
+        {
+            let cause =
+                open.phase_publication_cause(&dir, config::CodexDisableTerminalConfigImage::Before);
+            return Err(RuntimeCommandError::from(retain_codex_disable_attention(
+                &dir, &mut open, cause, false,
+            )));
+        }
+        let effect_lease = match acquire_codex_disable_effect_lease(&dir, &open.record, lifecycle) {
+            Ok(lease) => lease,
+            Err(cause) => {
+                return Err(RuntimeCommandError::from(retain_codex_disable_attention(
+                    &dir, &mut open, cause, false,
+                )))
+            }
+        };
+        let stop_result =
+            execute_planned_codex_science_stop(app, state, lifecycle, science_owner, science);
+        drop(effect_lease);
+        if stop_result.is_err() {
+            if !unrecorded_components_remain_original(
+                &dir,
+                &open.record,
+                science_stopped,
+                gateway_stopped,
+            ) {
+                return Err(RuntimeCommandError::from(
+                    retain_or_project_codex_disable_attention(
+                        &dir,
+                        &mut open,
+                        CodexDisableAttentionCause::StopUncertain,
+                        false,
+                    ),
+                ));
+            }
+            open.clear_before(&dir).map_err(|cause| {
+                RuntimeCommandError::from(retain_codex_disable_attention(
+                    &dir, &mut open, cause, false,
+                ))
+            })?;
+            return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+                "science_stop_failed",
+                "stopping",
+            )));
+        }
+        science_stopped = true;
+        if open
+            .transition(
+                &dir,
+                CodexDisableReceiptPhase::EffectsApplied {
+                    science_stopped,
+                    gateway_stopped,
+                },
+            )
+            .is_err()
+        {
+            drop(mutation.take());
+            restore_stopped_codex_components(
+                app,
+                state,
+                lifecycle,
+                &dir,
+                &mut open,
+                science_stopped,
+                gateway_stopped,
+                CodexDisableRestoreOrigin::Live,
+            )?;
+            return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+                "receipt_io",
+                "restored",
+            )));
+        }
+    }
+
+    if let Some(gateway) = gateway {
+        if open
+            .transition(
+                &dir,
+                CodexDisableReceiptPhase::Stopping {
+                    component: CodexDisableComponent::Gateway,
+                    science_stopped,
+                    gateway_stopped,
+                },
+            )
+            .is_err()
+        {
+            drop(mutation.take());
+            if science_stopped {
+                restore_stopped_codex_components(
+                    app,
+                    state,
+                    lifecycle,
+                    &dir,
+                    &mut open,
+                    science_stopped,
+                    gateway_stopped,
+                    CodexDisableRestoreOrigin::Live,
+                )?;
+                return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+                    "receipt_io",
+                    "restored",
+                )));
+            }
+            return Err(RuntimeCommandError::from(
+                handle_codex_disable_pre_effect_phase_failure(&dir, &mut open),
+            ));
+        }
+        let effect_lease = match acquire_codex_disable_effect_lease(&dir, &open.record, lifecycle) {
+            Ok(lease) => lease,
+            Err(cause) => {
+                drop(mutation.take());
+                if science_stopped {
+                    restore_stopped_codex_components(
+                        app,
+                        state,
+                        lifecycle,
+                        &dir,
+                        &mut open,
+                        science_stopped,
+                        gateway_stopped,
+                        CodexDisableRestoreOrigin::Live,
+                    )?;
+                    return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+                        cause.code(),
+                        "restored",
+                    )));
+                }
+                return Err(RuntimeCommandError::from(retain_codex_disable_attention(
+                    &dir, &mut open, cause, false,
+                )));
+            }
+        };
+        let stop_result = execute_planned_codex_gateway_stop(state, lifecycle, gateway);
+        drop(effect_lease);
+        if stop_result.is_err() {
+            if !unrecorded_components_remain_original(
+                &dir,
+                &open.record,
+                science_stopped,
+                gateway_stopped,
+            ) {
+                return Err(RuntimeCommandError::from(
+                    retain_or_project_codex_disable_attention(
+                        &dir,
+                        &mut open,
+                        CodexDisableAttentionCause::StopUncertain,
+                        false,
+                    ),
+                ));
+            }
+            if science_stopped {
+                drop(mutation.take());
+                restore_stopped_codex_components(
+                    app,
+                    state,
+                    lifecycle,
+                    &dir,
+                    &mut open,
+                    science_stopped,
+                    gateway_stopped,
+                    CodexDisableRestoreOrigin::Live,
+                )?;
+            } else {
+                open.clear_before(&dir).map_err(|cause| {
+                    RuntimeCommandError::from(retain_codex_disable_attention(
+                        &dir, &mut open, cause, false,
+                    ))
+                })?;
+            }
+            return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+                "gateway_stop_failed",
+                if science_stopped {
+                    "restored"
+                } else {
+                    "intent"
+                },
+            )));
+        }
+        gateway_stopped = true;
+        if open
+            .transition(
+                &dir,
+                CodexDisableReceiptPhase::EffectsApplied {
+                    science_stopped,
+                    gateway_stopped,
+                },
+            )
+            .is_err()
+        {
+            drop(mutation.take());
+            restore_stopped_codex_components(
+                app,
+                state,
+                lifecycle,
+                &dir,
+                &mut open,
+                science_stopped,
+                gateway_stopped,
+                CodexDisableRestoreOrigin::Live,
+            )?;
+            return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+                "receipt_io",
+                "restored",
+            )));
+        }
+    }
+    lifecycle.bump_generation();
+
+    if commit_codex_disable_config(&dir, &open.record).is_err() {
+        drop(mutation.take());
+        restore_stopped_codex_components(
+            app,
+            state,
+            lifecycle,
+            &dir,
+            &mut open,
+            science_stopped,
+            gateway_stopped,
+            CodexDisableRestoreOrigin::Live,
+        )?;
+        return Err(RuntimeCommandError::from(CodexDisableCommandError::failed(
+            "config_commit_failed",
+            "restored",
+        )));
+    }
+    drop(mutation.take());
+    if open
+        .transition(&dir, CodexDisableReceiptPhase::ConfigCommitted)
+        .is_err()
+    {
+        let cause = match open
+            .terminal_cleanup_cause(&dir, config::CodexDisableTerminalConfigImage::After)
+        {
+            CodexDisableAttentionCause::ConfigDrift => CodexDisableAttentionCause::ConfigDrift,
+            _ => CodexDisableAttentionCause::ReceiptIo,
+        };
+        return Err(RuntimeCommandError::from(retain_codex_disable_attention(
+            &dir, &mut open, cause, true,
+        )));
+    }
+    open.clear_after(&dir).map_err(|cause| {
+        RuntimeCommandError::from(retain_codex_disable_attention(&dir, &mut open, cause, true))
+    })?;
+    Ok(json!({ "experimental_codex_enabled": false }))
+}
+
+fn replay_codex_disable_before_image<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    supervisor: &SharedCodexAuthSupervisor,
+    dir: &Path,
+    open: &mut OpenCodexDisableReceipt,
+    cfg: &config::Config,
+) -> Result<(), CodexDisableCommandError> {
+    let science_observation = open
+        .record
+        .plan
+        .science
+        .as_ref()
+        .map(observe_codex_disable_science);
+    let gateway_observation = open
+        .record
+        .plan
+        .gateway
+        .as_ref()
+        .map(|plan| observe_codex_disable_gateway(cfg, plan));
+    let (science_stopped, gateway_stopped) = match decide_codex_disable_before_image_replay(
+        open.record.phase,
+        science_observation,
+        gateway_observation,
+    ) {
+        CodexDisableReplayDecision::Clear => {
+            return open
+                .clear_before(dir)
+                .map_err(|cause| retain_codex_disable_attention(dir, open, cause, false))
+        }
+        CodexDisableReplayDecision::Restore {
+            science_stopped,
+            gateway_stopped,
+        } => (science_stopped, gateway_stopped),
+        CodexDisableReplayDecision::Attention(cause) => {
+            if codex_disable_phase_has_inverse_progress(open.record.phase) {
+                return Err(project_codex_disable_recovery_attention(open, cause, false));
+            }
+            if matches!(
+                open.record.phase,
+                CodexDisableReceiptPhase::Attention { .. }
+            ) {
+                return Err(CodexDisableCommandError::attention(
+                    cause.code(),
+                    "attention",
+                    false,
+                ));
+            }
+            return Err(retain_codex_disable_attention(dir, open, cause, false));
+        }
+    };
+
+    let mutation = CodexAuthSupervisor::begin_mutation(supervisor).map_err(|_| {
+        project_codex_disable_recovery_attention(
+            open,
+            CodexDisableAttentionCause::RestoreFailed,
+            false,
+        )
+    })?;
+    if gateway_stopped {
+        drop(mutation);
+        restore_stopped_codex_components(
+            app,
+            state,
+            lifecycle,
+            dir,
+            open,
+            science_stopped,
+            gateway_stopped,
+            CodexDisableRestoreOrigin::Fresh,
+        )
+    } else {
+        let outcome = restore_stopped_codex_components(
+            app,
+            state,
+            lifecycle,
+            dir,
+            open,
+            science_stopped,
+            gateway_stopped,
+            CodexDisableRestoreOrigin::Fresh,
+        );
+        drop(mutation);
+        outcome
+    }
+}
+
+/// Converge the dedicated Codex-disable receipt before ordinary boot chooses a
+/// launch path.  `None` means there was no interrupted operation (or replay
+/// safely finished); `Some` is a stable, credential-free boot attention DTO.
+pub(crate) fn replay_interrupted_codex_disable<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<Value> {
+    let dir = config::default_dir();
+    match config::recover_orphan_codex_disable_operation_fence(&dir) {
+        Ok(config::CodexDisableOrphanFenceRecovery::None)
+        | Ok(config::CodexDisableOrphanFenceRecovery::Cleared) => {}
+        Ok(config::CodexDisableOrphanFenceRecovery::ConfigDrift) => {
+            let disabled = config::load_from(&dir)
+                .map(|cfg| !cfg.experimental_codex_enabled)
+                .unwrap_or(false);
+            return Some(
+                CodexDisableCommandError::attention("config_drift", "attention", disabled)
+                    .project_boot_attention(),
+            );
+        }
+        Err(_) => {
+            return Some(
+                CodexDisableCommandError::attention("receipt_io", "attention", false)
+                    .project_boot_attention(),
+            )
+        }
+    }
+    let mut open = match read_codex_disable_receipt_at(&dir) {
+        Ok(None) => return None,
+        Ok(Some(open)) => open,
+        Err(_) => {
+            return Some(
+                CodexDisableCommandError::attention("receipt_invalid", "attention", false)
+                    .project_boot_attention(),
+            )
+        }
+    };
+    let cfg = match config::load_from(&dir) {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            return Some(
+                retain_or_project_codex_disable_attention(
+                    &dir,
+                    &mut open,
+                    CodexDisableAttentionCause::ReceiptIo,
+                    false,
+                )
+                .project_boot_attention(),
+            )
+        }
+    };
+    let expected_fence = match codex_disable_config_fence(&open.record) {
+        Ok(fence) => fence,
+        Err(_) => {
+            return Some(
+                retain_or_project_codex_disable_attention(
+                    &dir,
+                    &mut open,
+                    CodexDisableAttentionCause::ReceiptIo,
+                    false,
+                )
+                .project_boot_attention(),
+            )
+        }
+    };
+    if cfg.codex_disable_operation_fence().ok().flatten().as_ref() != Some(&expected_fence) {
+        return Some(
+            retain_or_project_codex_disable_attention(
+                &dir,
+                &mut open,
+                CodexDisableAttentionCause::ConfigDrift,
+                false,
+            )
+            .project_boot_attention(),
+        );
+    }
+    let fingerprint = match codex_disable_config_fingerprint(&cfg) {
+        Ok(fingerprint) => fingerprint,
+        Err(_) => {
+            return Some(
+                retain_or_project_codex_disable_attention(
+                    &dir,
+                    &mut open,
+                    CodexDisableAttentionCause::ReceiptIo,
+                    false,
+                )
+                .project_boot_attention(),
+            )
+        }
+    };
+    if fingerprint == open.record.after_config_fingerprint {
+        if !matches!(open.record.phase, CodexDisableReceiptPhase::ConfigCommitted)
+            && open
+                .transition(&dir, CodexDisableReceiptPhase::ConfigCommitted)
+                .is_err()
+        {
+            let cause = match open
+                .terminal_cleanup_cause(&dir, config::CodexDisableTerminalConfigImage::After)
+            {
+                CodexDisableAttentionCause::ConfigDrift => CodexDisableAttentionCause::ConfigDrift,
+                _ => CodexDisableAttentionCause::ReceiptIo,
+            };
+            return Some(
+                retain_or_project_codex_disable_attention(&dir, &mut open, cause, true)
+                    .project_boot_attention(),
+            );
+        }
+        return match open.clear_after(&dir) {
+            Ok(()) => None,
+            Err(cause) => Some(
+                retain_or_project_codex_disable_attention(&dir, &mut open, cause, true)
+                    .project_boot_attention(),
+            ),
+        };
+    }
+    if fingerprint != open.record.before_config_fingerprint {
+        return Some(
+            retain_or_project_codex_disable_attention(
+                &dir,
+                &mut open,
+                CodexDisableAttentionCause::ConfigDrift,
+                false,
+            )
+            .project_boot_attention(),
+        );
+    }
+
+    let state = app.state::<SharedAppState>().inner().clone();
+    let lifecycle = app.state::<SharedLifecycle>().inner().clone();
+    let supervisor = app.state::<SharedCodexAuthSupervisor>().inner().clone();
+    let result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+        replay_codex_disable_before_image(
+            app,
+            &state,
+            lifecycle.as_ref(),
+            &supervisor,
+            &dir,
+            &mut open,
+            &cfg,
+        )
+    });
+    result.err().map(|error| error.project_boot_attention())
 }
 
 fn set_codex_network_at(
@@ -2329,19 +4408,13 @@ pub(crate) async fn set_experimental_codex_enabled(
         lifecycle.with_mutation(
             RuntimeMutationDomain::Destructive,
             |_| -> Result<_, RuntimeCommandError> {
-                let _mutation = if enabled {
-                    None
-                } else {
-                    Some(
-                        CodexAuthSupervisor::begin_mutation(&supervisor).map_err(|_| {
-                            RuntimeCommandError::from(CodexAuthCommandError::busy())
-                        })?,
-                    )
-                };
-                set_experimental_codex_enabled_at(&config::default_dir(), enabled, || {
-                    prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
-                })
-                .map_err(RuntimeCommandError::from)
+                execute_experimental_codex_enabled(
+                    &app,
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    enabled,
+                )
             },
         )
     })
@@ -2485,7 +4558,11 @@ mod tests {
         }
 
         fn script(&self, body: &str) -> PathBuf {
-            let path = self.0.join("fake-sidecar");
+            self.named_script("fake-sidecar", body)
+        }
+
+        fn named_script(&self, name: &str, body: &str) -> PathBuf {
+            let path = self.0.join(name);
             fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
             path
@@ -2504,6 +4581,431 @@ mod tests {
             "ab".repeat(16),
             "cd".repeat(16)
         )
+    }
+
+    fn p2a_receipt_fixture(dir: &Path) -> CodexDisableOperationReceipt {
+        let cfg = config::load_from(dir).unwrap();
+        let before_config_fingerprint = codex_disable_config_fingerprint(&cfg).unwrap();
+        let after_config_fingerprint =
+            codex_disable_config_fingerprint(&codex_disable_after_config(&cfg)).unwrap();
+        CodexDisableOperationReceipt {
+            schema_version: CODEX_DISABLE_RECEIPT_SCHEMA_VERSION,
+            operation_id: "11".repeat(16),
+            operation: "experimental_codex_disable".into(),
+            before_config_fingerprint,
+            after_config_fingerprint,
+            config_reference: CodexDisableConfigReference {
+                schema_version: cfg.schema_version,
+                active_profile_id: cfg.active_id.clone(),
+                proxy_port: cfg.proxy_port,
+                sandbox_port: cfg.sandbox_port,
+            },
+            plan: CodexDisableDurablePlan {
+                owner_generation: 7,
+                science: Some(CodexDisableSciencePlan {
+                    prior: config::RuntimePriorScienceRecipe {
+                        port: cfg.sandbox_port,
+                        runtime_path: PathBuf::from("/bin/sh"),
+                        runtime_source: "explicit".into(),
+                        runtime_version: None,
+                        runtime_fingerprint: "22".repeat(32),
+                        runtime_adoption_attempt_id: Some("55".repeat(16)),
+                        launch_receipt_digest: "33".repeat(32),
+                    },
+                    restore_launch_id: "44".repeat(16),
+                }),
+                gateway: None,
+            },
+            phase: CodexDisableReceiptPhase::Intent,
+        }
+    }
+
+    fn p2a_config_dir(name: &str) -> TempDir {
+        let temp = TempDir::new(name);
+        let (proxy_port, sandbox_port) = r0_distinct_ports();
+        let cfg = config::Config {
+            experimental_codex_enabled: true,
+            proxy_port,
+            sandbox_port,
+            ..Default::default()
+        };
+        config::save_to(&temp.0, &cfg).unwrap();
+        temp
+    }
+
+    #[test]
+    fn p2a_codex_disable_receipt_phase_matrix_is_validated() {
+        let temp = p2a_config_dir("p2a-receipt-phases");
+        let mut receipt = p2a_receipt_fixture(&temp.0);
+        for phase in [
+            CodexDisableReceiptPhase::Intent,
+            CodexDisableReceiptPhase::Stopping {
+                component: CodexDisableComponent::Science,
+                science_stopped: false,
+                gateway_stopped: false,
+            },
+            CodexDisableReceiptPhase::EffectsApplied {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+            CodexDisableReceiptPhase::Restoring {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+            CodexDisableReceiptPhase::Restored {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+            CodexDisableReceiptPhase::ConfigCommitted,
+            CodexDisableReceiptPhase::Attention {
+                cause: CodexDisableAttentionCause::RestoreUncertain,
+            },
+        ] {
+            receipt.phase = phase;
+            let encoded = encode_codex_disable_receipt(&receipt).unwrap();
+            let decoded: CodexDisableOperationReceipt = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, receipt);
+            let text = String::from_utf8(encoded).unwrap();
+            for forbidden in ["api_key", "oauth", "account", "secret", "credential_ref"] {
+                assert!(!text.contains(forbidden), "receipt leaked {forbidden}");
+            }
+        }
+        receipt.phase = CodexDisableReceiptPhase::EffectsApplied {
+            science_stopped: false,
+            gateway_stopped: false,
+        };
+        assert!(encode_codex_disable_receipt(&receipt).is_err());
+        receipt.phase = CodexDisableReceiptPhase::EffectsApplied {
+            science_stopped: false,
+            gateway_stopped: true,
+        };
+        assert!(encode_codex_disable_receipt(&receipt).is_err());
+    }
+
+    #[test]
+    fn p2a_codex_disable_intent_config_race_without_receipt_is_retryable() {
+        let temp = p2a_config_dir("p2a-intent-config-race");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let mut raced = before.clone();
+        raced.reuse_system_ssh = !raced.reuse_system_ssh;
+        config::save_to(&temp.0, &raced).unwrap();
+
+        let error = match OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt) {
+            Ok(_) => panic!("a stale before-image must not publish an intent"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            CodexDisableIntentPublishError::Retryable {
+                cause: "config_drift"
+            }
+        );
+        let projected = error.into_command_error();
+        assert_eq!(projected.code, "codex_disable_failed");
+        assert_eq!(projected.cause, "config_drift");
+        assert!(projected.retryable);
+        assert!(!projected.attention_required);
+        assert!(config::read_codex_disable_operation_receipt(&temp.0)
+            .unwrap()
+            .is_none());
+        assert!(config::load_from(&temp.0)
+            .unwrap()
+            .codex_disable_operation_fence()
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn p2a_codex_disable_config_commit_is_exact_before_image() {
+        let temp = p2a_config_dir("p2a-config-before-image");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let mut open =
+            OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt.clone()).unwrap();
+        open.transition(
+            &temp.0,
+            CodexDisableReceiptPhase::EffectsApplied {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+        )
+        .unwrap();
+        commit_codex_disable_config(&temp.0, &receipt).unwrap();
+        assert!(
+            !config::load_from(&temp.0)
+                .unwrap()
+                .experimental_codex_enabled
+        );
+        open.transition(&temp.0, CodexDisableReceiptPhase::ConfigCommitted)
+            .unwrap();
+        open.clear_after(&temp.0).unwrap();
+
+        let temp = p2a_config_dir("p2a-config-drift");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let open =
+            OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt.clone()).unwrap();
+        let mut drifted = config::load_from(&temp.0).unwrap();
+        drifted.reuse_system_ssh = true;
+        config::test_save_to_without_history_authority_guard(&temp.0, &drifted).unwrap();
+        assert!(commit_codex_disable_config(&temp.0, &receipt).is_err());
+        let after = config::load_from(&temp.0).unwrap();
+        assert!(after.experimental_codex_enabled);
+        assert!(after.reuse_system_ssh);
+        assert_eq!(
+            open.clear_before(&temp.0).unwrap_err(),
+            CodexDisableAttentionCause::ConfigDrift
+        );
+        assert!(read_codex_disable_receipt_at(&temp.0).unwrap().is_some());
+        let mut restored = config::load_from(&temp.0).unwrap();
+        restored.reuse_system_ssh = false;
+        config::test_save_to_without_history_authority_guard(&temp.0, &restored).unwrap();
+        open.clear_before(&temp.0).unwrap();
+
+        let temp = p2a_config_dir("p2a-post-commit-terminal-drift");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let mut open =
+            OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt.clone()).unwrap();
+        open.transition(
+            &temp.0,
+            CodexDisableReceiptPhase::EffectsApplied {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+        )
+        .unwrap();
+        commit_codex_disable_config(&temp.0, &receipt).unwrap();
+        let mut drifted = config::load_from(&temp.0).unwrap();
+        drifted.reuse_system_ssh = true;
+        config::test_save_to_without_history_authority_guard(&temp.0, &drifted).unwrap();
+        assert!(open
+            .transition(&temp.0, CodexDisableReceiptPhase::ConfigCommitted)
+            .is_err());
+        assert_eq!(
+            open.clear_after(&temp.0).unwrap_err(),
+            CodexDisableAttentionCause::ConfigDrift
+        );
+        assert!(matches!(
+            read_codex_disable_receipt_at(&temp.0)
+                .unwrap()
+                .unwrap()
+                .record
+                .phase,
+            CodexDisableReceiptPhase::EffectsApplied {
+                science_stopped: true,
+                gateway_stopped: false
+            }
+        ));
+        assert!(config::load_from(&temp.0)
+            .unwrap()
+            .codex_disable_operation_fence()
+            .unwrap()
+            .is_some());
+        let mut exact_after = config::load_from(&temp.0).unwrap();
+        exact_after.reuse_system_ssh = false;
+        config::test_save_to_without_history_authority_guard(&temp.0, &exact_after).unwrap();
+        open.transition(&temp.0, CodexDisableReceiptPhase::ConfigCommitted)
+            .unwrap();
+        open.clear_after(&temp.0).unwrap();
+
+        let temp = p2a_config_dir("p2a-restored-terminal-drift");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let mut open = OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt).unwrap();
+        open.transition(
+            &temp.0,
+            CodexDisableReceiptPhase::Restored {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+        )
+        .unwrap();
+        let mut drifted = config::load_from(&temp.0).unwrap();
+        drifted.reuse_system_ssh = true;
+        config::test_save_to_without_history_authority_guard(&temp.0, &drifted).unwrap();
+        assert_eq!(
+            open.clear_before(&temp.0).unwrap_err(),
+            CodexDisableAttentionCause::ConfigDrift
+        );
+        assert!(matches!(
+            read_codex_disable_receipt_at(&temp.0)
+                .unwrap()
+                .unwrap()
+                .record
+                .phase,
+            CodexDisableReceiptPhase::Restored {
+                science_stopped: true,
+                gateway_stopped: false
+            }
+        ));
+        let mut exact_before = config::load_from(&temp.0).unwrap();
+        exact_before.reuse_system_ssh = false;
+        config::test_save_to_without_history_authority_guard(&temp.0, &exact_before).unwrap();
+        open.clear_before(&temp.0).unwrap();
+
+        let temp = p2a_config_dir("p2a-receipt-unlink-terminal-drift");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let mut open =
+            OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt.clone()).unwrap();
+        open.transition(
+            &temp.0,
+            CodexDisableReceiptPhase::EffectsApplied {
+                science_stopped: true,
+                gateway_stopped: false,
+            },
+        )
+        .unwrap();
+        commit_codex_disable_config(&temp.0, &receipt).unwrap();
+        open.transition(&temp.0, CodexDisableReceiptPhase::ConfigCommitted)
+            .unwrap();
+        let fence = codex_disable_config_fence(&open.record).unwrap();
+        config::clear_codex_disable_operation_receipt(
+            &temp.0,
+            &open.bytes,
+            &fence,
+            config::CodexDisableTerminalConfigImage::After,
+        )
+        .unwrap();
+        let mut drifted = config::load_from(&temp.0).unwrap();
+        drifted.reuse_system_ssh = true;
+        config::test_save_to_without_history_authority_guard(&temp.0, &drifted).unwrap();
+        assert_eq!(
+            open.clear_after(&temp.0).unwrap_err(),
+            CodexDisableAttentionCause::ConfigDrift
+        );
+        let attention = retain_codex_disable_attention(
+            &temp.0,
+            &mut open,
+            CodexDisableAttentionCause::ConfigDrift,
+            true,
+        );
+        assert_eq!(attention.code, "codex_disable_attention");
+        assert_eq!(attention.cause, "config_drift");
+        assert!(attention.attention_required);
+        let blocked = require_no_codex_disable_receipt(&temp.0).unwrap_err();
+        assert_eq!(blocked.cause, "config_drift");
+        assert!(blocked.attention_required);
+        assert!(config::read_codex_disable_operation_receipt(&temp.0)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            config::recover_orphan_codex_disable_operation_fence(&temp.0).unwrap(),
+            config::CodexDisableOrphanFenceRecovery::ConfigDrift
+        );
+        let mut exact_after = config::load_from(&temp.0).unwrap();
+        exact_after.reuse_system_ssh = false;
+        config::test_save_to_without_history_authority_guard(&temp.0, &exact_after).unwrap();
+        assert_eq!(
+            config::recover_orphan_codex_disable_operation_fence(&temp.0).unwrap(),
+            config::CodexDisableOrphanFenceRecovery::Cleared
+        );
+    }
+
+    #[test]
+    fn p2a_open_receipt_blocks_conflicting_toggle() {
+        let temp = p2a_config_dir("p2a-open-receipt");
+        let receipt = p2a_receipt_fixture(&temp.0);
+        let before = config::load_from(&temp.0).unwrap();
+        let open = OpenCodexDisableReceipt::publish_intent(&temp.0, &before, receipt).unwrap();
+        let called = std::cell::Cell::new(false);
+        let result = set_experimental_codex_enabled_at(&temp.0, true, || {
+            called.set(true);
+            Ok(())
+        });
+        assert!(result.unwrap_err().contains("durable receipt"));
+        assert!(!called.get());
+        assert!(
+            config::load_from(&temp.0)
+                .unwrap()
+                .experimental_codex_enabled
+        );
+        open.clear_before(&temp.0).unwrap();
+    }
+
+    #[test]
+    fn p2a_replay_decision_preserves_replacement_and_is_idempotent() {
+        use CodexDisableComponentObservation::{Absent, Original, Replacement, Restored};
+        assert_eq!(
+            decide_codex_disable_before_image_replay(
+                CodexDisableReceiptPhase::Intent,
+                Some(Original),
+                Some(Original),
+            ),
+            CodexDisableReplayDecision::Clear,
+        );
+        assert_eq!(
+            decide_codex_disable_before_image_replay(
+                CodexDisableReceiptPhase::Intent,
+                Some(Absent),
+                Some(Original),
+            ),
+            CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::IdentityDrift),
+        );
+        assert_eq!(
+            decide_codex_disable_before_image_replay(
+                CodexDisableReceiptPhase::Stopping {
+                    component: CodexDisableComponent::Science,
+                    science_stopped: false,
+                    gateway_stopped: false,
+                },
+                Some(Absent),
+                Some(Original),
+            ),
+            CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::StopUncertain),
+        );
+        assert_eq!(
+            decide_codex_disable_before_image_replay(
+                CodexDisableReceiptPhase::Stopping {
+                    component: CodexDisableComponent::Science,
+                    science_stopped: false,
+                    gateway_stopped: false,
+                },
+                Some(Original),
+                Some(Original),
+            ),
+            CodexDisableReplayDecision::Clear,
+        );
+        for phase in [
+            CodexDisableReceiptPhase::EffectsApplied {
+                science_stopped: true,
+                gateway_stopped: true,
+            },
+            CodexDisableReceiptPhase::Restoring {
+                science_stopped: true,
+                gateway_stopped: true,
+            },
+            CodexDisableReceiptPhase::Restored {
+                science_stopped: true,
+                gateway_stopped: true,
+            },
+        ] {
+            assert_eq!(
+                decide_codex_disable_before_image_replay(phase, Some(Restored), Some(Restored),),
+                CodexDisableReplayDecision::Restore {
+                    science_stopped: true,
+                    gateway_stopped: true,
+                },
+            );
+        }
+        assert_eq!(
+            decide_codex_disable_before_image_replay(
+                CodexDisableReceiptPhase::Intent,
+                Some(Replacement),
+                Some(Original),
+            ),
+            CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::IdentityDrift),
+        );
+        assert_eq!(
+            decide_codex_disable_before_image_replay(
+                CodexDisableReceiptPhase::ConfigCommitted,
+                None,
+                None,
+            ),
+            CodexDisableReplayDecision::Attention(CodexDisableAttentionCause::ConfigDrift),
+        );
     }
 
     fn status_json(reason: &str, authenticated: bool, generation: u64) -> String {
@@ -4198,6 +6700,1516 @@ mod tests {
 
     fn r0_process_is_running(pid: u32) -> bool {
         unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    fn p2a_terminate_exact_uncommitted_science(port: u16, pid: u32, process_start: &str) {
+        assert!(pid > 1, "isolated fake Science PID must be signal-safe");
+        assert_eq!(
+            crate::runtime::science::test_unique_listener_pid(port),
+            Some(pid),
+            "test cleanup may signal only the captured isolated listener"
+        );
+        assert_eq!(
+            crate::runtime::science::test_process_start_identity_for_pid(pid).as_deref(),
+            Some(process_start),
+            "test cleanup requires the captured process-start identity"
+        );
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
+        for _ in 0..100 {
+            if crate::runtime::science::test_unique_listener_pid(port) != Some(pid)
+                && crate::runtime::science::test_process_start_identity_for_pid(pid).as_deref()
+                    != Some(process_start)
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if crate::runtime::science::test_unique_listener_pid(port) == Some(pid)
+            && crate::runtime::science::test_process_start_identity_for_pid(pid).as_deref()
+                == Some(process_start)
+        {
+            assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        }
+        for _ in 0..100 {
+            if crate::runtime::science::test_unique_listener_pid(port) != Some(pid)
+                && crate::runtime::science::test_process_start_identity_for_pid(pid).as_deref()
+                    != Some(process_start)
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("captured isolated fake Science process survived exact test cleanup");
+    }
+
+    fn run_exact_p2a_codex_disable_case(case: &str) {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let child_name =
+            "commands::codex::tests::isolated_p2a_codex_disable_durable_mutation_receipt";
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(child_name)
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env("CSSWITCH_TEST_P2A_CASE", case)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success()
+                && stdout.lines().any(|line| line == "running 1 test")
+                && stdout
+                    .lines()
+                    .any(|line| line == format!("test {child_name} ... ok")),
+            "isolated P2-A {case} failed:\nstdout={}\nstderr={}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn p2a_install_gateway_wrapper(temp: &TempDir, real_gateway: &Path) -> PathBuf {
+        let wrapper = temp.named_script(
+            "p2a-gateway-wrapper",
+            &format!(
+                r#"if [ "$1" = "codex-auth" ] && [ "$2" = "status" ]; then
+  printf '%s\n' '{{"schema_version":3,"ok":true,"command":"status","status":{{"authenticated":true,"reason":"ready","account_hash":"abababababababababababababababab","expiry_state":"valid","expires_at":2000000000,"auth_epoch":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","auth_generation":1}}}}'
+  exit 0
+fi
+exec '{}' "$@""#,
+                real_gateway.display()
+            ),
+        );
+        let wrapper = wrapper.canonicalize().unwrap();
+        env::set_var("CSSWITCH_GATEWAY_BIN", &wrapper);
+        wrapper
+    }
+
+    fn p2a_start_gateway<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+        state: &SharedAppState,
+        lifecycle: &crate::lifecycle::Lifecycle,
+    ) -> (u32, String) {
+        let prepared = prepare_provider_auth(app, "codex", CodexPreflightTarget::ActiveProfile)
+            .unwrap()
+            .unwrap();
+        let cfg = config::load_from(&config::default_dir()).unwrap();
+        let profile = cfg.active_profile().unwrap().clone();
+        GatewayController::start_for(
+            app,
+            state,
+            lifecycle,
+            &profile,
+            None,
+            None,
+            Some(prepared.proof()),
+        )
+        .unwrap();
+        let current = lock(state);
+        (
+            current.proxy.as_ref().unwrap().id(),
+            current.launch_id.clone(),
+        )
+    }
+
+    fn p2a_stop_test_gateway(state: &SharedAppState) {
+        let outcome = lock(state).stop_proxy();
+        assert!(matches!(outcome, crate::GatewayStopOutcome::Stopped));
+    }
+
+    fn p2a_stop_test_science<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &SharedAppState) {
+        let runtime = lock(state)
+            .science_runtime
+            .clone()
+            .expect("test cleanup requires tracked Science runtime");
+        let cfg = config::load_from(&config::default_dir()).unwrap();
+        let token = ScienceHostAdapter::managed_receipt(cfg.sandbox_port, &runtime)
+            .expect("test cleanup requires exact managed Science receipt");
+        let request = ScienceStopRequest::exact(
+            &runtime,
+            ScienceStopOwnershipReceipt::from_managed_launch(&token),
+        );
+        let outcome = ScienceHostAdapter::execute_stop(app, request)
+            .into_parts()
+            .0;
+        assert!(
+            outcome.is_ok(),
+            "managed Science cleanup failed: {outcome:?}"
+        );
+        let mut current = lock(state);
+        current.science_runtime = None;
+        current.science_confirmed_stopped = Some(runtime);
+        current.sandbox_url = None;
+    }
+
+    #[test]
+    fn p2a_codex_disable_managed_runtime_contract() {
+        for case in [
+            "success",
+            "science-success",
+            "science-replay-stop",
+            "science-stopping-terminal",
+            "science-replay-both",
+            "science-partial-restore",
+            "science-restore-uncertain",
+            "science-replacement",
+            "science-config-drift",
+            "science-generation-drift",
+            "open-conflicts",
+            "stop-failure",
+            "config-restore",
+            "restore-attention",
+            "other-provider",
+            "replay-intent",
+            "replay-stop",
+            "gateway-phase-drift",
+            "gateway-stopping-aba",
+            "replay-commit",
+            "replay-replacement",
+        ] {
+            run_exact_p2a_codex_disable_case(case);
+        }
+    }
+
+    #[test]
+    #[ignore = "source-gate parent executes exact isolated P2-A cases with temp HOME, managed local Gateway/fake auth sidecar, and dynamic loopback ports"]
+    fn isolated_p2a_codex_disable_durable_mutation_receipt() {
+        let requested = env::var("CSSWITCH_TEST_P2A_CASE").unwrap_or_default();
+        assert!(matches!(
+            requested.as_str(),
+            "success"
+                | "science-success"
+                | "science-replay-stop"
+                | "science-stopping-terminal"
+                | "science-replay-both"
+                | "science-partial-restore"
+                | "science-restore-uncertain"
+                | "science-replacement"
+                | "science-config-drift"
+                | "science-generation-drift"
+                | "open-conflicts"
+                | "stop-failure"
+                | "config-restore"
+                | "restore-attention"
+                | "other-provider"
+                | "replay-intent"
+                | "replay-stop"
+                | "gateway-phase-drift"
+                | "gateway-stopping-aba"
+                | "replay-commit"
+                | "replay-replacement"
+        ));
+        let temp = TempDir::new(&format!("p2a-{requested}"));
+        let home = temp.0.canonicalize().unwrap().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let config_dir = r0_codex_config(&home);
+        let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .manage(lifecycle.clone() as SharedLifecycle)
+            .manage(supervisor.clone() as SharedCodexAuthSupervisor)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let real_gateway = gateway_bin_path(app.handle()).expect("local test Gateway must exist");
+        let wrapper = p2a_install_gateway_wrapper(&temp, &real_gateway);
+
+        if requested == "open-conflicts" {
+            let receipt = p2a_receipt_fixture(&config_dir);
+            let before = config::load_from(&config_dir).unwrap();
+            let open =
+                OpenCodexDisableReceipt::publish_intent(&config_dir, &before, receipt).unwrap();
+            let one_click =
+                match crate::runtime::sandbox_session::OneClickEntryPreflight::capture(&state) {
+                    Ok(_) => panic!("open Codex disable fence must block one-click preflight"),
+                    Err(error) => error,
+                };
+            assert_eq!(
+                one_click.kind(),
+                crate::runtime::failure::OneClickFailureKind::Prepare
+            );
+            assert!(
+                crate::runtime::profile::ensure_codex_profile_inner(&config_dir)
+                    .unwrap_err()
+                    .contains("codex_disable_operation_in_progress")
+            );
+            let writer = config::update(&config_dir, |current| {
+                current.codex_network = csswitch_codex_network::CodexNetworkSettings::default();
+                current.mode = "official".into();
+            });
+            assert!(writer
+                .unwrap_err()
+                .to_string()
+                .contains("Codex disable operation"));
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            open.clear_before(&config_dir).unwrap();
+            return;
+        }
+
+        if requested.starts_with("science-") {
+            let bin_dir = temp.0.join("bin");
+            let fake_science = crate::commands::runtime::tests::write_test_bins(&bin_dir)
+                .canonicalize()
+                .unwrap();
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            env::set_var("SCIENCE_BIN", &fake_science);
+            env::set_var("CSSWITCH_TEST_OPEN_BIN", bin_dir.join("open"));
+            env::set_var("CSSWITCH_TEST_FAKE_SCIENCE_IDENTITY", "1");
+            env::set_var("CSSWITCH_DOCTOR_CHECK_REAL_HOME", "0");
+            env::set_var("CSSWITCH_REPO", root);
+            env::set_var(
+                "PATH",
+                format!(
+                    "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+                    bin_dir.to_string_lossy()
+                ),
+            );
+            let prepared =
+                prepare_provider_auth(app.handle(), "codex", CodexPreflightTarget::ActiveProfile)
+                    .unwrap()
+                    .unwrap();
+            let _catalog = crate::runtime::sandbox_session::test_arm_gateway_catalog_bypass(
+                config::load_from(&config_dir).unwrap().proxy_port,
+            );
+            lifecycle
+                .with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                    crate::runtime::sandbox_session::one_click_login(
+                        app.handle().clone(),
+                        state.clone(),
+                        lifecycle.as_ref(),
+                        None,
+                        Some(prepared.proof()),
+                    )
+                })
+                .unwrap();
+            drop(prepared);
+            let prior_runtime = lock(&state)
+                .science_runtime
+                .clone()
+                .expect("fake managed Science must be tracked");
+            let sandbox_port = config::load_from(&config_dir).unwrap().sandbox_port;
+            let prior_token = ScienceHostAdapter::managed_receipt(sandbox_port, &prior_runtime)
+                .expect("fake managed Science receipt must exist");
+            assert!(ScienceHostAdapter::receipt_is_current(
+                &prior_token,
+                &prior_runtime
+            ));
+            let (prior_gateway_pid, prior_gateway_launch_id) = {
+                let current = lock(&state);
+                (
+                    current.proxy.as_ref().unwrap().id(),
+                    current.launch_id.clone(),
+                )
+            };
+
+            match requested.as_str() {
+                "science-success" => {
+                    let result =
+                        lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                            execute_experimental_codex_enabled(
+                                app.handle(),
+                                &state,
+                                lifecycle.as_ref(),
+                                &supervisor,
+                                false,
+                            )
+                        });
+                    assert_eq!(result.unwrap()["experimental_codex_enabled"], false);
+                    assert!(lock(&state).science_runtime.is_none());
+                    assert_eq!(
+                        ScienceHostAdapter::probe_known(sandbox_port, &prior_runtime),
+                        SandboxScienceState::Stopped
+                    );
+                    assert!(read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .is_none());
+                }
+                "science-replay-stop" => {
+                    let plan =
+                        plan_experimental_codex_disable(&config_dir, &state, &lifecycle).unwrap();
+                    let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+                        panic!("managed Science and Gateway must produce a stop plan")
+                    };
+                    let CodexDisableStopPlan {
+                        before_config,
+                        receipt,
+                        science_owner,
+                        science,
+                        gateway,
+                    } = *plan;
+                    let science_plan = receipt.plan.science.clone().unwrap();
+                    let mut open = OpenCodexDisableReceipt::publish_intent(
+                        &config_dir,
+                        &before_config,
+                        receipt,
+                    )
+                    .unwrap();
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::Stopping {
+                            component: CodexDisableComponent::Science,
+                            science_stopped: false,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    let proof =
+                        acquire_codex_disable_effect_lease(&config_dir, &open.record, &lifecycle)
+                            .unwrap();
+                    execute_planned_codex_science_stop(
+                        app.handle(),
+                        &state,
+                        &lifecycle,
+                        science_owner,
+                        science.unwrap(),
+                    )
+                    .unwrap();
+                    drop(proof);
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::EffectsApplied {
+                            science_stopped: true,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    drop(gateway);
+                    let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                    let fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let fresh_app = tauri::test::mock_builder()
+                        .manage(fresh_state.clone())
+                        .manage(fresh_lifecycle.clone() as SharedLifecycle)
+                        .manage(fresh_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    assert!(replay_interrupted_codex_disable(fresh_app.handle()).is_none());
+                    assert!(replay_interrupted_codex_disable(fresh_app.handle()).is_none());
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Restored
+                    );
+                    assert!(r0_process_is_running(prior_gateway_pid));
+                    assert_eq!(lock(&state).launch_id, prior_gateway_launch_id);
+                    p2a_stop_test_science(fresh_app.handle(), &fresh_state);
+                    p2a_stop_test_gateway(&state);
+                }
+                "science-stopping-terminal" => {
+                    let plan =
+                        plan_experimental_codex_disable(&config_dir, &state, &lifecycle).unwrap();
+                    let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+                        panic!("managed Science and Gateway must produce a stop plan")
+                    };
+                    let CodexDisableStopPlan {
+                        before_config,
+                        receipt,
+                        science,
+                        gateway,
+                        ..
+                    } = *plan;
+                    assert!(science.is_some());
+                    assert!(gateway.is_some());
+                    let mut open = OpenCodexDisableReceipt::publish_intent(
+                        &config_dir,
+                        &before_config,
+                        receipt,
+                    )
+                    .unwrap();
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::Stopping {
+                            component: CodexDisableComponent::Science,
+                            science_stopped: false,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    drop(science);
+                    drop(gateway);
+
+                    // The existing terminal cleanup path is intentionally
+                    // available without a runtime journal.  Its stop must not
+                    // be misattributed to the open P2-A pre-effect WAL.
+                    crate::commands::runtime::stop_all_inner_cmd_for_test(
+                        app.handle().clone(),
+                        state.clone(),
+                        lifecycle.clone(),
+                    )
+                    .unwrap();
+                    assert!(!r0_process_is_running(prior_gateway_pid));
+                    assert_eq!(
+                        ScienceHostAdapter::probe_known(sandbox_port, &prior_runtime),
+                        SandboxScienceState::Stopped
+                    );
+
+                    let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                    let fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let fresh_app = tauri::test::mock_builder()
+                        .manage(fresh_state.clone())
+                        .manage(fresh_lifecycle.clone() as SharedLifecycle)
+                        .manage(fresh_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    for _ in 0..2 {
+                        let attention = replay_interrupted_codex_disable(fresh_app.handle())
+                            .expect("terminal stop after pre-effect WAL must retain attention");
+                        assert_eq!(attention["status"], "attention");
+                        assert_eq!(attention["error"]["cause"], "stop_uncertain");
+                    }
+                    assert!(lock(&fresh_state).science_runtime.is_none());
+                    assert!(lock(&fresh_state).proxy.is_none());
+                    assert!(
+                        config::load_from(&config_dir)
+                            .unwrap()
+                            .experimental_codex_enabled
+                    );
+                    open = read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .expect("uncertain terminal stop retains receipt");
+                    assert!(matches!(
+                        open.record.phase,
+                        CodexDisableReceiptPhase::Attention {
+                            cause: CodexDisableAttentionCause::StopUncertain
+                        }
+                    ));
+                    open.clear_before(&config_dir).unwrap();
+                }
+                "science-replay-both" => {
+                    let plan =
+                        plan_experimental_codex_disable(&config_dir, &state, &lifecycle).unwrap();
+                    let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+                        panic!("managed Science and Gateway must produce a stop plan")
+                    };
+                    let CodexDisableStopPlan {
+                        before_config,
+                        receipt,
+                        science_owner,
+                        science,
+                        gateway,
+                    } = *plan;
+                    let science_plan = receipt.plan.science.clone().unwrap();
+                    let gateway_plan = receipt.plan.gateway.clone().unwrap();
+                    let mut open = OpenCodexDisableReceipt::publish_intent(
+                        &config_dir,
+                        &before_config,
+                        receipt,
+                    )
+                    .unwrap();
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::Stopping {
+                            component: CodexDisableComponent::Science,
+                            science_stopped: false,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    let proof =
+                        acquire_codex_disable_effect_lease(&config_dir, &open.record, &lifecycle)
+                            .unwrap();
+                    execute_planned_codex_science_stop(
+                        app.handle(),
+                        &state,
+                        &lifecycle,
+                        science_owner,
+                        science.unwrap(),
+                    )
+                    .unwrap();
+                    drop(proof);
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::EffectsApplied {
+                            science_stopped: true,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::Stopping {
+                            component: CodexDisableComponent::Gateway,
+                            science_stopped: true,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    let proof =
+                        acquire_codex_disable_effect_lease(&config_dir, &open.record, &lifecycle)
+                            .unwrap();
+                    execute_planned_codex_gateway_stop(&state, &lifecycle, gateway.unwrap())
+                        .unwrap();
+                    drop(proof);
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::EffectsApplied {
+                            science_stopped: true,
+                            gateway_stopped: true,
+                        },
+                    )
+                    .unwrap();
+                    let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                    let fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let fresh_app = tauri::test::mock_builder()
+                        .manage(fresh_state.clone())
+                        .manage(fresh_lifecycle.clone() as SharedLifecycle)
+                        .manage(fresh_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    assert!(replay_interrupted_codex_disable(fresh_app.handle()).is_none());
+                    assert!(replay_interrupted_codex_disable(fresh_app.handle()).is_none());
+                    let restored_cfg = config::load_from(&config_dir).unwrap();
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Restored
+                    );
+                    assert_eq!(
+                        observe_codex_disable_gateway(&restored_cfg, &gateway_plan),
+                        CodexDisableComponentObservation::Restored
+                    );
+                    assert!(lock(&fresh_state).proxy.is_some());
+                    p2a_stop_test_science(fresh_app.handle(), &fresh_state);
+                    p2a_stop_test_gateway(&fresh_state);
+                }
+                "science-partial-restore" => {
+                    let failing_gateway = temp.named_script(
+                        "p2a-gateway-restore-fails-after-auth",
+                        r#"if [ "$1" = "codex-auth" ] && [ "$2" = "status" ]; then
+  printf '%s\n' '{"schema_version":3,"ok":true,"command":"status","status":{"authenticated":true,"reason":"ready","account_hash":"abababababababababababababababab","expiry_state":"valid","expires_at":2000000000,"auth_epoch":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","auth_generation":1}}'
+  exit 0
+fi
+exit 23"#,
+                    );
+                    env::set_var(
+                        "CSSWITCH_GATEWAY_BIN",
+                        failing_gateway.canonicalize().unwrap(),
+                    );
+                    let restore_auth_probe = prepare_provider_auth(
+                        app.handle(),
+                        "codex",
+                        CodexPreflightTarget::ActiveProfile,
+                    )
+                    .expect("Gateway restore failure wrapper must pass auth preflight")
+                    .expect("Codex auth preflight must return proof");
+                    drop(restore_auth_probe);
+                    let prior_science_pid =
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port)
+                            .expect("prior fake Science listener must be unique");
+                    let fault = config::test_arm_update_commit_failure(config_dir.clone());
+                    let result =
+                        lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                            execute_experimental_codex_enabled(
+                                app.handle(),
+                                &state,
+                                lifecycle.as_ref(),
+                                &supervisor,
+                                false,
+                            )
+                        });
+                    drop(fault);
+                    assert!(matches!(
+                        result,
+                        Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                            code: "codex_disable_attention",
+                            cause: "restore_failed",
+                            phase: "restoring",
+                            attention_required: true,
+                            ..
+                        }))
+                    ));
+                    assert!(
+                        config::load_from(&config_dir)
+                            .unwrap()
+                            .experimental_codex_enabled
+                    );
+                    assert!(!r0_process_is_running(prior_gateway_pid));
+                    let open = read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .expect("partial inverse must retain replayable receipt progress");
+                    assert!(matches!(
+                        open.record.phase,
+                        CodexDisableReceiptPhase::Restoring {
+                            science_stopped: true,
+                            gateway_stopped: true
+                        }
+                    ));
+                    let science_plan = open.record.plan.science.clone().unwrap();
+                    let gateway_plan = open.record.plan.gateway.clone().unwrap();
+                    let restored_science_pid =
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "partial inverse must leave exact restored Science running: observation={:?}, tracked={}, prior_running={}, port_in_use={}",
+                                    observe_codex_disable_science(&science_plan),
+                                    lock(&state).science_runtime.is_some(),
+                                    r0_process_is_running(prior_science_pid),
+                                    proc::loopback_port_in_use(sandbox_port, 100)
+                                )
+                            });
+                    assert_ne!(restored_science_pid, prior_science_pid);
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Restored
+                    );
+                    assert_eq!(
+                        observe_codex_disable_gateway(
+                            &config::load_from(&config_dir).unwrap(),
+                            &gateway_plan
+                        ),
+                        CodexDisableComponentObservation::Absent
+                    );
+
+                    let first_fresh_state: SharedAppState =
+                        Arc::new(Mutex::new(AppState::default()));
+                    let first_fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let first_fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let first_fresh_app = tauri::test::mock_builder()
+                        .manage(first_fresh_state.clone())
+                        .manage(first_fresh_lifecycle.clone() as SharedLifecycle)
+                        .manage(first_fresh_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    let first_attention =
+                        replay_interrupted_codex_disable(first_fresh_app.handle())
+                            .expect("fresh replay must retain partial inverse progress");
+                    assert_eq!(first_attention["error"]["cause"], "restore_failed");
+                    assert_eq!(
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port),
+                        Some(restored_science_pid),
+                        "fresh replay must adopt, not duplicate, exact restored Science"
+                    );
+                    assert!(lock(&first_fresh_state).science_runtime.is_some());
+                    assert!(lock(&first_fresh_state).proxy.is_none());
+                    assert!(matches!(
+                        read_codex_disable_receipt_at(&config_dir)
+                            .unwrap()
+                            .unwrap()
+                            .record
+                            .phase,
+                        CodexDisableReceiptPhase::Restoring {
+                            science_stopped: true,
+                            gateway_stopped: true
+                        }
+                    ));
+
+                    let before_drift = config::load_from(&config_dir).unwrap().reuse_system_ssh;
+                    let mut drifted = config::load_from(&config_dir).unwrap();
+                    drifted.reuse_system_ssh = !before_drift;
+                    config::test_save_to_without_history_authority_guard(&config_dir, &drifted)
+                        .unwrap();
+                    let drift_attention =
+                        replay_interrupted_codex_disable(first_fresh_app.handle())
+                            .expect("Config drift must project attention without erasing progress");
+                    assert_eq!(drift_attention["error"]["cause"], "config_drift");
+                    assert!(matches!(
+                        read_codex_disable_receipt_at(&config_dir)
+                            .unwrap()
+                            .unwrap()
+                            .record
+                            .phase,
+                        CodexDisableReceiptPhase::Restoring {
+                            science_stopped: true,
+                            gateway_stopped: true
+                        }
+                    ));
+                    assert_eq!(
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port),
+                        Some(restored_science_pid),
+                        "Config drift must not stop the exact partial restore"
+                    );
+                    let mut exact = config::load_from(&config_dir).unwrap();
+                    exact.reuse_system_ssh = before_drift;
+                    config::test_save_to_without_history_authority_guard(&config_dir, &exact)
+                        .unwrap();
+
+                    env::set_var("CSSWITCH_GATEWAY_BIN", &wrapper);
+                    let second_fresh_state: SharedAppState =
+                        Arc::new(Mutex::new(AppState::default()));
+                    let second_fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let second_fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let second_fresh_app = tauri::test::mock_builder()
+                        .manage(second_fresh_state.clone())
+                        .manage(second_fresh_lifecycle.clone() as SharedLifecycle)
+                        .manage(second_fresh_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    assert!(replay_interrupted_codex_disable(second_fresh_app.handle()).is_none());
+                    assert!(replay_interrupted_codex_disable(second_fresh_app.handle()).is_none());
+                    assert_eq!(
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port),
+                        Some(restored_science_pid),
+                        "second fresh replay must converge around the same restored Science"
+                    );
+                    assert!(lock(&second_fresh_state).science_runtime.is_some());
+                    assert!(lock(&second_fresh_state).proxy.is_some());
+                    assert!(read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .is_none());
+                    p2a_stop_test_science(second_fresh_app.handle(), &second_fresh_state);
+                    p2a_stop_test_gateway(&second_fresh_state);
+                }
+                "science-restore-uncertain" => {
+                    let prior_science_pid =
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port)
+                            .expect("prior fake Science listener must be unique");
+                    let uncertainty =
+                        crate::runtime::sandbox_session::test_arm_prior_restart_post_spawn_uncertain(
+                            sandbox_port,
+                        );
+                    let fault = config::test_arm_update_commit_failure(config_dir.clone());
+                    let result =
+                        lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                            execute_experimental_codex_enabled(
+                                app.handle(),
+                                &state,
+                                lifecycle.as_ref(),
+                                &supervisor,
+                                false,
+                            )
+                        });
+                    drop(fault);
+                    assert!(matches!(
+                        result,
+                        Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                            code: "codex_disable_attention",
+                            cause: "restore_uncertain",
+                            phase: "restoring",
+                            attention_required: true,
+                            ..
+                        }))
+                    ));
+                    let (uncertain_pid, uncertain_start) =
+                        crate::runtime::sandbox_session::test_prior_restart_post_spawn_identity()
+                            .expect("uncertain restore must expose its isolated fake identity");
+                    assert_ne!(uncertain_pid, prior_science_pid);
+                    assert!(r0_process_is_running(uncertain_pid));
+                    assert!(!r0_process_is_running(prior_gateway_pid));
+                    let open = read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .expect("uncertain inverse must retain replayable receipt progress");
+                    assert!(matches!(
+                        open.record.phase,
+                        CodexDisableReceiptPhase::Restoring {
+                            science_stopped: true,
+                            gateway_stopped: true
+                        }
+                    ));
+                    let science_plan = open.record.plan.science.clone().unwrap();
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Replacement,
+                        "uncommitted candidate must never be claimed as a managed restore"
+                    );
+
+                    let blocked_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                    let blocked_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let blocked_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let blocked_app = tauri::test::mock_builder()
+                        .manage(blocked_state.clone())
+                        .manage(blocked_lifecycle.clone() as SharedLifecycle)
+                        .manage(blocked_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    let blocked = replay_interrupted_codex_disable(blocked_app.handle())
+                        .expect("unproven Science candidate must keep replay fail closed");
+                    assert_eq!(blocked["error"]["cause"], "identity_drift");
+                    assert_eq!(
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port),
+                        Some(uncertain_pid),
+                        "replay must preserve an unproven replacement"
+                    );
+                    assert!(lock(&blocked_state).science_runtime.is_none());
+                    assert!(lock(&blocked_state).proxy.is_none());
+
+                    drop(uncertainty);
+                    p2a_terminate_exact_uncommitted_science(
+                        sandbox_port,
+                        uncertain_pid,
+                        &uncertain_start,
+                    );
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Absent
+                    );
+
+                    let recovered_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                    let recovered_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let recovered_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let recovered_app = tauri::test::mock_builder()
+                        .manage(recovered_state.clone())
+                        .manage(recovered_lifecycle.clone() as SharedLifecycle)
+                        .manage(recovered_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    assert!(replay_interrupted_codex_disable(recovered_app.handle()).is_none());
+                    assert!(replay_interrupted_codex_disable(recovered_app.handle()).is_none());
+                    let recovered_pid =
+                        crate::runtime::science::test_unique_listener_pid(sandbox_port)
+                            .expect("fresh replay must deterministically restore Science");
+                    assert_ne!(recovered_pid, uncertain_pid);
+                    assert!(lock(&recovered_state).science_runtime.is_some());
+                    assert!(lock(&recovered_state).proxy.is_some());
+                    assert!(read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .is_none());
+                    p2a_stop_test_science(recovered_app.handle(), &recovered_state);
+                    p2a_stop_test_gateway(&recovered_state);
+                }
+                "science-replacement" => {
+                    let plan =
+                        plan_experimental_codex_disable(&config_dir, &state, &lifecycle).unwrap();
+                    let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+                        panic!("managed Science and Gateway must produce a stop plan")
+                    };
+                    let CodexDisableStopPlan {
+                        before_config,
+                        receipt,
+                        science_owner,
+                        science,
+                        gateway,
+                    } = *plan;
+                    let science_plan = receipt.plan.science.clone().unwrap();
+                    let mut open = OpenCodexDisableReceipt::publish_intent(
+                        &config_dir,
+                        &before_config,
+                        receipt,
+                    )
+                    .unwrap();
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::Stopping {
+                            component: CodexDisableComponent::Science,
+                            science_stopped: false,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    let proof =
+                        acquire_codex_disable_effect_lease(&config_dir, &open.record, &lifecycle)
+                            .unwrap();
+                    execute_planned_codex_science_stop(
+                        app.handle(),
+                        &state,
+                        &lifecycle,
+                        science_owner,
+                        science.unwrap(),
+                    )
+                    .unwrap();
+                    drop(proof);
+                    drop(gateway);
+                    let replacement_launch_id = "aa".repeat(16);
+                    crate::runtime::sandbox_session::restore_science_from_durable_recipe(
+                        app.handle(),
+                        &state,
+                        &lifecycle,
+                        None,
+                        &science_plan.prior,
+                        &replacement_launch_id,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Replacement
+                    );
+                    let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                    let fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                    let fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                    let fresh_app = tauri::test::mock_builder()
+                        .manage(fresh_state)
+                        .manage(fresh_lifecycle.clone() as SharedLifecycle)
+                        .manage(fresh_supervisor as SharedCodexAuthSupervisor)
+                        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                        .unwrap();
+                    assert_eq!(
+                        replay_interrupted_codex_disable(fresh_app.handle()).unwrap()["status"],
+                        "attention"
+                    );
+                    assert_eq!(
+                        replay_interrupted_codex_disable(fresh_app.handle()).unwrap()["status"],
+                        "attention"
+                    );
+                    assert_eq!(
+                        observe_codex_disable_science(&science_plan),
+                        CodexDisableComponentObservation::Replacement
+                    );
+                    assert!(r0_process_is_running(prior_gateway_pid));
+                    open = read_codex_disable_receipt_at(&config_dir)
+                        .unwrap()
+                        .expect("replacement attention retains receipt");
+                    open.clear_before(&config_dir).unwrap();
+                    p2a_stop_test_science(app.handle(), &state);
+                    p2a_stop_test_gateway(&state);
+                }
+                "science-config-drift" | "science-generation-drift" => {
+                    let plan =
+                        plan_experimental_codex_disable(&config_dir, &state, &lifecycle).unwrap();
+                    let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+                        panic!("managed Science and Gateway must produce a stop plan")
+                    };
+                    let CodexDisableStopPlan {
+                        before_config,
+                        receipt,
+                        science,
+                        gateway,
+                        ..
+                    } = *plan;
+                    let mut open = OpenCodexDisableReceipt::publish_intent(
+                        &config_dir,
+                        &before_config,
+                        receipt,
+                    )
+                    .unwrap();
+                    open.transition(
+                        &config_dir,
+                        CodexDisableReceiptPhase::Stopping {
+                            component: CodexDisableComponent::Science,
+                            science_stopped: false,
+                            gateway_stopped: false,
+                        },
+                    )
+                    .unwrap();
+                    let expected_cause = if requested == "science-config-drift" {
+                        let mut drifted = config::load_from(&config_dir).unwrap();
+                        drifted.reuse_system_ssh = true;
+                        config::test_save_to_without_history_authority_guard(&config_dir, &drifted)
+                            .unwrap();
+                        CodexDisableAttentionCause::ConfigDrift
+                    } else {
+                        lifecycle.bump_generation();
+                        CodexDisableAttentionCause::IdentityDrift
+                    };
+                    assert!(acquire_codex_disable_effect_lease(
+                        &config_dir,
+                        &open.record,
+                        &lifecycle,
+                    )
+                    .is_err());
+                    let error = retain_codex_disable_attention(
+                        &config_dir,
+                        &mut open,
+                        expected_cause,
+                        false,
+                    );
+                    assert!(error.attention_required);
+                    assert_eq!(
+                        ScienceHostAdapter::probe_known(sandbox_port, &prior_runtime),
+                        SandboxScienceState::RunningHealthy
+                    );
+                    assert!(r0_process_is_running(prior_gateway_pid));
+                    assert_eq!(lock(&state).launch_id, prior_gateway_launch_id);
+                    drop(science);
+                    drop(gateway);
+                    if requested == "science-config-drift" {
+                        assert_eq!(
+                            open.clear_before(&config_dir).unwrap_err(),
+                            CodexDisableAttentionCause::ConfigDrift
+                        );
+                        let mut exact = config::load_from(&config_dir).unwrap();
+                        exact.reuse_system_ssh = false;
+                        config::test_save_to_without_history_authority_guard(&config_dir, &exact)
+                            .unwrap();
+                    }
+                    open.clear_before(&config_dir).unwrap();
+                    p2a_stop_test_science(app.handle(), &state);
+                    p2a_stop_test_gateway(&state);
+                }
+                _ => unreachable!(),
+            }
+            return;
+        }
+
+        if requested == "other-provider" {
+            let (other_state, other_pid) = r0_proxy_state("deepseek");
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let failed = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &other_state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            drop(fault);
+            assert!(matches!(
+                failed,
+                Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                    code: "codex_disable_failed",
+                    cause: "config_commit_failed",
+                    phase: "intent",
+                    ..
+                }))
+            ));
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(r0_process_is_running(other_pid));
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            let result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &other_state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            assert_eq!(result.unwrap()["experimental_codex_enabled"], false);
+            assert!(r0_process_is_running(other_pid));
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            p2a_stop_test_gateway(&other_state);
+            return;
+        }
+
+        let (prior_pid, prior_launch_id) = p2a_start_gateway(app.handle(), &state, &lifecycle);
+        assert!(r0_process_is_running(prior_pid));
+
+        if requested == "success" {
+            let result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            assert_eq!(result.unwrap()["experimental_codex_enabled"], false);
+            assert!(
+                !config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(lock(&state).proxy.is_none());
+            assert!(!r0_process_is_running(prior_pid));
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+
+            let enabled = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    true,
+                )
+            });
+            assert_eq!(enabled.unwrap()["experimental_codex_enabled"], true);
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let failed_noop = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            drop(fault);
+            assert!(matches!(
+                failed_noop,
+                Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                    code: "codex_disable_failed",
+                    cause: "config_commit_failed",
+                    phase: "intent",
+                    ..
+                }))
+            ));
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            let noop = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            assert_eq!(noop.unwrap()["experimental_codex_enabled"], false);
+            assert!(lock(&state).proxy.is_none());
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            return;
+        }
+
+        if requested == "stop-failure" {
+            let _fault = test_arm_codex_disable_gateway_stop_failure();
+            let result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            assert!(matches!(
+                result,
+                Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                    code: "codex_disable_failed",
+                    cause: "gateway_stop_failed",
+                    ..
+                }))
+            ));
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(r0_process_is_running(prior_pid));
+            assert_eq!(lock(&state).launch_id, prior_launch_id);
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            p2a_stop_test_gateway(&state);
+            return;
+        }
+
+        if requested == "gateway-phase-drift" {
+            let exact_failure = test_arm_codex_disable_gateway_phase_failure(
+                CodexDisablePhaseFailureMode::ExactBeforeImage,
+            );
+            let exact_result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            drop(exact_failure);
+            assert!(matches!(
+                exact_result,
+                Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                    code: "codex_disable_failed",
+                    cause: "receipt_io",
+                    phase: "intent",
+                    attention_required: false,
+                    ..
+                }))
+            ));
+            assert!(r0_process_is_running(prior_pid));
+            assert_eq!(lock(&state).launch_id, prior_launch_id);
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+
+            let before_drift = config::load_from(&config_dir).unwrap().reuse_system_ssh;
+            let drift_failure = test_arm_codex_disable_gateway_phase_failure(
+                CodexDisablePhaseFailureMode::ConfigDrift,
+            );
+            let drift_result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            drop(drift_failure);
+            assert!(matches!(
+                drift_result,
+                Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                    code: "codex_disable_attention",
+                    cause: "config_drift",
+                    phase: "intent",
+                    attention_required: true,
+                    ..
+                }))
+            ));
+            let drifted = config::load_from(&config_dir).unwrap();
+            assert!(drifted.experimental_codex_enabled);
+            assert_ne!(drifted.reuse_system_ssh, before_drift);
+            assert!(r0_process_is_running(prior_pid));
+            assert_eq!(lock(&state).launch_id, prior_launch_id);
+            let open = read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .expect("Config drift after phase failure must retain receipt attention");
+            assert!(matches!(
+                open.record.phase,
+                CodexDisableReceiptPhase::Attention {
+                    cause: CodexDisableAttentionCause::ConfigDrift
+                }
+            ));
+            assert_eq!(
+                open.clear_before(&config_dir).unwrap_err(),
+                CodexDisableAttentionCause::ConfigDrift
+            );
+            let mut exact = config::load_from(&config_dir).unwrap();
+            exact.reuse_system_ssh = before_drift;
+            config::test_save_to_without_history_authority_guard(&config_dir, &exact).unwrap();
+            open.clear_before(&config_dir).unwrap();
+            p2a_stop_test_gateway(&state);
+            return;
+        }
+
+        if matches!(requested.as_str(), "config-restore" | "restore-attention") {
+            if requested == "restore-attention" {
+                let failing = temp.named_script(
+                    "p2a-failing-gateway",
+                    "printf '%s\\n' 'invalid-sidecar-response'\nexit 23",
+                );
+                env::set_var("CSSWITCH_GATEWAY_BIN", failing);
+            }
+            let fault = config::test_arm_update_commit_failure(config_dir.clone());
+            let result = lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
+                execute_experimental_codex_enabled(
+                    app.handle(),
+                    &state,
+                    lifecycle.as_ref(),
+                    &supervisor,
+                    false,
+                )
+            });
+            drop(fault);
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(!r0_process_is_running(prior_pid));
+            if requested == "config-restore" {
+                assert!(matches!(
+                    result,
+                    Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                        code: "codex_disable_failed",
+                        cause: "config_commit_failed",
+                        ..
+                    }))
+                ));
+                let current = lock(&state);
+                assert!(current.proxy.is_some());
+                assert_ne!(current.launch_id, prior_launch_id);
+                drop(current);
+                assert!(read_codex_disable_receipt_at(&config_dir)
+                    .unwrap()
+                    .is_none());
+                p2a_stop_test_gateway(&state);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(RuntimeCommandError::Disable(CodexDisableCommandError {
+                        code: "codex_disable_attention",
+                        cause: "restore_failed",
+                        phase: "restoring",
+                        attention_required: true,
+                        ..
+                    }))
+                ));
+                assert!(lock(&state).proxy.is_none());
+                let open = read_codex_disable_receipt_at(&config_dir)
+                    .unwrap()
+                    .expect("failed restore retains receipt");
+                assert!(matches!(
+                    open.record.phase,
+                    CodexDisableReceiptPhase::Restoring {
+                        science_stopped: false,
+                        gateway_stopped: true
+                    }
+                ));
+                env::set_var("CSSWITCH_GATEWAY_BIN", &wrapper);
+                let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+                let fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+                let fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+                let fresh_app = tauri::test::mock_builder()
+                    .manage(fresh_state.clone())
+                    .manage(fresh_lifecycle.clone() as SharedLifecycle)
+                    .manage(fresh_supervisor as SharedCodexAuthSupervisor)
+                    .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                    .unwrap();
+                assert!(replay_interrupted_codex_disable(fresh_app.handle()).is_none());
+                assert!(replay_interrupted_codex_disable(fresh_app.handle()).is_none());
+                assert!(lock(&fresh_state).proxy.is_some());
+                assert!(read_codex_disable_receipt_at(&config_dir)
+                    .unwrap()
+                    .is_none());
+                p2a_stop_test_gateway(&fresh_state);
+            }
+            return;
+        }
+
+        let plan = plan_experimental_codex_disable(&config_dir, &state, &lifecycle).unwrap();
+        let ExperimentalCodexDisablePlan::StopManagedCodex(plan) = plan else {
+            panic!("running managed Codex Gateway must create a stop plan")
+        };
+        let CodexDisableStopPlan {
+            before_config,
+            receipt,
+            science,
+            gateway,
+            ..
+        } = *plan;
+        assert!(science.is_none());
+        let mut open =
+            OpenCodexDisableReceipt::publish_intent(&config_dir, &before_config, receipt).unwrap();
+
+        if requested == "replay-intent" {
+            drop(gateway);
+            assert!(replay_interrupted_codex_disable(app.handle()).is_none());
+            assert!(replay_interrupted_codex_disable(app.handle()).is_none());
+            assert!(r0_process_is_running(prior_pid));
+            assert_eq!(lock(&state).launch_id, prior_launch_id);
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            p2a_stop_test_gateway(&state);
+            return;
+        }
+
+        open.transition(
+            &config_dir,
+            CodexDisableReceiptPhase::Stopping {
+                component: CodexDisableComponent::Gateway,
+                science_stopped: false,
+                gateway_stopped: false,
+            },
+        )
+        .unwrap();
+        let effect_lease =
+            acquire_codex_disable_effect_lease(&config_dir, &open.record, &lifecycle).unwrap();
+        execute_planned_codex_gateway_stop(&state, &lifecycle, gateway.unwrap()).unwrap();
+        drop(effect_lease);
+        assert!(!r0_process_is_running(prior_pid));
+        assert!(lock(&state).proxy.is_none());
+
+        if requested == "gateway-stopping-aba" {
+            let (replacement_pid, replacement_launch_id) =
+                p2a_start_gateway(app.handle(), &state, &lifecycle);
+            assert_ne!(replacement_launch_id, prior_launch_id);
+            assert!(r0_process_is_running(replacement_pid));
+            p2a_stop_test_gateway(&state);
+            assert!(!r0_process_is_running(replacement_pid));
+
+            let fresh_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+            let fresh_lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+            let fresh_supervisor = Arc::new(CodexAuthSupervisor::default());
+            let fresh_app = tauri::test::mock_builder()
+                .manage(fresh_state.clone())
+                .manage(fresh_lifecycle.clone() as SharedLifecycle)
+                .manage(fresh_supervisor as SharedCodexAuthSupervisor)
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            for _ in 0..2 {
+                let attention = replay_interrupted_codex_disable(fresh_app.handle())
+                    .expect("start-stop ABA after pre-effect WAL must retain attention");
+                assert_eq!(attention["status"], "attention");
+                assert_eq!(attention["error"]["cause"], "stop_uncertain");
+            }
+            assert!(lock(&fresh_state).proxy.is_none());
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            open = read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .expect("Gateway ABA uncertainty retains receipt");
+            assert!(matches!(
+                open.record.phase,
+                CodexDisableReceiptPhase::Attention {
+                    cause: CodexDisableAttentionCause::StopUncertain
+                }
+            ));
+            open.clear_before(&config_dir).unwrap();
+            return;
+        }
+
+        if requested == "replay-commit" {
+            open.transition(
+                &config_dir,
+                CodexDisableReceiptPhase::EffectsApplied {
+                    science_stopped: false,
+                    gateway_stopped: true,
+                },
+            )
+            .unwrap();
+            commit_codex_disable_config(&config_dir, &open.record).unwrap();
+            assert!(replay_interrupted_codex_disable(app.handle()).is_none());
+            assert!(
+                !config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(lock(&state).proxy.is_none());
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            return;
+        }
+
+        if requested == "replay-stop" {
+            open.transition(
+                &config_dir,
+                CodexDisableReceiptPhase::EffectsApplied {
+                    science_stopped: false,
+                    gateway_stopped: true,
+                },
+            )
+            .unwrap();
+            assert!(replay_interrupted_codex_disable(app.handle()).is_none());
+            assert!(replay_interrupted_codex_disable(app.handle()).is_none());
+            assert!(
+                config::load_from(&config_dir)
+                    .unwrap()
+                    .experimental_codex_enabled
+            );
+            assert!(lock(&state).proxy.is_some());
+            assert!(read_codex_disable_receipt_at(&config_dir)
+                .unwrap()
+                .is_none());
+            p2a_stop_test_gateway(&state);
+            return;
+        }
+
+        assert_eq!(requested, "replay-replacement");
+        let (replacement_pid, replacement_launch_id) =
+            p2a_start_gateway(app.handle(), &state, &lifecycle);
+        assert_ne!(replacement_launch_id, prior_launch_id);
+        let first =
+            replay_interrupted_codex_disable(app.handle()).expect("replacement requires attention");
+        assert_eq!(first["status"], "attention");
+        assert!(r0_process_is_running(replacement_pid));
+        assert_eq!(lock(&state).launch_id, replacement_launch_id);
+        let second = replay_interrupted_codex_disable(app.handle())
+            .expect("attention replay remains fail closed");
+        assert_eq!(second["status"], "attention");
+        assert!(r0_process_is_running(replacement_pid));
+        assert_eq!(lock(&state).launch_id, replacement_launch_id);
+        p2a_stop_test_gateway(&state);
+        open = read_codex_disable_receipt_at(&config_dir)
+            .unwrap()
+            .expect("replacement attention retains receipt");
+        open.clear_before(&config_dir).unwrap();
+        env::set_var("CSSWITCH_GATEWAY_BIN", wrapper);
     }
 
     #[test]

@@ -134,6 +134,7 @@ impl GatewayController {
             science_runtime,
             trace,
             auth_proof,
+            None,
         )
     }
 
@@ -156,6 +157,31 @@ impl GatewayController {
             science_runtime,
             trace,
             auth_proof,
+            None,
+        )
+    }
+
+    /// Restore an exact prior managed Gateway with a durable launch id.  The
+    /// caller owns the operation receipt and auth/lifecycle leases; this facade
+    /// keeps the normal full-owner reservation and health acceptance path.
+    pub(crate) fn restore_for<R: Runtime>(
+        app: &tauri::AppHandle<R>,
+        state: &SharedAppState,
+        lifecycle: &lifecycle::Lifecycle,
+        profile: &config::Profile,
+        science_runtime: Option<&crate::runtime::science::ScienceRuntimeIdentity>,
+        auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+        durable_launch_id: &str,
+    ) -> Result<GatewayReceipt, String> {
+        start_proxy_for_inner(
+            app,
+            state,
+            lifecycle,
+            profile,
+            science_runtime,
+            None,
+            auth_proof,
+            Some(durable_launch_id),
         )
     }
 }

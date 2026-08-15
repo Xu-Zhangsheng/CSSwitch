@@ -9,6 +9,8 @@
         "test/codex_auth_ui.test.mjs::accepts every structured authentication error combination",
         "test/codex_auth_ui.test.mjs::keeps normal login, damaged records, and unavailable causes visibly distinct",
         "test/codex_auth_ui.test.mjs::rejects unknown fields and illegal reason cause retryability combinations",
+        "test/codex_disable_ui.test.mjs::accepts stable disable failure and attention projections",
+        "test/codex_disable_ui.test.mjs::rejects leaked, unknown, or contradictory disable errors",
         "test/model_catalog_state.test.mjs::Codex profile action aligns with providers as a permanently disabled edit button",
         "test/model_catalog_state.test.mjs::blank optional fields inherit the exact selector selected by their parent role",
         "test/model_catalog_state.test.mjs::compatible selectors sharing one upstream survive metadata refresh",
@@ -305,6 +307,7 @@
         "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_completion_state_cannot_claim_missing_characterization_tests",
         "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_every_machine_anchor_resolves_in_current_source",
         "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_integrity_checks_reject_representative_bad_inventory",
+        "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_p2a_codex_disable_receipt_contract_is_explicit",
         "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_r0_scope_and_critical_failure_boundaries_are_explicit",
         "test.test_runtime_mutation_inventory.RuntimeMutationInventoryTests.test_schema_and_fail_closed_references"
       ]
@@ -515,6 +518,7 @@
     },
     "RUST-DESKTOP": {
       "approved_ignored_test_ids": [
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_p2a_codex_disable_durable_mutation_receipt",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::isolated_r0_doctor_diagnostic_failure_skips_reconcile",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::isolated_cleanup_manifest_pre_rename_fault_is_crash_consistent",
@@ -557,6 +561,10 @@
         "desktop/src-tauri/Cargo.toml::lib::tests::isolated_r0_native_exit_events_share_repeatable_best_effort_cleanup"
       ],
       "approved_ignored_tests": {
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_p2a_codex_disable_durable_mutation_receipt": {
+          "boundary": "acceptance",
+          "reason": "source-gate parent executes exact isolated P2-A Codex disable receipt cases with temp HOME, managed local Gateway, fake auth sidecar, and dynamic loopback ports"
+        },
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract": {
           "boundary": "acceptance",
           "reason": "source-gate parents execute exact isolated R0-F Codex mutation cases with temp HOME, fake processes, fake sidecar, and dynamic loopback ports"
@@ -759,6 +767,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::experimental_toggle_commits_only_after_disable_precondition_succeeds",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::failed_or_cancelled_login_never_runs_profile_ensure",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::interactive_status_cancellation_reaps_the_child_promptly",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_p2a_codex_disable_durable_mutation_receipt",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::isolated_r0_codex_mutation_command_contract",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::launch_snapshot_ignores_unrelated_config_but_detects_every_launch_boundary",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::legacy_method_is_rejected_by_the_real_tauri_invoke_handler",
@@ -768,6 +777,11 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_sidecar_ndjson_replays_progress_and_one_terminal",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_success_terminal_requires_authenticated_status",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_terminal_rejects_missing_and_unknown_status_reason",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_config_commit_is_exact_before_image",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_managed_runtime_contract",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_receipt_phase_matrix_is_validated",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_open_receipt_blocks_conflicting_toggle",
+        "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_replay_decision_preserves_replacement_and_is_idempotent",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_requires_authentication_and_is_idempotent",
         "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_cancel_writes_exact_ndjson_and_write_failure_is_safely_terminalized",
@@ -846,6 +860,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::manual_browser_failure_returns_the_same_fresh_url_for_copy_and_retry",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::o0_gateway_terminal_handoff_reaches_production_one_click",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::o1_e4_history_full_snapshot_replay_resumes_from_durable_restore_intent",
+        "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::p2a_codex_disable_fence_blocks_mode_and_settings_before_effects",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_existing_marker_is_read_only",
         "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials",
@@ -934,6 +949,8 @@
         "desktop/src-tauri/Cargo.toml::lib::config::tests::native_v3_model_variants_preserve_the_selected_upstream",
         "desktop/src-tauri/Cargo.toml::lib::config::tests::new_id_is_unique_hex_and_now_ms_positive",
         "desktop/src-tauri/Cargo.toml::lib::config::tests::no_tmp_file_left_after_save",
+        "desktop/src-tauri/Cargo.toml::lib::config::tests::p2a_codex_disable_config_fence_blocks_siblings_and_recovers_orphans",
+        "desktop/src-tauri/Cargo.toml::lib::config::tests::p2a_codex_disable_receipt_cas_clear_preserves_replacement",
         "desktop/src-tauri/Cargo.toml::lib::config::tests::profile_accessors_by_id_and_active",
         "desktop/src-tauri/Cargo.toml::lib::config::tests::r0_startup_migration_is_single_commit_with_backup",
         "desktop/src-tauri/Cargo.toml::lib::config::tests::rolling_backup_then_drop_removes_key_recoverability",

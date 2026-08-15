@@ -177,6 +177,12 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
                 }
                 return Err(auth);
             }
+            Err(crate::commands::codex::RuntimeCommandError::Disable(error)) => {
+                return Ok(project_one_click_failure(TypedOneClickFailure::new(
+                    OneClickFailureKind::Prepare,
+                    error.safe_message(),
+                )));
+            }
         };
         match replay_compensation_to_convergence(&app, &state, &lifecycle) {
             Ok(true) => continue,

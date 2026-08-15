@@ -4,6 +4,10 @@ import {
   parseCodexAuthCommandError,
 } from "./codex-auth-protocol.js";
 import {
+  formatCodexDisableCommandError,
+  parseCodexDisableCommandError,
+} from "./codex-disable-protocol.js";
+import {
   PREVIEW,
   completeMockCodexLogin,
   getMockCodexOperation,
@@ -41,6 +45,13 @@ function clearStaleCodexAuthState() {
 }
 
 function runtimeCommandErrorText(error) {
+  let disableError;
+  try {
+    disableError = parseCodexDisableCommandError(error);
+  } catch (protocolError) {
+    return protocolError.message;
+  }
+  if (disableError) return formatCodexDisableCommandError(disableError);
   let authError;
   try {
     authError = parseCodexAuthCommandError(error);
@@ -401,12 +412,24 @@ async function toggleCodexFeature() {
       ? "Codex 实验入口已启用。下一步请在“设置 > Codex 账号与连接”登录 CSSwitch Codex。"
       : "Codex 实验入口已关闭；CSSwitch 自有 OAuth 凭据仍保留，可在此处检查或退出。", "ok");
   } catch (e) {
+    let disableError = null;
+    try {
+      disableError = parseCodexDisableCommandError(e);
+    } catch (_) {
+      // runtimeCommandErrorText owns the stable protocol-mismatch projection.
+    }
+    const committedWithAttention = !backendChanged && !desired && disableError?.config_state === "disabled";
+    if (committedWithAttention) {
+      backendChanged = true;
+    }
     if (backendChanged) {
       getConfigState().experimental_codex_enabled = desired;
       if (!desired) getConfigState().templates = (getConfigState().templates || []).filter((t) => !isCodexSource(t));
       renderList();
       syncCodexControls();
-      setMsg("Codex 实验入口已在后端" + (desired ? "启用" : "关闭") + "，但刷新完整配置失败：" + runtimeCommandErrorText(e) + " 请重新打开 CSSwitch 确认其余界面。", "err");
+      setMsg(committedWithAttention
+        ? runtimeCommandErrorText(e)
+        : "Codex 实验入口已在后端" + (desired ? "启用" : "关闭") + "，但刷新完整配置失败：" + runtimeCommandErrorText(e) + " 请重新打开 CSSwitch 确认其余界面。", "err");
     } else {
       getConfigState().experimental_codex_enabled = previous;
       els.codexEnabled.checked = previous;

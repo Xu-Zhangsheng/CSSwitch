@@ -12,6 +12,190 @@ struct GatewayProcessLocalOwner {
     launch_context: Option<GatewayLaunchRecipe>,
 }
 
+/// Process-local full-owner claim paired with the credential-free public
+/// identity that may be copied into a durable mutation receipt.
+pub(crate) struct GatewayStopClaim {
+    owner: GatewayProcessLocalOwner,
+    identity: config::GatewayRuntimeJournalIdentity,
+    profile_id: String,
+}
+
+impl GatewayStopClaim {
+    pub(crate) fn durable_identity(&self) -> config::GatewayRuntimeJournalIdentity {
+        self.identity.clone()
+    }
+
+    pub(crate) fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DurableGatewayObservation {
+    Absent,
+    Exact,
+    Replacement,
+}
+
+fn durable_gateway_health_matches(
+    health: &proc::GatewayHealth,
+    expected: &config::GatewayRuntimeJournalIdentity,
+) -> bool {
+    health.gateway == "rust"
+        && health.intent == "formal"
+        && health.provider == expected.provider
+        && health.shim == expected.shim
+        && health.launch_id == expected.launch_id
+        && !expected.provider_contract_id.is_empty()
+        && !expected.provider_contract_digest.is_empty()
+        && health.provider_contract_id == expected.provider_contract_id
+        && health.provider_contract_digest == expected.provider_contract_digest
+        && health.catalog_fp == expected.catalog_fp
+}
+
+impl GatewayController {
+    /// Freeze the current tracked Gateway by full process-local owner and a
+    /// secret-authenticated public health identity.  No credential or path
+    /// secret leaves this claim.
+    pub(crate) fn claim_stop(
+        state: &SharedAppState,
+        lifecycle: &lifecycle::Lifecycle,
+    ) -> Result<Option<GatewayStopClaim>, String> {
+        let owner = {
+            let mut current = lock(state);
+            if current.proxy.is_none() {
+                return Ok(None);
+            }
+            if !proc::tracked_child_is_running(&mut current.proxy) {
+                return Err("受管 Gateway child 不是可确认的运行态；拒绝建立停止 receipt。".into());
+            }
+            GatewayProcessLocalOwner::claim(&current, lifecycle.current_generation())
+                .ok_or("无法冻结受管 Gateway full owner")?
+        };
+        let health = proc::http_gateway_health(
+            owner.proxy_port,
+            Some(&owner.secret),
+            operation::LOCAL_HEALTH_TIMEOUT_MS,
+        )
+        .ok_or("受管 Gateway 不接受当前 path secret；拒绝建立停止 receipt")?;
+        let identity = config::GatewayRuntimeJournalIdentity {
+            provider: health.provider.clone(),
+            shim: health.shim.clone(),
+            launch_id: health.launch_id.clone(),
+            provider_contract_id: health.provider_contract_id.clone(),
+            provider_contract_digest: health.provider_contract_digest.clone(),
+            catalog_fp: health.catalog_fp.clone(),
+        };
+        if owner.provider != "codex"
+            || owner.gateway_kind != "rust"
+            || owner.launch_id != health.launch_id
+            || owner.provider != health.provider
+            || owner.shim_mode != health.shim
+            || !durable_gateway_health_matches(&health, &identity)
+        {
+            return Err("受管 Codex Gateway owner/health 身份不一致；拒绝停止。".into());
+        }
+        let profile_id = owner
+            .launch_context
+            .as_ref()
+            .map(|recipe| recipe.profile.id.clone())
+            .filter(|value| !value.is_empty())
+            .ok_or("受管 Codex Gateway 缺少精确 launch recipe reference")?;
+        if !owner.still_owns(&lock(state), lifecycle.current_generation()) {
+            return Err(
+                "受管 Codex Gateway owner 在 receipt 建立前发生变化；已保留 replacement。".into(),
+            );
+        }
+        Ok(Some(GatewayStopClaim {
+            owner,
+            identity,
+            profile_id,
+        }))
+    }
+
+    /// Stop only the frozen tracked child.  The existing cleanup owner moves
+    /// waits outside AppState and rejects stale publication on generation/full-
+    /// owner drift.
+    pub(crate) fn execute_claimed_stop(
+        state: &SharedAppState,
+        lifecycle: &lifecycle::Lifecycle,
+        claim: GatewayStopClaim,
+    ) -> Result<config::GatewayRuntimeJournalIdentity, String> {
+        let current = lock(state);
+        if !claim
+            .owner
+            .still_owns(&current, lifecycle.current_generation())
+        {
+            return Err("Codex Gateway stop claim 已漂移；未停止或覆盖 replacement。".into());
+        }
+        let generation = lifecycle.current_generation();
+        let current = cleanup_tracked_gateway_with(
+            state,
+            lifecycle,
+            current,
+            generation,
+            crate::runtime::system::stop_child_confirmed,
+        )?;
+        drop(current);
+        Ok(claim.identity)
+    }
+
+    pub(crate) fn observe_durable_untracked(
+        port: u16,
+        secret: &str,
+        expected: &config::GatewayRuntimeJournalIdentity,
+    ) -> DurableGatewayObservation {
+        if !proc::loopback_port_in_use(port, operation::LOCAL_HEALTH_TIMEOUT_MS) {
+            return DurableGatewayObservation::Absent;
+        }
+        proc::http_gateway_health(
+            port,
+            (!secret.is_empty()).then_some(secret),
+            operation::LOCAL_HEALTH_TIMEOUT_MS,
+        )
+        .filter(|health| durable_gateway_health_matches(health, expected))
+        .map(|_| DurableGatewayObservation::Exact)
+        .unwrap_or(DurableGatewayObservation::Replacement)
+    }
+
+    /// Reap only an orphan whose path-secret health identity and packaged
+    /// binary both match the deterministic restore identity.  Any replacement
+    /// is left untouched.
+    pub(crate) fn clear_durable_untracked<R: Runtime>(
+        app: &tauri::AppHandle<R>,
+        port: u16,
+        secret: &str,
+        expected: &config::GatewayRuntimeJournalIdentity,
+    ) -> Result<(), String> {
+        match Self::observe_durable_untracked(port, secret, expected) {
+            DurableGatewayObservation::Absent => return Ok(()),
+            DurableGatewayObservation::Replacement => {
+                return Err(
+                    "Gateway restore 端口出现 replacement；未停止或覆盖该 listener。".into(),
+                )
+            }
+            DurableGatewayObservation::Exact => {}
+        }
+        let binary = gateway_bin_path(app).ok_or("找不到本次应用打包的 Gateway")?;
+        match stop_managed_gateway_on_port(port, &binary, || {
+            proc::http_gateway_health(
+                port,
+                (!secret.is_empty()).then_some(secret),
+                operation::LOCAL_HEALTH_TIMEOUT_MS,
+            )
+            .is_some_and(|health| durable_gateway_health_matches(&health, expected))
+        }) {
+            ManagedGatewayCleanup::Stopped(_) => Ok(()),
+            ManagedGatewayCleanup::NotManaged => {
+                Err("Gateway restore listener 不是本次打包的受管 binary；已保留。".into())
+            }
+            ManagedGatewayCleanup::StopUnknown { .. } => {
+                Err("Gateway restore listener 的停止结果不确定；已保留 recovery receipt。".into())
+            }
+        }
+    }
+}
+
 impl GatewayProcessLocalOwner {
     fn claim(st: &AppState, generation: u64) -> Option<Self> {
         Some(Self {
@@ -473,6 +657,10 @@ where
     Ok((current, accepted_health))
 }
 
+// The formal start owner intentionally receives every frozen launch proof;
+// bundling them here would obscure which existing call sites may omit the new
+// durable launch id used only by exact P2-A restore.
+#[allow(clippy::too_many_arguments)]
 fn start_proxy_for_inner<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &SharedAppState,
@@ -481,6 +669,7 @@ fn start_proxy_for_inner<R: Runtime>(
     science_runtime: Option<&crate::runtime::science::ScienceRuntimeIdentity>,
     trace: Option<&OperationTrace>,
     auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+    durable_launch_id: Option<&str>,
 ) -> Result<GatewayReceipt, String> {
     retry_rejected_gateway_candidates_outside_state(state)?;
     assert_format_supported(profile)?;
@@ -578,7 +767,16 @@ fn start_proxy_for_inner<R: Runtime>(
         s
     };
 
-    let launch_id = proc::gen_secret().map_err(|e| format!("无法生成 gateway launch_id：{e}"))?;
+    let launch_id = match durable_launch_id {
+        Some(value)
+            if (24..=128).contains(&value.len())
+                && value.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            value.to_ascii_lowercase()
+        }
+        Some(_) => return Err("Gateway durable launch_id 非法；已拒绝恢复。".into()),
+        None => proc::gen_secret().map_err(|e| format!("无法生成 gateway launch_id：{e}"))?,
+    };
     let spawn_owner = {
         let mut st = lock(state);
         let gen = lifecycle.current_generation();

@@ -48,6 +48,7 @@ EXPECTED_STATE_OWNERS = {
     "codex.supervisor",
     "config.access-gate",
     "config.binding",
+    "config.codex-disable-receipt",
     "config.desired",
     "config.migration-backups",
     "config.transaction",
@@ -63,6 +64,7 @@ EXPECTED_STATE_OWNERS = {
 EXPECTED_DURABLE_RECORDS = {
     "record.authority-snapshot-v1",
     "record.codex-auth-state-v1",
+    "record.codex-disable-operation-v1",
     "record.codex-model-cache-v3",
     "record.codex-oauth-v1",
     "record.codex-thinking-v1",
@@ -998,6 +1000,69 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         else:
             self.assertEqual(status, "requirements-open")
             self.assertEqual(review_status, "pending")
+
+    def test_p2a_codex_disable_receipt_contract_is_explicit(self):
+        inventory = load_inventory()
+        records = {item["id"]: item for item in inventory["durable_records"]}
+        operations = {item["id"]: item for item in inventory["operations"]}
+        receipt = records["record.codex-disable-operation-v1"]
+        config_record = records["record.config-v4"]
+        operation = operations["op.codex-enable"]
+
+        self.assertEqual(receipt["authority_owner"], "config.codex-disable-receipt")
+        self.assertNotIn("secret", receipt["fields"])
+        self.assertNotIn("credential", " ".join(receipt["fields"]))
+        self.assertIn("codex_disable_operation", config_record["fields"])
+        self.assertEqual(operation["compensation"]["kind"], "prior-runtime-restart")
+        for access in ("reads", "writes", "clears"):
+            self.assertIn(
+                "record.codex-disable-operation-v1",
+                operation["durable_records"][access],
+            )
+        self.assertEqual(
+            {entry["name"] for entry in operation["entrypoints"]},
+            {"set_experimental_codex_enabled", "codex_disable_replay"},
+        )
+        self.assertEqual(
+            {point["id"] for point in operation["failure_points"]},
+            {
+                "codex-enable.intent",
+                "codex-enable.stop",
+                "codex-enable.commit",
+                "codex-enable.post-commit-clear",
+                "codex-enable.replay-drift",
+            },
+        )
+        effects = " ".join(operation["ordered_effects"])
+        self.assertIn("durably publish intent before", effects)
+        self.assertIn("typed stopping component phase", effects)
+        self.assertIn("stopping as pre-effect WAL only", effects)
+        self.assertIn("start-stop ABA", effects)
+        self.assertIn("Config authority fence", effects)
+        self.assertIn("each fresh process adopts exact deterministic restores", effects)
+        self.assertIn("fresh boot replays", effects)
+        self.assertIn("never stop or restart another provider", effects)
+        stop_failure = next(
+            point
+            for point in operation["failure_points"]
+            if point["id"] == "codex-enable.stop"
+        )
+        self.assertIn("phase-publication failure", stop_failure["observed_outcome"])
+        commit_failure = next(
+            point
+            for point in operation["failure_points"]
+            if point["id"] == "codex-enable.commit"
+        )
+        self.assertIn("unproven after-spawn Science candidate", commit_failure["observed_outcome"])
+        self.assertIn(
+            "Recovery attention never erases durable inverse progress",
+            operation["compensation"]["contract"],
+        )
+        self.assertNotIn(
+            "record.codex-disable-operation-v1",
+            operations["op.codex-network"]["durable_records"]["writes"],
+            "P2-A must not silently expand the receipt to op.codex-network",
+        )
 
     def test_integrity_checks_reject_representative_bad_inventory(self):
         inventory = load_inventory()

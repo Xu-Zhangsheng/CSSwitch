@@ -59,7 +59,8 @@ use one_click::{
 pub(crate) use one_click::{
     interrupted_compensation_requires_pre_auth_replay, one_click_login_entry,
     replay_interrupted_compensation_before_auth, replay_interrupted_one_click_finalize,
-    typed_interrupted_gateway_recovery_error, OneClickEntryPreflight,
+    restore_science_from_durable_recipe, typed_interrupted_gateway_recovery_error,
+    DurableScienceRestoreError, OneClickEntryPreflight,
 };
 #[cfg(test)]
 use pending_cleanup::retry_pending_authority_cleanup;
@@ -91,8 +92,9 @@ pub(crate) use authority_snapshot::{
     test_arm_healthy_reopen_catalog_failure, test_arm_one_click_exit_after_snapshot_capture,
     test_arm_one_click_finalize_completion_failure, test_arm_one_click_first_journal_failure,
     test_arm_one_click_snapshot_capture, test_arm_prior_restart_post_spawn_failure,
-    test_arm_rollback_diagnostic_canary, test_prior_restart_post_spawn_identity,
-    test_rollback_diagnostic_snapshot, SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
+    test_arm_prior_restart_post_spawn_uncertain, test_arm_rollback_diagnostic_canary,
+    test_prior_restart_post_spawn_identity, test_rollback_diagnostic_snapshot,
+    SCIENCE_PROTECTED_AUTHORITY_ENTRIES,
 };
 
 #[cfg(test)]

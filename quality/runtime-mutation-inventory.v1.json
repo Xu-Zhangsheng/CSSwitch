@@ -18,9 +18,9 @@
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
       "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
     ],
-    "test_identity_semantics": "characterization_tests lists the stable identities required for R0 completion. Exact source gate run cdb5aea62b19f8e8768de42058a01eee and a separate clean-context completion review both passed on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb; this remains source-only behavior characterization and does not authorize R1-R11 or promote artifact/live evidence.",
-    "characterization_status": "complete",
-    "completion_review_status": "complete"
+    "test_identity_semantics": "characterization_tests lists the stable identities required for the current source inventory. P2-A adds dedicated Codex-disable receipt and replay identities; its fresh exact-SHA canonical source gate and completion review are pending, and no prior seal is inherited. This remains source-only behavior characterization and does not promote artifact/live evidence.",
+    "characterization_status": "requirements-open",
+    "completion_review_status": "pending"
   },
   "state_owners": [
     {
@@ -28,7 +28,7 @@
       "kind": "durable-config",
       "durability": "filesystem",
       "authority": "Desired mode, ports, selected profile, profiles, Codex feature/network settings, and path secret.",
-      "fields": ["active_id", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
+      "fields": ["active_id", "codex_disable_operation", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"}
     },
     {
@@ -46,6 +46,14 @@
       "authority": "Open versioned one-click or HistoryRecovery transaction with typed stage, durable prior-stop outcome, success-finalize action, or compatibility state; retained legacy profile-switch journals stay readable only for interrupted-Gateway recovery. An open HistoryRecovery record centrally fences journal-external Config writes and downgrade.",
       "fields": ["runtime_transaction"],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"}
+    },
+    {
+      "id": "config.codex-disable-receipt",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Dedicated credential-free op.codex-enable disable plan, exact before/after Config references, component identities, restore ids, and replay phase; it is not a one-click or HistoryRecovery journal.",
+      "fields": ["config_reference", "operation_id", "phase", "plan", "schema_version"],
+      "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "CodexDisableOperationReceipt"}
     },
     {
       "id": "app.gateway",
@@ -205,11 +213,21 @@
       "id": "record.config-v4",
       "format": "config schema v4 JSON",
       "authority_owner": "config.desired",
-      "fields": ["active_id", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
+      "fields": ["active_id", "codex_disable_operation", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
       "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "fn commit_migrated_config("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn save_to("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update<"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update_result<"}],
       "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"},
       "known_gap": "Several non-one-click commands stop managed runtime before committing config and do not retain a durable prior-restart receipt."
+    },
+    {
+      "id": "record.codex-disable-operation-v1",
+      "format": "Dedicated credential-free codex-disable-operation.v1.json sidecar with exact-byte CAS phases",
+      "authority_owner": "config.codex-disable-receipt",
+      "fields": ["after_config_fingerprint", "before_config_fingerprint", "config_reference", "operation", "operation_id", "phase", "plan", "schema_version"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "begin_codex_disable_operation"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "write_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "clear_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "clear_codex_disable_operation_fence"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "impl OpenCodexDisableReceipt"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "read_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "read_codex_disable_receipt_at"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "replay_interrupted_codex_disable"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "CodexDisableOperationReceipt"},
+      "known_gap": "This narrow receipt covers only experimental Codex disable; enable has no runtime effect, and network/mode/settings/profile/one-click remain separate operations."
     },
     {
       "id": "record.config-migration-backups-v1",
@@ -782,14 +800,14 @@
       "mutation_kind": "runtime",
       "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.startup-config-migration"],
-      "entrypoints": [{"kind": "tauri-command", "name": "set_experimental_codex_enabled", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_experimental_codex_enabled"}, "bundled_callers": ["desktop/src/codex-controller.js::toggleCodexFeature"]}],
-      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
-      "durable_records": {"reads": ["record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-v4"], "clears": ["record.science-receipt-v1"]},
-      "ordered_effects": ["when disabling begin mutation lease", "reject either open runtime journal before effects", "when disabling stop only confirmed Codex runtime", "recheck both journals and commit experimental flag", "do not delete credentials or profiles"],
-      "failure_points": [{"id": "codex-enable.commit", "after_effects": ["confirmed Codex runtime may be stopped"], "observed_outcome": "Config failure leaves old flag but stopped Codex runtime; other providers preserved.", "compensation": "no prior restart"}],
-      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_experimental_codex_enabled_at"}, "contract": "Disable is stop-before-config and retains credentials/profiles; enable only commits config."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_disable_config_failure_preserves_other_provider_and_does_not_restart_codex"],
-      "known_gaps": ["No durable operation receipt."]
+      "entrypoints": [{"kind": "tauri-command", "name": "set_experimental_codex_enabled", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_experimental_codex_enabled"}, "bundled_callers": ["desktop/src/codex-controller.js::toggleCodexFeature"]}, {"kind": "internal-recovery", "name": "codex_disable_replay", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "replay_interrupted_codex_disable"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::run_boot_decision"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "config.codex-disable-receipt", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.codex-disable-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-disable-operation-v1", "record.config-v4", "record.science-receipt-v1"], "clears": ["record.codex-disable-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["enable and disabled no-op only commit the flag and never create a receipt or touch runtime", "when disabling begin the Codex supervisor mutation lease and reject either open runtime journal or open Codex-disable receipt", "freeze exact Config before/after fingerprints plus managed Science receipt and Gateway full-owner public identity", "durably publish the minimal Config authority fence and then durably publish intent before the first destructive effect", "publish a typed stopping component phase and revalidate Config fence, before-image, owner generation, and managed identity immediately before each exact stop", "stop only the exact CSSwitch-owned Codex Science and Gateway and durably CAS post-stop per-component progress", "treat stopping as pre-effect WAL only: fresh original proves no effect, while absent/restored/replacement is uncertainty and never grants inverse authority", "commit experimental_codex_enabled=false only against the exact fenced Config before-image", "durably publish config_committed, clear only the exact receipt, then release only the exact Config fence", "on precommit failure restore only components whose post-stop progress this operation durably recorded while Config and identity proofs still match", "preserve replayable inverse progress across typed attention so each fresh process adopts exact deterministic restores and continues inverse without duplicating managed children", "fresh boot replays intent/stopping/effects/restoring/restored/config_committed phases idempotently and fails closed on replacement, drift, terminal-stop ambiguity, or start-stop ABA", "do not delete credentials or profiles and never stop or restart another provider"],
+      "failure_points": [{"id": "codex-enable.intent", "after_effects": ["credential-free exact plan frozen", "minimal Config authority fence may be durable", "no runtime stopped", "desired Config before-image unchanged"], "observed_outcome": "Intent publication failure returns before destructive effects; a receipt-free fence is recovered only when the current Config still matches its exact before/after image, while drift or an unreadable/conflicting durable record becomes typed attention.", "compensation": "clear only the exact orphan fence; preserve runtime and desired config"}, {"id": "codex-enable.stop", "after_effects": ["durable intent published", "zero or more exact managed components may have a confirmed stop"], "observed_outcome": "Confirmed untouched components remain original; an exact-before-image phase-publication failure clears safely, while Config drift, uncertain absence, replacement, or owner drift retains the receipt and typed attention.", "compensation": "restore only durable progress proven to be this operation's exact stop while preserving every replacement"}, {"id": "codex-enable.commit", "after_effects": ["durable receipt proves exact managed components stopped", "config before-image remains authoritative"], "observed_outcome": "Config failure keeps the old enabled flag and runs exact prior Science/Gateway inverse; failed or uncertain inverse retains typed attention and the replayable phase. An unproven after-spawn Science candidate is preserved as replacement until absent, while deterministic partial restores are adopted by the next fresh replay.", "compensation": "deterministic managed Science/Gateway restore using prior receipt/config references without credentials in the operation record"}, {"id": "codex-enable.post-commit-clear", "after_effects": ["experimental flag durably disabled", "managed Codex runtime stopped", "receipt may remain at effects_applied or config_committed", "exact Config authority fence may remain until sidecar absence is proven"], "observed_outcome": "ConfigCommitted publication, receipt unlink, and fence release each require the exact after-image; restored/no-effect cleanup requires the exact before-image. Drift retains the receipt or the self-describing before/after fence across the unlink window and projects typed config_drift attention instead of success.", "compensation": "no inverse after config commit"}, {"id": "codex-enable.replay-drift", "after_effects": ["open durable receipt or receipt-free terminal fence", "fresh process has observed current Config and managed identities"], "observed_outcome": "Config/owner/generation identity drift or any replacement is preserved and projected as typed boot attention; replay never guesses recovery or clears replacement authority.", "compensation": "manual attention with durable recovery record retained"}],
+      "compensation": {"kind": "prior-runtime-restart", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "restore_stopped_codex_components"}, "contract": "Only a component whose exact CSSwitch-owned stop has post-stop progress durably recorded by this operation may be restored, and only while the complete Config fence/before-image plus managed identities still match. Stopping is pre-effect WAL only: fresh absence/restoration is uncertain and never grants inverse authority, so terminal stop and start-stop ABA retain attention. Recovery attention never erases durable inverse progress; each fresh replay adopts exact deterministic Science/Gateway restores and continues without duplicating or orphaning managed children. Intent, Noop, and PreserveOtherProvider never restart anything."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_managed_runtime_contract", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_receipt_phase_matrix_is_validated", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_config_commit_is_exact_before_image", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_open_receipt_blocks_conflicting_toggle", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_replay_decision_preserves_replacement_and_is_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::p2a_codex_disable_fence_blocks_mode_and_settings_before_effects", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2a_codex_disable_config_fence_blocks_siblings_and_recovers_orphans", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2a_codex_disable_receipt_cas_clear_preserves_replacement", "test/codex_disable_ui.test.mjs::accepts stable disable failure and attention projections", "test/codex_disable_ui.test.mjs::rejects leaked, unknown, or contradictory disable errors"],
+      "known_gaps": ["The dedicated receipt deliberately does not cover op.codex-network, mode/settings/profile mutations, one-click/history, artifact, live provider, installed runtime, or release behavior."]
     },
     {
       "id": "op.codex-network",

@@ -185,6 +185,7 @@ impl OneClickGatewayPreflightSnapshot {
 /// outside the destructive lease. Runtime entry owns capture and verification.
 pub(crate) struct OneClickEntryPreflight {
     config: Option<config::Config>,
+    codex_disable_operation: Option<config::CodexDisableOperationFence>,
     runtime_transaction: Option<config::RuntimeTransactionRecord>,
     runtime_compensation: Option<config::RuntimeCompensationJournal>,
     prior_gateway: Option<OneClickGatewayPreflightSnapshot>,
@@ -196,6 +197,8 @@ impl OneClickEntryPreflight {
         let cfg = config::load_from(&config::default_dir()).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
+        config::require_no_runtime_transaction(&cfg)
+            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
         let active = cfg.active_profile().ok_or_else(|| {
             typed_one_click_err(
                 OneClickFailureKind::NoActiveProfile,
@@ -219,6 +222,9 @@ impl OneClickEntryPreflight {
                 })?
                 .unwrap_or(false);
         Ok(Self {
+            codex_disable_operation: cfg.codex_disable_operation_fence().map_err(|message| {
+                typed_one_click_err(OneClickFailureKind::ConfigLoad, message.to_string())
+            })?,
             runtime_transaction: cfg.runtime_transaction.clone(),
             runtime_compensation: cfg.runtime_compensation.clone(),
             config: (adapter != "codex").then_some(cfg),
@@ -239,6 +245,20 @@ impl OneClickEntryPreflight {
         &self,
         state: &SharedAppState,
     ) -> Result<(), TypedOneClickFailure> {
+        let current_codex_disable_operation = config::load_from(&config::default_dir())
+            .and_then(|current| current.codex_disable_operation_fence())
+            .map_err(|_| {
+                typed_one_click_err(
+                    OneClickFailureKind::PreflightSnapshot,
+                    "config_changed_retry：无法复核 Codex disable operation fence，请重试。",
+                )
+            })?;
+        if current_codex_disable_operation != self.codex_disable_operation {
+            return Err(typed_one_click_err(
+                OneClickFailureKind::PreflightSnapshot,
+                "config_changed_retry：Codex disable operation 在认证检查期间发生变化，请重试。",
+            ));
+        }
         if let Some(expected) = self.config.as_ref() {
             let current = config::load_from(&config::default_dir()).map_err(|_| {
                 typed_one_click_err(
@@ -1164,7 +1184,9 @@ fn restart_science_identity_with_budget<R: Runtime>(
         let mut seams = SANDBOX_SESSION_TEST_SEAMS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if seams.prior_restart_post_spawn_failure_port == Some(port) {
+        let post_spawn_failure = seams.prior_restart_post_spawn_failure_port == Some(port);
+        let post_spawn_uncertain = seams.prior_restart_post_spawn_uncertain_port == Some(port);
+        if post_spawn_failure || post_spawn_uncertain {
             let listener_pid = crate::runtime::science::test_unique_listener_pid(port)
                 .ok_or("test-only prior Science listener identity missing after verification")?;
             let process_start =
@@ -1172,6 +1194,11 @@ fn restart_science_identity_with_budget<R: Runtime>(
                     .ok_or("test-only prior Science process-start identity missing")?;
             seams.prior_restart_post_spawn_identity = Some((listener_pid, process_start));
             drop(seams);
+            if post_spawn_uncertain {
+                return Err(ManagedScienceRestartError::after_spawn_unproven(
+                    "test-only prior Science post-spawn cleanup uncertainty",
+                ));
+            }
             let mut sandbox = None;
             let mut url = None;
             let request = ScienceStopRequest::exact(
@@ -1255,6 +1282,89 @@ fn restart_science_identity_with_budget<R: Runtime>(
     current.science_runtime = Some(committed_runtime);
     current.science_confirmed_stopped = None;
     Ok(())
+}
+
+/// Shared managed-restart effect for the dedicated Codex-disable receipt.
+/// This does not read or write a one-click/history journal; it only reuses the
+/// existing ScienceHostAdapter launch/health/identity/managed-receipt phases.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DurableScienceRestoreError {
+    Failed,
+    Uncertain,
+}
+
+pub(crate) fn restore_science_from_durable_recipe<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    auth_proof: Option<&crate::codex_auth_supervisor::CodexAuthReadyProof>,
+    recipe: &config::RuntimePriorScienceRecipe,
+    durable_launch_id: &str,
+) -> Result<(), DurableScienceRestoreError> {
+    let mut runtime = crate::runtime::science::runtime_identity_from_prior_recipe(recipe)
+        .map_err(|_| DurableScienceRestoreError::Failed)?;
+    {
+        let current = lock(state);
+        if current.sandbox.is_some()
+            || current
+                .science_runtime
+                .as_ref()
+                .is_some_and(|candidate| candidate != &runtime)
+            || current
+                .science_confirmed_stopped
+                .as_ref()
+                .is_some_and(|candidate| candidate != &runtime)
+        {
+            return Err(DurableScienceRestoreError::Uncertain);
+        }
+    }
+    if crate::runtime::science::hydrate_runtime_from_v2_managed_launch(
+        recipe.port,
+        &mut runtime,
+        durable_launch_id,
+    )
+    .is_ok()
+        && ScienceHostAdapter::probe_known(recipe.port, &runtime)
+            == SandboxScienceState::RunningHealthy
+    {
+        let mut current = lock(state);
+        if current.sandbox.is_some()
+            || current
+                .science_runtime
+                .as_ref()
+                .is_some_and(|candidate| candidate != &runtime)
+        {
+            return Err(DurableScienceRestoreError::Uncertain);
+        }
+        current.sandbox_port = recipe.port;
+        current.sandbox_url = Some(ScienceHostAdapter::url(recipe.port, &runtime));
+        current.science_runtime = Some(runtime);
+        current.science_confirmed_stopped = None;
+        return Ok(());
+    }
+    if proc::loopback_port_in_use(recipe.port, operation::LOCAL_HEALTH_TIMEOUT_MS)
+        || !crate::runtime::science::prior_restart_receipt_is_absent(recipe, &runtime)
+    {
+        return Err(DurableScienceRestoreError::Uncertain);
+    }
+    restart_science_identity_with_budget(
+        app,
+        state,
+        lifecycle,
+        auth_proof,
+        &runtime,
+        recipe.port,
+        operation::SANDBOX_HEALTH_BUDGET_MS,
+        Some(durable_launch_id),
+        None,
+    )
+    .map_err(|error| {
+        if error.candidate_stop_proof == ManagedScienceCandidateStopProof::Unproven {
+            DurableScienceRestoreError::Uncertain
+        } else {
+            DurableScienceRestoreError::Failed
+        }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

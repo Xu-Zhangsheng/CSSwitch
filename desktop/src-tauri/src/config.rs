@@ -41,6 +41,10 @@ static CONFIG_ACCESS: std::sync::Mutex<ConfigAccessState> =
 
 const CONFIG_WRITER_LOCK_FILE: &str = ".config.writer.lock";
 const RUNTIME_COMPENSATION_AUTH_LOCK_FILE: &str = ".runtime-compensation.auth.lock";
+const CODEX_DISABLE_OPERATION_RECEIPT_FILE: &str = "codex-disable-operation.v1.json";
+const CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE: &str = ".codex-disable-operation.v1.clearing";
+const CODEX_DISABLE_OPERATION_FENCE_KEY: &str = "codex_disable_operation";
+const CODEX_DISABLE_OPERATION_FENCE_SCHEMA_VERSION: u32 = 1;
 
 #[cfg(test)]
 pub(crate) const PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE: &str =
@@ -1624,6 +1628,82 @@ pub struct Config {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Minimal Config-authority fence for the dedicated `op.codex-enable` disable
+/// receipt.  The detailed plan and phase remain in the independent sidecar;
+/// this credential-free reference only prevents sibling Config writers from
+/// racing a destructive effect and binds terminal cleanup to the exact
+/// before/after Config images even if receipt unlink has already completed.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexDisableOperationFence {
+    pub(crate) schema_version: u32,
+    pub(crate) operation_id: String,
+    pub(crate) intent_digest: String,
+    pub(crate) before_config_fingerprint: String,
+    pub(crate) after_config_fingerprint: String,
+}
+
+impl CodexDisableOperationFence {
+    pub(crate) fn new(
+        operation_id: String,
+        intent_digest: String,
+        before_config_fingerprint: String,
+        after_config_fingerprint: String,
+    ) -> Self {
+        Self {
+            schema_version: CODEX_DISABLE_OPERATION_FENCE_SCHEMA_VERSION,
+            operation_id,
+            intent_digest,
+            before_config_fingerprint,
+            after_config_fingerprint,
+        }
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        let valid_lower_hex = |value: &str, len: usize| {
+            value.len() == len
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        };
+        if self.schema_version != CODEX_DISABLE_OPERATION_FENCE_SCHEMA_VERSION
+            || !valid_lower_hex(&self.operation_id, 32)
+            || !valid_lower_hex(&self.intent_digest, 64)
+            || !valid_lower_hex(&self.before_config_fingerprint, 64)
+            || !valid_lower_hex(&self.after_config_fingerprint, 64)
+            || self.before_config_fingerprint == self.after_config_fingerprint
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Codex disable operation fence identity/schema 非法",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CodexDisableTerminalConfigImage {
+    Before,
+    After,
+}
+
+impl CodexDisableTerminalConfigImage {
+    fn fingerprint<'a>(self, fence: &'a CodexDisableOperationFence) -> &'a str {
+        match self {
+            Self::Before => &fence.before_config_fingerprint,
+            Self::After => &fence.after_config_fingerprint,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CodexDisableOrphanFenceRecovery {
+    None,
+    Cleared,
+    ConfigDrift,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -1656,7 +1736,16 @@ pub(crate) fn require_template_enabled(cfg: &Config, template_id: &str) -> Resul
 }
 
 pub(crate) fn require_no_runtime_transaction(cfg: &Config) -> Result<(), String> {
-    if cfg.has_open_runtime_journal() {
+    if cfg
+        .codex_disable_operation_fence()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        Err(
+            "code=codex_disable_operation_in_progress Codex disable operation 尚未结束；请先完成恢复或处理 attention。"
+                .into(),
+        )
+    } else if cfg.has_open_runtime_journal() {
         Err(
             "code=runtime_transaction_in_progress 运行时事务尚未结束；请先完成恢复或重试一键开始。"
                 .into(),
@@ -1667,6 +1756,42 @@ pub(crate) fn require_no_runtime_transaction(cfg: &Config) -> Result<(), String>
 }
 
 impl Config {
+    pub(crate) fn codex_disable_operation_fence(
+        &self,
+    ) -> io::Result<Option<CodexDisableOperationFence>> {
+        self.extra
+            .get(CODEX_DISABLE_OPERATION_FENCE_KEY)
+            .map(|value| {
+                let fence: CodexDisableOperationFence = serde_json::from_value(value.clone())
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Codex disable operation fence 无法解析：{error}"),
+                        )
+                    })?;
+                fence.validate()?;
+                Ok(fence)
+            })
+            .transpose()
+    }
+
+    pub(crate) fn without_codex_disable_operation_fence(&self) -> Self {
+        let mut normalized = self.clone();
+        normalized.extra.remove(CODEX_DISABLE_OPERATION_FENCE_KEY);
+        normalized
+    }
+
+    fn set_codex_disable_operation_fence(&mut self, fence: &CodexDisableOperationFence) {
+        self.extra.insert(
+            CODEX_DISABLE_OPERATION_FENCE_KEY.into(),
+            serde_json::to_value(fence).expect("Codex disable operation fence is serializable"),
+        );
+    }
+
+    fn clear_codex_disable_operation_fence(&mut self) {
+        self.extra.remove(CODEX_DISABLE_OPERATION_FENCE_KEY);
+    }
+
     pub fn has_open_runtime_journal(&self) -> bool {
         self.runtime_transaction.is_some() || self.runtime_compensation.is_some()
     }
@@ -1684,6 +1809,23 @@ impl Config {
     pub fn profile_by_id_mut(&mut self, id: &str) -> Option<&mut Profile> {
         self.profiles.iter_mut().find(|p| p.id == id)
     }
+}
+
+/// Stable credential-free Config identity for the dedicated Codex-disable
+/// protocol.  The operation fence itself is excluded so the same before/after
+/// images remain comparable while the cross-process writer fence is held.
+pub(crate) fn codex_disable_config_fingerprint(config: &Config) -> io::Result<String> {
+    let normalized = config.without_codex_disable_operation_fence();
+    let bytes = serde_json::to_vec(&normalized).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("无法编码 Codex disable config fingerprint：{error}"),
+        )
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-codex-disable-config-v1\0");
+    digest.update(bytes);
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 /// 16 字节随机 → 32 hex 字符。/dev/urandom（unix）；不可用时退回时间纳秒。
@@ -2108,6 +2250,386 @@ pub(crate) fn write_pending_authority_cleanup_manifest_if_absent(
         bytes,
         |secure| secure.sync(),
     )
+}
+
+/// Read the dedicated, credential-free receipt for `op.codex-enable` disable.
+///
+/// The receipt deliberately lives beside `config.json` instead of inside the
+/// one-click/history journals.  All access is anchored to the already-audited
+/// config directory descriptor and shares the process-local config serializer.
+pub(crate) fn read_codex_disable_operation_receipt(dir: &Path) -> io::Result<Option<Vec<u8>>> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    read_codex_disable_operation_receipt_in(&secure)
+}
+
+fn read_codex_disable_operation_receipt_in(secure: &SecureDir) -> io::Result<Option<Vec<u8>>> {
+    let active = secure.read_regular(CODEX_DISABLE_OPERATION_RECEIPT_FILE)?;
+    let clearing = secure.read_regular(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)?;
+    match (active, clearing) {
+        (active, None) => Ok(active),
+        (None, Some(bytes)) => {
+            // `clear` first makes the private clearing name durable, then
+            // unlinks it.  If a process dies in between, resurrect the exact
+            // terminal receipt so boot replay can adjudicate and clear it
+            // again instead of treating an invisible tombstone as success.
+            secure.rename(
+                CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE,
+                CODEX_DISABLE_OPERATION_RECEIPT_FILE,
+            )?;
+            secure.sync()?;
+            if secure
+                .read_regular(CODEX_DISABLE_OPERATION_RECEIPT_FILE)?
+                .as_deref()
+                != Some(bytes.as_slice())
+            {
+                return Err(io::Error::other(
+                    "Codex disable receipt 清理恢复后身份不确定；已停止 mutation",
+                ));
+            }
+            Ok(Some(bytes))
+        }
+        (Some(_), Some(_)) => Err(io::Error::other(
+            "Codex disable receipt 与清理记录同时存在；已保留并停止 mutation",
+        )),
+    }
+}
+
+/// Snapshot an exact Config-authority proof immediately before one frozen
+/// destructive effect.  The writer flock serializes proof acquisition; the
+/// durable Config field remains after it is released and makes every normal
+/// cross-process writer fail closed for the whole effect window.
+pub(crate) struct CodexDisableEffectLease {
+    config: Config,
+}
+
+impl CodexDisableEffectLease {
+    pub(crate) fn config(&self) -> &Config {
+        &self.config
+    }
+}
+
+pub(crate) fn acquire_codex_disable_effect_lease(
+    dir: &Path,
+    expected_fence: &CodexDisableOperationFence,
+) -> io::Result<CodexDisableEffectLease> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, false)?;
+    let config = load_from_secure(&secure)?;
+    if config.codex_disable_operation_fence()?.as_ref() != Some(expected_fence) {
+        return Err(io::Error::other(
+            "Codex disable operation fence 在 effect 前发生变化",
+        ));
+    }
+    Ok(CodexDisableEffectLease { config })
+}
+
+/// Atomically establish the Config authority fence and then publish the
+/// sidecar intent before any destructive effect may begin.  A crash after the
+/// first durable write leaves a harmless orphan fence for boot recovery; an
+/// ordinary write failure attempts an exact rollback while the writer flock is
+/// still held.
+pub(crate) fn begin_codex_disable_operation(
+    dir: &Path,
+    expected_config: &Config,
+    fence: &CodexDisableOperationFence,
+    receipt_bytes: &[u8],
+) -> io::Result<()> {
+    fence.validate()?;
+    if expected_config.codex_disable_operation_fence()?.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Codex disable begin before-image 已含 operation fence",
+        ));
+    }
+    if codex_disable_config_fingerprint(expected_config)? != fence.before_config_fingerprint {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Codex disable begin before-image fingerprint 不匹配",
+        ));
+    }
+    let mut expected_after = expected_config.clone();
+    expected_after.experimental_codex_enabled = false;
+    if codex_disable_config_fingerprint(&expected_after)? != fence.after_config_fingerprint {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Codex disable begin after-image fingerprint 不匹配",
+        ));
+    }
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, true)?;
+    let mut current = load_from_secure(&secure)?;
+    if &current != expected_config {
+        return Err(io::Error::other(
+            "Codex disable begin config before-image 已变化",
+        ));
+    }
+    require_no_runtime_transaction(&current).map_err(io::Error::other)?;
+    if read_codex_disable_operation_receipt_in(&secure)?.is_some() {
+        return Err(io::Error::other("Codex disable receipt 已存在"));
+    }
+    current.set_codex_disable_operation_fence(fence);
+    save_to_secure(&secure, &current)?;
+    let publish = atomic_write_named_bytes_if_absent_in(
+        &secure,
+        CODEX_DISABLE_OPERATION_RECEIPT_FILE,
+        receipt_bytes,
+        |secure| secure.sync(),
+    );
+    if let Err(error) = publish {
+        current.clear_codex_disable_operation_fence();
+        let _ = save_to_secure(&secure, &current);
+        return Err(error);
+    }
+    if secure
+        .read_regular(CODEX_DISABLE_OPERATION_RECEIPT_FILE)?
+        .as_deref()
+        != Some(receipt_bytes)
+    {
+        return Err(io::Error::other("Codex disable intent 持久化后回读不一致"));
+    }
+    Ok(())
+}
+
+/// Exact-fence bypass used only by this operation's Config commit.  The
+/// closure may change the flag but cannot replace or remove the fence.
+pub(crate) fn update_codex_disable_operation<T, F>(
+    dir: &Path,
+    expected_fence: &CodexDisableOperationFence,
+    f: F,
+) -> Result<T, String>
+where
+    F: FnOnce(&mut Config) -> Result<(T, bool), String>,
+{
+    let access = config_access();
+    ensure_config_access_open(&access).map_err(|error| error.to_string())?;
+    let (secure, _writer) = open_config_writer(dir, false).map_err(|error| error.to_string())?;
+    let mut config = load_from_secure(&secure).map_err(|error| error.to_string())?;
+    if config
+        .codex_disable_operation_fence()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(expected_fence)
+    {
+        return Err("Codex disable operation fence 已变化".into());
+    }
+    let (result, changed) = f(&mut config)?;
+    if config
+        .codex_disable_operation_fence()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(expected_fence)
+    {
+        return Err("Codex disable operation closure 不得改变 fence".into());
+    }
+    if changed
+        && codex_disable_config_fingerprint(&config).map_err(|error| error.to_string())?
+            != expected_fence.after_config_fingerprint
+    {
+        return Err("Codex disable operation closure 未生成 exact after-image".into());
+    }
+    if changed {
+        #[cfg(test)]
+        if CONFIG_UPDATE_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|(thread, armed_dir)| {
+                *thread == std::thread::current().id() && armed_dir == dir
+            })
+        {
+            return Err("test-only config update commit failure".into());
+        }
+        save_to_secure(&secure, &config).map_err(|error| error.to_string())?;
+    }
+    Ok(result)
+}
+
+pub(crate) fn clear_codex_disable_operation_fence(
+    dir: &Path,
+    expected_fence: &CodexDisableOperationFence,
+    terminal_image: CodexDisableTerminalConfigImage,
+) -> io::Result<()> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, false)?;
+    if read_codex_disable_operation_receipt_in(&secure)?.is_some() {
+        return Err(io::Error::other(
+            "Codex disable receipt 尚未清理；拒绝释放 Config fence",
+        ));
+    }
+    let mut config = load_from_secure(&secure)?;
+    if config.codex_disable_operation_fence()?.as_ref() != Some(expected_fence) {
+        return Err(io::Error::other(
+            "Codex disable Config fence 在清理前发生变化",
+        ));
+    }
+    if codex_disable_config_fingerprint(&config)? != terminal_image.fingerprint(expected_fence) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Codex disable Config terminal image 在 fence 清理前发生变化",
+        ));
+    }
+    config.clear_codex_disable_operation_fence();
+    save_to_secure(&secure, &config)
+}
+
+/// Boot-only convergence for the two safe receipt-free protocol points: a
+/// crash after fence publication but before intent publication, or a crash
+/// after exact terminal receipt clear but before fence clear.
+pub(crate) fn recover_orphan_codex_disable_operation_fence(
+    dir: &Path,
+) -> io::Result<CodexDisableOrphanFenceRecovery> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(CodexDisableOrphanFenceRecovery::None)
+        }
+        Err(error) => return Err(error),
+    };
+    if read_codex_disable_operation_receipt_in(&secure)?.is_some() {
+        return Ok(CodexDisableOrphanFenceRecovery::None);
+    }
+    let mut config = load_from_secure(&secure)?;
+    let Some(fence) = config.codex_disable_operation_fence()? else {
+        return Ok(CodexDisableOrphanFenceRecovery::None);
+    };
+    let fingerprint = codex_disable_config_fingerprint(&config)?;
+    if fingerprint != fence.before_config_fingerprint
+        && fingerprint != fence.after_config_fingerprint
+    {
+        return Ok(CodexDisableOrphanFenceRecovery::ConfigDrift);
+    }
+    config.clear_codex_disable_operation_fence();
+    save_to_secure(&secure, &config)?;
+    Ok(CodexDisableOrphanFenceRecovery::Cleared)
+}
+
+/// Publish the first disable intent without replacing another open operation.
+#[cfg(test)]
+pub(crate) fn write_codex_disable_operation_receipt_if_absent(
+    dir: &Path,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = open_config_writer(dir, true)?;
+    if secure.regular_exists_allow_hardlinks(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)? {
+        return Err(io::Error::other(
+            "Codex disable receipt 尚有未裁决的清理记录",
+        ));
+    }
+    atomic_write_named_bytes_if_absent_in(
+        &secure,
+        CODEX_DISABLE_OPERATION_RECEIPT_FILE,
+        bytes,
+        |secure| secure.sync(),
+    )
+}
+
+/// Advance one receipt phase by exact-byte CAS.  A stale writer can therefore
+/// neither overwrite a replacement operation nor silently retarget recovery.
+pub(crate) fn write_codex_disable_operation_receipt(
+    dir: &Path,
+    bytes: &[u8],
+    expected_before: &[u8],
+) -> io::Result<()> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = open_config_writer(dir, false)?;
+    if secure.regular_exists_allow_hardlinks(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)? {
+        return Err(io::Error::other(
+            "Codex disable receipt 尚有未裁决的清理记录",
+        ));
+    }
+    atomic_write_named_bytes_in(
+        &secure,
+        CODEX_DISABLE_OPERATION_RECEIPT_FILE,
+        bytes,
+        Some(expected_before),
+        |secure| secure.sync(),
+    )
+}
+
+/// Clear only the exact terminal receipt.  The fixed private clearing name is
+/// part of the protocol: an interrupted clear is discoverable and resurrected
+/// by `read_codex_disable_operation_receipt`, while a stale clear can never
+/// unlink a replacement.
+pub(crate) fn clear_codex_disable_operation_receipt(
+    dir: &Path,
+    expected: &[u8],
+    expected_fence: &CodexDisableOperationFence,
+    terminal_image: CodexDisableTerminalConfigImage,
+) -> io::Result<()> {
+    let operation_id = &expected_fence.operation_id;
+    if operation_id.len() != 32
+        || !operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Codex disable operation id 非法",
+        ));
+    }
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = open_config_writer(dir, false)?;
+    if secure.regular_exists_allow_hardlinks(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)? {
+        return Err(io::Error::other(
+            "Codex disable receipt 尚有未裁决的清理记录",
+        ));
+    }
+    let config = load_from_secure(&secure)?;
+    if config.codex_disable_operation_fence()?.as_ref() != Some(expected_fence) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Codex disable Config fence 在 receipt 清理前发生变化",
+        ));
+    }
+    if codex_disable_config_fingerprint(&config)? != terminal_image.fingerprint(expected_fence) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Codex disable Config terminal image 在 receipt 清理前发生变化",
+        ));
+    }
+    if secure
+        .read_regular(CODEX_DISABLE_OPERATION_RECEIPT_FILE)?
+        .as_deref()
+        != Some(expected)
+    {
+        return Err(io::Error::other(
+            "Codex disable receipt 在清理前发生变化；已保留当前记录",
+        ));
+    }
+    secure.rename(
+        CODEX_DISABLE_OPERATION_RECEIPT_FILE,
+        CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE,
+    )?;
+    // Persist the discoverable intermediate name before removing it.  Every
+    // crash point therefore leaves either the active receipt, the recoverable
+    // clearing receipt, or a durably empty state.
+    secure.sync()?;
+    if secure
+        .read_regular(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)?
+        .as_deref()
+        != Some(expected)
+    {
+        return Err(io::Error::other(
+            "Codex disable receipt 在清理期间变化；清理记录已保留",
+        ));
+    }
+    secure.unlink(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)?;
+    secure.sync()
 }
 
 fn config_path(dir: &Path) -> PathBuf {
@@ -3180,6 +3702,7 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
             format!("只接受 canonical schema v{CURRENT_SCHEMA_VERSION}"),
         ));
     }
+    cfg.codex_disable_operation_fence()?;
     let mut ids = BTreeSet::new();
     for reserved in [
         "schema_version",
@@ -3431,6 +3954,7 @@ pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
     // fence whenever a valid current Config can be identified.
     if let Ok(current) = load_from_secure(&secure) {
         ensure_history_recovery_sibling_authority_unchanged(&current, cfg)?;
+        ensure_codex_disable_sibling_authority_unchanged(&current, cfg)?;
     }
     save_to_secure(&secure, cfg)
 }
@@ -3465,6 +3989,18 @@ fn ensure_history_recovery_sibling_authority_unchanged(
     if current_authority != next_authority {
         return Err(io::Error::other(
             "history recovery 正在持有完整 Config authority；拒绝 sibling config writer",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_codex_disable_sibling_authority_unchanged(
+    current: &Config,
+    next: &Config,
+) -> io::Result<()> {
+    if current.codex_disable_operation_fence()?.is_some() && current != next {
+        return Err(io::Error::other(
+            "Codex disable operation 正在持有完整 Config authority；拒绝 sibling config writer",
         ));
     }
     Ok(())
@@ -3975,6 +4511,7 @@ pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     let current = cfg.clone();
     f(&mut cfg);
     ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)?;
+    ensure_codex_disable_sibling_authority_unchanged(&current, &cfg)?;
     #[cfg(test)]
     if CONFIG_UPDATE_COMMIT_FAILURE
         .lock()
@@ -4004,6 +4541,8 @@ where
     let (result, changed) = f(&mut cfg)?;
     if changed {
         ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
+            .map_err(|error| error.to_string())?;
+        ensure_codex_disable_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
         #[cfg(test)]
         if CONFIG_UPDATE_COMMIT_FAILURE
@@ -4036,6 +4575,8 @@ where
     let (result, changed) = f(&mut cfg)?;
     if changed {
         ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
+            .map_err(|error| error.to_string())?;
+        ensure_codex_disable_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
         let _ = write_rolling_backup_in(&secure);
         save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
@@ -4075,6 +4616,200 @@ mod tests {
 
     fn mode_of(p: &Path) -> u32 {
         fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn p2a_codex_disable_receipt_cas_clear_preserves_replacement() {
+        let dir = tmpdir().join(".csswitch-p2a-receipt");
+        let cfg = Config {
+            experimental_codex_enabled: true,
+            proxy_port: 18000,
+            sandbox_port: 18765,
+            ..Default::default()
+        };
+        save_to(&dir, &cfg).unwrap();
+        let mut after = cfg.clone();
+        after.experimental_codex_enabled = false;
+        let fence = CodexDisableOperationFence::new(
+            "11".repeat(16),
+            "22".repeat(32),
+            codex_disable_config_fingerprint(&cfg).unwrap(),
+            codex_disable_config_fingerprint(&after).unwrap(),
+        );
+        let first = br#"{"phase":"intent"}"#;
+        let second = br#"{"phase":"effects_applied"}"#;
+        let replacement = br#"{"phase":"attention"}"#;
+        begin_codex_disable_operation(&dir, &cfg, &fence, first).unwrap();
+        assert_eq!(
+            read_codex_disable_operation_receipt(&dir).unwrap(),
+            Some(first.to_vec())
+        );
+        assert_eq!(
+            mode_of(&dir.join(CODEX_DISABLE_OPERATION_RECEIPT_FILE)),
+            0o600
+        );
+        assert!(write_codex_disable_operation_receipt_if_absent(&dir, second).is_err());
+
+        write_codex_disable_operation_receipt(&dir, second, first).unwrap();
+        write_codex_disable_operation_receipt(&dir, replacement, second).unwrap();
+        assert!(clear_codex_disable_operation_receipt(
+            &dir,
+            second,
+            &fence,
+            CodexDisableTerminalConfigImage::Before,
+        )
+        .is_err());
+        assert_eq!(
+            read_codex_disable_operation_receipt(&dir).unwrap(),
+            Some(replacement.to_vec()),
+            "stale clear must preserve replacement bytes"
+        );
+
+        {
+            let (secure, _fence) = open_config_writer(&dir, false).unwrap();
+            secure
+                .rename(
+                    CODEX_DISABLE_OPERATION_RECEIPT_FILE,
+                    CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE,
+                )
+                .unwrap();
+            secure.sync().unwrap();
+        }
+        assert!(!dir.join(CODEX_DISABLE_OPERATION_RECEIPT_FILE).exists());
+        assert!(dir
+            .join(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)
+            .exists());
+        assert_eq!(
+            read_codex_disable_operation_receipt(&dir).unwrap(),
+            Some(replacement.to_vec()),
+            "an interrupted clear must resurrect the exact receipt"
+        );
+        assert!(dir.join(CODEX_DISABLE_OPERATION_RECEIPT_FILE).exists());
+        assert!(!dir
+            .join(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)
+            .exists());
+
+        clear_codex_disable_operation_receipt(
+            &dir,
+            replacement,
+            &fence,
+            CodexDisableTerminalConfigImage::Before,
+        )
+        .unwrap();
+        assert!(read_codex_disable_operation_receipt(&dir)
+            .unwrap()
+            .is_none());
+        assert!(!fs::read_dir(&dir).unwrap().flatten().any(|entry| entry
+            .file_name()
+            .to_string_lossy()
+            .contains(CODEX_DISABLE_OPERATION_RECEIPT_FILE)));
+        clear_codex_disable_operation_fence(&dir, &fence, CodexDisableTerminalConfigImage::Before)
+            .unwrap();
+    }
+
+    #[test]
+    fn p2a_codex_disable_config_fence_blocks_siblings_and_recovers_orphans() {
+        let dir = tmpdir().join(".csswitch-p2a-fence");
+        let cfg = Config {
+            experimental_codex_enabled: true,
+            proxy_port: 18000,
+            sandbox_port: 18765,
+            ..Default::default()
+        };
+        save_to(&dir, &cfg).unwrap();
+        let mut after = cfg.clone();
+        after.experimental_codex_enabled = false;
+        let fence = CodexDisableOperationFence::new(
+            "11".repeat(16),
+            "22".repeat(32),
+            codex_disable_config_fingerprint(&cfg).unwrap(),
+            codex_disable_config_fingerprint(&after).unwrap(),
+        );
+
+        let mut fence_only = cfg.clone();
+        fence_only.set_codex_disable_operation_fence(&fence);
+        save_to(&dir, &fence_only).unwrap();
+        assert_eq!(
+            recover_orphan_codex_disable_operation_fence(&dir).unwrap(),
+            CodexDisableOrphanFenceRecovery::Cleared
+        );
+        assert_eq!(
+            recover_orphan_codex_disable_operation_fence(&dir).unwrap(),
+            CodexDisableOrphanFenceRecovery::None
+        );
+        assert_eq!(load_from(&dir).unwrap(), cfg);
+
+        let receipt = br#"{"schema_version":1,"phase":"intent"}"#;
+        begin_codex_disable_operation(&dir, &cfg, &fence, receipt).unwrap();
+        let fenced = load_from(&dir).unwrap();
+        assert_eq!(
+            fenced.codex_disable_operation_fence().unwrap(),
+            Some(fence.clone())
+        );
+        assert!(require_no_runtime_transaction(&fenced)
+            .unwrap_err()
+            .contains("codex_disable_operation_in_progress"));
+        assert!(update(&dir, |current| current.mode = "official".into()).is_err());
+        assert_eq!(load_from(&dir).unwrap(), fenced);
+
+        clear_codex_disable_operation_receipt(
+            &dir,
+            receipt,
+            &fence,
+            CodexDisableTerminalConfigImage::Before,
+        )
+        .unwrap();
+        let mut drifted = load_from(&dir).unwrap();
+        drifted.reuse_system_ssh = true;
+        test_save_to_without_history_authority_guard(&dir, &drifted).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                recover_orphan_codex_disable_operation_fence(&dir).unwrap(),
+                CodexDisableOrphanFenceRecovery::ConfigDrift,
+                "receipt-free terminal drift must retain the self-describing fence"
+            );
+            assert_eq!(
+                load_from(&dir)
+                    .unwrap()
+                    .codex_disable_operation_fence()
+                    .unwrap(),
+                Some(fence.clone())
+            );
+        }
+        let mut exact = load_from(&dir).unwrap();
+        exact.reuse_system_ssh = false;
+        test_save_to_without_history_authority_guard(&dir, &exact).unwrap();
+        assert_eq!(
+            recover_orphan_codex_disable_operation_fence(&dir).unwrap(),
+            CodexDisableOrphanFenceRecovery::Cleared
+        );
+        assert_eq!(
+            recover_orphan_codex_disable_operation_fence(&dir).unwrap(),
+            CodexDisableOrphanFenceRecovery::None
+        );
+        assert_eq!(load_from(&dir).unwrap(), cfg);
+        assert!(read_codex_disable_operation_receipt(&dir)
+            .unwrap()
+            .is_none());
+
+        begin_codex_disable_operation(&dir, &cfg, &fence, receipt).unwrap();
+        update_codex_disable_operation(&dir, &fence, |current| {
+            current.experimental_codex_enabled = false;
+            Ok(((), true))
+        })
+        .unwrap();
+        clear_codex_disable_operation_receipt(
+            &dir,
+            receipt,
+            &fence,
+            CodexDisableTerminalConfigImage::After,
+        )
+        .unwrap();
+        assert_eq!(
+            recover_orphan_codex_disable_operation_fence(&dir).unwrap(),
+            CodexDisableOrphanFenceRecovery::Cleared
+        );
+        assert_eq!(load_from(&dir).unwrap(), after);
     }
 
     fn wait_for_test_path(path: &Path) {

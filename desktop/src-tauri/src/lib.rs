@@ -794,6 +794,10 @@ fn run_boot_decision_with<R, Load, Decide, Open, Boot, Project, Show>(
 }
 
 fn run_boot_decision(app: tauri::AppHandle) {
+    if let Some(attention) = commands::codex::replay_interrupted_codex_disable(&app) {
+        mark_boot_attention(&app, attention);
+        return;
+    }
     run_boot_decision_with(
         app,
         || load_boot_config(&config::default_dir()),

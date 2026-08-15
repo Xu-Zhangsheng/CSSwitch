@@ -428,7 +428,7 @@ fn write_padded_test_updater(path: &Path, body: &str) {
     updater.sync_all().unwrap();
 }
 
-fn write_test_bins(dir: &Path) -> PathBuf {
+pub(crate) fn write_test_bins(dir: &Path) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
     write_executable(
         &dir.join("open"),
@@ -9695,6 +9695,103 @@ fn set_mode_rejects_config_commit_when_gateway_stop_is_uncertain() {
     cleanup
         .retry_with(crate::runtime::system::stop_child_confirmed)
         .unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn p2a_codex_disable_fence_blocks_mode_and_settings_before_effects() {
+    let root = tmpdir("p2a-codex-disable-entry-fence");
+    let config_dir = root.join("config");
+    let sandbox_home = root.join("sandbox");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::create_dir_all(&sandbox_home).unwrap();
+    let cfg = Config {
+        mode: "proxy".into(),
+        experimental_codex_enabled: true,
+        proxy_port: 18000,
+        sandbox_port: 18765,
+        ..Default::default()
+    };
+    config::save_to(&config_dir, &cfg).unwrap();
+    let mut after = cfg.clone();
+    after.experimental_codex_enabled = false;
+    let fence = config::CodexDisableOperationFence::new(
+        "11".repeat(16),
+        "22".repeat(32),
+        config::codex_disable_config_fingerprint(&cfg).unwrap(),
+        config::codex_disable_config_fingerprint(&after).unwrap(),
+    );
+    let receipt = br#"{"schema_version":1,"test":"p2a-entry-fence"}"#;
+    config::begin_codex_disable_operation(&config_dir, &cfg, &fence, receipt).unwrap();
+    let fenced_bytes = fs::read(config_dir.join("config.json")).unwrap();
+    let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let lifecycle = Arc::new(lifecycle::Lifecycle::new());
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let effect_called = Arc::new(AtomicBool::new(false));
+
+    let mode_effect = effect_called.clone();
+    let mode_result = super::lifecycle::set_mode_inner_with(
+        app.handle().clone(),
+        state.clone(),
+        lifecycle.clone(),
+        "official".into(),
+        config_dir.clone(),
+        move |runtime| {
+            mode_effect.store(true, Ordering::SeqCst);
+            Ok(science::ScienceStopRequest::recover(runtime))
+        },
+        |_, _| unreachable!("mode stop effect must be fenced"),
+        |_| unreachable!("mode gateway stop must be fenced"),
+    );
+    assert!(mode_result
+        .as_ref()
+        .is_err_and(|error| error.contains("codex_disable_operation_in_progress")));
+
+    let settings_effect = effect_called.clone();
+    let settings_result = super::lifecycle::set_settings_inner_with(
+        app.handle().clone(),
+        state,
+        lifecycle,
+        super::lifecycle::UiSettings {
+            proxy_port: 18001,
+            sandbox_port: 18766,
+            reuse_system_ssh: false,
+        },
+        super::lifecycle::SetSettingsPaths {
+            config_dir: config_dir.clone(),
+            sandbox_home,
+        },
+        move |runtime| {
+            settings_effect.store(true, Ordering::SeqCst);
+            Ok(science::ScienceStopRequest::recover(runtime))
+        },
+        |_, _| unreachable!("settings stop effect must be fenced"),
+        |_| unreachable!("settings gateway stop must be fenced"),
+    );
+    assert!(settings_result
+        .as_ref()
+        .is_err_and(|error| error.contains("codex_disable_operation_in_progress")));
+    assert!(!effect_called.load(Ordering::SeqCst));
+    assert_eq!(
+        fs::read(config_dir.join("config.json")).unwrap(),
+        fenced_bytes
+    );
+
+    config::clear_codex_disable_operation_receipt(
+        &config_dir,
+        receipt,
+        &fence,
+        config::CodexDisableTerminalConfigImage::Before,
+    )
+    .unwrap();
+    config::clear_codex_disable_operation_fence(
+        &config_dir,
+        &fence,
+        config::CodexDisableTerminalConfigImage::Before,
+    )
+    .unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

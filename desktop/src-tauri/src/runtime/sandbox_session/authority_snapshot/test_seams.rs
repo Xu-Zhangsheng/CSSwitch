@@ -17,6 +17,7 @@ pub(super) struct SandboxSessionTestSeams {
     pub(super) catalog_failure_port: Option<u16>,
     pub(super) catalog_bypass_port: Option<u16>,
     pub(super) prior_restart_post_spawn_failure_port: Option<u16>,
+    pub(super) prior_restart_post_spawn_uncertain_port: Option<u16>,
     pub(super) prior_restart_post_spawn_identity: Option<(u32, String)>,
     pub(super) rollback_diagnostic_canary: Option<String>,
     pub(super) rollback_diagnostic_snapshot: Option<PathBuf>,
@@ -206,6 +207,17 @@ pub(crate) fn test_arm_prior_restart_post_spawn_failure(port: u16) -> SandboxSes
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .prior_restart_post_spawn_failure_port = Some(port);
+    SandboxSessionTestSeamGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_prior_restart_post_spawn_uncertain(
+    port: u16,
+) -> SandboxSessionTestSeamGuard {
+    SANDBOX_SESSION_TEST_SEAMS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .prior_restart_post_spawn_uncertain_port = Some(port);
     SandboxSessionTestSeamGuard
 }
 

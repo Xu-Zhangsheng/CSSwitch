@@ -45,6 +45,15 @@ pub(crate) use lifecycle::stop_sandbox_state;
 pub(crate) use lifecycle::{execute_process_local_science_stop_with, UiSettings};
 pub(crate) use one_click::one_click_login_cmd;
 
+#[cfg(test)]
+pub(crate) fn stop_all_inner_cmd_for_test<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: SharedAppState,
+    lifecycle: SharedLifecycle,
+) -> Result<(), String> {
+    lifecycle::stop_all_inner_cmd(app, state, lifecycle)
+}
+
 #[tauri::command]
 pub(crate) async fn set_mode(
     app: tauri::AppHandle,
@@ -183,4 +192,4 @@ use status::{
 
 #[cfg(test)]
 #[path = "runtime/tests.rs"]
-mod tests;
+pub(crate) mod tests;
