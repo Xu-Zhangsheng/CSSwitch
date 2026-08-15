@@ -197,8 +197,15 @@ impl OneClickEntryPreflight {
         let cfg = config::load_from(&config::default_dir()).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
-        config::require_no_runtime_transaction(&cfg)
-            .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+        let codex_disable_operation = cfg.codex_disable_operation_fence().map_err(|message| {
+            typed_one_click_err(OneClickFailureKind::ConfigLoad, message.to_string())
+        })?;
+        if codex_disable_operation.is_some() {
+            return Err(typed_one_click_err(
+                OneClickFailureKind::Prepare,
+                "code=codex_disable_operation_in_progress Codex disable operation 尚未结束；请先完成恢复或处理 attention。",
+            ));
+        }
         let active = cfg.active_profile().ok_or_else(|| {
             typed_one_click_err(
                 OneClickFailureKind::NoActiveProfile,
@@ -222,9 +229,7 @@ impl OneClickEntryPreflight {
                 })?
                 .unwrap_or(false);
         Ok(Self {
-            codex_disable_operation: cfg.codex_disable_operation_fence().map_err(|message| {
-                typed_one_click_err(OneClickFailureKind::ConfigLoad, message.to_string())
-            })?,
+            codex_disable_operation,
             runtime_transaction: cfg.runtime_transaction.clone(),
             runtime_compensation: cfg.runtime_compensation.clone(),
             config: (adapter != "codex").then_some(cfg),
