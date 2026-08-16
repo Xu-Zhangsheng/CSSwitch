@@ -33,8 +33,11 @@
       "quality/runtime-mutation-inventory.v1.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py",
       "test/run-frontend.sh",
       "test/runtime_mutation_protocol.test.mjs",
+      "test/test_profile_pin_contract.py",
       "test/test_runtime_mutation_inventory.py",
       "test/test_skill_runtime_boundary.py"
     ],
@@ -51,9 +54,12 @@
         "SUITE-QUALITY-METADATA",
         "SUITE-QUALITY-FOCUSED",
         "SUITE-QUALITY-INVENTORY",
+        "SUITE-RUN-EVIDENCE-CONTRACT",
         "SUITE-RUST-DESKTOP",
         "SUITE-RUST-GATEWAY",
-        "SUITE-MJS-FRONTEND"
+        "SUITE-MJS-FRONTEND",
+        "SUITE-PY-OFFLINE",
+        "SUITE-SOURCE-GATE-CONTRACT"
       ],
       "required_gate_ids": [
         "GATE-SOURCE",

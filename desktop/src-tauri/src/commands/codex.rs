@@ -9693,6 +9693,11 @@ exit 23"#,
             );
             config::update(&config_dir, |cfg| cfg.runtime_compensation = None).unwrap();
 
+            config::update(&config_dir, |cfg| {
+                cfg.codex_network.mode = csswitch_codex_network::CodexNetworkMode::Custom;
+                cfg.codex_network.proxy_url = "http://127.0.0.1:8080".into();
+            })
+            .unwrap();
             let before = fs::read(config_dir.join("config.json")).unwrap();
             let settings = csswitch_codex_network::CodexNetworkSettings::default();
             let resolved = csswitch_codex_network::direct_route();

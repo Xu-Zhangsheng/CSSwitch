@@ -24,7 +24,8 @@ class ProfilePinContractTests(unittest.TestCase):
         config_source = (ROOT / "desktop/src-tauri/src/config.rs").read_text()
         self.assertIn("code=runtime_transaction_in_progress", config_source)
         self.assertIn("resolve_launch_plan(profile)?", pin)
-        self.assertIn('"apply_state": "pending"', pin)
+        self.assertIn('object.insert("apply_state".into()', pin)
+        self.assertIn('serde_json::Value::String("pending".into())', pin)
         for forbidden in (
             "prepare_provider_auth",
             "scratch_validate_candidate",
