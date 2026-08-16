@@ -260,6 +260,7 @@
         "test.test_process_ownership_policy.ProductionProcessOwnershipPolicy.test_tauri_runtime_has_no_global_name_or_argv_kill",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_backend_pin_is_local_and_one_click_remains_the_apply_boundary",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_committed_profile_mutations_distinguish_refresh_failure",
+        "test.test_profile_pin_contract.ProfilePinContractTests.test_mode_switch_accepts_only_exact_typed_terminal_outcomes",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_skill_and_browser_warnings_preserve_runtime_success",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_success_keeps_single_finally_busy_ownership_through_refresh",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_ui_activation_has_no_skip_path_and_reports_pending_selection"
