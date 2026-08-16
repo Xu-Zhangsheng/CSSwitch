@@ -13,7 +13,7 @@
 | pending authority cleanup retry set | `AppState.pending_authority_cleanup` | 进程内镜像；跨重启权威是 private pending-cleanup manifest |
 | profile、active selection、端口、mode、SSH/Codex 设置、path secret | CSSwitch `config.json` / `Config` | 持久 |
 | last healthy binding | `Config.runtime_binding` | 持久；只含公开 identity/hash 与可选的 32-hex Science adoption attempt id；旧值缺失 id 时不能授权 adoption finalize |
-| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery 与 interrupted-Gateway recovery writer 写 typed V2；历史 profile-switch V1/V2 journal 只保留兼容读取与恢复，不再有 profile-switch writer |
+| in-flight runtime transaction | `Config.runtime_transaction` / `RuntimeTransactionRecord` | 持久；one-click、history recovery、healthy-reopen Gateway intent 与 interrupted-Gateway recovery writer 写 typed V2；profile-switch V1 只保留兼容读取，当前 profile-switch V2 writer 仅限 healthy reopen 发布 `StartFormalGateway` 及 recovery 收敛 |
 | in-flight one-click compensation | `Config.runtime_compensation` / path-free `RuntimeCompensationJournal` V1/V2 | 持久；V1 只兼容读取并阻断 mutation；当前 V2 只含 opaque compensation id、目标/fingerprint、受管 snapshot ticket、aggregate state、五个 typed step state 与最多两个 adoption attempt retention id；与 `runtime_transaction` 分离 |
 | Science protected state rollback | private authority snapshot + manifest | 持久到 success/完整补偿/人工处置 |
 | Science managed launch | stable path `science-managed-launch.v1.json` + live listener identity | schema v2 绑定 source/version/adoption attempt；schema v1 只读兼容且 provenance unknown |
@@ -414,8 +414,8 @@ OAuth、SSH、MCP 或 route 写入前必须完成 protected snapshot。`serve` �
 - `set_active_profile` 只写 selection，不触碰运行态。
 - 真正应用由下一次一键开始执行。
 - mode 切到 official 时先 bump generation，停止受管 Science/Gateway，再持久化 mode；停机失败不提交。
-- 当前产品不执行运行中 profile switch transaction；`set_active_profile` 只提交 selection，下一次一键开始按新的 active profile 重新走完整启动与补偿链。已删除无生产 caller 的 `set_active_profile_txn` writer 及其 rollback/journal helpers。
-- 历史遗留的 profile-switch V1/V2 journal 仍由中断 Gateway recovery 严格读取、验证并按其既有 complete-record CAS 规则处理；selection 与普通 one-click 不会重新产生或接管这类旧 writer 的 handoff。
+- 当前产品没有由 `set_active_profile` 触发的运行中 profile-switch transaction；该命令只提交 selection，下一次一键开始按新的 active profile 重新走完整启动与补偿链。已删除无生产 caller 的 `set_active_profile_txn` writer 及其 rollback/journal helpers。唯一当前 profile-switch writer 是 healthy reopen 的 bounded Gateway intent：它在最终 admission 下发布 V2 `StartFormalGateway`，不重启 Science，也不恢复已删除的通用 profile-switch coordinator。
+- 历史遗留的 profile-switch V1 journal 与当前 healthy-reopen V2 intent 都由中断 Gateway recovery 严格读取、验证并按 complete-record CAS 规则处理；selection 不产生 journal，普通 one-click 只消费 recovery 的 affine terminal handoff，不伪造或接管 writer identity。
 
 ## 中断 Gateway 恢复
 
@@ -433,9 +433,11 @@ fingerprint、future nested schema、未知字段和重复字段均在 config lo
 绑定去除 journal 后的完整 Config authority；history phase 缺少该 64-hex identity 同样 fail-closed。
 当前生产可写 V2 的重启矩阵包括八个 one-click phases、history recovery 的
 `stop_old_science / authority_snapshot_active / history_credential_write_pending /
-history_credential_published / resume_after_history_restore`，以及 interrupted-Gateway recovery 的
+history_credential_published / resume_after_history_restore`、healthy reopen 发布的
+`profile_switch / start_formal_gateway / not_attempted`，以及 interrupted-Gateway recovery 的
 `pending|stopped|not_managed|signal_failed|exit_unconfirmed|absent_after_attempt`；其它组合
-不得由 reader 推断为可恢复语义。历史 profile-switch journal 只作为该 recovery 的输入，不是当前可写 phase。
+不得由 reader 推断为可恢复语义。profile-switch V1 只作为 compatibility recovery 输入；当前
+V2 `StartFormalGateway` 只由 healthy reopen 写入，`RecoverInterruptedGateway` 只由 recovery 写入。
 
 通过 path secret、初始公开 Gateway identity/contract 与 packaged binary 可用性检查后，recovery
 先用调用方读取的**完整原记录** CAS 发布
