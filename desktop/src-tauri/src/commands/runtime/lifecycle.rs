@@ -13,7 +13,7 @@ pub(super) async fn set_mode_command(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     mode: String,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
     run_blocking(move || set_mode_inner(app, state, lifecycle, mode)).await
@@ -24,7 +24,7 @@ pub(super) fn set_mode_inner<R: tauri::Runtime>(
     state: SharedAppState,
     lifecycle: SharedLifecycle,
     mode: String,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     set_mode_inner_with(
         app,
         state,
@@ -47,7 +47,7 @@ pub(super) fn set_mode_inner_with<R, Claim, Execute, StopGateway>(
     claim_science: Claim,
     execute_science: Execute,
     stop_gateway: StopGateway,
-) -> Result<(), String>
+) -> Result<serde_json::Value, String>
 where
     R: tauri::Runtime,
     Claim: FnOnce(
@@ -71,8 +71,83 @@ where
     lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
         let preflight = config::load_from(&dir).map_err(|error| error.to_string())?;
         config::require_no_runtime_transaction(&preflight)?;
+        let (science_effect, gateway_effect) = {
+            let current = lock(&state);
+            (
+                current.science_runtime.is_some() || current.sandbox.is_some(),
+                current.proxy.is_some(),
+            )
+        };
+        let mut after = preflight.clone();
+        after.mode = mode.clone();
+        let mut mutation = if mode == "official" && (science_effect || gateway_effect) {
+            let effects = [
+                science_effect.then_some(config_mutation::ConfigMutationEffectKind::StopScience),
+                gateway_effect.then_some(config_mutation::ConfigMutationEffectKind::StopGateway),
+                Some(config_mutation::ConfigMutationEffectKind::ConfigCommit),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            Some(
+                config_mutation::begin(
+                    &dir,
+                    config_mutation::ConfigMutationOperation::SetModeOfficial,
+                    &preflight,
+                    Some(&after),
+                    config_mutation::MutationTarget {
+                        mode: Some("official".into()),
+                        ..Default::default()
+                    },
+                    config_mutation::RuntimePlan {
+                        owner_generation: lifecycle.current_generation(),
+                        ..Default::default()
+                    },
+                    effects,
+                    None,
+                    None,
+                )
+                .map_err(|error| config_mutation::command_error_string(&error))?,
+            )
+        } else {
+            None
+        };
         if mode == "official" {
             let generation = lifecycle.bump_generation();
+            let mut science_index = None;
+            let mut gateway_index = None;
+            let mut next_effect = 0usize;
+            if science_effect {
+                science_index = Some(next_effect);
+                next_effect += 1;
+            }
+            if gateway_effect {
+                gateway_index = Some(next_effect);
+            }
+            if let Some(operation) = mutation.as_mut() {
+                if let Some(index) = science_index {
+                    operation
+                        .checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::InProgress,
+                            None,
+                        )
+                        .map_err(|error| {
+                            format!("Config mutation receipt 无法记录 Science effect：{error}")
+                        })?;
+                }
+                if let Some(index) = gateway_index {
+                    operation
+                        .checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::InProgress,
+                            None,
+                        )
+                        .map_err(|error| {
+                            format!("Config mutation receipt 无法记录 Gateway effect：{error}")
+                        })?;
+                }
+            }
             let (owner, request) =
                 claim_process_local_science_stop(&state, generation, claim_science);
             // The stop script and bounded TERM/KILL waits intentionally run
@@ -80,35 +155,173 @@ where
             // process-local owner while set_mode holds the mutation lease.
             let execution = request.map(|request| execute_science(&app, request));
             let mut st = lock(&state);
-            publish_process_local_science_stop(
+            let science_result = publish_process_local_science_stop(
                 &mut st,
                 lifecycle.current_generation(),
                 owner,
                 execution,
-            )
-            .map_err(|e| {
-                format!("停止沙箱失败，未切换到官方模式：{e}（真实实例 8765 未受影响）")
-            })?;
-            require_confirmed_gateway_stop(
-                stop_gateway(&mut st),
-                "Gateway 停止结果未确认，未切换到官方模式",
-            )?;
-        }
-        config::update_result(&dir, {
-            let mode = mode.clone();
-            move |c| {
-                config::require_no_runtime_transaction(c)?;
-                c.mode = mode;
-                Ok(((), true))
+            );
+            if let Err(error) = science_result {
+                if let Some(mut operation) = mutation.take() {
+                    if let Some(index) = science_index {
+                        let _ = operation.checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Uncertain,
+                            Some("science_stop_uncertain"),
+                        );
+                    }
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("science_stop_uncertain"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    if let Err(attention) = attention {
+                        return Err(config_mutation::command_error_string(
+                            &attention.with_message(if error
+                                .to_string()
+                                .contains("process-local owner 已变化")
+                            {
+                                "停止沙箱失败：process-local owner 已变化"
+                            } else {
+                                "停止沙箱失败，未切换到官方模式"
+                            }),
+                        ));
+                    }
+                }
+                return Err(format!(
+                    "停止沙箱失败，未切换到官方模式：{error}（真实实例 8765 未受影响）"
+                ));
             }
-        })
-        .map_err(|e| e.to_string())?;
+            if let Some(operation) = mutation.as_mut() {
+                if let Some(index) = science_index {
+                    operation
+                        .checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Succeeded,
+                            Some("stopped"),
+                        )
+                        .map_err(|error| format!("Science stop receipt checkpoint 失败：{error}"))?;
+                }
+            }
+            let gateway_result = stop_gateway(&mut st);
+            if let Err(error) = require_confirmed_gateway_stop(
+                gateway_result,
+                "Gateway 停止结果未确认，未切换到官方模式",
+            ) {
+                if let Some(mut operation) = mutation.take() {
+                    if let Some(index) = gateway_index {
+                        let _ = operation.checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Uncertain,
+                            Some("gateway_stop_uncertain"),
+                        );
+                    }
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("gateway_stop_uncertain"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    if let Err(attention) = attention {
+                        return Err(config_mutation::command_error_string(
+                            &attention.with_message("Gateway 停止结果未确认，未切换到官方模式"),
+                        ));
+                    }
+                }
+                return Err(error);
+            }
+            if let Some(operation) = mutation.as_mut() {
+                if let Some(index) = gateway_index {
+                    operation
+                        .checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Succeeded,
+                            Some("stopped"),
+                        )
+                        .map_err(|error| format!("Gateway stop receipt checkpoint 失败：{error}"))?;
+                }
+            }
+        }
+        let outcome = if let Some(mut operation) = mutation {
+            let mode_for_commit = mode.clone();
+            let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+            if let Err(error) = operation.update_config(move |c| {
+                if config::config_mutation_config_fingerprint(c)
+                    .map_err(|error| error.to_string())?
+                    != before_fingerprint
+                {
+                    return Err("Config mutation before-image 在 commit 前发生变化".into());
+                }
+                c.mode = mode_for_commit;
+                Ok(((), true))
+            }) {
+                let attention = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("config_commit_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                return Err(match attention {
+                    Err(attention) => config_mutation::command_error_string(
+                        &attention.with_message(if error
+                            .contains("test-only config update commit failure")
+                        {
+                            "test-only config update commit failure"
+                        } else {
+                            "官方模式配置未提交"
+                        }),
+                    ),
+                    Ok(_) => error,
+                });
+            }
+            let commit_index = operation.receipt().effects.len().saturating_sub(1);
+            operation
+                .checkpoint_effect(
+                    commit_index,
+                    config_mutation::ConfigMutationEffectState::Succeeded,
+                    Some("committed"),
+                )
+                .map_err(|error| format!("Config mutation Config checkpoint 失败：{error}"))?;
+            let outcome = operation
+                .finish(
+                    "completed",
+                    "after",
+                    "stopped",
+                    None,
+                    config::ConfigMutationTerminalConfigImage::After,
+                )
+                .map_err(|error| config_mutation::command_error_string(&error))?;
+            config_mutation::outcome_json(&outcome)
+        } else {
+            config::update_result(&dir, {
+                let mode = mode.clone();
+                move |c| {
+                    config::require_no_runtime_transaction(c)?;
+                    c.mode = mode;
+                    Ok(((), true))
+                }
+            })
+            .map_err(|e| e.to_string())?;
+            config_mutation::typed_intent_outcome(
+                "set_mode",
+                "committed",
+                "committed",
+                None,
+                None,
+                Some("not_run"),
+                Some(false),
+            )
+        };
         {
             let mut app_state = lock(&state);
             app_state.history_recovery = None;
         }
         crate::clear_boot_attention(&app);
-        Ok(())
+        Ok(outcome)
     })
 }
 
@@ -134,7 +347,7 @@ pub(super) async fn set_settings_command(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     cfg: UiSettings,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let state = state.inner().clone();
     let lifecycle = lifecycle.inner().clone();
     run_blocking(move || set_settings_inner(app, state, lifecycle, cfg)).await
@@ -145,7 +358,7 @@ pub(super) fn set_settings_inner<R: tauri::Runtime>(
     state: SharedAppState,
     lifecycle: SharedLifecycle,
     cfg: UiSettings,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     validate_runtime_ports(cfg.proxy_port, cfg.sandbox_port)?;
     if cfg.reuse_system_ssh {
         system_ssh_config_path()?;
@@ -176,7 +389,7 @@ pub(super) fn set_settings_inner_with<R, Claim, Execute, StopGateway>(
     claim_science: Claim,
     execute_science: Execute,
     stop_gateway: StopGateway,
-) -> Result<(), String>
+) -> Result<serde_json::Value, String>
 where
     R: tauri::Runtime,
     Claim: FnOnce(
@@ -200,54 +413,386 @@ where
             old.sandbox_port,
             cfg.sandbox_port,
         ) || old.reuse_system_ssh != cfg.reuse_system_ssh;
-        // 拆链路【先】于落盘，且停沙箱结果必须据实处理（修增量 P1）：停不掉就【不改端口】——
-        // 否则会留下「config 已是新端口、旧沙箱仍在旧端口指向旧代理」的不一致态，下次一键还会复用这条死链路。
-        // 保持端口不变则一切仍自洽（旧沙箱指旧代理端口、下次一键在旧端口重建代理，链路照通）。
+
+        // Even false -> false is not automatically a no-op: an earlier
+        // interrupted launch may have left one of the three CSSwitch-owned
+        // SSH leaves behind.  Read-only preflight classifies absent/owned;
+        // foreign or ambiguous state fails before runtime teardown.
+        let bridge_owned = if !cfg.reuse_system_ssh {
+            preflight_science_ssh_bridge_cleanup(&paths.sandbox_home)?
+        } else {
+            false
+        };
+        let stub_owned = if !cfg.reuse_system_ssh {
+            preflight_managed_sandbox_ssh_stub_cleanup(&paths.sandbox_home)?
+        } else {
+            false
+        };
+        let destructive = teardown || bridge_owned || stub_owned;
+        let mut after = old.clone();
+        after.proxy_port = cfg.proxy_port;
+        after.sandbox_port = cfg.sandbox_port;
+        after.reuse_system_ssh = cfg.reuse_system_ssh;
+        let mut mutation = if destructive {
+            let mut effects = Vec::new();
+            if teardown {
+                let current = lock(&state);
+                if current.science_runtime.is_some() || current.sandbox.is_some() {
+                    effects.push(config_mutation::ConfigMutationEffectKind::StopScience);
+                }
+                if current.proxy.is_some() {
+                    effects.push(config_mutation::ConfigMutationEffectKind::StopGateway);
+                }
+            }
+            if bridge_owned {
+                effects.push(config_mutation::ConfigMutationEffectKind::DeleteSshBridgeSidecar);
+            }
+            if stub_owned {
+                effects.push(config_mutation::ConfigMutationEffectKind::DeleteManagedSshStub);
+            }
+            effects.push(config_mutation::ConfigMutationEffectKind::ConfigCommit);
+            Some(
+                config_mutation::begin(
+                    &paths.config_dir,
+                    config_mutation::ConfigMutationOperation::SetSettingsDestructive,
+                    &old,
+                    Some(&after),
+                    config_mutation::MutationTarget {
+                        proxy_port: Some(cfg.proxy_port),
+                        sandbox_port: Some(cfg.sandbox_port),
+                        reuse_system_ssh: Some(cfg.reuse_system_ssh),
+                        ..Default::default()
+                    },
+                    config_mutation::RuntimePlan {
+                        owner_generation: lifecycle.current_generation(),
+                        ..Default::default()
+                    },
+                    effects,
+                    None,
+                    Some(config_mutation::SshPlan::default()),
+                )
+                .map_err(|error| config_mutation::command_error_string(&error))?,
+            )
+        } else {
+            None
+        };
+
+        let mut effect_cursor = 0usize;
+        let science_index = if destructive && teardown {
+            let current = lock(&state);
+            let has_science = current.science_runtime.is_some() || current.sandbox.is_some();
+            drop(current);
+            has_science.then(|| {
+                let index = effect_cursor;
+                effect_cursor += 1;
+                index
+            })
+        } else {
+            None
+        };
+        let gateway_index = if destructive && teardown {
+            let current = lock(&state);
+            let has_gateway = current.proxy.is_some();
+            drop(current);
+            has_gateway.then(|| {
+                let index = effect_cursor;
+                effect_cursor += 1;
+                index
+            })
+        } else {
+            None
+        };
+        let bridge_index = bridge_owned.then(|| {
+            let index = effect_cursor;
+            effect_cursor += 1;
+            index
+        });
+        let stub_index = stub_owned.then(|| {
+            let index = effect_cursor;
+            effect_cursor += 1;
+            index
+        });
+        let commit_index = effect_cursor;
+
+        if let Some(operation) = mutation.as_mut() {
+            for index in [science_index, gateway_index]
+                .into_iter()
+                .flatten()
+            {
+                operation
+                    .checkpoint_effect(
+                        index,
+                        config_mutation::ConfigMutationEffectState::InProgress,
+                        None,
+                    )
+                    .map_err(|error| format!("settings runtime receipt checkpoint 失败：{error}"))?;
+            }
+        }
+
         if teardown {
             let generation = lifecycle.current_generation();
             let (owner, request) =
                 claim_process_local_science_stop(&state, generation, claim_science);
-            // Preserve the current stop-before-generation ordering, but do the
-            // stop script and bounded TERM/KILL waits without AppState so the
-            // read model remains available during a settings teardown.
             let execution = request.map(|request| execute_science(&app, request));
             let mut st = lock(&state);
-            publish_process_local_science_stop(
+            let science_result = publish_process_local_science_stop(
                 &mut st,
                 lifecycle.current_generation(),
                 owner,
                 execution,
-            )
-            .map_err(|e| {
-                format!(
-                    "设置未更改：无法停止仍使用旧端口或旧 SSH 授权的沙箱（{e}）。请手动停止沙箱或重启 app 后重试。（真实实例 8765 未受影响）"
-                )
-            })?;
-            lifecycle.bump_generation(); // 停成功后作废在途启动
-            require_confirmed_gateway_stop(
+            );
+            if let Err(error) = science_result {
+                if let Some(mut operation) = mutation.take() {
+                    if let Some(index) = science_index {
+                        let _ = operation.checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Uncertain,
+                            Some("science_stop_uncertain"),
+                        );
+                    }
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("science_stop_uncertain"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    if let Err(attention) = attention {
+                        return Err(config_mutation::command_error_string(
+                            &attention.with_message(if error
+                                .to_string()
+                                .contains("process-local owner 已变化")
+                            {
+                                "设置未更改：process-local owner 已变化"
+                            } else {
+                                "设置未更改：无法安全完成沙箱停止"
+                            }),
+                        ));
+                    }
+                }
+                return Err(format!(
+                    "设置未更改：无法停止仍使用旧端口或旧 SSH 授权的沙箱（{error}）。请手动停止沙箱或重启 app 后重试。（真实实例 8765 未受影响）"
+                ));
+            }
+            if let Some(operation) = mutation.as_mut() {
+                if let Some(index) = science_index {
+                    operation
+                        .checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Succeeded,
+                            Some("stopped"),
+                        )
+                        .map_err(|error| format!("Science stop receipt checkpoint 失败：{error}"))?;
+                }
+            }
+            lifecycle.bump_generation();
+            if let Err(error) = require_confirmed_gateway_stop(
                 stop_gateway(&mut st),
                 "设置未更改：Gateway 停止结果未确认",
-            )?;
+            ) {
+                if let Some(mut operation) = mutation.take() {
+                    if let Some(index) = gateway_index {
+                        let _ = operation.checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Uncertain,
+                            Some("gateway_stop_uncertain"),
+                        );
+                    }
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("gateway_stop_uncertain"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    if let Err(attention) = attention {
+                        return Err(config_mutation::command_error_string(
+                            &attention.with_message("设置未更改：Gateway 停止结果未确认"),
+                        ));
+                    }
+                }
+                return Err(error);
+            }
+            if let Some(operation) = mutation.as_mut() {
+                if let Some(index) = gateway_index {
+                    operation
+                        .checkpoint_effect(
+                            index,
+                            config_mutation::ConfigMutationEffectState::Succeeded,
+                            Some("stopped"),
+                        )
+                        .map_err(|error| format!("Gateway stop receipt checkpoint 失败：{error}"))?;
+                }
+            }
         }
-        if !cfg.reuse_system_ssh {
-            revoke_science_ssh_bridge(&paths.sandbox_home)?;
-            remove_managed_sandbox_ssh_stub(&paths.sandbox_home)?;
+
+        if bridge_owned {
+            if let Some(operation) = mutation.as_mut() {
+                operation
+                    .checkpoint_effect(
+                        bridge_index.expect("bridge effect index"),
+                        config_mutation::ConfigMutationEffectState::InProgress,
+                        None,
+                    )
+                    .map_err(|error| format!("SSH bridge receipt checkpoint 失败：{error}"))?;
+            }
+            if let Err(error) = revoke_science_ssh_bridge(&paths.sandbox_home) {
+                if let Some(mut operation) = mutation.take() {
+                    let _ = operation.checkpoint_effect(
+                        bridge_index.expect("bridge effect index"),
+                        config_mutation::ConfigMutationEffectState::Uncertain,
+                        Some("ssh_bridge_revoke_uncertain"),
+                    );
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("ssh_bridge_revoke_uncertain"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    if let Err(attention) = attention {
+                        return Err(config_mutation::command_error_string(&attention));
+                    }
+                }
+                return Err(error);
+            }
+            if let Some(operation) = mutation.as_mut() {
+                operation
+                    .checkpoint_effect(
+                        bridge_index.expect("bridge effect index"),
+                        config_mutation::ConfigMutationEffectState::Succeeded,
+                        Some("absent"),
+                    )
+                    .map_err(|error| format!("SSH bridge receipt checkpoint 失败：{error}"))?;
+            }
         }
-        // 拆链路成功（或无需拆）→ 才落盘新端口，保证 config 与运行态一致。
-        config::update_result(&paths.config_dir, move |c| {
-            config::require_no_runtime_transaction(c)?;
-            c.proxy_port = cfg.proxy_port;
-            c.sandbox_port = cfg.sandbox_port;
-            c.reuse_system_ssh = cfg.reuse_system_ssh;
-            Ok(((), true))
-        })
-        .map_err(|e| e.to_string())?;
-        {
-            let mut app_state = lock(&state);
-            app_state.history_recovery = None;
+        if stub_owned {
+            if let Some(operation) = mutation.as_mut() {
+                operation
+                    .checkpoint_effect(
+                        stub_index.expect("stub effect index"),
+                        config_mutation::ConfigMutationEffectState::InProgress,
+                        None,
+                    )
+                    .map_err(|error| format!("SSH stub receipt checkpoint 失败：{error}"))?;
+            }
+            if let Err(error) = remove_managed_sandbox_ssh_stub(&paths.sandbox_home) {
+                if let Some(mut operation) = mutation.take() {
+                    let _ = operation.checkpoint_effect(
+                        stub_index.expect("stub effect index"),
+                        config_mutation::ConfigMutationEffectState::Uncertain,
+                        Some("ssh_stub_remove_uncertain"),
+                    );
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("ssh_stub_remove_uncertain"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    if let Err(attention) = attention {
+                        return Err(config_mutation::command_error_string(&attention));
+                    }
+                }
+                return Err(error);
+            }
+            if let Some(operation) = mutation.as_mut() {
+                operation
+                    .checkpoint_effect(
+                        stub_index.expect("stub effect index"),
+                        config_mutation::ConfigMutationEffectState::Succeeded,
+                        Some("absent"),
+                    )
+                    .map_err(|error| format!("SSH stub receipt checkpoint 失败：{error}"))?;
+            }
         }
-        crate::clear_boot_attention(&app);
-        Ok(())
+
+        if let Some(mut operation) = mutation {
+            let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+            let next_cfg = cfg;
+            operation
+                .update_config(move |current| {
+                    if config::config_mutation_config_fingerprint(current)
+                        .map_err(|error| error.to_string())?
+                        != before_fingerprint
+                    {
+                        return Err("Config mutation before-image 在 settings commit 前发生变化".into());
+                    }
+                    current.proxy_port = next_cfg.proxy_port;
+                    current.sandbox_port = next_cfg.sandbox_port;
+                    current.reuse_system_ssh = next_cfg.reuse_system_ssh;
+                    Ok(((), true))
+                })
+                .map_err(|error| {
+                    let attention = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("config_commit_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    match attention {
+                        Err(attention) => config_mutation::command_error_string(
+                            &attention.with_message(if error
+                                .contains("test-only config update commit failure")
+                            {
+                                "test-only config update commit failure"
+                            } else {
+                                "设置未更改：配置未提交"
+                            }),
+                        ),
+                        Ok(_) => error,
+                    }
+                })?;
+            operation
+                .checkpoint_effect(
+                    commit_index,
+                    config_mutation::ConfigMutationEffectState::Succeeded,
+                    Some("committed"),
+                )
+                .map_err(|error| format!("settings Config checkpoint 失败：{error}"))?;
+            let outcome = operation
+                .finish(
+                    "completed",
+                    "after",
+                    if teardown { "stopped" } else { "preserved" },
+                    None,
+                    config::ConfigMutationTerminalConfigImage::After,
+                )
+                .map_err(|error| config_mutation::command_error_string(&error))?;
+            {
+                let mut app_state = lock(&state);
+                app_state.history_recovery = None;
+            }
+            crate::clear_boot_attention(&app);
+            Ok(config_mutation::outcome_json(&outcome))
+        } else {
+            config::update_result(&paths.config_dir, move |current| {
+                config::require_no_runtime_transaction(current)?;
+                let changed = current.proxy_port != cfg.proxy_port
+                    || current.sandbox_port != cfg.sandbox_port
+                    || current.reuse_system_ssh != cfg.reuse_system_ssh;
+                current.proxy_port = cfg.proxy_port;
+                current.sandbox_port = cfg.sandbox_port;
+                current.reuse_system_ssh = cfg.reuse_system_ssh;
+                Ok((changed, changed))
+            })
+            .map_err(|error| error.to_string())?;
+            {
+                let mut app_state = lock(&state);
+                app_state.history_recovery = None;
+            }
+            crate::clear_boot_attention(&app);
+            Ok(config_mutation::typed_intent_outcome(
+                "set_settings",
+                if teardown { "committed" } else { "no_change" },
+                "committed",
+                None,
+                None,
+                Some("not_run"),
+                Some(false),
+            ))
+        }
     })
 }
 

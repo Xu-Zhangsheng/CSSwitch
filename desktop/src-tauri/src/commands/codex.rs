@@ -16,6 +16,7 @@ use crate::codex_auth_supervisor::{
     LoginReservation, OperationErrorView, OperationSnapshot, SharedCodexAuthSupervisor,
 };
 use crate::lifecycle::RuntimeMutationDomain;
+use crate::commands::runtime::config_mutation::ConfigMutationCommandErrorV1;
 use crate::proc::ChildLiveness;
 use crate::runtime::proxy_lifecycle::{
     gateway_bin_path, DurableGatewayObservation, GatewayController, GatewayStopClaim,
@@ -776,6 +777,7 @@ fn codex_disable_current_config_state(
 pub(crate) enum RuntimeCommandError {
     Auth(CodexAuthCommandError),
     Disable(CodexDisableCommandError),
+    Mutation(ConfigMutationCommandErrorV1),
     Message(String),
 }
 
@@ -788,6 +790,12 @@ impl From<CodexAuthCommandError> for RuntimeCommandError {
 impl From<CodexDisableCommandError> for RuntimeCommandError {
     fn from(error: CodexDisableCommandError) -> Self {
         Self::Disable(error)
+    }
+}
+
+impl From<ConfigMutationCommandErrorV1> for RuntimeCommandError {
+    fn from(error: ConfigMutationCommandErrorV1) -> Self {
+        Self::Mutation(error)
     }
 }
 
@@ -808,6 +816,7 @@ impl std::fmt::Display for RuntimeCommandError {
         match self {
             Self::Message(message) => formatter.write_str(message),
             Self::Disable(error) => formatter.write_str(error.safe_message()),
+            Self::Mutation(error) => error.fmt(formatter),
             Self::Auth(error) => formatter.write_str(match error.code {
                 "codex_login_required" => "Codex 尚未登录或本地认证记录不完整。",
                 "codex_auth_busy" => "另一项 Codex 认证或启动操作正在进行。",
@@ -828,6 +837,7 @@ struct ManagedAuthProcess {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
     stdout: std::process::ChildStdout,
+    pending: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1069,6 +1079,8 @@ struct LoginSidecarEvent {
     state: Option<String>,
     #[serde(default)]
     disposition: Option<String>,
+    #[serde(default)]
+    authorization_digest: Option<String>,
     #[serde(default)]
     status: Option<AuthStatusView>,
     #[serde(default)]
@@ -2191,12 +2203,25 @@ fn prepare_codex_auth_mutation<R: tauri::Runtime>(
     state: &SharedAppState,
     lifecycle: &crate::lifecycle::Lifecycle,
 ) -> Result<AuthRuntimeAction, String> {
+    prepare_codex_auth_mutation_with_fence(app, state, lifecycle, None)
+}
+
+fn prepare_codex_auth_mutation_with_fence<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    expected_fence: Option<&config::ConfigMutationOperationFence>,
+) -> Result<AuthRuntimeAction, String> {
     require_no_codex_disable_receipt(&config::default_dir())
         .map_err(|error| error.safe_message().to_string())?;
     let cfg = config::load_from(&config::default_dir()).map_err(|error| {
         format!("读取配置失败；为避免遗漏残留 Codex Science，认证未变更：{error}")
     })?;
-    config::require_no_runtime_transaction(&cfg)?;
+    if let Some(expected_fence) = expected_fence {
+        config::require_no_runtime_transaction_for_mutation(&cfg, expected_fence)?;
+    } else {
+        config::require_no_runtime_transaction(&cfg)?;
+    }
     let active_profile_is_codex = cfg
         .active_profile()
         .is_some_and(|profile| profile.template_id == "codex");
@@ -2829,6 +2854,185 @@ pub(crate) fn replay_interrupted_codex_disable<R: tauri::Runtime>(
     result.err().map(|error| error.project_boot_attention())
 }
 
+fn codex_network_requires_destructive_receipt(
+    cfg: &config::Config,
+    state: &SharedAppState,
+) -> bool {
+    let active_profile_is_codex = cfg
+        .active_profile()
+        .is_some_and(|profile| profile.template_id == "codex");
+    let current = lock(state);
+    let science = current.science_runtime.is_some() || current.sandbox.is_some();
+    let gateway = current.proxy.is_some();
+    (current.provider == "codex" && (science || gateway)) || (active_profile_is_codex && science)
+}
+
+fn set_codex_network_with_p2b<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    settings: csswitch_codex_network::CodexNetworkSettings,
+    resolved: &csswitch_codex_network::ResolvedCodexNetworkRoute,
+) -> Result<Value, RuntimeCommandError> {
+    let dir = config::default_dir();
+    let before = config::load_from(&dir)
+        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    config::require_no_runtime_transaction(&before).map_err(RuntimeCommandError::from)?;
+    let mode = settings.mode;
+    if !codex_network_requires_destructive_receipt(&before, state) {
+        return set_codex_network_at(&dir, settings, resolved, || Ok(())).map_err(Into::into);
+    }
+    let mut after = before.clone();
+    after.codex_network = settings.clone();
+    let (science_effect, gateway_effect) = {
+        let current = lock(state);
+        (
+            current.science_runtime.is_some() || current.sandbox.is_some(),
+            current.proxy.is_some(),
+        )
+    };
+    let mut effects = Vec::new();
+    if science_effect {
+        effects.push(
+            crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopScience,
+        );
+    }
+    if gateway_effect {
+        effects.push(
+            crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
+        );
+    }
+    effects.push(crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ConfigCommit);
+    let mut operation = crate::commands::runtime::config_mutation::begin(
+        &dir,
+        crate::commands::runtime::config_mutation::ConfigMutationOperation::SetCodexNetwork,
+        &before,
+        Some(&after),
+        crate::commands::runtime::config_mutation::MutationTarget {
+            network_fingerprint: Some(
+                crate::commands::runtime::config_mutation::network_fingerprint(&settings)
+                    .map_err(RuntimeCommandError::from)?,
+            ),
+            ..Default::default()
+        },
+        crate::commands::runtime::config_mutation::RuntimePlan {
+            owner_generation: lifecycle.current_generation(),
+            ..Default::default()
+        },
+        effects,
+        None,
+        None,
+    )
+    .map_err(|error| RuntimeCommandError::Mutation(error))?;
+    let action = prepare_codex_auth_mutation_with_fence(
+        app,
+        state,
+        lifecycle,
+        Some(operation.fence()),
+    )
+    .map_err(|error| {
+        let _ = operation.finish(
+            "attention",
+            "before",
+            "unknown",
+            Some("runtime_stop_failed"),
+            config::ConfigMutationTerminalConfigImage::Before,
+        );
+        RuntimeCommandError::from(error)
+    })?;
+    let mut index = 0usize;
+    for (present, code) in [
+        (science_effect, "stopped_science"),
+        (gateway_effect, "stopped_gateway"),
+    ] {
+        if present {
+            operation
+                .checkpoint_effect(
+                    index,
+                    if action == AuthRuntimeAction::StopManagedCodex {
+                        crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded
+                    } else {
+                        crate::commands::runtime::config_mutation::ConfigMutationEffectState::Skipped
+                    },
+                    Some(if action == AuthRuntimeAction::StopManagedCodex {
+                        code
+                    } else {
+                        "preserved_other_provider"
+                    }),
+                )
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            index += 1;
+        }
+    }
+    let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+    if let Err(error) = operation.update_config(move |cfg| {
+            if config::config_mutation_config_fingerprint(cfg)
+                .map_err(|error| error.to_string())?
+                != before_fingerprint
+            {
+                return Err("Codex network Config before-image 已变化；拒绝提交".into());
+            }
+            cfg.codex_network = settings;
+            Ok(((), true))
+        }) {
+        let attention = operation.finish(
+            "attention",
+            "before",
+            "unknown",
+            Some("config_commit_failed"),
+            config::ConfigMutationTerminalConfigImage::Before,
+        );
+        return Err(match attention {
+            Err(error) => RuntimeCommandError::Mutation(error),
+            Ok(_) => RuntimeCommandError::from(error),
+        });
+    }
+    operation
+        .checkpoint_effect(
+            index,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+            Some("committed"),
+        )
+        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    let outcome = operation
+        .finish(
+            "completed",
+            "after",
+            if action == AuthRuntimeAction::StopManagedCodex {
+                "stopped"
+            } else {
+                "preserved"
+            },
+            None,
+            config::ConfigMutationTerminalConfigImage::After,
+        )
+        .map_err(RuntimeCommandError::Mutation)?;
+    let mut response = crate::commands::runtime::config_mutation::outcome_json(&outcome);
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "mode".into(),
+            Value::String(match mode {
+                csswitch_codex_network::CodexNetworkMode::Auto => "auto",
+                csswitch_codex_network::CodexNetworkMode::Custom => "custom",
+            }
+            .into()),
+        );
+        object.insert(
+            "source".into(),
+            Value::String(resolved.source.as_str().into()),
+        );
+        object.insert(
+            "proxy_scheme".into(),
+            resolved
+                .proxy_scheme
+                .as_ref()
+                .map_or(Value::Null, |scheme| Value::String(scheme.to_string())),
+        );
+        object.insert("restarted".into(), Value::Bool(false));
+    }
+    Ok(response)
+}
+
 fn set_codex_network_at(
     dir: &Path,
     settings: csswitch_codex_network::CodexNetworkSettings,
@@ -2839,18 +3043,32 @@ fn set_codex_network_at(
     config::require_no_runtime_transaction(&preflight)?;
     before_commit()?;
     let mode = settings.mode;
-    config::update_result(dir, move |cfg| {
+    let changed = config::update_result(dir, move |cfg| {
         config::require_no_runtime_transaction(cfg)?;
+        let changed = cfg.codex_network != settings;
         cfg.codex_network = settings;
-        Ok(((), true))
+        Ok((changed, changed))
     })
     .map_err(|error| error.to_string())?;
-    Ok(json!({
-        "mode": mode,
-        "source": resolved.source,
-        "proxy_scheme": resolved.proxy_scheme,
-        "restarted": false,
-    }))
+    let outcome = crate::commands::runtime::config_mutation::outcome_json(
+        &crate::commands::runtime::config_mutation::ConfigMutationOutcomeV1 {
+            schema_version: crate::commands::runtime::config_mutation::RECEIPT_SCHEMA_VERSION,
+            operation_id: None,
+            operation: "set_codex_network".into(),
+            disposition: if changed { "completed" } else { "no_change" }.into(),
+            config_state: "after".into(),
+            runtime_state: "preserved".into(),
+            recovery_state: "not_needed".into(),
+        },
+    );
+    let mut response = outcome;
+    if let Some(object) = response.as_object_mut() {
+        object.insert("mode".into(), json!(mode));
+        object.insert("source".into(), json!(resolved.source));
+        object.insert("proxy_scheme".into(), json!(resolved.proxy_scheme));
+        object.insert("restarted".into(), Value::Bool(false));
+    }
+    Ok(response)
 }
 
 fn codex_downgrade_preview_for(cfg: &config::Config) -> Result<Value, String> {
@@ -3313,6 +3531,10 @@ fn spawn_codex_auth_sidecar_at(
             .filter(|value| is_lower_hex(value, 32))
             .ok_or_else(|| "Codex 登录 operation ID 非法。".to_string())?;
         command.env("CSSWITCH_CODEX_AUTH_OPERATION_ID", operation_id);
+        command.env(
+            "CSSWITCH_CODEX_AUTH_START_DIGEST",
+            auth_start_authorization_digest(operation_id),
+        );
     } else if operation_id.is_some() {
         return Err("非登录 sidecar 不得携带 operation ID。".into());
     }
@@ -3348,7 +3570,15 @@ fn spawn_codex_auth_sidecar_at(
         child,
         stdin,
         stdout,
+        pending: Vec::new(),
     })
+}
+
+fn auth_start_authorization_digest(operation_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-p2b-auth-start-v1\0");
+    digest.update(operation_id.as_bytes());
+    format!("{:x}", digest.finalize())
 }
 
 #[cfg(test)]
@@ -3375,10 +3605,11 @@ fn wait_for_single_sidecar_response_controlled(
         ref mut child,
         stdin: _,
         ref mut stdout,
+        pending,
     } = process;
 
     let deadline = Instant::now() + timeout;
-    let mut bytes = Vec::new();
+    let mut bytes = pending;
     let mut output_eof = false;
     let mut exit_status = None;
     let mut chunk = [0_u8; 8192];
@@ -3463,6 +3694,99 @@ fn send_cancel_to_sidecar(
         .map_err(|_| "无法向 Codex 认证 sidecar 发送取消请求。".to_string())
 }
 
+fn send_start_to_sidecar(
+    stdin: &mut Option<std::process::ChildStdin>,
+    operation_id: &str,
+    authorization_digest: &str,
+) -> Result<(), String> {
+    let mut input = stdin
+        .take()
+        .ok_or_else(|| "Codex 认证 sidecar 启动授权通道不可用。".to_string())?;
+    let line = serde_json::to_vec(&json!({
+        "schema_version": AUTH_SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "command": "start",
+        "authorization_digest": authorization_digest,
+    }))
+    .map_err(|_| "无法编码 Codex 认证启动授权。".to_string())?;
+    if line.len() >= MAX_AUTH_LINE_BYTES {
+        return Err("Codex 认证启动授权超过协议上限。".into());
+    }
+    input
+        .write_all(&line)
+        .and_then(|_| input.write_all(b"\n"))
+        .and_then(|_| input.flush())
+        .map_err(|_| "无法向 Codex 认证 sidecar 发送启动授权。".to_string())
+}
+
+fn wait_for_login_start_ack(
+    mut process: ManagedAuthProcess,
+    operation_id: &str,
+    authorization_digest: &str,
+) -> Result<ManagedAuthProcess, String> {
+    send_start_to_sidecar(&mut process.stdin, operation_id, authorization_digest)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut pending = std::mem::take(&mut process.pending);
+    let mut chunk = [0_u8; 8192];
+    loop {
+        loop {
+            match process.stdout.read(&mut chunk) {
+                Ok(0) => {
+                    stop_auth_child(&mut process.child);
+                    return Err("Codex 认证 sidecar 在启动授权前退出。".into());
+                }
+                Ok(read) => {
+                    pending.extend_from_slice(&chunk[..read]);
+                    if pending.len() > MAX_AUTH_OUTPUT_BYTES as usize {
+                        stop_auth_child(&mut process.child);
+                        return Err("Codex 认证启动授权响应超过 64 KiB。".into());
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    stop_auth_child(&mut process.child);
+                    return Err("读取 Codex 认证启动授权响应失败。".into());
+                }
+            }
+        }
+        while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = pending.drain(..=newline).collect::<Vec<_>>();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            let event: LoginSidecarEvent = serde_json::from_slice(&line)
+                .map_err(|_| "Codex 认证启动授权响应不是合法 NDJSON。".to_string())?;
+            if event.schema_version != AUTH_SCHEMA_VERSION || event.operation_id != operation_id {
+                stop_auth_child(&mut process.child);
+                return Err("Codex 认证启动授权 operation 不匹配。".into());
+            }
+            if event.kind != "start_ack"
+                || event.state.is_some()
+                || event.disposition.is_some()
+                || event.status.is_some()
+                || event.error.is_some()
+                || event.authorization_digest.as_deref() != Some(authorization_digest)
+            {
+                stop_auth_child(&mut process.child);
+                return Err("Codex 认证 sidecar 在 start_ack 前发送了非法事件。".into());
+            }
+            process.pending = pending;
+            return Ok(process);
+        }
+        if process.child.try_wait().ok().flatten().is_some() {
+            stop_auth_child(&mut process.child);
+            return Err("Codex 认证 sidecar 未返回匹配的 start_ack。".into());
+        }
+        if Instant::now() >= deadline {
+            stop_auth_child(&mut process.child);
+            return Err("等待 Codex 认证 start_ack 超时。".into());
+        }
+        std::thread::sleep(AUTH_POLL_INTERVAL);
+    }
+}
+
 fn wait_for_login_sidecar(
     mut process: ManagedAuthProcess,
     action: CodexAuthAction,
@@ -3476,7 +3800,7 @@ fn wait_for_login_sidecar(
         return Err("Codex 登录流式协议参数非法。".into());
     }
     let deadline = Instant::now() + action.timeout();
-    let mut pending = Vec::new();
+    let mut pending = std::mem::take(&mut process.pending);
     let mut total = 0_u64;
     let mut output_eof = false;
     let mut exit_status = None;
@@ -3528,6 +3852,7 @@ fn wait_for_login_sidecar(
                                     || event.status.is_some()
                                     || event.error.is_some()
                                     || event.disposition.is_some()
+                                    || event.authorization_digest.is_some()
                                 {
                                     stop_auth_child(&mut process.child);
                                     return Err("Codex 认证 progress 字段非法。".into());
@@ -3544,6 +3869,7 @@ fn wait_for_login_sidecar(
                                     || event.state.is_some()
                                     || event.status.is_some()
                                     || event.error.is_some()
+                                    || event.authorization_digest.is_some()
                                 {
                                     stop_auth_child(&mut process.child);
                                     return Err("Codex 认证 cancel ack 字段非法。".into());
@@ -3562,7 +3888,10 @@ fn wait_for_login_sidecar(
                                 on_cancel_ack(disposition);
                             }
                             "terminal" => {
-                                if terminal.is_some() || event.disposition.is_some() {
+                                if terminal.is_some()
+                                    || event.disposition.is_some()
+                                    || event.authorization_digest.is_some()
+                                {
                                     stop_auth_child(&mut process.child);
                                     return Err("Codex 认证 terminal 字段非法。".into());
                                 }
@@ -3759,6 +4088,32 @@ fn register_login_process(
         return Err(RuntimeCommandError::from(CodexAuthCommandError::busy()));
     }
     Ok(process)
+}
+
+fn auth_sidecar_identity(
+    process: &ManagedAuthProcess,
+) -> crate::commands::runtime::config_mutation::AuthSidecarIdentity {
+    let pid = process.child.id();
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-codex-auth-sidecar-executable-v1\0");
+    digest.update(b"desktop-gateway");
+    let process_group_id = {
+        #[cfg(unix)]
+        {
+            let value = unsafe { libc::getpgid(pid as libc::pid_t) };
+            if value > 0 { value } else { pid as i32 }
+        }
+        #[cfg(not(unix))]
+        {
+            pid as i32
+        }
+    };
+    crate::commands::runtime::config_mutation::AuthSidecarIdentity {
+        pid,
+        process_start: format!("pid:{pid}"),
+        executable_fingerprint: format!("{:x}", digest.finalize()),
+        process_group_id,
+    }
 }
 
 fn run_codex_logout_sidecar<R: tauri::Runtime>(
@@ -4027,8 +4382,8 @@ pub(crate) async fn codex_auth_start<R: tauri::Runtime>(
     let worker_app = app.clone();
     let worker_lifecycle = lifecycle.clone();
     let worker_supervisor = supervisor.clone();
-    let (reservation, process) = crate::run_blocking_typed(move || {
-        start_codex_login_inner(
+    let (reservation, process, mutation) = crate::run_blocking_typed(move || {
+        start_codex_login_p2b_inner(
             &app,
             &state,
             lifecycle.as_ref(),
@@ -4043,7 +4398,7 @@ pub(crate) async fn codex_auth_start<R: tauri::Runtime>(
     let operation_id = reservation.operation_id.clone();
     let cancel = reservation.cancel.clone();
     let _worker = tauri::async_runtime::spawn_blocking(move || {
-        complete_login_operation(
+        complete_login_operation_p2b(
             worker_app,
             worker_lifecycle,
             worker_supervisor,
@@ -4051,9 +4406,186 @@ pub(crate) async fn codex_auth_start<R: tauri::Runtime>(
             cancel,
             process,
             action,
+            mutation,
         );
     });
     Ok(response)
+}
+
+fn start_codex_login_p2b_inner<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    supervisor: &SharedCodexAuthSupervisor,
+    action: CodexAuthAction,
+    spawn_sidecar: impl FnOnce(
+        &tauri::AppHandle<R>,
+        CodexAuthAction,
+        &str,
+        &csswitch_codex_network::ResolvedCodexNetworkRoute,
+    ) -> Result<ManagedAuthProcess, CodexAuthCommandError>,
+) -> Result<
+    (
+        LoginReservation,
+        ManagedAuthProcess,
+        crate::commands::runtime::config_mutation::OpenConfigMutation,
+    ),
+    RuntimeCommandError,
+> {
+    lifecycle.with_mutation(
+        RuntimeMutationDomain::Destructive,
+        |_| -> Result<_, RuntimeCommandError> {
+            let dir = config::default_dir();
+            let before = config::load_from(&dir)
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            config::require_no_runtime_transaction(&before).map_err(RuntimeCommandError::from)?;
+            config::require_template_enabled(&before, "codex")
+                .map_err(RuntimeCommandError::from)?;
+            let route = csswitch_codex_network::resolve_from_process(&before.codex_network)
+                .map_err(|_| RuntimeCommandError::from("proxy_config_invalid：Codex 网络代理配置非法。"))?;
+            let reservation = supervisor
+                .begin_login()
+                .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
+            let auth_operation_id = reservation.operation_id.clone();
+            let mut operation = crate::commands::runtime::config_mutation::begin(
+                &dir,
+                crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthStart,
+                &before,
+                None,
+                crate::commands::runtime::config_mutation::MutationTarget::default(),
+                crate::commands::runtime::config_mutation::RuntimePlan {
+                    owner_generation: lifecycle.current_generation(),
+                    ..Default::default()
+                },
+                vec![
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopScience,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSidecar,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthGenerationCommit,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ProfileEnsure,
+                ],
+                Some(crate::commands::runtime::config_mutation::AuthOperationReceipt {
+                    auth_operation_id: auth_operation_id.clone(),
+                    supervisor_sequence: reservation.snapshot.sequence,
+                    state: "reserved".into(),
+                    start_authorization_digest: None,
+                    sidecar: None,
+                    terminal_auth_epoch: None,
+                    terminal_auth_generation: None,
+                    terminal_account_hash: None,
+                }),
+                None,
+            )
+            .map_err(RuntimeCommandError::Mutation)?;
+            let attached = supervisor
+                .attach_config_mutation_operation(&auth_operation_id, operation.operation_id())
+                .map_err(RuntimeCommandError::from)?;
+            let mut reservation = reservation;
+            reservation.snapshot = attached;
+
+            let (science_present, gateway_present) = {
+                let current = lock(state);
+                (
+                    current.science_runtime.is_some() || current.sandbox.is_some(),
+                    current.proxy.is_some(),
+                )
+            };
+            let runtime_action = match prepare_codex_auth_mutation_with_fence(
+                app,
+                state,
+                lifecycle,
+                Some(operation.fence()),
+            ) {
+                Ok(action) => action,
+                Err(error) => {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("runtime_preflight_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(RuntimeCommandError::from(error));
+                }
+            };
+            for (index, present) in [(0, science_present), (1, gateway_present)] {
+                let state = if runtime_action == AuthRuntimeAction::StopManagedCodex && present {
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded
+                } else {
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Skipped
+                };
+                operation
+                    .checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }))
+                    .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            }
+
+            let process = match spawn_sidecar(app, action, &auth_operation_id, &route)
+                .map_err(RuntimeCommandError::from)
+                .and_then(|process| register_login_process(supervisor, &auth_operation_id, process))
+            {
+                Ok(process) => process,
+                Err(error) => {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("sidecar_spawn_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(error);
+                }
+            };
+            let sidecar_identity = auth_sidecar_identity(&process);
+            operation
+                .update_receipt(|receipt| {
+                    if let Some(auth) = receipt.auth_operation.as_mut() {
+                        auth.state = "spawned_inert".into();
+                        auth.sidecar = Some(sidecar_identity.clone());
+                    }
+                })
+                .map_err(RuntimeCommandError::from)?;
+            operation
+                .checkpoint_effect(
+                    2,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                    Some("identity_persisted"),
+                )
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            let start_digest = auth_start_authorization_digest(&auth_operation_id);
+            operation
+                .update_receipt(|receipt| {
+                    if let Some(auth) = receipt.auth_operation.as_mut() {
+                        auth.state = "start_authorized".into();
+                        auth.start_authorization_digest = Some(start_digest.clone());
+                    }
+                })
+                .map_err(RuntimeCommandError::from)?;
+            let process = match wait_for_login_start_ack(process, &auth_operation_id, &start_digest) {
+                Ok(process) => process,
+                Err(error) => {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("start_ack_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(RuntimeCommandError::from(error));
+                }
+            };
+            operation
+                .checkpoint_effect(
+                    2,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                    Some("start_ack"),
+                )
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            Ok((reservation, process, operation))
+        },
+    )
 }
 
 fn start_codex_login_inner<R: tauri::Runtime>(
@@ -4158,7 +4690,7 @@ fn emit_operation_snapshot<R: tauri::Runtime>(
     let _ = app.emit("codex-auth://operation", snapshot);
 }
 
-fn complete_login_operation<R: tauri::Runtime>(
+fn complete_login_operation_p2b<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     lifecycle: SharedLifecycle,
     supervisor: SharedCodexAuthSupervisor,
@@ -4166,19 +4698,21 @@ fn complete_login_operation<R: tauri::Runtime>(
     cancel: std::sync::Arc<AtomicBool>,
     process: ManagedAuthProcess,
     action: CodexAuthAction,
+    mutation: crate::commands::runtime::config_mutation::OpenConfigMutation,
 ) {
     let progress_app = app.clone();
     let progress_supervisor = supervisor.clone();
     let progress_operation_id = operation_id.clone();
     let ack_supervisor = supervisor.clone();
     let ack_operation_id = operation_id.clone();
-    let snapshot = complete_login_operation_inner(
+    let snapshot = complete_login_operation_p2b_inner(
         &supervisor,
         &lifecycle,
         &operation_id,
         cancel.as_ref(),
         process,
         action,
+        mutation,
         move |event| {
             let Some(state) = event.state.as_deref() else {
                 return;
@@ -4191,10 +4725,191 @@ fn complete_login_operation<R: tauri::Runtime>(
         move |disposition| {
             ack_supervisor.record_cancel_disposition(&ack_operation_id, disposition);
         },
-        || crate::runtime::profile::ensure_codex_profile_inner(&config::default_dir()),
     );
     if let Ok(snapshot) = snapshot {
         emit_operation_snapshot(&app, &snapshot);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn complete_login_operation_p2b_inner(
+    supervisor: &SharedCodexAuthSupervisor,
+    lifecycle: &SharedLifecycle,
+    operation_id: &str,
+    cancel: &AtomicBool,
+    process: ManagedAuthProcess,
+    action: CodexAuthAction,
+    mut mutation: crate::commands::runtime::config_mutation::OpenConfigMutation,
+    on_progress: impl FnMut(&LoginSidecarEvent),
+    on_cancel_ack: impl FnMut(&str),
+) -> Result<OperationSnapshot, String> {
+    let outcome = wait_for_login_sidecar(
+        process,
+        action,
+        operation_id,
+        cancel,
+        on_progress,
+        on_cancel_ack,
+    );
+    record_login_terminal_auth_status(supervisor, &outcome);
+    match outcome {
+        Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
+            let status: AuthStatusView = serde_json::from_value(
+                value
+                    .get("status")
+                    .cloned()
+                    .ok_or_else(|| "Codex 登录成功终态缺少 status。".to_string())?,
+            )
+            .map_err(|_| "Codex 登录成功终态 status 不可用于 durable 引用。".to_string())?;
+            let account_hash = status.account_hash.as_deref().map(|account| {
+                let mut digest = Sha256::new();
+                digest.update(b"csswitch-p2b-auth-account-v1\0");
+                digest.update(account.as_bytes());
+                format!("{:x}", digest.finalize())
+            });
+            mutation.update_receipt(|receipt| {
+                if let Some(auth) = receipt.auth_operation.as_mut() {
+                    auth.state = "terminal".into();
+                    auth.terminal_auth_epoch = status.auth_epoch.clone();
+                    auth.terminal_auth_generation = Some(status.auth_generation);
+                    auth.terminal_account_hash = account_hash.clone();
+                }
+                receipt.target.auth_generation = Some(status.auth_generation);
+                receipt.target.auth_epoch = status.auth_epoch.clone();
+                receipt.target.auth_account_hash = account_hash.clone();
+            })?;
+            mutation.checkpoint_effect(
+                3,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("auth_generation_committed"),
+            )?;
+            let ensure = lifecycle.with_mutation(RuntimeMutationDomain::Intent, |_| {
+                crate::runtime::profile::ensure_codex_profile_with_mutation(
+                    &config::default_dir(),
+                    mutation.fence(),
+                    mutation.receipt_bytes(),
+                )
+            });
+            let ensure = match ensure {
+                Ok(ensure) => ensure,
+                Err(_error) => {
+                    let _ = mutation.finish(
+                        "attention",
+                        "after",
+                        "stopped",
+                        Some("profile_ensure_failed"),
+                        config::ConfigMutationTerminalConfigImage::After,
+                    );
+                    return supervisor.finish(
+                        operation_id,
+                        "failed",
+                        Some(OperationErrorView {
+                            code: "profile_ensure_failed".into(),
+                            stage: "profile_ensure".into(),
+                            retryable: true,
+                            upstream_status: None,
+                            response_kind: None,
+                            challenge_detected: None,
+                            transport_kind: None,
+                        }),
+                    );
+                }
+            };
+            mutation.update_receipt(|receipt| {
+                receipt.target.profile_id = Some(ensure.profile_id.clone());
+            })?;
+            mutation.checkpoint_effect(
+                4,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some(match ensure.disposition {
+                    crate::runtime::profile::EnsureCodexProfileDisposition::Created => "created",
+                    crate::runtime::profile::EnsureCodexProfileDisposition::Existing => "existing",
+                }),
+            )?;
+            let terminal = mutation.finish(
+                "completed",
+                "after",
+                "stopped",
+                None,
+                config::ConfigMutationTerminalConfigImage::After,
+            );
+            match terminal {
+                Ok(_) => supervisor.finish(operation_id, "succeeded", None),
+                Err(_) => supervisor.finish(
+                    operation_id,
+                    "failed",
+                    Some(OperationErrorView {
+                        code: "config_mutation_attention".into(),
+                        stage: "terminal".into(),
+                        retryable: false,
+                        upstream_status: None,
+                        response_kind: None,
+                        challenge_detected: None,
+                        transport_kind: None,
+                    }),
+                ),
+            }
+        }
+        Ok(value) => {
+            let state = if value.get("state").and_then(Value::as_str) == Some("cancelled") {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            let _ = mutation.update_receipt(|receipt| {
+                if let Some(auth) = receipt.auth_operation.as_mut() {
+                    auth.state = if state == "cancelled" {
+                        "cancelled".into()
+                    } else {
+                        "terminal".into()
+                    };
+                }
+            });
+            let _ = mutation.checkpoint_effect(
+                2,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("sidecar_terminal"),
+            );
+            let _ = mutation.finish(
+                "attention",
+                "before",
+                "unknown",
+                Some(if state == "cancelled" { "auth_cancelled" } else { "auth_failed" }),
+                config::ConfigMutationTerminalConfigImage::Before,
+            );
+            supervisor.finish(
+                operation_id,
+                state,
+                Some(operation_error_from_envelope(&value)),
+            )
+        }
+        Err(_) => {
+            let _ = mutation.update_receipt(|receipt| {
+                if let Some(auth) = receipt.auth_operation.as_mut() {
+                    auth.state = "terminal".into();
+                }
+            });
+            let _ = mutation.finish(
+                "attention",
+                "before",
+                "unknown",
+                Some("sidecar_protocol_error"),
+                config::ConfigMutationTerminalConfigImage::Before,
+            );
+            supervisor.finish(
+                operation_id,
+                "failed",
+                Some(OperationErrorView {
+                    code: "internal_error".into(),
+                    stage: "token_exchange".into(),
+                    retryable: true,
+                    upstream_status: None,
+                    response_kind: None,
+                    challenge_detected: None,
+                    transport_kind: Some("unknown".into()),
+                }),
+            )
+        }
     }
 }
 
@@ -4332,10 +5047,26 @@ fn ensure_codex_profile_authenticated(dir: &Path) -> Result<Value, String> {
         crate::runtime::profile::EnsureCodexProfileDisposition::Created => "created",
         crate::runtime::profile::EnsureCodexProfileDisposition::Existing => "existing",
     };
-    Ok(json!({
-        "disposition": disposition,
-        "profile_id": result.profile_id,
-    }))
+    let mut outcome = crate::commands::runtime::config_mutation::typed_intent_outcome(
+        "codex_ensure_profile",
+        disposition,
+        "committed",
+        None,
+        Some(result.profile_id.clone()),
+        Some("accepted"),
+        None,
+    );
+    if let Some(object) = outcome.as_object_mut() {
+        object.insert(
+            "disposition".into(),
+            serde_json::Value::String(disposition.into()),
+        );
+        object.insert(
+            "profile_id".into(),
+            serde_json::Value::String(result.profile_id),
+        );
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -4351,21 +5082,212 @@ pub(crate) async fn codex_auth_logout(
     let supervisor = supervisor.inner().clone();
     let logout_supervisor = supervisor.clone();
     let logout_app = app.clone();
-    let mutation: CodexMutationLease = crate::run_blocking_typed(move || {
-        prepare_codex_logout_inner(&app, &state, lifecycle.as_ref(), &supervisor)
+    let (mutation, operation) = crate::run_blocking_typed(move || {
+        prepare_codex_logout_p2b_inner(&app, &state, lifecycle.as_ref(), &supervisor)
     })
     .await?;
+    let operation_id = operation.operation_id().to_string();
     crate::run_blocking_typed(move || {
         completion_lifecycle.with_mutation(RuntimeMutationDomain::Destructive, |_| {
-            let current = config::load_from(&config::default_dir())
-                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
-            config::require_no_runtime_transaction(&current).map_err(RuntimeCommandError::from)?;
-            complete_codex_logout_inner(&logout_supervisor, mutation, |mutation| {
-                run_codex_logout_sidecar(&logout_app, mutation)
-            })
+            let mut response = complete_codex_logout_p2b_inner(
+                &logout_supervisor,
+                operation,
+                mutation,
+                |mutation| run_codex_logout_sidecar(&logout_app, mutation),
+            )?;
+            if let Some(object) = response.as_object_mut() {
+                object.insert(
+                    "config_mutation_operation_id".into(),
+                    Value::String(operation_id),
+                );
+            }
+            Ok(response)
         })
     })
     .await
+}
+
+fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &SharedAppState,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    supervisor: &SharedCodexAuthSupervisor,
+) -> Result<
+    (
+        CodexMutationLease,
+        crate::commands::runtime::config_mutation::OpenConfigMutation,
+    ),
+    RuntimeCommandError,
+> {
+    lifecycle.with_mutation(
+        RuntimeMutationDomain::Destructive,
+        |_| -> Result<_, RuntimeCommandError> {
+            let dir = config::default_dir();
+            let before = config::load_from(&dir)
+                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            config::require_no_runtime_transaction(&before).map_err(RuntimeCommandError::from)?;
+            let mutation = CodexAuthSupervisor::begin_mutation(supervisor)
+                .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
+            let auth_operation_id = config::new_id();
+            let mut operation = crate::commands::runtime::config_mutation::begin(
+                &dir,
+                crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthLogout,
+                &before,
+                None,
+                crate::commands::runtime::config_mutation::MutationTarget::default(),
+                crate::commands::runtime::config_mutation::RuntimePlan {
+                    owner_generation: lifecycle.current_generation(),
+                    ..Default::default()
+                },
+                vec![
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopScience,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSidecar,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthGenerationCommit,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSecretCleanupObservation,
+                ],
+                Some(crate::commands::runtime::config_mutation::AuthOperationReceipt {
+                    auth_operation_id,
+                    supervisor_sequence: 1,
+                    state: "reserved".into(),
+                    start_authorization_digest: None,
+                    sidecar: None,
+                    terminal_auth_epoch: None,
+                    terminal_auth_generation: None,
+                    terminal_account_hash: None,
+                }),
+                None,
+            )
+            .map_err(RuntimeCommandError::Mutation)?;
+            let (science_present, gateway_present) = {
+                let current = lock(state);
+                (
+                    current.science_runtime.is_some() || current.sandbox.is_some(),
+                    current.proxy.is_some(),
+                )
+            };
+            let action = match prepare_codex_auth_mutation_with_fence(
+                app,
+                state,
+                lifecycle,
+                Some(operation.fence()),
+            ) {
+                Ok(action) => action,
+                Err(error) => {
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("runtime_preflight_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(RuntimeCommandError::from(error));
+                }
+            };
+            for (index, present) in [(0, science_present), (1, gateway_present)] {
+                let state = if action == AuthRuntimeAction::StopManagedCodex && present {
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded
+                } else {
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Skipped
+                };
+                operation
+                    .checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }))
+                    .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+            }
+            Ok((mutation, operation))
+        },
+    )
+}
+
+fn complete_codex_logout_p2b_inner(
+    supervisor: &SharedCodexAuthSupervisor,
+    mut operation: crate::commands::runtime::config_mutation::OpenConfigMutation,
+    mutation: CodexMutationLease,
+    run_sidecar: impl FnOnce(&CodexMutationLease) -> Result<Value, CodexAuthCommandError>,
+) -> Result<Value, RuntimeCommandError> {
+    let value = match run_sidecar(&mutation) {
+        Ok(value) => value,
+        Err(error) => {
+            supervisor.record_auth_status("unavailable", None, error.cause);
+            let _ = operation.finish(
+                "attention",
+                "before",
+                "unknown",
+                Some(error.cause.unwrap_or("logout_failed")),
+                config::ConfigMutationTerminalConfigImage::Before,
+            );
+            return Err(RuntimeCommandError::from(error));
+        }
+    };
+    record_last_auth_status(supervisor, &value);
+    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+        let error = require_authenticated_status_typed(&value).unwrap_err();
+        let _ = operation.finish(
+            "attention",
+            "before",
+            "unknown",
+            Some(error.cause.unwrap_or("logout_failed")),
+            config::ConfigMutationTerminalConfigImage::Before,
+        );
+        return Err(RuntimeCommandError::from(error));
+    }
+    let status: AuthStatusView = serde_json::from_value(
+        value
+            .get("status")
+            .cloned()
+            .ok_or_else(|| RuntimeCommandError::from("Codex logout 成功终态缺少 status。"))?,
+    )
+    .map_err(|_| RuntimeCommandError::from("Codex logout 成功终态 status 不可用于 durable 引用。"))?;
+    let account_hash = status.account_hash.as_deref().map(|account| {
+        let mut digest = Sha256::new();
+        digest.update(b"csswitch-p2b-auth-account-v1\0");
+        digest.update(account.as_bytes());
+        format!("{:x}", digest.finalize())
+    });
+    operation
+        .update_receipt(|receipt| {
+            if let Some(auth) = receipt.auth_operation.as_mut() {
+                auth.state = "terminal".into();
+                auth.terminal_auth_epoch = status.auth_epoch.clone();
+                auth.terminal_auth_generation = Some(status.auth_generation);
+                auth.terminal_account_hash = account_hash.clone();
+            }
+            receipt.target.auth_epoch = status.auth_epoch.clone();
+            receipt.target.auth_generation = Some(status.auth_generation);
+            receipt.target.auth_account_hash = account_hash.clone();
+        })
+        .map_err(RuntimeCommandError::from)?;
+    operation
+        .checkpoint_effect(
+            2,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+            Some("logout_sidecar"),
+        )
+        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    operation
+        .checkpoint_effect(
+            3,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+            Some("auth_generation_committed"),
+        )
+        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    operation
+        .checkpoint_effect(
+            4,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+            Some("logged_out_readback"),
+        )
+        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    operation
+        .finish(
+            "completed",
+            "after",
+            "stopped",
+            None,
+            config::ConfigMutationTerminalConfigImage::After,
+        )
+        .map_err(RuntimeCommandError::Mutation)?;
+    Ok(value)
 }
 
 fn prepare_codex_logout_inner<R: tauri::Runtime>(
@@ -4454,10 +5376,13 @@ pub(crate) async fn set_codex_network(
             |_| -> Result<_, RuntimeCommandError> {
                 let _mutation = CodexAuthSupervisor::begin_mutation(&supervisor)
                     .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
-                set_codex_network_at(&config::default_dir(), settings, &resolved, || {
-                    prepare_codex_auth_mutation(&app, &state, lifecycle.as_ref()).map(|_| ())
-                })
-                .map_err(RuntimeCommandError::from)
+                set_codex_network_with_p2b(
+                    &app,
+                    &state,
+                    lifecycle.as_ref(),
+                    settings,
+                    &resolved,
+                )
             },
         )
     })
@@ -8851,5 +9776,115 @@ exit 23"#,
                     .contains("终态退出"));
             }
         }
+    }
+
+    #[test]
+    fn p2b_codex_auth_start_inert_sidecar_identity_and_dual_id_matrix() {
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let reservation = supervisor.begin_login().unwrap();
+        let config_operation_id = config::new_id();
+        let snapshot = supervisor
+            .attach_config_mutation_operation(&reservation.operation_id, &config_operation_id)
+            .unwrap();
+        assert_eq!(snapshot.operation_id, reservation.operation_id);
+        assert_eq!(snapshot.config_mutation_operation_id.as_deref(), Some(config_operation_id.as_str()));
+        assert!(auth_start_authorization_digest(&reservation.operation_id).len() == 64);
+        assert!(auth_start_authorization_digest(&reservation.operation_id)
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+        assert!(supervisor
+            .attach_config_mutation_operation(&reservation.operation_id, "not-an-id")
+            .is_err());
+    }
+
+    #[test]
+    fn p2b_codex_auth_start_generation_crash_matrix() {
+        let dir = TempDir::new("p2b-auth-start-crash");
+        let cfg = config::Config::default();
+        config::save_to(&dir.0, &cfg).unwrap();
+        let mut operation = crate::commands::runtime::config_mutation::begin(
+            &dir.0,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthStart,
+            &cfg,
+            None,
+            crate::commands::runtime::config_mutation::MutationTarget::default(),
+            crate::commands::runtime::config_mutation::RuntimePlan {
+                owner_generation: 0,
+                ..Default::default()
+            },
+            vec![crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthGenerationCommit],
+            None,
+            None,
+        )
+        .unwrap();
+        operation
+            .checkpoint_effect(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                Some("auth_generation_pending"),
+            )
+            .unwrap();
+        assert!(config::read_config_mutation_operation_receipt(&dir.0)
+            .unwrap()
+            .is_some());
+        let attention = operation
+            .finish(
+                "attention",
+                "before",
+                "unknown",
+                Some("auth_generation_unknown"),
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .unwrap_err();
+        assert!(attention.attention_required);
+        assert!(config::read_config_mutation_operation_receipt(&dir.0)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn p2b_codex_logout_never_reactivates_committed_logout() {
+        let dir = TempDir::new("p2b-logout-terminal");
+        let cfg = config::Config::default();
+        config::save_to(&dir.0, &cfg).unwrap();
+        let operation = crate::commands::runtime::config_mutation::begin(
+            &dir.0,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthLogout,
+            &cfg,
+            None,
+            crate::commands::runtime::config_mutation::MutationTarget {
+                auth_generation: Some(7),
+                ..Default::default()
+            },
+            crate::commands::runtime::config_mutation::RuntimePlan {
+                owner_generation: 0,
+                ..Default::default()
+            },
+            vec![crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthGenerationCommit],
+            None,
+            None,
+        )
+        .unwrap();
+        let mut operation = operation;
+        operation
+            .checkpoint_effect(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("logged_out_generation_7"),
+            )
+            .unwrap();
+        let outcome = operation
+            .finish(
+                "completed",
+                "after",
+                "stopped",
+                None,
+                config::ConfigMutationTerminalConfigImage::After,
+            )
+            .unwrap();
+        assert_eq!(outcome.disposition, "completed");
+        assert!(config::read_config_mutation_operation_receipt(&dir.0)
+            .unwrap()
+            .is_none());
     }
 }

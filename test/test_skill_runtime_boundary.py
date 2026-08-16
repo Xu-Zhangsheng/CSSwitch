@@ -67,6 +67,20 @@ def proxy_lifecycle_source():
 
 
 class SkillRuntimeBoundary(unittest.TestCase):
+    def test_p2b_mutation_fence_is_owned_and_intent_surfaces_do_not_claim_receipt(self):
+        config = (ROOT / "desktop/src-tauri/src/config.rs").read_text()
+        mutation = (ROOT / "desktop/src-tauri/src/commands/runtime/config_mutation.rs").read_text()
+        profiles = (ROOT / "desktop/src-tauri/src/commands/profiles.rs").read_text()
+        codex = (ROOT / "desktop/src-tauri/src/commands/codex.rs").read_text()
+        self.assertIn('CONFIG_MUTATION_OPERATION_FENCE_KEY: &str = "config_mutation_operation"', config)
+        self.assertIn("require_no_runtime_transaction_for_mutation", config)
+        self.assertIn("clear_config_mutation_operation", config)
+        self.assertIn("ConfigMutationOperation::SetModeOfficial", mutation)
+        self.assertIn("ConfigMutationOperation::SetSettingsDestructive", mutation)
+        self.assertIn("typed_intent_outcome(", profiles)
+        self.assertIn("typed_intent_outcome(", codex)
+        self.assertNotIn("ConfigMutationOperation::SetModeOfficial", profiles.split("fn set_active_profile", 1)[1].split("fn clear_profile_key_p2b", 1)[0])
+
     def test_github_fixture_override_is_acceptance_only_and_reaches_connector_and_host(self):
         desktop_manifest = (
             ROOT / "desktop/src-tauri/Cargo.toml"

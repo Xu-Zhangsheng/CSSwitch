@@ -84,6 +84,25 @@ cold、healthy reopen 或 interrupted-Gateway recovery 内部流程经 `GatewayC
 `SOURCE-CONTRACT`。Agent 在最终 artifact / installed runtime 中实际 load Skill、
 调用 install/poll tool、完成卸载以及 restart 后继续可用，当前均为 `UNKNOWN`。
 
+## 非一键 mutation 的 command/DTO 边界
+
+会改变 runtime 或 applied profile authority 的七个非一键 destructive command 通过独立的
+`config-mutation-operation.v1.json` receipt 与 `config_mutation_operation` Config fence
+串行化：`set_mode_official`、`set_settings_destructive`、`codex_auth_start`、
+`codex_auth_logout`、`set_codex_network`、`clear_applied_profile_key`、
+`delete_applied_profile`。Rust command 只向 frontend 返回脱敏的 typed outcome 或 typed
+command error；frontend 通过 `runtime-mutation-protocol.js` 严格解析 operation、status、
+effect summary 与 recovery disposition，不把 receipt、fence、credential 或私有路径带过
+invoke 边界。receipt 打开时普通 writer、P2-A journal 与 runtime journal 的冲突统一返回
+可识别的 attention/error，不能由 UI 自动重试或把旧状态显示为已应用。
+
+`set_active_profile`、`update_profile_connection` 与 `codex_ensure_profile` 是 intent-only
+结果：它们报告 selected/updated/ensured 的 durable intent，不启动或停止 runtime，也不创建
+P2-B receipt。preview adapter 只镜像这些 typed DTO 与旧字段，不扩大 production caller。
+Codex auth start 的 sidecar 先等待匹配 operation id、authorization digest 的 `start_ack`；
+ack 之前不打开 OAuth/network flow，前端仍通过既有 `codex-auth://operation` snapshot 观察
+脱敏状态。
+
 ## event 面
 
 | Event | 发出方 | Payload | 当前边界 |

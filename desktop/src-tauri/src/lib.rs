@@ -794,6 +794,20 @@ fn run_boot_decision_with<R, Load, Decide, Open, Boot, Project, Show>(
 }
 
 fn run_boot_decision(app: tauri::AppHandle) {
+    match commands::runtime::config_mutation::boot_recover(&config::default_dir()) {
+        Ok(Some(attention)) => {
+            mark_boot_attention(&app, attention);
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            mark_boot_attention(
+                &app,
+                boot_prepare_failure(format!("P2-B Config mutation recovery 需要人工处理：{error}")),
+            );
+            return;
+        }
+    }
     if let Some(attention) = commands::codex::replay_interrupted_codex_disable(&app) {
         mark_boot_attention(&app, attention);
         return;

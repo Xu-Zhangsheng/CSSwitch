@@ -17,6 +17,7 @@ const EXPIRING_WINDOW_SECONDS: i64 = 5 * 60;
 const MAX_NDJSON_LINE_BYTES: usize = 8 * 1024;
 const MAX_NDJSON_TOTAL_BYTES: usize = 64 * 1024;
 const OPERATION_ID_ENV: &str = "CSSWITCH_CODEX_AUTH_OPERATION_ID";
+const START_DIGEST_ENV: &str = "CSSWITCH_CODEX_AUTH_START_DIGEST";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliRun {
@@ -309,6 +310,8 @@ struct StreamingEvent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     disposition: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    authorization_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<StatusView<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<StreamingError<'a>>,
@@ -337,11 +340,34 @@ struct CancelInput {
     command: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartInput {
+    schema_version: u32,
+    operation_id: String,
+    command: String,
+    authorization_digest: String,
+}
+
 fn valid_cancel_input(line: &[u8], operation_id: &str) -> bool {
     serde_json::from_slice::<CancelInput>(line).is_ok_and(|cancel| {
         cancel.schema_version == CLI_SCHEMA_VERSION
             && cancel.operation_id == operation_id
             && cancel.command == "cancel"
+    })
+}
+
+fn valid_start_input(line: &[u8], operation_id: &str, expected_digest: &str) -> bool {
+    serde_json::from_slice::<StartInput>(line).is_ok_and(|start| {
+        start.schema_version == CLI_SCHEMA_VERSION
+            && start.operation_id == operation_id
+            && start.command == "start"
+            && start.authorization_digest == expected_digest
+            && start.authorization_digest.len() == 64
+            && start
+                .authorization_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     })
 }
 
@@ -399,6 +425,10 @@ pub fn run_streaming_cli(args: &[String]) -> Option<i32> {
         }
         _ => return Some(2),
     };
+    let expected_digest = match std::env::var(START_DIGEST_ENV) {
+        Ok(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) => value,
+        _ => return Some(2),
+    };
     #[cfg(not(target_os = "macos"))]
     {
         let _ = operation_id;
@@ -411,8 +441,13 @@ pub fn run_streaming_cli(args: &[String]) -> Option<i32> {
             Err(_) => return Some(6),
         };
         let writer = NdjsonWriter::stdout();
-        let control = LoginControl::default();
-        spawn_cancel_reader(operation_id.clone(), control.clone(), writer.clone());
+        let control = LoginControl::awaiting_start();
+        spawn_control_reader(
+            operation_id.clone(),
+            expected_digest,
+            control.clone(),
+            writer.clone(),
+        );
         let progress_writer = writer.clone();
         let progress_operation_id = operation_id.clone();
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -464,6 +499,7 @@ pub fn run_streaming_cli(args: &[String]) -> Option<i32> {
             kind: "terminal",
             state: Some(state),
             disposition: None,
+            authorization_digest: None,
             status,
             error,
         };
@@ -481,6 +517,7 @@ fn progress_event<'a>(operation_id: &'a str, state: &'a str) -> StreamingEvent<'
         kind: "progress",
         state: Some(state),
         disposition: None,
+        authorization_digest: None,
         status: None,
         error: None,
     }
@@ -530,31 +567,67 @@ fn now_seconds() -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-fn spawn_cancel_reader(operation_id: String, control: LoginControl, writer: NdjsonWriter) {
+fn spawn_control_reader(
+    operation_id: String,
+    expected_digest: String,
+    control: LoginControl,
+    writer: NdjsonWriter,
+) {
     std::thread::spawn(move || {
         let mut input =
             std::io::BufReader::new(std::io::stdin()).take((MAX_NDJSON_LINE_BYTES + 1) as u64);
-        let mut line = Vec::new();
-        if input.read_until(b'\n', &mut line).is_err()
-            || line.len() > MAX_NDJSON_LINE_BYTES
-            || !line.ends_with(b"\n")
-        {
+        let mut authorized = false;
+        loop {
+            let mut line = Vec::new();
+            if input.read_until(b'\n', &mut line).is_err()
+                || line.len() > MAX_NDJSON_LINE_BYTES
+                || !line.ends_with(b"\n")
+            {
+                control.cancel();
+                return;
+            }
+            if valid_cancel_input(&line, &operation_id) {
+                let disposition = control.cancel();
+                let event = StreamingEvent {
+                    schema_version: CLI_SCHEMA_VERSION,
+                    operation_id: &operation_id,
+                    kind: "cancel_ack",
+                    state: None,
+                    disposition: Some(disposition.as_str()),
+                    authorization_digest: None,
+                    status: None,
+                    error: None,
+                };
+                let _ = writer.emit(&event);
+                if !authorized {
+                    return;
+                }
+                continue;
+            }
+            if !authorized && valid_start_input(&line, &operation_id, &expected_digest) {
+                if !control.authorize_start() {
+                    return;
+                }
+                let event = StreamingEvent {
+                    schema_version: CLI_SCHEMA_VERSION,
+                    operation_id: &operation_id,
+                    kind: "start_ack",
+                    state: None,
+                    disposition: None,
+                    authorization_digest: Some(&expected_digest),
+                    status: None,
+                    error: None,
+                };
+                if writer.emit(&event).is_err() {
+                    control.cancel();
+                    return;
+                }
+                authorized = true;
+                continue;
+            }
+            control.cancel();
             return;
         }
-        if !valid_cancel_input(&line, &operation_id) {
-            return;
-        }
-        let disposition = control.cancel();
-        let event = StreamingEvent {
-            schema_version: CLI_SCHEMA_VERSION,
-            operation_id: &operation_id,
-            kind: "cancel_ack",
-            state: None,
-            disposition: Some(disposition.as_str()),
-            status: None,
-            error: None,
-        };
-        let _ = writer.emit(&event);
     });
 }
 

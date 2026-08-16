@@ -1,0 +1,1122 @@
+//! P2-B ordinary Config mutation receipts.
+//!
+//! This module deliberately owns only the credential-free operation contract
+//! and orchestration shared by ordinary Desktop writers.  One-click/History,
+//! P2-A Codex disable, Gateway auth storage, and Skill ledgers retain their
+//! own authority and wire formats.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+use crate::config::{
+    self, Config, ConfigMutationOperationFence, ConfigMutationTerminalConfigImage,
+};
+
+pub(crate) const RECEIPT_SCHEMA_VERSION: u32 = 1;
+const INTENT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConfigMutationOperation {
+    SetModeOfficial,
+    SetSettingsDestructive,
+    CodexAuthStart,
+    CodexAuthLogout,
+    SetCodexNetwork,
+    ClearAppliedProfileKey,
+    DeleteAppliedProfile,
+}
+
+impl ConfigMutationOperation {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::SetModeOfficial,
+        Self::SetSettingsDestructive,
+        Self::CodexAuthStart,
+        Self::CodexAuthLogout,
+        Self::SetCodexNetwork,
+        Self::ClearAppliedProfileKey,
+        Self::DeleteAppliedProfile,
+    ];
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SetModeOfficial => "set_mode_official",
+            Self::SetSettingsDestructive => "set_settings_destructive",
+            Self::CodexAuthStart => "codex_auth_start",
+            Self::CodexAuthLogout => "codex_auth_logout",
+            Self::SetCodexNetwork => "set_codex_network",
+            Self::ClearAppliedProfileKey => "clear_applied_profile_key",
+            Self::DeleteAppliedProfile => "delete_applied_profile",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|operation| operation.as_str() == value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConfigMutationEffectKind {
+    StopScience,
+    StopGateway,
+    WriteSshBridgeConfig,
+    DeleteSshBridgeSidecar,
+    DeleteManagedSshStub,
+    AuthSidecar,
+    AuthGenerationCommit,
+    AuthSecretCleanupObservation,
+    ConfigCommit,
+    ProfileEnsure,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConfigMutationEffectState {
+    Pending,
+    InProgress,
+    Succeeded,
+    Failed,
+    Uncertain,
+    Skipped,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigReference {
+    pub(crate) schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) active_profile_id_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) runtime_binding_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) proxy_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sandbox_port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MutationTarget {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) proxy_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sandbox_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reuse_system_ssh: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) network_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) auth_epoch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) auth_generation: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) auth_account_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimePlan {
+    pub(crate) owner_generation: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) science_prior_recipe: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) science_restore_launch_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gateway_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gateway_profile_id_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gateway_restore_launch_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthSidecarIdentity {
+    pub(crate) pid: u32,
+    pub(crate) process_start: String,
+    pub(crate) executable_fingerprint: String,
+    pub(crate) process_group_id: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthOperationReceipt {
+    pub(crate) auth_operation_id: String,
+    pub(crate) supervisor_sequence: u64,
+    pub(crate) state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) start_authorization_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sidecar: Option<AuthSidecarIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_auth_epoch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_auth_generation: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_account_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssetIdentity {
+    pub(crate) uid: u32,
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+    pub(crate) mode: u32,
+    pub(crate) nlink: u64,
+    pub(crate) length: u64,
+    pub(crate) digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SshLeafReceipt {
+    pub(crate) before_identity_or_absent: Option<AssetIdentity>,
+    pub(crate) expected_after: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) observed_after_identity_or_absent: Option<AssetIdentity>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SshPlan {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bridge_config: Option<SshLeafReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bridge_sidecar: Option<SshLeafReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) managed_stub: Option<SshLeafReceipt>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EffectReceipt {
+    pub(crate) kind: ConfigMutationEffectKind,
+    pub(crate) state: ConfigMutationEffectState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) attempt_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outcome_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TerminalReceipt {
+    pub(crate) state: String,
+    pub(crate) config_state: String,
+    pub(crate) runtime_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cause: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigMutationReceipt {
+    pub(crate) schema_version: u32,
+    pub(crate) operation_id: String,
+    pub(crate) operation: String,
+    pub(crate) started_at_ms: i64,
+    pub(crate) before_config_fingerprint: String,
+    pub(crate) fenced_before_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) after_config_fingerprint: Option<String>,
+    pub(crate) config_reference: ConfigReference,
+    pub(crate) target: MutationTarget,
+    pub(crate) runtime_plan: RuntimePlan,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) auth_operation: Option<AuthOperationReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ssh_plan: Option<SshPlan>,
+    pub(crate) effects: Vec<EffectReceipt>,
+    pub(crate) terminal: TerminalReceipt,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigIntentOutcomeV1 {
+    pub(crate) schema_version: u32,
+    pub(crate) operation: String,
+    pub(crate) intent_id: String,
+    pub(crate) disposition: String,
+    pub(crate) config_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) validation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) science_running: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigMutationCommandErrorV1 {
+    pub(crate) schema_version: u32,
+    pub(crate) code: String,
+    pub(crate) operation: String,
+    pub(crate) cause: String,
+    pub(crate) phase: String,
+    pub(crate) retryable: bool,
+    pub(crate) attention_required: bool,
+    pub(crate) receipt_retained: bool,
+    pub(crate) config_state: String,
+    pub(crate) runtime_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) message: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigMutationOutcomeV1 {
+    pub(crate) schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) operation_id: Option<String>,
+    pub(crate) operation: String,
+    pub(crate) disposition: String,
+    pub(crate) config_state: String,
+    pub(crate) runtime_state: String,
+    pub(crate) recovery_state: String,
+}
+
+impl ConfigMutationCommandErrorV1 {
+    pub(crate) fn with_message(mut self, message: impl Into<String>) -> Self {
+        let message = message.into();
+        if !message.is_empty()
+            && message.chars().count() <= 512
+            && message.chars().all(|character| {
+                character != '\n' && character != '\r' && character != '\0'
+            })
+        {
+            self.message = Some(message);
+        }
+        self
+    }
+
+    pub(crate) fn json(&self) -> Value {
+        serde_json::to_value(self).unwrap_or_else(|_| {
+            json!({
+                "schema_version": RECEIPT_SCHEMA_VERSION,
+                "code": "config_mutation_attention",
+                "operation": self.operation,
+                "cause": "error_serialization",
+                "phase": "unknown",
+                "retryable": false,
+                "attention_required": true,
+                "receipt_retained": true,
+                "config_state": "unknown",
+                "runtime_state": "unknown"
+            })
+        })
+    }
+}
+
+impl std::fmt::Display for ConfigMutationCommandErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self.code.as_str() {
+            "mutation_conflict" => "普通配置变更与另一项受管操作冲突。",
+            "config_mutation_attention" => "普通配置变更需要人工处理；操作记录已保留。",
+            _ => "普通配置变更失败。",
+        })
+    }
+}
+
+fn lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn bounded_token(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+        })
+}
+
+fn digest_bytes(prefix: &[u8], bytes: impl AsRef<[u8]>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(prefix);
+    hasher.update(bytes.as_ref());
+    format!("{:x}", hasher.finalize())
+}
+
+fn digest_string(prefix: &[u8], value: &str) -> String {
+    digest_bytes(prefix, value.as_bytes())
+}
+
+pub(crate) fn config_reference(cfg: &Config) -> ConfigReference {
+    ConfigReference {
+        schema_version: INTENT_SCHEMA_VERSION,
+        active_profile_id_digest: (!cfg.active_id.is_empty())
+            .then(|| digest_string(b"csswitch-p2b-profile-id-v1\0", &cfg.active_id)),
+        runtime_binding_digest: cfg.runtime_binding.as_ref().and_then(|binding| {
+            serde_json::to_vec(binding)
+                .ok()
+                .map(|bytes| digest_bytes(b"csswitch-p2b-runtime-binding-v1\0", bytes))
+        }),
+        proxy_port: Some(cfg.proxy_port),
+        sandbox_port: Some(cfg.sandbox_port),
+    }
+}
+
+pub(crate) fn network_fingerprint(
+    settings: &csswitch_codex_network::CodexNetworkSettings,
+) -> Result<String, String> {
+    let bytes = serde_json::to_vec(settings).map_err(|error| error.to_string())?;
+    Ok(digest_bytes(b"csswitch-p2b-network-v1\0", bytes))
+}
+
+fn encode_receipt(receipt: &ConfigMutationReceipt) -> Result<Vec<u8>, String> {
+    let bytes = serde_json::to_vec(receipt).map_err(|error| error.to_string())?;
+    if bytes.is_empty() || bytes.len() > config::MAX_CONFIG_MUTATION_RECEIPT_BYTES {
+        return Err("Config mutation receipt 超过 64 KiB 上限".into());
+    }
+    Ok(bytes)
+}
+
+fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
+    if receipt.schema_version != RECEIPT_SCHEMA_VERSION
+        || !lower_hex(&receipt.operation_id, 32)
+        || ConfigMutationOperation::parse(&receipt.operation).is_none()
+        || receipt.before_config_fingerprint != receipt.fenced_before_fingerprint
+        || !lower_hex(&receipt.before_config_fingerprint, 64)
+        || receipt
+            .after_config_fingerprint
+            .as_deref()
+            .is_some_and(|value| !lower_hex(value, 64))
+        || receipt.config_reference.schema_version != INTENT_SCHEMA_VERSION
+        || receipt.effects.len() > 32
+    {
+        return Err("Config mutation receipt schema/identity 非法".into());
+    }
+    if receipt
+        .target
+        .profile_id
+        .as_deref()
+        .is_some_and(|value| value.is_empty() || value.len() > 256 || value.contains('/'))
+        || receipt
+            .target
+            .network_fingerprint
+            .as_deref()
+            .is_some_and(|value| !lower_hex(value, 64))
+        || receipt
+            .target
+            .auth_account_hash
+            .as_deref()
+            .is_some_and(|value| !lower_hex(value, 64))
+        || receipt
+            .target
+            .auth_epoch
+            .as_deref()
+            .is_some_and(|value| !bounded_token(value, 128))
+    {
+        return Err("Config mutation receipt target 泄露或越界".into());
+    }
+    if !bounded_token(&receipt.terminal.state, 32)
+        || !bounded_token(&receipt.terminal.config_state, 32)
+        || !bounded_token(&receipt.terminal.runtime_state, 32)
+        || !matches!(receipt.terminal.state.as_str(), "open" | "completed" | "attention")
+        || !matches!(receipt.terminal.config_state.as_str(), "before" | "after" | "unknown")
+        || !matches!(
+            receipt.terminal.runtime_state.as_str(),
+            "preserved" | "stopped" | "restored" | "unknown"
+        )
+    {
+        return Err("Config mutation receipt terminal state 非法".into());
+    }
+    for effect in &receipt.effects {
+        if effect
+            .attempt_id
+            .as_deref()
+            .is_some_and(|value| !lower_hex(value, 32))
+            || effect
+                .outcome_code
+                .as_deref()
+                .is_some_and(|value| !bounded_token(value, 64))
+        {
+            return Err("Config mutation effect checkpoint 非法".into());
+        }
+    }
+    if let Some(auth) = receipt.auth_operation.as_ref() {
+        if !lower_hex(&auth.auth_operation_id, 32)
+            || !matches!(
+                auth.state.as_str(),
+                "reserved"
+                    | "spawned_inert"
+                    | "registered"
+                    | "start_authorized"
+                    | "cancel_requested"
+                    | "cancelled"
+                    | "terminal"
+            )
+            || auth
+                .start_authorization_digest
+                .as_deref()
+                .is_some_and(|value| !lower_hex(value, 64))
+            || auth
+                .terminal_account_hash
+                .as_deref()
+                .is_some_and(|value| !lower_hex(value, 64))
+            || auth
+                .terminal_auth_epoch
+                .as_deref()
+                .is_some_and(|value| !bounded_token(value, 128))
+        {
+            return Err("Config mutation auth operation identity 非法".into());
+        }
+        if let Some(sidecar) = auth.sidecar.as_ref() {
+            if sidecar.pid == 0
+                || sidecar.process_group_id <= 0
+                || !bounded_token(&sidecar.process_start, 128)
+                || !lower_hex(&sidecar.executable_fingerprint, 64)
+            {
+                return Err("Config mutation auth sidecar identity 非法".into());
+            }
+        } else if auth.state == "spawned_inert"
+            || auth.state == "registered"
+            || auth.state == "start_authorized"
+        {
+            return Err("auth sidecar durable identity 不完整".into());
+        }
+    }
+    Ok(())
+}
+
+fn serialize_fence(fence: &ConfigMutationOperationFence) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(fence).map_err(|error| error.to_string())
+}
+
+fn receipt_digest(bytes: &[u8]) -> String {
+    digest_bytes(b"csswitch-p2b-receipt-v1\0", bytes)
+}
+
+pub(crate) struct OpenConfigMutation {
+    dir: std::path::PathBuf,
+    fence: ConfigMutationOperationFence,
+    receipt: ConfigMutationReceipt,
+    bytes: Vec<u8>,
+}
+
+impl OpenConfigMutation {
+    pub(crate) fn operation_id(&self) -> &str {
+        &self.receipt.operation_id
+    }
+
+    pub(crate) fn fence(&self) -> &ConfigMutationOperationFence {
+        &self.fence
+    }
+
+    pub(crate) fn receipt(&self) -> &ConfigMutationReceipt {
+        &self.receipt
+    }
+
+    pub(crate) fn receipt_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn update_receipt<F>(&mut self, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&mut ConfigMutationReceipt),
+    {
+        f(&mut self.receipt);
+        validate_receipt(&self.receipt)?;
+        let next = encode_receipt(&self.receipt)?;
+        config::write_config_mutation_operation(&self.dir, &self.fence, &next, &self.bytes)
+            .map_err(|error| error.to_string())?;
+        self.bytes = next;
+        Ok(())
+    }
+
+    pub(crate) fn checkpoint_effect(
+        &mut self,
+        index: usize,
+        state: ConfigMutationEffectState,
+        outcome_code: Option<&str>,
+    ) -> Result<(), String> {
+        let effect = self
+            .receipt
+            .effects
+            .get_mut(index)
+            .ok_or_else(|| "Config mutation effect index 越界".to_string())?;
+        effect.state = state;
+        effect.outcome_code = outcome_code.map(str::to_string);
+        let next = encode_receipt(&self.receipt)?;
+        config::write_config_mutation_operation(&self.dir, &self.fence, &next, &self.bytes)
+            .map_err(|error| error.to_string())?;
+        self.bytes = next;
+        Ok(())
+    }
+
+    pub(crate) fn update_config<T, F>(&mut self, f: F) -> Result<T, String>
+    where
+        F: FnOnce(&mut Config) -> Result<(T, bool), String>,
+    {
+        config::update_config_mutation_operation(&self.dir, &self.fence, &self.bytes, f)
+    }
+
+    pub(crate) fn finish(
+        &mut self,
+        disposition: &str,
+        config_state: &str,
+        runtime_state: &str,
+        cause: Option<&str>,
+        terminal_image: ConfigMutationTerminalConfigImage,
+    ) -> Result<ConfigMutationOutcomeV1, ConfigMutationCommandErrorV1> {
+        // Some operations (notably auth start) cannot know their exact
+        // Config after-image until the idempotent profile handoff completes.
+        // Bind that image immediately before terminal publication; cleanup
+        // must never fall back to an unbounded `Unknown` image for a claimed
+        // Config commit.
+        if disposition == "completed"
+            && matches!(terminal_image, ConfigMutationTerminalConfigImage::After)
+            && self.fence.after_config_fingerprint.is_none()
+        {
+            let current = match config::load_from(&self.dir) {
+                Ok(current) => current,
+                Err(error) => {
+                    return Err(self.attention(
+                        "terminal_config_read",
+                        "terminal",
+                        error.to_string(),
+                        true,
+                    ))
+                }
+            };
+            let fingerprint = match config::config_mutation_config_fingerprint(&current) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    return Err(self.attention(
+                        "terminal_config_fingerprint",
+                        "terminal",
+                        error.to_string(),
+                        true,
+                    ))
+                }
+            };
+            self.receipt.after_config_fingerprint = Some(fingerprint);
+        }
+        self.receipt.terminal = TerminalReceipt {
+            state: if disposition == "completed" {
+                "completed".into()
+            } else {
+                "attention".into()
+            },
+            config_state: config_state.into(),
+            runtime_state: runtime_state.into(),
+            cause: cause.map(str::to_string),
+        };
+        if let Err(error) = validate_receipt(&self.receipt) {
+            return Err(self.attention("terminal_invalid", "terminal", error, true));
+        }
+        let next = match encode_receipt(&self.receipt) {
+            Ok(bytes) => bytes,
+            Err(error) => return Err(self.attention("terminal_invalid", "terminal", error, true)),
+        };
+        if let Err(error) = config::write_config_mutation_operation(
+            &self.dir,
+            &self.fence,
+            &next,
+            &self.bytes,
+        ) {
+            return Err(self.attention("receipt_checkpoint", "terminal", error.to_string(), true));
+        }
+        let mut terminal_base = self.fence.clone();
+        if terminal_base.after_config_fingerprint.is_none() {
+            terminal_base.after_config_fingerprint = self.receipt.after_config_fingerprint.clone();
+        }
+        let terminal_fence = terminal_base.terminal(
+            receipt_digest(&next),
+            config_state,
+            runtime_state,
+            self.receipt
+                .auth_operation
+                .as_ref()
+                .and_then(|auth| auth.terminal_auth_epoch.clone()),
+            self.receipt
+                .auth_operation
+                .as_ref()
+                .and_then(|auth| auth.terminal_auth_generation),
+            self.receipt
+                .auth_operation
+                .as_ref()
+                .and_then(|auth| auth.terminal_account_hash.clone()),
+        );
+        if let Err(error) = config::publish_config_mutation_terminal_fence(
+            &self.dir,
+            &self.fence,
+            &terminal_fence,
+            &next,
+            terminal_image,
+        ) {
+            self.bytes = next;
+            return Err(self.attention("terminal_fence", "terminal", error.to_string(), true));
+        }
+        if disposition != "completed" {
+            self.bytes = next;
+            self.fence = terminal_fence;
+            return Err(self.attention(
+                "attention_retained",
+                "terminal",
+                "terminal attention retained".into(),
+                true,
+            ));
+        }
+        if let Err(error) = config::clear_config_mutation_operation(
+            &self.dir,
+            &terminal_fence,
+            &next,
+            terminal_image,
+        ) {
+            self.bytes = next;
+            return Err(self.attention("cleanup_incomplete", "terminal", error.to_string(), true));
+        }
+        self.bytes = next;
+        self.fence = terminal_fence;
+        Ok(ConfigMutationOutcomeV1 {
+            schema_version: RECEIPT_SCHEMA_VERSION,
+            operation_id: Some(self.receipt.operation_id.clone()),
+            operation: self.receipt.operation.clone(),
+            disposition: disposition.into(),
+            config_state: config_state.into(),
+            runtime_state: runtime_state.into(),
+            recovery_state: "not_needed".into(),
+        })
+    }
+
+    fn attention(
+        &self,
+        cause: &str,
+        phase: &str,
+        _detail: String,
+        receipt_retained: bool,
+    ) -> ConfigMutationCommandErrorV1 {
+        ConfigMutationCommandErrorV1 {
+            schema_version: RECEIPT_SCHEMA_VERSION,
+            code: "config_mutation_attention".into(),
+            operation: self.receipt.operation.clone(),
+            cause: cause.into(),
+            phase: phase.into(),
+            retryable: false,
+            attention_required: true,
+            receipt_retained,
+            config_state: self.receipt.terminal.config_state.clone(),
+            runtime_state: self.receipt.terminal.runtime_state.clone(),
+            message: None,
+        }
+    }
+}
+
+pub(crate) fn begin(
+    dir: &Path,
+    operation: ConfigMutationOperation,
+    before: &Config,
+    after: Option<&Config>,
+    target: MutationTarget,
+    runtime_plan: RuntimePlan,
+    effects: Vec<ConfigMutationEffectKind>,
+    auth_operation: Option<AuthOperationReceipt>,
+    ssh_plan: Option<SshPlan>,
+) -> Result<OpenConfigMutation, ConfigMutationCommandErrorV1> {
+    let before_fingerprint = config::config_mutation_config_fingerprint(before).map_err(|error| {
+        command_error(operation, "fingerprint", "config_fingerprint", false, false, error.to_string())
+    })?;
+    let after_fingerprint = after
+        .map(|config| config::config_mutation_config_fingerprint(config))
+        .transpose()
+        .map_err(|error| {
+            command_error(operation, "fingerprint", "config_fingerprint", false, false, error.to_string())
+        })?;
+    let operation_id = config::new_id();
+    let effect_receipts = effects
+        .into_iter()
+        .map(|kind| EffectReceipt {
+            kind,
+            state: ConfigMutationEffectState::Pending,
+            attempt_id: None,
+            outcome_code: None,
+        })
+        .collect::<Vec<_>>();
+    let mut receipt = ConfigMutationReceipt {
+        schema_version: RECEIPT_SCHEMA_VERSION,
+        operation_id: operation_id.clone(),
+        operation: operation.as_str().into(),
+        started_at_ms: config::now_ms(),
+        before_config_fingerprint: before_fingerprint.clone(),
+        fenced_before_fingerprint: before_fingerprint.clone(),
+        after_config_fingerprint: after_fingerprint.clone(),
+        config_reference: config_reference(before),
+        target,
+        runtime_plan,
+        auth_operation,
+        ssh_plan,
+        effects: effect_receipts,
+        terminal: TerminalReceipt {
+            state: "open".into(),
+            config_state: "before".into(),
+            runtime_state: "preserved".into(),
+            cause: None,
+        },
+    };
+    validate_receipt(&receipt).map_err(|error| {
+        command_error(operation, "intent", "receipt_schema", false, false, error)
+    })?;
+    let bytes = encode_receipt(&receipt).map_err(|error| {
+        command_error(operation, "intent", "receipt_schema", false, false, error)
+    })?;
+    let intent_digest = digest_bytes(b"csswitch-p2b-intent-v1\0", &bytes);
+    let fence = ConfigMutationOperationFence::begin(
+        operation_id,
+        operation.as_str().into(),
+        intent_digest,
+        before_fingerprint,
+        after_fingerprint,
+    );
+    let fence_bytes = serialize_fence(&fence).map_err(|error| {
+        command_error(operation, "intent", "fence_schema", false, false, error)
+    })?;
+    if fence_bytes.len() > 8 * 1024 {
+        return Err(command_error(
+            operation,
+            "intent",
+            "fence_bounds",
+            false,
+            false,
+            "Config mutation fence 超过 8 KiB".into(),
+        ));
+    }
+    config::begin_config_mutation_operation(dir, before, &fence, &bytes).map_err(|error| {
+        let cause = if error.to_string().contains("operation fence")
+            || error.to_string().contains("receipt")
+        {
+            "mutation_conflict"
+        } else {
+            "intent"
+        };
+        command_error(operation, "intent", cause, cause == "mutation_conflict", false, error.to_string())
+    })?;
+    // Keep the in-memory copy canonical after the successful publication.
+    receipt.fenced_before_fingerprint = fence.before_config_fingerprint.clone();
+    Ok(OpenConfigMutation {
+        dir: dir.to_path_buf(),
+        fence,
+        receipt,
+        bytes,
+    })
+}
+
+fn command_error(
+    operation: ConfigMutationOperation,
+    phase: &str,
+    cause: &str,
+    retryable: bool,
+    retained: bool,
+    _detail: String,
+) -> ConfigMutationCommandErrorV1 {
+    ConfigMutationCommandErrorV1 {
+        schema_version: RECEIPT_SCHEMA_VERSION,
+        code: if retained {
+            "config_mutation_attention"
+        } else if cause == "mutation_conflict" {
+            "mutation_conflict"
+        } else {
+            "config_mutation_failed"
+        }
+        .into(),
+        operation: operation.as_str().into(),
+        cause: cause.into(),
+        phase: phase.into(),
+        retryable,
+        attention_required: retained,
+        receipt_retained: retained,
+        config_state: "before".into(),
+        runtime_state: "preserved".into(),
+        message: None,
+    }
+}
+
+pub(crate) fn outcome_json(outcome: &ConfigMutationOutcomeV1) -> Value {
+    serde_json::to_value(outcome).unwrap_or_else(|_| json!({
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "operation": outcome.operation,
+        "disposition": "attention",
+        "config_state": "unknown",
+        "runtime_state": "unknown",
+        "recovery_state": "attention"
+    }))
+}
+
+pub(crate) fn command_error_string(error: &ConfigMutationCommandErrorV1) -> String {
+    serde_json::to_string(&error.json()).unwrap_or_else(|_| error.to_string())
+}
+
+pub(crate) fn typed_intent_outcome(
+    operation: &str,
+    disposition: &str,
+    config_state: &str,
+    selected_profile_id: Option<String>,
+    applied_profile_id: Option<String>,
+    validation: Option<&str>,
+    science_running: Option<bool>,
+) -> Value {
+    serde_json::to_value(ConfigIntentOutcomeV1 {
+        schema_version: INTENT_SCHEMA_VERSION,
+        operation: operation.into(),
+        intent_id: config::new_id(),
+        disposition: disposition.into(),
+        config_state: config_state.into(),
+        selected_profile_id,
+        applied_profile_id,
+        validation: validation.map(str::to_string),
+        science_running,
+    })
+    .unwrap_or_else(|_| json!({"schema_version": INTENT_SCHEMA_VERSION, "disposition": "inconclusive"}))
+}
+
+fn boot_attention(operation: Option<&str>, cause: &str) -> Value {
+    json!({
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "code": "config_mutation_boot_attention",
+        "operation": operation.unwrap_or("unknown"),
+        "disposition": "attention",
+        "cause": cause,
+        "attention_required": true,
+        "receipt_retained": true,
+        "config_state": "unknown",
+        "runtime_state": "unknown",
+    })
+}
+
+/// Boot-only P2-B convergence.  Effectful/open receipts are deliberately not
+/// guessed at here: only an already terminal, exact receipt/fence pair may
+/// finish its final cleanup.  Open or ambiguous records remain visible as a
+/// typed attention result and therefore stop normal Gateway/Science boot.
+pub(crate) fn boot_recover(dir: &Path) -> Result<Option<Value>, String> {
+    let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
+    let p2a_receipt = config::read_codex_disable_operation_receipt(dir)
+        .map_err(|error| error.to_string())?;
+    let p2a_fence = cfg
+        .codex_disable_operation_fence()
+        .map_err(|error| error.to_string())?;
+    let p2b_receipt = config::read_config_mutation_operation_receipt(dir)
+        .map_err(|error| error.to_string())?;
+    let p2b_fence = cfg
+        .config_mutation_operation_fence()
+        .map_err(|error| error.to_string())?;
+    if (p2a_receipt.is_some() || p2a_fence.is_some())
+        && (p2b_receipt.is_some() || p2b_fence.is_some())
+    {
+        return Ok(Some(boot_attention(None, "p2a_p2b_mutual_exclusion")));
+    }
+    if p2b_receipt.is_none() && p2b_fence.is_none() {
+        return Ok(None);
+    }
+    if cfg.has_open_runtime_journal() {
+        return Ok(Some(boot_attention(
+            p2b_fence.as_ref().map(|fence| fence.operation.as_str()),
+            "runtime_journal_conflict",
+        )));
+    }
+    if let Some(bytes) = p2b_receipt {
+        let receipt: ConfigMutationReceipt = serde_json::from_slice(&bytes)
+            .map_err(|_| "Config mutation boot receipt 非法；已保留 attention".to_string())?;
+        validate_receipt(&receipt)
+            .map_err(|_| "Config mutation boot receipt schema 非法；已保留 attention".to_string())?;
+        let Some(fence) = p2b_fence.as_ref() else {
+            return Ok(Some(boot_attention(
+                Some(receipt.operation.as_str()),
+                "receipt_without_fence",
+            )));
+        };
+        if receipt.operation_id != fence.operation_id
+            || receipt.operation != fence.operation
+            || receipt.terminal.state != "completed"
+            || fence.phase != "terminal"
+            || fence.terminal_receipt_digest.as_deref()
+                != Some(receipt_digest(&bytes).as_str())
+        {
+            return Ok(Some(boot_attention(
+                Some(receipt.operation.as_str()),
+                "open_or_ambiguous_receipt",
+            )));
+        }
+        let image = match fence.config_state.as_deref() {
+            Some("before") => ConfigMutationTerminalConfigImage::Before,
+            Some("after") if fence.after_config_fingerprint.is_some() => {
+                ConfigMutationTerminalConfigImage::After
+            }
+            _ => {
+                return Ok(Some(boot_attention(
+                    Some(receipt.operation.as_str()),
+                    "terminal_image_unknown",
+                )))
+            }
+        };
+        config::clear_config_mutation_operation(dir, fence, &bytes, image)
+            .map_err(|error| error.to_string())?;
+        return Ok(None);
+    }
+    match config::recover_orphan_config_mutation_operation_fence(dir)
+        .map_err(|error| error.to_string())?
+    {
+        config::ConfigMutationOrphanFenceRecovery::Cleared
+        | config::ConfigMutationOrphanFenceRecovery::None => Ok(None),
+        config::ConfigMutationOrphanFenceRecovery::ActiveReceipt => Ok(Some(boot_attention(
+            p2b_fence.as_ref().map(|fence| fence.operation.as_str()),
+            "active_receipt_requires_recovery",
+        ))),
+        config::ConfigMutationOrphanFenceRecovery::ConfigDrift => Ok(Some(boot_attention(
+            p2b_fence.as_ref().map(|fence| fence.operation.as_str()),
+            "config_drift",
+        ))),
+        config::ConfigMutationOrphanFenceRecovery::Attention => Ok(Some(boot_attention(
+            p2b_fence.as_ref().map(|fence| fence.operation.as_str()),
+            "orphan_fence_attention",
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "csswitch-p2b-config-mutation-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn open_fixture(dir: &Path) -> OpenConfigMutation {
+        let before = Config::default();
+        begin(
+            dir,
+            ConfigMutationOperation::SetModeOfficial,
+            &before,
+            None,
+            MutationTarget {
+                mode: Some("official".into()),
+                ..Default::default()
+            },
+            RuntimePlan::default(),
+            vec![ConfigMutationEffectKind::ConfigCommit],
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn p2b_receipt_contract_is_credential_free_and_allowlisted() {
+        let dir = config_dir();
+        config::save_to(&dir, &Config::default()).unwrap();
+        let operation = open_fixture(&dir);
+        let bytes = std::fs::read(dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("set_mode_official"));
+        assert!(!text.contains("https://"));
+        assert!(!text.contains("api_key"));
+        assert_eq!(operation.receipt().schema_version, 1);
+    }
+
+    #[test]
+    fn p2b_recovery_keeps_replacement_on_exact_fence_mismatch() {
+        let dir = config_dir();
+        config::save_to(&dir, &Config::default()).unwrap();
+        let mut operation = open_fixture(&dir);
+        let original = operation.bytes.clone();
+        operation
+            .checkpoint_effect(0, ConfigMutationEffectState::Succeeded, Some("committed"))
+            .unwrap();
+        let replacement = operation.bytes.clone();
+        assert!(config::write_config_mutation_operation(
+            &dir,
+            operation.fence(),
+            b"replacement",
+            &original,
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap(),
+            replacement
+        );
+    }
+
+    #[test]
+    fn p2b_receipt_only_is_not_silently_cleared() {
+        let dir = config_dir();
+        config::save_to(&dir, &Config::default()).unwrap();
+        std::fs::write(
+            dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE),
+            br#"{"schema_version":1}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            config::recover_orphan_config_mutation_operation_fence(&dir).unwrap(),
+            config::ConfigMutationOrphanFenceRecovery::Attention
+        ));
+    }
+
+    #[test]
+    fn p2b_set_mode_crash_recovery_matrix() {
+        let dir = config_dir();
+        config::save_to(&dir, &Config::default()).unwrap();
+        let mut operation = open_fixture(&dir);
+        operation
+            .checkpoint_effect(0, ConfigMutationEffectState::Succeeded, Some("config_commit"))
+            .unwrap();
+        let outcome = operation
+            .finish(
+                "completed",
+                "before",
+                "stopped",
+                None,
+                ConfigMutationTerminalConfigImage::Before,
+            )
+            .unwrap();
+        assert_eq!(outcome.disposition, "completed");
+        assert!(!dir
+            .join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)
+            .exists());
+        assert!(config::config_mutation_config_fingerprint(&config::load_from(&dir).unwrap())
+            .is_ok());
+    }
+
+    #[test]
+    fn p2b_set_settings_ssh_false_to_false_owned_absent_foreign_matrix() {
+        let dir = config_dir();
+        config::save_to(&dir, &Config::default()).unwrap();
+        let operation = begin(
+            &dir,
+            ConfigMutationOperation::SetSettingsDestructive,
+            &Config::default(),
+            None,
+            MutationTarget {
+                proxy_port: Some(18991),
+                sandbox_port: Some(18765),
+                reuse_system_ssh: Some(false),
+                ..Default::default()
+            },
+            RuntimePlan::default(),
+            vec![ConfigMutationEffectKind::DeleteManagedSshStub],
+            None,
+            Some(SshPlan::default()),
+        )
+        .unwrap();
+        assert_eq!(operation.receipt().target.reuse_system_ssh, Some(false));
+    }
+}

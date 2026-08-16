@@ -525,6 +525,69 @@ pub(crate) fn ensure_codex_profile_inner(dir: &Path) -> Result<EnsureCodexProfil
     })
 }
 
+/// P2-B-owned profile handoff.  The canonical profile ensure remains an
+/// intent operation everywhere else; this exact-fence variant is used only
+/// after a durable Codex auth-start receipt has authorized the profile
+/// commit, so ordinary Config writers cannot race or erase that receipt.
+pub(crate) fn ensure_codex_profile_with_mutation(
+    dir: &Path,
+    fence: &crate::config::ConfigMutationOperationFence,
+    receipt: &[u8],
+) -> Result<EnsureCodexProfileResult, String> {
+    let template = templates::by_id("codex").ok_or("Codex 模板不可用。")?;
+    let contract = crate::provider_contracts::contract_for(template.id, template.api_format)?;
+    if contract.default_credential_source
+        != crate::provider_contracts::CredentialSource::CsswitchOauth
+    {
+        return Err("Codex provider contract 不是 CSSwitch OAuth。".into());
+    }
+    let profile_id = config::new_id();
+    let candidate = config::Profile {
+        id: profile_id.clone(),
+        name: template.name.to_string(),
+        template_id: template.id.to_string(),
+        category: template.category.to_string(),
+        api_format: template.api_format.to_string(),
+        base_url: template.base_url.to_string(),
+        api_key: String::new(),
+        model: String::new(),
+        model_catalog: Vec::new(),
+        default_model_route_id: String::new(),
+        role_bindings: Default::default(),
+        credential_source: contract.default_credential_source,
+        credential_ref: Some("csswitch:codex:default".to_string()),
+        model_policy: contract.default_model_policy,
+        website_url: Some(template.website_url.to_string()),
+        icon: Some(template.icon.to_string()),
+        icon_color: Some(template.icon_color.to_string()),
+        sort_index: Some(config::now_ms()),
+        created_at: Some(config::now_ms()),
+        notes: None,
+        extra: Default::default(),
+    };
+    config::update_config_mutation_operation(dir, fence, receipt, |cfg| {
+        config::require_template_enabled(cfg, "codex")?;
+        if let Some(existing) = cfg.profiles.iter().find(|profile| is_canonical_codex_profile(profile))
+        {
+            return Ok((
+                EnsureCodexProfileResult {
+                    disposition: EnsureCodexProfileDisposition::Existing,
+                    profile_id: existing.id.clone(),
+                },
+                false,
+            ));
+        }
+        cfg.profiles.push(candidate);
+        Ok((
+            EnsureCodexProfileResult {
+                disposition: EnsureCodexProfileDisposition::Created,
+                profile_id,
+            },
+            true,
+        ))
+    })
+}
+
 pub(crate) fn update_profile_metadata_inner(
     dir: &Path,
     id: &str,
@@ -572,6 +635,36 @@ pub(crate) fn clear_profile_key_inner(dir: &Path, id: &str) -> Result<(), String
     Ok(())
 }
 
+pub(crate) fn clear_profile_key_with_mutation(
+    dir: &Path,
+    fence: &crate::config::ConfigMutationOperationFence,
+    receipt: &[u8],
+    id: &str,
+    expected_before_fingerprint: &str,
+) -> Result<(), String> {
+    config::update_config_mutation_operation(dir, fence, receipt, |cfg| {
+        if config::config_mutation_config_fingerprint(cfg).map_err(|error| error.to_string())?
+            != expected_before_fingerprint
+        {
+            return Err("Config mutation before-image 在 profile key commit 前发生变化".into());
+        }
+        let was_applied = cfg
+            .runtime_binding
+            .as_ref()
+            .map(|binding| binding.profile_id.as_str())
+            == Some(id);
+        if let Some(profile) = cfg.profile_by_id_mut(id) {
+            profile.api_key.clear();
+        }
+        if was_applied {
+            cfg.runtime_binding = None;
+        }
+        Ok(((), true))
+    })?;
+    config::drop_rolling_backup(dir);
+    Ok(())
+}
+
 pub(crate) fn delete_profile_inner(dir: &Path, id: &str) -> Result<(), String> {
     config::update_result(dir, |c| {
         config::require_no_runtime_transaction(c)?;
@@ -589,6 +682,37 @@ pub(crate) fn delete_profile_inner(dir: &Path, id: &str) -> Result<(), String> {
         Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
+    config::drop_rolling_backup(dir);
+    Ok(())
+}
+
+pub(crate) fn delete_profile_with_mutation(
+    dir: &Path,
+    fence: &crate::config::ConfigMutationOperationFence,
+    receipt: &[u8],
+    id: &str,
+    expected_before_fingerprint: &str,
+) -> Result<(), String> {
+    config::update_config_mutation_operation(dir, fence, receipt, |cfg| {
+        if config::config_mutation_config_fingerprint(cfg).map_err(|error| error.to_string())?
+            != expected_before_fingerprint
+        {
+            return Err("Config mutation before-image 在 profile delete commit 前发生变化".into());
+        }
+        cfg.profiles.retain(|profile| profile.id != id);
+        if cfg.active_id == id {
+            cfg.active_id.clear();
+        }
+        if cfg
+            .runtime_binding
+            .as_ref()
+            .map(|binding| binding.profile_id.as_str())
+            == Some(id)
+        {
+            cfg.runtime_binding = None;
+        }
+        Ok(((), true))
+    })?;
     config::drop_rolling_backup(dir);
     Ok(())
 }

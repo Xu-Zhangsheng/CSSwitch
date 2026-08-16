@@ -49,6 +49,7 @@ EXPECTED_STATE_OWNERS = {
     "config.access-gate",
     "config.binding",
     "config.codex-disable-receipt",
+    "config.mutation-operation",
     "config.desired",
     "config.migration-backups",
     "config.transaction",
@@ -65,6 +66,7 @@ EXPECTED_DURABLE_RECORDS = {
     "record.authority-snapshot-v1",
     "record.codex-auth-state-v1",
     "record.codex-disable-operation-v1",
+    "record.config-mutation-operation-v1",
     "record.codex-model-cache-v3",
     "record.codex-oauth-v1",
     "record.codex-thinking-v1",
@@ -849,7 +851,7 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             operations["op.revoke-profile"]["durable_records"]["clears"],
-            ["record.runtime-binding-v1"],
+            ["record.config-mutation-operation-v1", "record.runtime-binding-v1"],
         )
 
         fetch_models = operations["op.codex-catalog-mutation"]
@@ -1063,6 +1065,41 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             operations["op.codex-network"]["durable_records"]["writes"],
             "P2-A must not silently expand the receipt to op.codex-network",
         )
+
+    def test_p2b_non_one_click_receipt_contract_is_explicit(self):
+        inventory = load_inventory()
+        records = {item["id"]: item for item in inventory["durable_records"]}
+        operations = {item["id"]: item for item in inventory["operations"]}
+        receipt = records["record.config-mutation-operation-v1"]
+
+        self.assertEqual(receipt["authority_owner"], "config.mutation-operation")
+        self.assertNotIn("secret", receipt["fields"])
+        self.assertNotIn("credential", " ".join(receipt["fields"]))
+        self.assertIn("config_mutation_operation", records["record.config-v4"]["fields"])
+        self.assertEqual(
+            {"op.set-mode", "op.set-settings", "op.codex-auth-start", "op.codex-logout", "op.codex-network", "op.revoke-profile"},
+            {
+                operation["id"]
+                for operation in inventory["operations"]
+                if "record.config-mutation-operation-v1" in operation["durable_records"]["writes"]
+            },
+        )
+        for operation_id in (
+            "op.set-mode",
+            "op.set-settings",
+            "op.codex-auth-start",
+            "op.codex-logout",
+            "op.codex-network",
+            "op.revoke-profile",
+        ):
+            operation = operations[operation_id]
+            self.assertEqual(
+                operation["serialization"],
+                "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+            )
+            for access in ("reads", "writes", "clears"):
+                self.assertIn("record.config-mutation-operation-v1", operation["durable_records"][access])
+            self.assertTrue(any("fence" in effect.lower() for effect in operation["ordered_effects"]))
 
     def test_integrity_checks_reject_representative_bad_inventory(self):
         inventory = load_inventory()

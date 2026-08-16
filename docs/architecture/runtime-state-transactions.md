@@ -279,6 +279,31 @@ authority snapshot 会捕获 managed receipt 文件的 before-image，但这不�
 process-local handoff；durable journal 只保存 crash recovery 所需的最小 identity/outcome，不能
 把 receipt 全量序列化或让诊断 DTO 参与控制流。
 
+## 非一键 destructive mutation receipt
+
+非一键、会改变 runtime 或 durable profile authority 的 destructive mutation 使用独立的
+`config-mutation-operation.v1.json` receipt 与 Config 内的
+`config_mutation_operation` fence；它不是 one-click/history 的 `runtime_transaction`，也不
+把三类 runtime receipt 合并成一个全局事务。当前七个 operation 是
+`set_mode_official`、`set_settings_destructive`、`codex_auth_start`、`codex_auth_logout`、
+`set_codex_network`、`clear_applied_profile_key` 与 `delete_applied_profile`。普通 Config
+writer、P2-A journal 和运行时 journal 在 fence 打开时都 fail closed；只有持有精确 fence
+identity 的 scoped writer 能提交本次 mutation。
+
+receipt 只保存脱敏的 operation id、intent/config fingerprint、runtime plan、bounded effect
+checkpoint、auth sidecar identity 与 terminal digest，不保存 token、API key、OAuth 内容、私有
+路径或原始 Config。写入遵循 fence-first、create-new/no-clobber、bounded 64 KiB、fsync 与
+exact CAS；成功终结的顺序是 terminal receipt、terminal fence、clearing tombstone、receipt
+unlink，最后清除 Config fence。中断、receipt/fence 不一致、Config drift、替换 owner 或
+cleanup 失败均保留 receipt/fence 并投影 `attention`，启动恢复不会猜测或静默清除。
+
+涉及 Codex auth start 时，sidecar 先以 inert 状态启动；只有匹配 operation id 与授权 digest
+的 `start_ack` 到达后才允许 network/OAuth flow。logout、network、mode/settings teardown
+和 applied-profile revoke 也在相应 runtime/auth effect 与 Config commit 之间写入 checkpoint，
+因此每个 crash window 都能停在可检查的 manual-recovery 边界。`set_active_profile`、
+`update_profile_connection` 与 `codex_ensure_profile` 是 intent-only typed outcome，不创建
+P2-B receipt，也不声称 runtime 已应用。
+
 ## 三个阶段域
 
 | 阶段域 | 形态 | 用途 |

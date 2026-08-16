@@ -18,7 +18,7 @@
       "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
       "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
     ],
-    "test_identity_semantics": "characterization_tests lists the stable identities required for the current source inventory. P2-A adds dedicated Codex-disable receipt and replay identities; its fresh exact-SHA canonical source gate and completion review are pending, and no prior seal is inherited. This remains source-only behavior characterization and does not promote artifact/live evidence.",
+    "test_identity_semantics": "characterization_tests lists the stable identities required for the current source inventory. P2-A and P2-B add dedicated receipt, fence, recovery, and typed-surface identities; their fresh exact-SHA canonical source gate and completion review are pending, and no prior seal is inherited. This remains source-only behavior characterization and does not promote artifact/live evidence.",
     "characterization_status": "requirements-open",
     "completion_review_status": "pending"
   },
@@ -28,7 +28,7 @@
       "kind": "durable-config",
       "durability": "filesystem",
       "authority": "Desired mode, ports, selected profile, profiles, Codex feature/network settings, and path secret.",
-      "fields": ["active_id", "codex_disable_operation", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
+      "fields": ["active_id", "codex_disable_operation", "codex_network", "config_mutation_operation", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"}
     },
     {
@@ -54,6 +54,14 @@
       "authority": "Dedicated credential-free op.codex-enable disable plan, exact before/after Config references, component identities, restore ids, and replay phase; it is not a one-click or HistoryRecovery journal.",
       "fields": ["config_reference", "operation_id", "phase", "plan", "schema_version"],
       "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "CodexDisableOperationReceipt"}
+    },
+    {
+      "id": "config.mutation-operation",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Credential-free non-one-click mutation receipt, exact Config fence, bounded effect checkpoints, terminal image, and fail-closed boot recovery for the seven destructive P2-B operations.",
+      "fields": ["after_config_fingerprint", "auth_identity", "before_config_fingerprint", "clearing_marker", "config_mutation_operation", "effects", "intent_digest", "operation_id", "phase", "receipt", "runtime_plan", "schema_version", "terminal_receipt_digest"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "ConfigMutationOperationFence"}
     },
     {
       "id": "app.gateway",
@@ -213,7 +221,7 @@
       "id": "record.config-v4",
       "format": "config schema v4 JSON",
       "authority_owner": "config.desired",
-      "fields": ["active_id", "codex_disable_operation", "codex_network", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
+      "fields": ["active_id", "codex_disable_operation", "codex_network", "config_mutation_operation", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
       "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "fn commit_migrated_config("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn save_to("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update<"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update_result<"}],
       "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}],
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"},
@@ -228,6 +236,16 @@
       "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "read_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "read_codex_disable_receipt_at"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "replay_interrupted_codex_disable"}],
       "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "CodexDisableOperationReceipt"},
       "known_gap": "This narrow receipt covers only experimental Codex disable; enable has no runtime effect, and network/mode/settings/profile/one-click remain separate operations."
+    },
+    {
+      "id": "record.config-mutation-operation-v1",
+      "format": "Credential-free config-mutation-operation.v1.json sidecar plus clearing tombstone and Config extra fence with exact-byte CAS",
+      "authority_owner": "config.mutation-operation",
+      "fields": ["after_config_fingerprint", "auth_identity", "before_config_fingerprint", "clearing_marker", "config_fence", "effects", "intent_digest", "operation_id", "receipt", "runtime_plan", "schema_version", "terminal"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "begin_config_mutation_operation"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "write_config_mutation_operation"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "publish_config_mutation_terminal_fence"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "clear_config_mutation_operation"}, {"path": "desktop/src-tauri/src/commands/runtime/config_mutation.rs", "symbol": "pub(crate) fn begin("}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "read_config_mutation_operation_receipt"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "recover_orphan_config_mutation_operation_fence"}, {"path": "desktop/src-tauri/src/commands/runtime/config_mutation.rs", "symbol": "pub(crate) fn boot_recover("}],
+      "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/config_mutation.rs", "symbol": "ConfigMutationReceipt"},
+      "known_gap": "The receipt preserves exact effect and terminal attention state but does not restart previously stopped provider runtimes; artifact, installed-app, live-provider, credential, and release evidence remain outside this source slice."
     },
     {
       "id": "record.config-migration-backups-v1",
@@ -531,7 +549,7 @@
     {
       "id": "op.history-restore",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "serialization": "lifecycle-plus-domain-lease",
       "implicit_operation_ids": ["op.one-click", "op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "restore_history_choice", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, "bundled_callers": ["desktop/src/runtime-controller.js::restoreHistoryChoice"]}],
       "state_owners": ["app.boot", "app.cleanup", "app.gateway", "app.history", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.binding", "config.desired", "config.transaction", "gateway.bridge-key", "lifecycle.global", "process.gateway", "process.science", "science.route"],
@@ -570,39 +588,39 @@
     {
       "id": "op.set-mode",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "set_mode", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "bundled_callers": ["desktop/src/profile-controller.js::switchMode"]}],
-      "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
-      "durable_records": {"reads": ["record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-v4"], "clears": ["record.science-receipt-v1"]},
-      "ordered_effects": ["validate mode", "reject either open runtime journal before effects", "for official: bump generation, claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity; on current success stop the tracked Gateway", "recheck both journals in the config writer and commit mode", "clear history recovery and boot attention"],
+      "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["validate mode", "reject either open runtime journal or P2-B mutation fence before effects", "publish the credential-free receipt and exact Config fence", "for official: bump generation, claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity; on current success stop the tracked Gateway", "checkpoint each effect and commit mode against the exact before-image", "publish terminal fence, clear receipt through the clearing tombstone, and clear only the exact Config fence", "clear history recovery and boot attention"],
       "failure_points": [
         {"id": "set-mode.stop-science", "after_effects": ["generation bumped", "exact Science stop claimed and may have been attempted"], "observed_outcome": "Failure prevents mode commit and Gateway stop.", "compensation": "no generation rollback or Science restart"},
         {"id": "set-mode.owner-cas", "after_effects": ["generation bumped", "exact Science stop attempted", "process-local owner changed before publication"], "observed_outcome": "Reject stale publication, preserve the replacement Science read model and tracked Gateway, and leave mode unchanged.", "compensation": "none; a stale stop result cannot clear replacement runtime ownership or continue the mode transition"},
         {"id": "set-mode.config-commit", "after_effects": ["Science and Gateway stopped"], "observed_outcome": "Commit failure leaves prior mode durable but runtime stopped.", "compensation": "no prior runtime restart"}
       ],
-      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "contract": "Stop-before-commit ordering is preserved; no journal or restart compensation."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_mode_config_failure_leaves_runtime_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement"],
-      "known_gaps": ["No durable operation receipt."]
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "contract": "Stop-before-commit ordering is preserved; terminal uncertainty retains the credential-free receipt and exact fence for fresh boot attention, without restart compensation."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_mode_config_failure_leaves_runtime_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::config_mutation::tests::p2b_set_mode_crash_recovery_matrix", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2b_fence_first_orphan_and_receipt_only_corruption_matrix"],
+      "known_gaps": ["P2-B records exact effect progress and terminal attention but deliberately does not restart previously stopped runtimes."]
     },
     {
       "id": "op.set-settings",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "set_settings", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "bundled_callers": ["desktop/src/profile-controller.js::persistRuntimeSettings"]}],
-      "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
-      "durable_records": {"reads": ["record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"], "writes": ["record.config-v4"], "clears": ["record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"]},
-      "ordered_effects": ["validate ports/SSH inputs", "reject either open runtime journal before effects", "if teardown: claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity; on current success bump generation and stop the tracked Gateway", "if SSH disabled: revoke bridge and remove managed stub", "recheck both journals in the config writer and commit settings", "clear history recovery and boot attention"],
+      "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"]},
+      "ordered_effects": ["validate ports/SSH inputs", "reject either open runtime journal or P2-B mutation fence before effects", "preflight SSH ownership and publish the credential-free receipt and exact Config fence", "if teardown: claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity; on current success bump generation and stop the tracked Gateway", "if SSH disabled: revoke bridge and remove managed stub with ownership checkpoints", "commit settings against the exact before-image", "publish terminal fence, clear receipt through the clearing tombstone, and clear only the exact Config fence", "clear history recovery and boot attention"],
       "failure_points": [
         {"id": "set-settings.stop", "after_effects": ["exact Science stop claimed and may have been attempted"], "observed_outcome": "Failure prevents generation bump, Gateway stop, settings commit, and later teardown effects.", "compensation": "none"},
         {"id": "set-settings.owner-cas", "after_effects": ["exact Science stop attempted", "process-local owner changed before publication"], "observed_outcome": "Reject stale publication, preserve the replacement Science read model and tracked Gateway, and leave settings unchanged.", "compensation": "none; a stale stop result cannot clear replacement runtime ownership or continue the settings transition"},
         {"id": "set-settings.ssh-revoke", "after_effects": ["runtime stopped", "one or more SSH artifacts may be removed"], "observed_outcome": "Failure prevents config commit and leaves runtime stopped.", "compensation": "no bridge/stub inverse or runtime restart"},
         {"id": "set-settings.config-commit", "after_effects": ["runtime stopped", "SSH bridge/stub may be removed"], "observed_outcome": "Prior settings remain durable but runtime stays stopped.", "compensation": "none"}
       ],
-      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "contract": "Stop/revoke/remove-before-commit behavior is preserved without journal or prior restart."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_stub_remove_failure_preserves_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replacement"],
-      "known_gaps": ["No durable receipt for teardown or SSH bridge changes."]
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "contract": "Stop/revoke/remove-before-commit behavior is preserved; terminal uncertainty retains the exact receipt and fence for fresh attention, without bridge inverse or runtime restart."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_stub_remove_failure_preserves_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::config_mutation::tests::p2b_set_settings_ssh_false_to_false_owned_absent_foreign_matrix", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2b_open_fence_blocks_all_ordinary_config_writers_cross_process"],
+      "known_gaps": ["P2-B does not reconstruct or restart removed SSH artifacts; foreign or ambiguous ownership remains fail-closed attention."]
     },
     {
       "id": "op.stop-all",
@@ -685,29 +703,29 @@
     {
       "id": "op.revoke-profile",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [
-        {"kind": "tauri-command", "name": "clear_profile_key", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key_cmd"}, "bundled_callers": ["desktop/src/profile-controller.js::doClearKey"]},
-        {"kind": "tauri-command", "name": "delete_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile_cmd"}, "bundled_callers": ["desktop/src/profile-controller.js::doDelete"]}
+        {"kind": "tauri-command", "name": "clear_profile_key", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "bundled_callers": ["desktop/src/profile-controller.js::doClearKey"]},
+        {"kind": "tauri-command", "name": "delete_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile"}, "bundled_callers": ["desktop/src/profile-controller.js::doDelete"]}
       ],
-      "state_owners": ["app.gateway", "app.science", "config.binding", "config.desired", "config.transaction", "lifecycle.global", "process.gateway"],
-      "durable_records": {"reads": ["record.config-v4", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-v4"], "clears": ["record.runtime-binding-v1"]},
-      "ordered_effects": ["reject either open runtime journal", "derive applied role from runtime_binding", "recheck both journals and commit key clear/profile delete first", "if applied: bump generation and stop tracked Gateway", "always retain Science"],
+      "state_owners": ["app.gateway", "app.science", "config.binding", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.runtime-binding-v1"]},
+      "ordered_effects": ["reject either open runtime journal or P2-B mutation fence", "derive applied role from runtime_binding", "for selected-only intent, return a typed no-runtime-effect outcome", "for applied revoke, publish the credential-free receipt and exact Config fence", "bump generation and stop tracked Gateway", "checkpoint stop and commit key clear/profile delete against the exact before-image", "publish terminal fence and clear receipt/fence only after the terminal image is proven", "always retain Science"],
       "failure_points": [{"id": "revoke-profile.config", "after_effects": ["no runtime stop yet"], "observed_outcome": "Atomic config failure leaves Gateway unchanged.", "compensation": "none"}],
-      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key_cmd"}, "contract": "Config-first revocation uses runtime_binding truth; selected-only does not stop Gateway, applied revocation stops Gateway after commit, and Science remains."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_profile_revocation_selected_applied_role_matrix"],
-      "known_gaps": ["No journal or typed revocation receipt."]
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "contract": "Config-first revocation uses runtime_binding truth; selected-only returns intent-only typed state, while applied revocation retains receipt attention on stop or commit uncertainty and Science remains."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_profile_revocation_selected_applied_role_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_applied_profile_revoke_crash_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_intent_only_outcomes_have_zero_runtime_effect"],
+      "known_gaps": ["P2-B retains the applied revoke receipt on uncertainty but deliberately provides no runtime restart or credential rollback."]
     },
     {
       "id": "op.codex-auth-start",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "codex_auth_start", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_start"}, "bundled_callers": ["desktop/src/codex-controller.js::startCodexLogin"]}],
-      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
-      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4"], "clears": ["record.science-receipt-v1"]},
-      "ordered_effects": ["reject either open runtime journal", "reserve auth operation", "under lifecycle stop only confirmed Codex runtime", "recheck both journals", "spawn sidecar and register the exact child", "release lifecycle while OAuth waits", "atomically commit OAuth through sidecar", "ensure canonical Codex profile", "publish terminal operation snapshot"],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["reject either open runtime journal or P2-B mutation fence", "reserve auth operation and publish an inert sidecar identity plus start authorization", "under lifecycle stop only confirmed Codex runtime", "checkpoint stop effects and recheck exact Config fence", "spawn sidecar and register exact child plus dual process identity", "release lifecycle while OAuth waits only after matching start_ack", "atomically commit OAuth through sidecar", "checkpoint auth generation and ensure canonical Codex profile", "publish terminal receipt/fence and operation snapshot"],
       "failure_points": [
         {"id": "codex-login.prepare", "after_effects": ["operation reserved", "confirmed Codex runtime may be stopped"], "observed_outcome": "Failure aborts the reserved operation and clears its starting snapshot; the command returns a safe error and no other provider runtime is stopped.", "compensation": "no prior Codex runtime restart"},
         {"id": "codex-login.storage-commit", "after_effects": ["one or both new secret records may have been written", "auth-state generation is not yet committed"], "observed_outcome": "Restore both prior secret records; if either restore fails return RollbackFailed and make no restoration claim.", "compensation": "AuthRepository rollback_or restores both old secret records or reports rollback failure"},
@@ -715,7 +733,7 @@
       ],
       "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_start"}, "contract": "Supervisor reaps/cancels exact sidecar and preserves safely committed OAuth; stopped Codex runtime is not restarted."},
       "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_finalization_requires_profile_ready_before_succeeded", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_login_prepare_failure_preserves_other_provider_and_stopped_codex_state"],
-      "known_gaps": ["No shared RuntimeOperationPlan or prior restart receipt."]
+      "known_gaps": ["P2-B persists auth identity and generation references without credentials; it does not restart a stopped Codex runtime or claim provider/live evidence."]
     },
     {
       "id": "op.codex-auth-cancel",
@@ -747,19 +765,19 @@
     {
       "id": "op.codex-logout",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "codex_auth_logout", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_logout"}, "bundled_callers": ["desktop/src/codex-controller.js::doLogoutCodex"]}],
-      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
-      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1"], "clears": ["record.codex-oauth-v1", "record.codex-thinking-v1", "record.science-receipt-v1"]},
-      "ordered_effects": ["begin Codex mutation lease", "reject either open runtime journal", "under lifecycle stop only confirmed Codex runtime", "release lifecycle", "reacquire lifecycle and recheck both journals", "run exact logout sidecar", "best-effort remote revoke", "commit a new logged-out auth generation", "attempt deletion of both secret records", "record safe auth status"],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1", "record.config-mutation-operation-v1"], "clears": ["record.config-mutation-operation-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["begin Codex mutation lease and publish the credential-free receipt/fence", "reject either open runtime journal", "under lifecycle stop only confirmed Codex runtime", "release lifecycle", "reacquire lifecycle and recheck both journals and exact fence", "run exact logout sidecar", "best-effort remote revoke", "commit a new logged-out auth generation", "attempt deletion of both secret records and checkpoint cleanup observation", "publish terminal fence and clear only the exact receipt/fence", "record safe auth status"],
       "failure_points": [
         {"id": "codex-logout.state-commit", "after_effects": ["confirmed Codex runtime stopped", "remote revoke may have been attempted"], "observed_outcome": "Auth-state commit failure leaves the previous committed credential generation active and returns error.", "compensation": "no secret deletion and no prior Codex restart"},
         {"id": "codex-logout.secret-delete", "after_effects": ["logged-out generation committed", "both secret deletions attempted"], "observed_outcome": "Return error with stale secret file possible, but committed=false prevents authentication use.", "compensation": "no rollback to the active generation and no prior Codex restart"}
       ],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_logout"}, "contract": "Stop-before-credential revoke behavior is preserved; no runtime journal or restart."},
       "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::runtime_decision_stops_only_confirmed_codex_and_fails_closed_on_unknown_live_child", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_logout_failure_leaves_confirmed_codex_runtime_stopped"],
-      "known_gaps": ["No durable operation receipt."]
+      "known_gaps": ["Remote revoke remains best effort and P2-B does not restore a stopped Codex runtime; stale secret files remain unusable after the new logged-out generation commits."]
     },
     {
       "id": "op.codex-auth-refresh",
@@ -812,16 +830,16 @@
     {
       "id": "op.codex-network",
       "mutation_kind": "runtime",
-      "serialization": "lifecycle-plus-domain-lease",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
       "implicit_operation_ids": ["op.startup-config-migration"],
       "entrypoints": [{"kind": "tauri-command", "name": "set_codex_network", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_codex_network"}, "bundled_callers": ["desktop/src/codex-controller.js::saveCodexNetwork"]}],
-      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
-      "durable_records": {"reads": ["record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-v4"], "clears": ["record.science-receipt-v1"]},
-      "ordered_effects": ["validate network settings", "begin mutation lease", "reject either open runtime journal before effects", "stop only confirmed Codex runtime", "recheck both journals and commit network setting", "return restarted=false"],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["validate network settings", "begin mutation lease and publish the credential-free receipt/fence", "reject either open runtime journal before effects", "stop only confirmed Codex runtime or preserve an unaffected provider path", "checkpoint stop effects and recheck exact fence", "commit network setting against the exact before-image", "publish terminal fence and clear receipt/fence only after cleanup", "return restarted=false"],
       "failure_points": [{"id": "codex-network.commit", "after_effects": ["confirmed Codex runtime stopped"], "observed_outcome": "Commit failure leaves previous network setting and stopped Codex runtime; other providers preserved.", "compensation": "no prior restart"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_codex_network"}, "contract": "Stop-before-config behavior is preserved and never auto-restarts."},
       "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_network_commit_failure_leaves_codex_stopped_and_other_provider_untouched"],
-      "known_gaps": ["No durable operation receipt."]
+      "known_gaps": ["P2-B does not auto-restart Codex after a committed network change and preserves other-provider runtime ownership."]
     },
     {
       "id": "op.codex-downgrade",

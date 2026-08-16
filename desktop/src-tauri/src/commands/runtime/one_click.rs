@@ -183,6 +183,9 @@ pub(crate) fn one_click_login_cmd<R: tauri::Runtime>(
                     error.safe_message(),
                 )));
             }
+            Err(mutation @ crate::commands::codex::RuntimeCommandError::Mutation(_)) => {
+                return Err(mutation);
+            }
         };
         match replay_compensation_to_convergence(&app, &state, &lifecycle) {
             Ok(true) => continue,

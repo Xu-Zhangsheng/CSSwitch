@@ -365,6 +365,23 @@ pub(crate) fn prevalidate_sandbox_ssh_stub(
     Ok(())
 }
 
+/// Read-only P2-B admission for removing the isolated managed stub.  The
+/// caller gets a boolean only after the exact CSSwitch marker and private
+/// regular-file checks have passed; foreign, malformed or ambiguous files
+/// are never treated as absent.
+pub(crate) fn preflight_managed_sandbox_ssh_stub_cleanup(
+    sandbox_home: &Path,
+) -> Result<bool, String> {
+    prevalidate_sandbox_ssh_stub(sandbox_home, &[], false)?;
+    let config = sandbox_home.join(".ssh/config");
+    match std::fs::symlink_metadata(&config) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err("隔离 SSH config 不是安全普通文件".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("无法确认隔离 SSH config 状态".into()),
+    }
+}
+
 fn validate_managed_sandbox_ssh_stub_for_config(
     sandbox_home: &Path,
     expected_system_config: &Path,

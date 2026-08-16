@@ -32,6 +32,7 @@ const CONTROL_RUNNING: u8 = 0;
 const CONTROL_CANCELLED: u8 = 1;
 const CONTROL_COMMITTING: u8 = 2;
 const CONTROL_FINISHED: u8 = 3;
+const CONTROL_WAITING_START: u8 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CancelDisposition {
@@ -63,10 +64,27 @@ pub struct LoginControl {
 }
 
 impl LoginControl {
+    pub fn awaiting_start() -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(CONTROL_WAITING_START)),
+        }
+    }
+
+    pub fn authorize_start(&self) -> bool {
+        self.state
+            .compare_exchange(
+                CONTROL_WAITING_START,
+                CONTROL_RUNNING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     pub fn cancel(&self) -> CancelDisposition {
         loop {
             match self.state.load(Ordering::Acquire) {
-                CONTROL_RUNNING => {
+                CONTROL_RUNNING | CONTROL_WAITING_START => {
                     if self
                         .state
                         .compare_exchange(
@@ -112,6 +130,17 @@ impl LoginControl {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+
+    async fn await_start(&self) -> Result<(), OAuthFlowError> {
+        while self.state.load(Ordering::Acquire) == CONTROL_WAITING_START {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if self.is_cancelled() {
+            Err(cancelled_error("cancelled"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -143,6 +172,7 @@ where
     T: StateStore,
     F: Fn(LoginProgress),
 {
+    control.await_start().await?;
     let factory = CodexHttpClientFactory::from_environment().map_err(|_| {
         OAuthFlowError::new(
             OAuthErrorCode::OAuthNetwork,

@@ -172,13 +172,14 @@ pub(crate) fn clear_profile_key(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     id: String,
-) -> Result<(), String> {
-    clear_profile_key_cmd(
+) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
+    clear_profile_key_p2b(
         &config::default_dir(),
         state.inner(),
         lifecycle.as_ref(),
         &id,
     )
+    .map_err(crate::commands::codex::RuntimeCommandError::from)
 }
 
 /// 删 profile：经串行器；删的是【生效】profile → active 置空（inner 内）+ bump + 停代理。
@@ -187,13 +188,250 @@ pub(crate) fn delete_profile(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     id: String,
-) -> Result<(), String> {
-    delete_profile_cmd(
+) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
+    delete_profile_p2b(
         &config::default_dir(),
         state.inner(),
         lifecycle.as_ref(),
         &id,
     )
+    .map_err(crate::commands::codex::RuntimeCommandError::from)
+}
+
+fn profile_mutation_attention(
+    operation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
+    effect_index: usize,
+    cause: &str,
+    detail: &str,
+) -> Result<serde_json::Value, String> {
+    let _ = operation.checkpoint_effect(
+        effect_index,
+        crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+        Some(cause),
+    );
+    match operation.finish(
+        "attention",
+        "before",
+        "unknown",
+        Some(cause),
+        config::ConfigMutationTerminalConfigImage::Before,
+    ) {
+        Ok(_) => Err(detail.to_string()),
+        Err(error) => Err(crate::commands::runtime::config_mutation::command_error_string(&error)),
+    }
+}
+
+fn clear_profile_key_p2b(
+    dir: &Path,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    id: &str,
+) -> Result<serde_json::Value, String> {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Destructive, |_| {
+        let before = load_without_runtime_transaction(dir)?;
+        let applied = before
+            .runtime_binding
+            .as_ref()
+            .is_some_and(|binding| binding.profile_id == id);
+        let target_exists = before.profile_by_id(id).is_some();
+        if !applied {
+            clear_profile_key_inner(dir, id)?;
+            return Ok(crate::commands::runtime::config_mutation::typed_intent_outcome(
+                "clear_profile_key",
+                if target_exists { "committed" } else { "no_change" },
+                "committed",
+                Some(id.to_string()),
+                before.runtime_binding.as_ref().map(|binding| binding.profile_id.clone()),
+                Some("not_run"),
+                Some(false),
+            ));
+        }
+
+        let mut after = before.clone();
+        if let Some(profile) = after.profile_by_id_mut(id) {
+            profile.api_key.clear();
+        }
+        after.runtime_binding = None;
+        let mut operation = crate::commands::runtime::config_mutation::begin(
+            dir,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::ClearAppliedProfileKey,
+            &before,
+            Some(&after),
+            crate::commands::runtime::config_mutation::MutationTarget {
+                profile_id: Some(id.to_string()),
+                ..Default::default()
+            },
+            crate::commands::runtime::config_mutation::RuntimePlan {
+                owner_generation: lifecycle.current_generation(),
+                ..Default::default()
+            },
+            vec![
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ConfigCommit,
+            ],
+            None,
+            None,
+        )
+        .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
+
+        lifecycle.bump_generation();
+        if let Err(error) = lock(state).stop_proxy().require_stopped(
+            "清除已应用 profile key 前无法安全停止 Gateway；配置未修改",
+        ) {
+            return profile_mutation_attention(
+                &mut operation,
+                0,
+                "gateway_stop_uncertain",
+                &error,
+            );
+        }
+        operation
+            .checkpoint_effect(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("stopped"),
+            )
+            .map_err(|error| error.to_string())?;
+        let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+        if let Err(error) = crate::runtime::profile::clear_profile_key_with_mutation(
+            dir,
+            operation.fence(),
+            operation.receipt_bytes(),
+            id,
+            &before_fingerprint,
+        ) {
+            return profile_mutation_attention(
+                &mut operation,
+                1,
+                "config_commit_failed",
+                &error,
+            );
+        }
+        operation
+            .checkpoint_effect(
+                1,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("committed"),
+            )
+            .map_err(|error| error.to_string())?;
+        let outcome = operation
+            .finish(
+                "completed",
+                "after",
+                "stopped",
+                None,
+                config::ConfigMutationTerminalConfigImage::After,
+            )
+            .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
+        Ok(crate::commands::runtime::config_mutation::outcome_json(&outcome))
+    })
+}
+
+fn delete_profile_p2b(
+    dir: &Path,
+    state: &SharedAppState,
+    lifecycle: &lifecycle::Lifecycle,
+    id: &str,
+) -> Result<serde_json::Value, String> {
+    lifecycle.with_mutation(lifecycle::RuntimeMutationDomain::Destructive, |_| {
+        let before = load_without_runtime_transaction(dir)?;
+        let applied = before
+            .runtime_binding
+            .as_ref()
+            .is_some_and(|binding| binding.profile_id == id);
+        let target_exists = before.profile_by_id(id).is_some();
+        if !applied {
+            delete_profile_inner(dir, id)?;
+            return Ok(crate::commands::runtime::config_mutation::typed_intent_outcome(
+                "delete_profile",
+                if target_exists { "committed" } else { "no_change" },
+                "committed",
+                Some(id.to_string()),
+                before.runtime_binding.as_ref().map(|binding| binding.profile_id.clone()),
+                Some("not_run"),
+                Some(false),
+            ));
+        }
+
+        let mut after = before.clone();
+        after.profiles.retain(|profile| profile.id != id);
+        if after.active_id == id {
+            after.active_id.clear();
+        }
+        after.runtime_binding = None;
+        let mut operation = crate::commands::runtime::config_mutation::begin(
+            dir,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::DeleteAppliedProfile,
+            &before,
+            Some(&after),
+            crate::commands::runtime::config_mutation::MutationTarget {
+                profile_id: Some(id.to_string()),
+                ..Default::default()
+            },
+            crate::commands::runtime::config_mutation::RuntimePlan {
+                owner_generation: lifecycle.current_generation(),
+                ..Default::default()
+            },
+            vec![
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ConfigCommit,
+            ],
+            None,
+            None,
+        )
+        .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
+
+        lifecycle.bump_generation();
+        if let Err(error) = lock(state).stop_proxy().require_stopped(
+            "删除已应用 profile 前无法安全停止 Gateway；配置未修改",
+        ) {
+            return profile_mutation_attention(
+                &mut operation,
+                0,
+                "gateway_stop_uncertain",
+                &error,
+            );
+        }
+        operation
+            .checkpoint_effect(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("stopped"),
+            )
+            .map_err(|error| error.to_string())?;
+        let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+        if let Err(error) = crate::runtime::profile::delete_profile_with_mutation(
+            dir,
+            operation.fence(),
+            operation.receipt_bytes(),
+            id,
+            &before_fingerprint,
+        ) {
+            return profile_mutation_attention(
+                &mut operation,
+                1,
+                "config_commit_failed",
+                &error,
+            );
+        }
+        operation
+            .checkpoint_effect(
+                1,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some("committed"),
+            )
+            .map_err(|error| error.to_string())?;
+        let outcome = operation
+            .finish(
+                "completed",
+                "after",
+                "stopped",
+                None,
+                config::ConfigMutationTerminalConfigImage::After,
+            )
+            .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
+        Ok(crate::commands::runtime::config_mutation::outcome_json(&outcome))
+    })
 }
 
 fn clear_profile_key_cmd(
@@ -462,12 +700,25 @@ fn commit_profile_connection_in_dir(
     // isolated and one-click is the only runtime apply/start boundary.
     let validated = validate(&candidate)?;
     persist_profile_candidate_inner(dir, id, &candidate)?;
-    Ok(json!({
-        "validated": validated,
-        "committed": true,
-        "status": "ok",
-        "message": "已保存连接；下次一键开始时核验并应用。",
-    }))
+    let mut result = crate::commands::runtime::config_mutation::typed_intent_outcome(
+        "update_profile_connection",
+        "committed",
+        "committed",
+        None,
+        None,
+        Some(if validated { "accepted" } else { "inconclusive" }),
+        None,
+    );
+    if let Some(object) = result.as_object_mut() {
+        object.insert("validated".into(), serde_json::Value::Bool(validated));
+        object.insert("committed".into(), serde_json::Value::Bool(true));
+        object.insert("status".into(), serde_json::Value::String("ok".into()));
+        object.insert(
+            "message".into(),
+            serde_json::Value::String("已保存连接；下次一键开始时核验并应用。".into()),
+        );
+    }
+    Ok(result)
 }
 
 /// 只把 profile 设为当前选择；真正 apply/start 只发生在一键开始。
@@ -526,22 +777,41 @@ fn pin_active_profile_in_dir(
     } else {
         "已设为当前选择，待应用。当前运行链保持不变；下次一键开始时核验并应用。"
     };
-    Ok(json!({
-        "committed": true,
-        "status": "ok",
-        "selected_profile_id": id,
-        "applied_profile_id": applied_profile_id,
-        "apply_state": "pending",
-        "science_running": science_running,
-        "hint": hint,
-    }))
+    let mut result = crate::commands::runtime::config_mutation::typed_intent_outcome(
+        "set_active_profile",
+        if applied_profile_id.as_deref() == Some(id) {
+            "no_change"
+        } else {
+            "committed"
+        },
+        "committed",
+        Some(id.to_string()),
+        applied_profile_id.clone(),
+        Some("accepted"),
+        Some(science_running),
+    );
+    if let Some(object) = result.as_object_mut() {
+        object.insert("committed".into(), serde_json::Value::Bool(true));
+        object.insert("status".into(), serde_json::Value::String("ok".into()));
+        object.insert("selected_profile_id".into(), serde_json::Value::String(id.into()));
+        object.insert(
+            "applied_profile_id".into(),
+            applied_profile_id.map_or(serde_json::Value::Null, serde_json::Value::String),
+        );
+        object.insert("apply_state".into(), serde_json::Value::String("pending".into()));
+        object.insert("science_running".into(), serde_json::Value::Bool(science_running));
+        object.insert("hint".into(), serde_json::Value::String(hint.into()));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_profile_preset_sync_inner_cmd, catalog_edit_from_parts, clear_profile_key_cmd,
-        clear_profile_key_cmd_with, delete_profile_cmd, delete_profile_cmd_with,
+        acknowledge_pending_notice_inner, apply_profile_preset_sync_inner_cmd, catalog_edit_from_parts, clear_profile_key_cmd,
+        clear_profile_key_cmd_with, clear_profile_key_p2b, delete_profile_cmd,
+        delete_profile_cmd_with, delete_profile_p2b,
+        update_profile_metadata_inner,
         persist_profile_candidate_inner, pin_active_profile_in_dir, require_preview_fingerprint,
         update_profile_connection_with,
     };
@@ -1422,6 +1692,89 @@ mod tests {
         assert!(error.contains("code=runtime_transaction_in_progress"));
         assert_eq!(fs::read(dir.join("config.json")).unwrap(), before);
         assert_eq!(fs::read(&backup_path).unwrap(), backup_before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn p2b_applied_profile_revoke_crash_matrix() {
+        for operation in ["clear", "delete"] {
+            let dir = tmpdir(&format!("p2b-revoke-{operation}"));
+            let cfg = Config {
+                profiles: vec![profile("applied", "sk-applied")],
+                active_id: "applied".into(),
+                runtime_binding: Some(binding("applied")),
+                ..Default::default()
+            };
+            config::save_to(&dir, &cfg).unwrap();
+            let state = state_with_proxy_identity();
+            let lifecycle = lifecycle::Lifecycle::new();
+            let result = if operation == "clear" {
+                clear_profile_key_p2b(&dir, &state, &lifecycle, "applied")
+            } else {
+                delete_profile_p2b(&dir, &state, &lifecycle, "applied")
+            };
+            let outcome = result.unwrap();
+            assert_eq!(outcome["schema_version"], 1, "{operation}");
+            assert_eq!(outcome["operation"], if operation == "clear" { "clear_applied_profile_key" } else { "delete_applied_profile" });
+            assert_eq!(outcome["disposition"], "completed");
+            let after = config::load_from(&dir).unwrap();
+            if operation == "clear" {
+                assert_eq!(after.profile_by_id("applied").unwrap().api_key, "");
+            } else {
+                assert!(after.profile_by_id("applied").is_none());
+            }
+            assert!(after.runtime_binding.is_none());
+            assert!(lock(&state).proxy.is_none());
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn p2b_intent_only_outcomes_have_zero_runtime_effect() {
+        let dir = tmpdir("p2b-intent-only");
+        let cfg = Config {
+            profiles: vec![profile("one", "sk-one"), profile("two", "sk-two")],
+            active_id: "one".into(),
+            runtime_binding: Some(binding("one")),
+            ..Default::default()
+        };
+        config::save_to(&dir, &cfg).unwrap();
+        let state = state_with_proxy_identity();
+        let result = pin_active_profile_in_dir(&dir, &state, "two").unwrap();
+        assert_eq!(result["schema_version"], 1);
+        assert_eq!(result["operation"], "set_active_profile");
+        assert_eq!(result["selected_profile_id"], "two");
+        assert_eq!(result["applied_profile_id"], "one");
+        assert_eq!(result["science_running"], false);
+        assert_eq!(lock(&state).launch_id, "launch-current");
+        assert!(config::read_config_mutation_operation_receipt(&dir)
+            .unwrap()
+            .is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn p2b_notice_create_metadata_writers_reject_open_fence() {
+        let dir = tmpdir("p2b-ordinary-writers");
+        let cfg = Config {
+            profiles: vec![profile("one", "sk-one")],
+            active_id: "one".into(),
+            ..Default::default()
+        };
+        config::save_to(&dir, &cfg).unwrap();
+        let fence = config::ConfigMutationOperationFence::begin(
+            config::new_id(),
+            "set_mode_official".into(),
+            "a".repeat(64),
+            config::config_mutation_config_fingerprint(&cfg).unwrap(),
+            None,
+        );
+        config::begin_config_mutation_operation(&dir, &cfg, &fence, br#"{"receipt":1}"#).unwrap();
+        assert!(update_profile_metadata_inner(&dir, "one", "changed", None).is_err());
+        assert!(acknowledge_pending_notice_inner(&dir, "notice").is_err());
+        assert!(config::read_config_mutation_operation_receipt(&dir)
+            .unwrap()
+            .is_some());
         let _ = fs::remove_dir_all(&dir);
     }
 

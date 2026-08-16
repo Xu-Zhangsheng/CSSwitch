@@ -527,6 +527,28 @@ pub(crate) fn prevalidate_science_ssh_bridge(
     system_ssh_hosts_for_home(&home)
 }
 
+/// Read-only admission for the P2-B settings receipt.  `true` means the
+/// bridge sidecar and its Config leaf are an exact CSSwitch-owned pair and
+/// may be removed by the operation; `false` means both are safely absent.
+/// Any unowned ssh_hosts or mismatched sidecar is foreign/unknown and fails
+/// closed before the receipt or an effect is published.
+pub(crate) fn preflight_science_ssh_bridge_cleanup(sandbox_home: &Path) -> Result<bool, String> {
+    reject_symlink_components(sandbox_home)?;
+    let data_dir = sandbox_home.join(".claude-science");
+    let config_path = data_dir.join("config.toml");
+    let state_path = data_dir.join(STATE_FILE);
+    reject_symlink_components(&config_path)?;
+    reject_symlink_components(&state_path)?;
+    let current = read_ssh_hosts(&read_document(&config_path)?)?;
+    let prior = read_state(&state_path)?;
+    match prior {
+        Some(state) if current_matches_owned_state(current.as_deref(), &state) => Ok(true),
+        Some(_) => Err("隔离 Science SSH bridge 状态与当前 config 不一致，拒绝猜测撤销".into()),
+        None if current.is_none() => Ok(false),
+        None => Err("隔离 Science config 含无 sidecar 证明的 ssh_hosts，拒绝猜测撤销".into()),
+    }
+}
+
 pub(crate) fn revoke_science_ssh_bridge(sandbox_home: &Path) -> Result<(), String> {
     let _authority_guard = crate::config::acquire_authority_writer_guard()
         .map_err(|error| format!("authority writer fence failed: {error}"))?;

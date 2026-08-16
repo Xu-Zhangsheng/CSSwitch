@@ -5,6 +5,12 @@ import {
   mergeCatalogCandidates,
   projectSimpleModelFields,
 } from "./model-catalog-state.js";
+import {
+  formatConfigMutationCommandError,
+  parseConfigIntentOutcome,
+  parseConfigMutationCommandError,
+  parseConfigMutationResponse,
+} from "./runtime-mutation-protocol.js";
 
 export function createProfileController({
   els,
@@ -53,6 +59,16 @@ const MODEL_FAMILY_ICONS = {
   siliconflow: { file: "siliconflow.svg", label: "硅基流动" },
   xiaomi: { file: "xiaomi.svg", label: "小米 MiMo" },
 };
+
+function mutationErrorText(error) {
+  try {
+    const parsed = parseConfigMutationCommandError(error);
+    if (parsed) return formatConfigMutationCommandError(parsed);
+  } catch (protocolError) {
+    return protocolError.message;
+  }
+  return String(error && error.message ? error.message : error);
+}
 
 function modelFamilyKey(profile = {}) {
   const templateId = String(profile.template_id || "").toLowerCase();
@@ -457,9 +473,13 @@ async function switchMode(m) {
   setBusy(true, { kind: "switchMode", id: m });
   startSwitchModeFeedback(m);
   try {
-    await call("set_mode", { mode: m });
+    const result = await call("set_mode", { mode: m });
+    const outcome = parseConfigMutationResponse(result);
+    if (!outcome || outcome.operation !== "set_mode" || outcome.disposition === "attention") {
+      throw new Error("模式切换结果协议不匹配。");
+    }
   } catch (e) {
-    setMsg("切换模式失败：" + e, "err");
+    setMsg("切换模式失败：" + mutationErrorText(e), "err");
     setBusy(false);
     await getSkillPage()?.refreshIfLoaded();
     return;
@@ -515,7 +535,11 @@ async function persistRuntimeSettings() {
   setBusy(true, { kind: "ports" });
   startPortSaveFeedback(changed);
   try {
-    await call("set_settings", { cfg: { proxy_port: p, sandbox_port: s, reuse_system_ssh: reuseSystemSsh } });
+    const result = await call("set_settings", { cfg: { proxy_port: p, sandbox_port: s, reuse_system_ssh: reuseSystemSsh } });
+    const outcome = parseConfigMutationResponse(result);
+    if (!outcome || !["set_settings", "set_settings_destructive"].includes(outcome.operation) || outcome.disposition === "attention") {
+      throw new Error("运行设置结果协议不匹配。");
+    }
     getConfigState().proxy_port = p;
     getConfigState().sandbox_port = s;
     getConfigState().reuse_system_ssh = reuseSystemSsh;
@@ -537,7 +561,7 @@ async function persistRuntimeSettings() {
     els.proxyPort.value = getConfigState().proxy_port;
     els.sandboxPort.value = getConfigState().sandbox_port;
     els.reuseSystemSsh.checked = getConfigState().reuse_system_ssh;
-    setMsg(String(e), "err");
+    setMsg(mutationErrorText(e), "err");
   } finally {
     setBusy(false);
     await getSkillPage()?.refreshIfLoaded();
@@ -1020,6 +1044,8 @@ async function connSave() {
   startSaveConnectionFeedback(p.id, selected);
   try {
     const r = await call("update_profile_connection", args);
+    const intent = parseConfigIntentOutcome(r);
+    if (!intent || intent.operation !== "update_profile_connection") throw new Error("连接保存结果协议不匹配。");
     els.connKey.value = "";
     await loadConfigAfterCommit();
     if (r && (r.status === "error" || r.committed === false)) {
@@ -1057,7 +1083,10 @@ async function doClearKey(id) {
   setBusy(true);
   setMsg("清除 key 中…");
   try {
-    await call("clear_profile_key", { id });
+    const outcome = parseConfigMutationResponse(await call("clear_profile_key", { id }));
+    if (!outcome || !["clear_profile_key", "clear_applied_profile_key"].includes(outcome.operation) || outcome.disposition === "attention") {
+      throw new Error("清除 key 结果协议不匹配。");
+    }
     await loadConfigAfterCommit();
     setMsg(
       wasApplied
@@ -1068,7 +1097,7 @@ async function doClearKey(id) {
       "ok"
     );
   } catch (e) {
-    setMsg(e && e.configCommitted ? committedRefreshMessage("清除 key", e) : "清除失败：" + e, "err");
+    setMsg(e && e.configCommitted ? committedRefreshMessage("清除 key", e) : "清除失败：" + mutationErrorText(e), "err");
   } finally {
     setBusy(false);
     await runtime.refreshStatus();
@@ -1114,7 +1143,10 @@ async function doDelete(id) {
   setBusy(true);
   setMsg("删除中…");
   try {
-    await call("delete_profile", { id });
+    const outcome = parseConfigMutationResponse(await call("delete_profile", { id }));
+    if (!outcome || !["delete_profile", "delete_applied_profile"].includes(outcome.operation) || outcome.disposition === "attention") {
+      throw new Error("删除配置结果协议不匹配。");
+    }
     await loadConfigAfterCommit();
     setMsg(
       wasApplied
@@ -1125,7 +1157,7 @@ async function doDelete(id) {
       "ok"
     );
   } catch (e) {
-    setMsg(e && e.configCommitted ? committedRefreshMessage("删除配置", e) : "删除失败：" + e, "err");
+    setMsg(e && e.configCommitted ? committedRefreshMessage("删除配置", e) : "删除失败：" + mutationErrorText(e), "err");
   } finally {
     setBusy(false);
     await runtime.refreshStatus();
@@ -1148,6 +1180,8 @@ async function activate(id) {
   startActivateFeedback(id);
   try {
     const r = await call("set_active_profile", { id });
+    const intent = parseConfigIntentOutcome(r);
+    if (!intent || intent.operation !== "set_active_profile") throw new Error("当前选择结果协议不匹配。");
     if (r && r.committed) {
       runtime.hideHistoryRecovery();
       await loadConfigAfterCommit();

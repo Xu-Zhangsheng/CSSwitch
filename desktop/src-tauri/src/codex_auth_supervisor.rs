@@ -31,6 +31,8 @@ pub(crate) struct OperationSnapshot {
     pub(crate) started_at_ms: i64,
     pub(crate) updated_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) config_mutation_operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<OperationErrorView>,
 }
 
@@ -53,6 +55,7 @@ impl OperationSnapshot {
             state: "starting".into(),
             started_at_ms: now,
             updated_at_ms: now,
+            config_mutation_operation_id: None,
             error: None,
         }
     }
@@ -485,6 +488,36 @@ impl CodexAuthSupervisor {
             operation.snapshot.state = state.to_string();
             operation.snapshot.updated_at_ms = crate::config::now_ms();
             operation.snapshot.error = None;
+            operation.snapshot.clone()
+        };
+        inner.last_snapshot = Some(snapshot.clone());
+        self.cancel_changed.notify_all();
+        Ok(snapshot)
+    }
+
+    pub(crate) fn attach_config_mutation_operation(
+        &self,
+        operation_id: &str,
+        config_mutation_operation_id: &str,
+    ) -> Result<OperationSnapshot, String> {
+        if config_mutation_operation_id.len() != 32
+            || !config_mutation_operation_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err("Config mutation operation ID 非法。".into());
+        }
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let snapshot = {
+            let operation = inner
+                .active_login
+                .as_mut()
+                .filter(|operation| operation.snapshot.operation_id == operation_id)
+                .ok_or_else(|| "Codex 登录 operation 已失效。".to_string())?;
+            operation.snapshot.config_mutation_operation_id =
+                Some(config_mutation_operation_id.to_string());
+            operation.snapshot.sequence = operation.snapshot.sequence.saturating_add(1);
+            operation.snapshot.updated_at_ms = crate::config::now_ms();
             operation.snapshot.clone()
         };
         inner.last_snapshot = Some(snapshot.clone());

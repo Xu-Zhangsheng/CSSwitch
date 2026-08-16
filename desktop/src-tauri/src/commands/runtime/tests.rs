@@ -9652,6 +9652,7 @@ fn set_mode_rejects_config_commit_when_gateway_stop_is_uncertain() {
     )
     .unwrap();
     let config_before = fs::read(config_dir.join("config.json")).unwrap();
+    let config_authority_before = config::load_from(&config_dir).unwrap();
     let child = std::process::Command::new("/bin/sleep")
         .arg("30")
         .spawn()
@@ -9686,10 +9687,13 @@ fn set_mode_rejects_config_commit_when_gateway_stop_is_uncertain() {
     assert!(result
         .as_ref()
         .is_err_and(|error| error.contains("未切换到官方模式")));
-    assert_eq!(
-        fs::read(config_dir.join("config.json")).unwrap(),
-        config_before
-    );
+    let current = config::load_from(&config_dir).unwrap();
+    assert_eq!(current.without_config_mutation_operation_fence(), config_authority_before);
+    assert!(current.config_mutation_operation_fence().unwrap().is_some());
+    assert!(config::read_config_mutation_operation_receipt(&config_dir)
+        .unwrap()
+        .is_some());
+    assert_ne!(fs::read(config_dir.join("config.json")).unwrap(), config_before);
     let cleanup = lock(&state).rejected_gateway_candidates.clone();
     assert_eq!(cleanup.owned_pids(), vec![child_pid]);
     cleanup
@@ -9953,6 +9957,7 @@ fn set_settings_rejects_config_commit_when_gateway_stop_is_uncertain() {
     )
     .unwrap();
     let config_before = fs::read(config_dir.join("config.json")).unwrap();
+    let config_authority_before = config::load_from(&config_dir).unwrap();
     let child = std::process::Command::new("/bin/sleep")
         .arg("30")
         .spawn()
@@ -9994,10 +9999,13 @@ fn set_settings_rejects_config_commit_when_gateway_stop_is_uncertain() {
     assert!(result
         .as_ref()
         .is_err_and(|error| error.contains("设置未更改")));
-    assert_eq!(
-        fs::read(config_dir.join("config.json")).unwrap(),
-        config_before
-    );
+    let current = config::load_from(&config_dir).unwrap();
+    assert_eq!(current.without_config_mutation_operation_fence(), config_authority_before);
+    assert!(current.config_mutation_operation_fence().unwrap().is_some());
+    assert!(config::read_config_mutation_operation_receipt(&config_dir)
+        .unwrap()
+        .is_some());
+    assert_ne!(fs::read(config_dir.join("config.json")).unwrap(), config_before);
     let cleanup = lock(&state).rejected_gateway_candidates.clone();
     assert_eq!(cleanup.owned_pids(), vec![child_pid]);
     cleanup
@@ -10629,4 +10637,37 @@ fn isolated_r0_d_lifecycle_command_contract() {
     }
 
     fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn p2b_boot_dual_receipt_conflict_fails_closed() {
+    let dir = tmpdir("p2b-boot-dual-receipt");
+    let mut cfg = Config {
+        experimental_codex_enabled: true,
+        ..Default::default()
+    };
+    let before = config::codex_disable_config_fingerprint(&cfg).unwrap();
+    let mut after = cfg.clone();
+    after.experimental_codex_enabled = false;
+    let after_fingerprint = config::codex_disable_config_fingerprint(&after).unwrap();
+    cfg.extra.insert(
+        "codex_disable_operation".into(),
+        serde_json::json!({
+            "schema_version": 1,
+            "operation_id": "11".repeat(16),
+            "intent_digest": "22".repeat(32),
+            "before_config_fingerprint": before,
+            "after_config_fingerprint": after_fingerprint,
+        }),
+    );
+    config::save_to(&dir, &cfg).unwrap();
+    fs::write(dir.join("codex-disable-operation.v1.json"), b"p2a").unwrap();
+    fs::write(
+        dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE),
+        b"p2b",
+    )
+    .unwrap();
+    let attention = super::config_mutation::boot_recover(&dir).unwrap();
+    assert_eq!(attention.unwrap()["cause"], "p2a_p2b_mutual_exclusion");
+    let _ = fs::remove_dir_all(&dir);
 }

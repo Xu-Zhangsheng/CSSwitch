@@ -1,0 +1,95 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-P2B-MUTATION-RECEIPTS",
+    "version": "v0.8.4-dev",
+    "title": "Durabilize non-one-click destructive mutation receipts",
+    "summary": "Implements the bounded P2-B source slice for mode, settings, applied-profile revoke, Codex authentication, and Codex network mutations. The Desktop now uses one credential-free config-mutation-operation.v1 receipt with a sibling exact Config fence, bounded per-effect checkpoints, terminal clearing tombstone, and fail-closed boot recovery; intent-only profile surfaces return typed outcomes without claiming a receipt. Codex login additionally persists inert sidecar identity and matching start authorization before network work. P2-A, one-click/history journals, credentials, real providers, installed artifacts, signing, and release remain separate evidence boundaries.",
+    "status": "active",
+    "owner": "runtime-transaction",
+    "changed_paths": [
+      "desktop/gateway/src/codex_auth/cli.rs",
+      "desktop/gateway/src/codex_auth/login_async.rs",
+      "desktop/src-tauri/src/codex_auth_supervisor.rs",
+      "desktop/src-tauri/src/commands/codex.rs",
+      "desktop/src-tauri/src/commands/profiles.rs",
+      "desktop/src-tauri/src/commands/runtime.rs",
+      "desktop/src-tauri/src/commands/runtime/config_mutation.rs",
+      "desktop/src-tauri/src/commands/runtime/lifecycle.rs",
+      "desktop/src-tauri/src/commands/runtime/one_click.rs",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "desktop/src-tauri/src/config.rs",
+      "desktop/src-tauri/src/lib.rs",
+      "desktop/src-tauri/src/runtime/profile.rs",
+      "desktop/src-tauri/src/runtime/settings.rs",
+      "desktop/src-tauri/src/runtime/ssh_bridge.rs",
+      "desktop/src/codex-controller.js",
+      "desktop/src/preview-adapter.js",
+      "desktop/src/profile-controller.js",
+      "desktop/src/runtime-mutation-protocol.js",
+      "docs/architecture/desktop-control-plane.md",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/next/CHG-P2B-MUTATION-RECEIPTS.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/run-frontend.sh",
+      "test/runtime_mutation_protocol.test.mjs",
+      "test/test_runtime_mutation_inventory.py",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-RUST-DESKTOP",
+        "SUITE-RUST-GATEWAY",
+        "SUITE-MJS-FRONTEND"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P1",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "exact P2-A source candidate 09cbc686c61228eba592475dec6e9e327658b4a2 is the frozen implementation base",
+        "credential-free receipt and Config-fence unit tests cover bounded size, no-clobber CAS, clearing tombstone, mutual exclusion, orphan recovery, receipt-only corruption, and ordinary-writer blocking",
+        "runtime/profile/Codex tests cover applied versus intent-only outcomes, inert auth sidecar identity, matching start authorization, generation references, logout terminality, and dual-receipt boot conflict",
+        "frontend and preview tests parse only safe typed envelopes and reject attention or malformed responses",
+        "no artifact, installed App, live provider, live Science, credentials, signing, notarization, or public release evidence is claimed"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

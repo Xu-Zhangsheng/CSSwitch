@@ -25,15 +25,19 @@ use crate::runtime::science::{
     ScienceHostAdapter, SCIENCE_DOWNLOAD_URL,
 };
 use crate::runtime::settings::{
-    remove_managed_sandbox_ssh_stub, system_ssh_config_path, validate_runtime_ports,
+    preflight_managed_sandbox_ssh_stub_cleanup, remove_managed_sandbox_ssh_stub,
+    system_ssh_config_path, validate_runtime_ports,
 };
-use crate::runtime::ssh_bridge::{revoke_science_ssh_bridge, system_ssh_hosts};
+use crate::runtime::ssh_bridge::{
+    preflight_science_ssh_bridge_cleanup, revoke_science_ssh_bridge, system_ssh_hosts,
+};
 use crate::runtime::system::open_in_browser;
 use crate::{
     config, lock, proc, run_blocking, run_blocking_typed, AppState, SharedAppState, SharedLifecycle,
 };
 
 mod actions;
+pub(crate) mod config_mutation;
 mod gateway;
 mod lifecycle;
 mod one_click;
@@ -60,7 +64,7 @@ pub(crate) async fn set_mode(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     mode: String,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     lifecycle::set_mode_command(app, state, lifecycle, mode).await
 }
 
@@ -76,7 +80,7 @@ pub(crate) async fn set_settings(
     state: State<'_, SharedAppState>,
     lifecycle: State<'_, SharedLifecycle>,
     cfg: UiSettings,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     lifecycle::set_settings_command(app, state, lifecycle, cfg).await
 }
 

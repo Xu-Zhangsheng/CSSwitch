@@ -116,7 +116,7 @@ let mockCodexOperation = null;
 function mockMask(k) { return k ? "••••" + String(k).slice(-4) : ""; }
 function mockEnsureCodexProfile() {
   const existing = mockStore.profiles.find((profile) => profile.template_id === "codex" && profile.credential_source === "csswitch_oauth");
-  if (existing) return { disposition: "existing", profile_id: existing.id };
+  if (existing) return { ...mockIntentOutcome("codex_ensure_profile", "existing"), disposition: "existing", profile_id: existing.id };
   const id = "p-codex-login";
   mockStore.profiles.push({
     id, name: "Codex（实验）", template_id: "codex", category: "experimental",
@@ -125,10 +125,32 @@ function mockEnsureCodexProfile() {
     capabilities: MOCK_CODEX_CAPABILITIES, icon: "custom", icon_color: "#111827",
     website_url: "https://developers.openai.com/codex/", sort_index: mockStore.profiles.length + 1, notes: "",
   });
-  return { disposition: "created", profile_id: id };
+  return { ...mockIntentOutcome("codex_ensure_profile", "created", { selected_profile_id: null, applied_profile_id: null }), disposition: "created", profile_id: id };
+}
+function mockIntentOutcome(operation, disposition, extra = {}) {
+  return {
+    schema_version: 1,
+    operation,
+    intent_id: "abcdef0123456789abcdef0123456789",
+    disposition,
+    config_state: disposition === "no_change" ? "unchanged" : "committed",
+    validation: "accepted",
+    science_running: false,
+    ...extra,
+  };
 }
 export function mockInvoke(cmd, args) {
   args = args || {};
+  const mockIntentOutcome = (operation, disposition, extra = {}) => ({
+    schema_version: 1,
+    operation,
+    intent_id: "abcdef0123456789abcdef0123456789",
+    disposition,
+    config_state: disposition === "no_change" ? "unchanged" : "committed",
+    validation: "accepted",
+    science_running: false,
+    ...extra,
+  });
   switch (cmd) {
     case "get_config":
       if (mockStore.fail_next_get_config) {
@@ -196,7 +218,7 @@ export function mockInvoke(cmd, args) {
       }
       if (args.key) p.key = mockMask(args.key);
       if (mockStore.active_id === args.id) mockStore.selection_pending = true;
-      return Promise.resolve({ validated: true });
+      return Promise.resolve(mockIntentOutcome("update_profile_connection", "committed", { validated: true, committed: true, status: "ok" }));
     }
     case "clear_profile_key": {
       const p = mockStore.profiles.find((x) => x.id === args.id);
@@ -207,7 +229,7 @@ export function mockInvoke(cmd, args) {
       } else if (mockStore.active_id === args.id) {
         mockStore.selection_pending = true;
       }
-      return Promise.resolve(null);
+      return Promise.resolve(mockIntentOutcome("clear_profile_key", "committed", { committed: true, status: "ok" }));
     }
     case "delete_profile":
       mockStore.profiles = mockStore.profiles.filter((x) => x.id !== args.id);
@@ -215,7 +237,7 @@ export function mockInvoke(cmd, args) {
       if (mockStore.applied_profile_id === args.id) mockStore.applied_profile_id = null;
       mockStore.selection_pending = !!mockStore.active_id &&
         mockStore.active_id !== mockStore.applied_profile_id;
-      return Promise.resolve(null);
+      return Promise.resolve(mockIntentOutcome("delete_profile", "committed", { committed: true, status: "ok" }));
     case "set_active_profile": {
       const p = mockStore.profiles.find((x) => x.id === args.id);
       if (!p) return Promise.reject("找不到 profile：" + args.id);
@@ -223,6 +245,7 @@ export function mockInvoke(cmd, args) {
         mockStore.active_id = args.id;
         mockStore.selection_pending = true;
         return {
+          ...mockIntentOutcome("set_active_profile", "committed", { selected_profile_id: args.id, applied_profile_id: mockStore.applied_profile_id }),
           committed: true,
           status: "ok",
           selected_profile_id: args.id,
@@ -311,7 +334,7 @@ export function mockInvoke(cmd, args) {
         source: custom ? "custom" : "direct",
         proxy_scheme: custom ? String(args.settings.proxy_url || "").split(":", 1)[0] : null,
       };
-      return Promise.resolve({ mode: args.settings.mode, ...mockStore.codex_network_resolved, restarted: false });
+      return Promise.resolve({ schema_version: 1, operation_id: "abcdef0123456789abcdef0123456789", operation: "set_codex_network", disposition: "completed", config_state: "after", runtime_state: "stopped", recovery_state: "not_needed", mode: args.settings.mode, ...mockStore.codex_network_resolved, restarted: false });
     }
     case "codex_downgrade_preview": {
       const profiles = mockStore.profiles.filter((p) => p.credential_source === "csswitch_oauth");
@@ -325,10 +348,10 @@ export function mockInvoke(cmd, args) {
         mockStore.sandbox_port = args.cfg.sandbox_port;
         mockStore.reuse_system_ssh = !!args.cfg.reuse_system_ssh;
       }
-      return Promise.resolve(null);
+      return Promise.resolve(mockIntentOutcome("set_settings", "committed"));
     case "set_mode":
       mockStore.mode = args.mode;
-      return Promise.resolve(null);
+      return Promise.resolve(mockIntentOutcome("set_mode", "committed"));
     case "one_click_login":
       mockStore.applied_profile_id = mockStore.active_id || null;
       mockStore.selection_pending = false;

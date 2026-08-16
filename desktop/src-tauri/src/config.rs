@@ -45,6 +45,13 @@ const CODEX_DISABLE_OPERATION_RECEIPT_FILE: &str = "codex-disable-operation.v1.j
 const CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE: &str = ".codex-disable-operation.v1.clearing";
 const CODEX_DISABLE_OPERATION_FENCE_KEY: &str = "codex_disable_operation";
 const CODEX_DISABLE_OPERATION_FENCE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const CONFIG_MUTATION_OPERATION_RECEIPT_FILE: &str =
+    "config-mutation-operation.v1.json";
+pub(crate) const CONFIG_MUTATION_OPERATION_CLEARING_FILE: &str =
+    ".config-mutation-operation.v1.clearing";
+pub(crate) const CONFIG_MUTATION_OPERATION_FENCE_KEY: &str = "config_mutation_operation";
+const CONFIG_MUTATION_OPERATION_FENCE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const MAX_CONFIG_MUTATION_RECEIPT_BYTES: usize = 64 * 1024;
 
 #[cfg(test)]
 pub(crate) const PENDING_AUTHORITY_CLEANUP_MANIFEST_FILE: &str =
@@ -1697,6 +1704,169 @@ impl CodexDisableTerminalConfigImage {
     }
 }
 
+/// The small Config projection for the ordinary non-one-click mutation
+/// protocol.  The detailed receipt remains in the credential-free sidecar;
+/// this reference only fences cooperating Config writers and binds terminal
+/// cleanup to exact Config/receipt identities.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigMutationOperationFence {
+    pub(crate) schema_version: u32,
+    pub(crate) operation_id: String,
+    pub(crate) operation: String,
+    pub(crate) phase: String,
+    pub(crate) intent_digest: String,
+    pub(crate) before_config_fingerprint: String,
+    pub(crate) after_config_fingerprint: Option<String>,
+    pub(crate) terminal_receipt_digest: Option<String>,
+    pub(crate) config_state: Option<String>,
+    pub(crate) runtime_state: Option<String>,
+    pub(crate) auth_epoch: Option<String>,
+    pub(crate) auth_generation: Option<u64>,
+    pub(crate) auth_account_hash: Option<String>,
+}
+
+impl ConfigMutationOperationFence {
+    pub(crate) fn begin(
+        operation_id: String,
+        operation: String,
+        intent_digest: String,
+        before_config_fingerprint: String,
+        after_config_fingerprint: Option<String>,
+    ) -> Self {
+        Self {
+            schema_version: CONFIG_MUTATION_OPERATION_FENCE_SCHEMA_VERSION,
+            operation_id,
+            operation,
+            phase: "begin".into(),
+            intent_digest,
+            before_config_fingerprint,
+            after_config_fingerprint,
+            terminal_receipt_digest: None,
+            config_state: None,
+            runtime_state: None,
+            auth_epoch: None,
+            auth_generation: None,
+            auth_account_hash: None,
+        }
+    }
+
+    pub(crate) fn terminal(
+        &self,
+        receipt_digest: String,
+        config_state: &str,
+        runtime_state: &str,
+        auth_epoch: Option<String>,
+        auth_generation: Option<u64>,
+        auth_account_hash: Option<String>,
+    ) -> Self {
+        let mut terminal = self.clone();
+        terminal.phase = "terminal".into();
+        terminal.terminal_receipt_digest = Some(receipt_digest);
+        terminal.config_state = Some(config_state.into());
+        terminal.runtime_state = Some(runtime_state.into());
+        terminal.auth_epoch = auth_epoch;
+        terminal.auth_generation = auth_generation;
+        terminal.auth_account_hash = auth_account_hash;
+        terminal
+    }
+
+    fn valid_lower_hex(value: &str, length: usize) -> bool {
+        value.len() == length
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    }
+
+    pub(crate) fn validate(&self) -> io::Result<()> {
+        const OPERATIONS: &[&str] = &[
+            "set_mode_official",
+            "set_settings_destructive",
+            "codex_auth_start",
+            "codex_auth_logout",
+            "set_codex_network",
+            "clear_applied_profile_key",
+            "delete_applied_profile",
+        ];
+        let valid_state = |value: Option<&String>, allowed: &[&str]| {
+            value.is_none_or(|value| allowed.contains(&value.as_str()))
+        };
+        let base_valid = self.schema_version == CONFIG_MUTATION_OPERATION_FENCE_SCHEMA_VERSION
+            && Self::valid_lower_hex(&self.operation_id, 32)
+            && OPERATIONS.contains(&self.operation.as_str())
+            && matches!(self.phase.as_str(), "begin" | "terminal")
+            && Self::valid_lower_hex(&self.intent_digest, 64)
+            && Self::valid_lower_hex(&self.before_config_fingerprint, 64)
+            && self
+                .after_config_fingerprint
+                .as_deref()
+                .is_none_or(|value| Self::valid_lower_hex(value, 64))
+            && self.auth_epoch.as_deref().is_none_or(|value| {
+                value.len() <= 128
+                    && !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+            && self
+                .auth_account_hash
+                .as_deref()
+                .is_none_or(|value| Self::valid_lower_hex(value, 64))
+            && valid_state(
+                self.config_state.as_ref(),
+                &["before", "after", "unknown"],
+            )
+            && valid_state(
+                self.runtime_state.as_ref(),
+                &["preserved", "stopped", "restored", "unknown"],
+            );
+        if !base_valid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Config mutation operation fence identity/schema 非法",
+            ));
+        }
+        match self.phase.as_str() {
+            "begin" if self.terminal_receipt_digest.is_none()
+                && self.config_state.is_none()
+                && self.runtime_state.is_none() => Ok(()),
+            "terminal"
+                if self
+                    .terminal_receipt_digest
+                    .as_deref()
+                    .is_some_and(|value| Self::valid_lower_hex(value, 64))
+                    && self.config_state.is_some()
+                    && self.runtime_state.is_some() => Ok(()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Config mutation operation fence phase/terminal fields 非法",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfigMutationTerminalConfigImage {
+    Before,
+    After,
+}
+
+impl ConfigMutationTerminalConfigImage {
+    fn fingerprint<'a>(self, fence: &'a ConfigMutationOperationFence) -> Option<&'a str> {
+        match self {
+            Self::Before => Some(&fence.before_config_fingerprint),
+            Self::After => fence.after_config_fingerprint.as_deref(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfigMutationOrphanFenceRecovery {
+    None,
+    Cleared,
+    ActiveReceipt,
+    ConfigDrift,
+    Attention,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CodexDisableOrphanFenceRecovery {
     None,
@@ -1745,6 +1915,15 @@ pub(crate) fn require_no_runtime_transaction(cfg: &Config) -> Result<(), String>
             "code=codex_disable_operation_in_progress Codex disable operation 尚未结束；请先完成恢复或处理 attention。"
                 .into(),
         )
+    } else if cfg
+        .config_mutation_operation_fence()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        Err(
+            "code=config_mutation_operation_in_progress 普通配置变更尚未结束；请先完成恢复或处理 attention。"
+                .into(),
+        )
     } else if cfg.has_open_runtime_journal() {
         Err(
             "code=runtime_transaction_in_progress 运行时事务尚未结束；请先完成恢复或重试一键开始。"
@@ -1753,6 +1932,45 @@ pub(crate) fn require_no_runtime_transaction(cfg: &Config) -> Result<(), String>
     } else {
         Ok(())
     }
+}
+
+/// Admission helper for a P2-B owner that already holds the dedicated
+/// Config-mutation fence.  Ordinary writers must continue using
+/// `require_no_runtime_transaction`, which rejects every open sibling fence;
+/// only the exact owner may pass its own fence through the shared runtime
+/// admission check.
+pub(crate) fn require_no_runtime_transaction_for_mutation(
+    cfg: &Config,
+    expected: &ConfigMutationOperationFence,
+) -> Result<(), String> {
+    if cfg
+        .codex_disable_operation_fence()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err(
+            "code=codex_disable_operation_in_progress Codex disable operation 尚未结束；请先完成恢复或处理 attention."
+                .into(),
+        );
+    }
+    if cfg
+        .config_mutation_operation_fence()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(expected)
+    {
+        return Err(
+            "code=config_mutation_operation_in_progress Config mutation operation fence 已变化或缺失。"
+                .into(),
+        );
+    }
+    if cfg.has_open_runtime_journal() {
+        return Err(
+            "code=runtime_transaction_in_progress 运行时事务尚未结束；请先完成恢复或重试一键开始。"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 impl Config {
@@ -1792,6 +2010,44 @@ impl Config {
         self.extra.remove(CODEX_DISABLE_OPERATION_FENCE_KEY);
     }
 
+    pub(crate) fn config_mutation_operation_fence(
+        &self,
+    ) -> io::Result<Option<ConfigMutationOperationFence>> {
+        self.extra
+            .get(CONFIG_MUTATION_OPERATION_FENCE_KEY)
+            .map(|value| {
+                let fence: ConfigMutationOperationFence = serde_json::from_value(value.clone())
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Config mutation operation fence 无法解析：{error}"),
+                        )
+                    })?;
+                fence.validate()?;
+                Ok(fence)
+            })
+            .transpose()
+    }
+
+    pub(crate) fn without_config_mutation_operation_fence(&self) -> Self {
+        let mut normalized = self.clone();
+        normalized
+            .extra
+            .remove(CONFIG_MUTATION_OPERATION_FENCE_KEY);
+        normalized
+    }
+
+    fn set_config_mutation_operation_fence(&mut self, fence: &ConfigMutationOperationFence) {
+        self.extra.insert(
+            CONFIG_MUTATION_OPERATION_FENCE_KEY.into(),
+            serde_json::to_value(fence).expect("Config mutation operation fence is serializable"),
+        );
+    }
+
+    fn clear_config_mutation_operation_fence(&mut self) {
+        self.extra.remove(CONFIG_MUTATION_OPERATION_FENCE_KEY);
+    }
+
     pub fn has_open_runtime_journal(&self) -> bool {
         self.runtime_transaction.is_some() || self.runtime_compensation.is_some()
     }
@@ -1824,6 +2080,24 @@ pub(crate) fn codex_disable_config_fingerprint(config: &Config) -> io::Result<St
     })?;
     let mut digest = Sha256::new();
     digest.update(b"csswitch-codex-disable-config-v1\0");
+    digest.update(bytes);
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+/// Stable credential-free identity for P2-B ordinary mutation admission.
+/// The persistent P2-B fence is excluded so before/after images remain
+/// comparable while the fence is held; all secret-bearing profile/config
+/// fields are still covered by the digest and never copied into the receipt.
+pub(crate) fn config_mutation_config_fingerprint(config: &Config) -> io::Result<String> {
+    let normalized = config.without_config_mutation_operation_fence();
+    let bytes = serde_json::to_vec(&normalized).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("无法编码 Config mutation config fingerprint：{error}"),
+        )
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-config-mutation-config-v1\0");
     digest.update(bytes);
     Ok(format!("{:x}", digest.finalize()))
 }
@@ -2630,6 +2904,450 @@ pub(crate) fn clear_codex_disable_operation_receipt(
     }
     secure.unlink(CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE)?;
     secure.sync()
+}
+
+fn validate_config_mutation_receipt_size(bytes: &[u8]) -> io::Result<()> {
+    if bytes.is_empty() || bytes.len() > MAX_CONFIG_MUTATION_RECEIPT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Config mutation receipt 为空或超过 64 KiB 上限",
+        ));
+    }
+    Ok(())
+}
+
+fn read_config_mutation_operation_receipt_in(
+    secure: &SecureDir,
+) -> io::Result<Option<Vec<u8>>> {
+    let active = secure.read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)?;
+    let clearing = secure.read_regular(CONFIG_MUTATION_OPERATION_CLEARING_FILE)?;
+    if let Some(bytes) = active.as_deref() {
+        validate_config_mutation_receipt_size(bytes)?;
+    }
+    if let Some(bytes) = clearing.as_deref() {
+        validate_config_mutation_receipt_size(bytes)?;
+    }
+    match (active, clearing) {
+        (active, None) => Ok(active),
+        (None, Some(bytes)) => {
+            secure.rename(
+                CONFIG_MUTATION_OPERATION_CLEARING_FILE,
+                CONFIG_MUTATION_OPERATION_RECEIPT_FILE,
+            )?;
+            secure.sync()?;
+            if secure
+                .read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)?
+                .as_deref()
+                != Some(bytes.as_slice())
+            {
+                return Err(io::Error::other(
+                    "Config mutation receipt 清理恢复后身份不确定；已停止 mutation",
+                ));
+            }
+            Ok(Some(bytes))
+        }
+        (Some(_), Some(_)) => Err(io::Error::other(
+            "Config mutation receipt 与 clearing 记录同时存在；已保留并停止 mutation",
+        )),
+    }
+}
+
+/// Read the independent P2-B receipt through the secure Config directory.
+/// A recoverable clearing tombstone is resurrected before the bytes are
+/// returned, preserving the exact terminal record across a crash.
+pub(crate) fn read_config_mutation_operation_receipt(
+    dir: &Path,
+) -> io::Result<Option<Vec<u8>>> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    read_config_mutation_operation_receipt_in(&secure)
+}
+
+/// Fence-first P2-B admission.  The caller has already validated the typed
+/// receipt and effect graph; this function owns the secure Config/fence and
+/// sidecar publication seam.
+pub(crate) fn begin_config_mutation_operation(
+    dir: &Path,
+    expected_config: &Config,
+    fence: &ConfigMutationOperationFence,
+    receipt_bytes: &[u8],
+) -> io::Result<()> {
+    fence.validate()?;
+    if fence.phase != "begin" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config mutation begin 必须使用 begin fence",
+        ));
+    }
+    validate_config_mutation_receipt_size(receipt_bytes)?;
+    if expected_config.codex_disable_operation_fence()?.is_some()
+        || expected_config.config_mutation_operation_fence()?.is_some()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "P2-B begin 前已有互斥 operation fence",
+        ));
+    }
+    if config_mutation_config_fingerprint(expected_config)?
+        != fence.before_config_fingerprint
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config mutation begin before-image fingerprint 不匹配",
+        ));
+    }
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, true)?;
+    let mut current = load_from_secure(&secure)?;
+    if &current != expected_config {
+        return Err(io::Error::other(
+            "Config mutation begin config before-image 已变化",
+        ));
+    }
+    if current.codex_disable_operation_fence()?.is_some()
+        || current.config_mutation_operation_fence()?.is_some()
+    {
+        return Err(io::Error::other(
+            "Config mutation begin 发现互斥 operation fence",
+        ));
+    }
+    require_no_runtime_transaction(&current).map_err(io::Error::other)?;
+    if read_codex_disable_operation_receipt_in(&secure)?.is_some()
+        || read_config_mutation_operation_receipt_in(&secure)?.is_some()
+    {
+        return Err(io::Error::other(
+            "Config mutation begin 发现已有 receipt；拒绝覆盖",
+        ));
+    }
+    current.set_config_mutation_operation_fence(fence);
+    save_to_secure(&secure, &current)?;
+    let publish = atomic_write_named_bytes_if_absent_in(
+        &secure,
+        CONFIG_MUTATION_OPERATION_RECEIPT_FILE,
+        receipt_bytes,
+        |secure| secure.sync(),
+    );
+    if let Err(error) = publish {
+        let rollback = (|| {
+            let fenced = load_from_secure(&secure)?;
+            if fenced.config_mutation_operation_fence()?.as_ref() != Some(fence)
+                || config_mutation_config_fingerprint(&fenced)?
+                    != fence.before_config_fingerprint
+                || read_config_mutation_operation_receipt_in(&secure)?.is_some()
+            {
+                return Err(io::Error::other(
+                    "Config mutation receipt publish 失败后无法证明零 effect；保留 attention",
+                ));
+            }
+            let mut before = fenced;
+            before.clear_config_mutation_operation_fence();
+            save_to_secure(&secure, &before)
+        })();
+        return match rollback {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(io::Error::other(format!(
+                "Config mutation receipt publish 失败且 fence rollback 失败：{error}；{rollback_error}"
+            ))),
+        };
+    }
+    let reread = load_from_secure(&secure)?;
+    if reread.config_mutation_operation_fence()?.as_ref() != Some(fence)
+        || secure
+            .read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)?
+            .as_deref()
+            != Some(receipt_bytes)
+    {
+        return Err(io::Error::other(
+            "Config mutation fence/receipt 发布后 exact reread 不一致；保留 attention",
+        ));
+    }
+    Ok(())
+}
+
+/// The only P2-B Config write bypass.  It requires both the exact fence and
+/// exact current receipt bytes and cannot replace or remove the fence.
+pub(crate) fn update_config_mutation_operation<T, F>(
+    dir: &Path,
+    expected_fence: &ConfigMutationOperationFence,
+    expected_receipt: &[u8],
+    f: F,
+) -> Result<T, String>
+where
+    F: FnOnce(&mut Config) -> Result<(T, bool), String>,
+{
+    expected_fence.validate().map_err(|error| error.to_string())?;
+    let access = config_access();
+    ensure_config_access_open(&access).map_err(|error| error.to_string())?;
+    let (secure, _writer) = open_config_writer(dir, false).map_err(|error| error.to_string())?;
+    let mut current = load_from_secure(&secure).map_err(|error| error.to_string())?;
+    if current
+        .config_mutation_operation_fence()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(expected_fence)
+    {
+        return Err("Config mutation operation fence 已变化".into());
+    }
+    if secure
+        .regular_exists_allow_hardlinks(CONFIG_MUTATION_OPERATION_CLEARING_FILE)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("Config mutation receipt 尚有未裁决的 clearing 记录".into());
+    }
+    if secure
+        .read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)
+        .map_err(|error| error.to_string())?
+        .as_deref()
+        != Some(expected_receipt)
+    {
+        return Err("Config mutation receipt 已变化".into());
+    }
+    let (result, changed) = f(&mut current)?;
+    if current
+        .config_mutation_operation_fence()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(expected_fence)
+    {
+        return Err("Config mutation closure 不得改变 operation fence".into());
+    }
+    if changed {
+        save_to_secure(&secure, &current).map_err(|error| error.to_string())?;
+    }
+    Ok(result)
+}
+
+/// Exact-byte checkpoint for the durable receipt. It cannot create a
+/// replacement and cannot run while a clearing tombstone is unresolved.
+pub(crate) fn write_config_mutation_operation(
+    dir: &Path,
+    expected_fence: &ConfigMutationOperationFence,
+    bytes: &[u8],
+    expected_before: &[u8],
+) -> io::Result<()> {
+    expected_fence.validate()?;
+    validate_config_mutation_receipt_size(bytes)?;
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, false)?;
+    if secure.regular_exists_allow_hardlinks(CONFIG_MUTATION_OPERATION_CLEARING_FILE)? {
+        return Err(io::Error::other(
+            "Config mutation receipt 尚有未裁决的 clearing 记录",
+        ));
+    }
+    if load_from_secure(&secure)?
+        .config_mutation_operation_fence()?
+        .as_ref()
+        != Some(expected_fence)
+    {
+        return Err(io::Error::other("Config mutation operation fence 已变化"));
+    }
+    atomic_write_named_bytes_in(
+        &secure,
+        CONFIG_MUTATION_OPERATION_RECEIPT_FILE,
+        bytes,
+        Some(expected_before),
+        |secure| secure.sync(),
+    )
+}
+
+pub(crate) fn publish_config_mutation_terminal_fence(
+    dir: &Path,
+    expected_begin_fence: &ConfigMutationOperationFence,
+    terminal_fence: &ConfigMutationOperationFence,
+    terminal_receipt: &[u8],
+    terminal_image: ConfigMutationTerminalConfigImage,
+) -> io::Result<()> {
+    expected_begin_fence.validate()?;
+    terminal_fence.validate()?;
+    if expected_begin_fence.phase != "begin"
+        || terminal_fence.phase != "terminal"
+        || terminal_fence.operation_id != expected_begin_fence.operation_id
+        || terminal_fence.operation != expected_begin_fence.operation
+        || terminal_fence.intent_digest != expected_begin_fence.intent_digest
+        || (expected_begin_fence.after_config_fingerprint.is_some()
+            && terminal_fence.after_config_fingerprint
+                != expected_begin_fence.after_config_fingerprint)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config mutation terminal fence identity 不匹配",
+        ));
+    }
+    validate_config_mutation_receipt_size(terminal_receipt)?;
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, false)?;
+    if secure
+        .read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)?
+        .as_deref()
+        != Some(terminal_receipt)
+    {
+        return Err(io::Error::other(
+            "Config mutation terminal receipt 在 fence checkpoint 前变化",
+        ));
+    }
+    let mut current = load_from_secure(&secure)?;
+    if current.config_mutation_operation_fence()?.as_ref() != Some(expected_begin_fence) {
+        return Err(io::Error::other(
+            "Config mutation begin fence 在 terminal checkpoint 前变化",
+        ));
+    }
+    let expected_fingerprint = terminal_image.fingerprint(expected_begin_fence);
+    if expected_fingerprint.is_some_and(|expected| {
+        config_mutation_config_fingerprint(&current)
+            .map(|actual| actual != expected)
+            .unwrap_or(true)
+    }) {
+        return Err(io::Error::other(
+            "Config mutation terminal Config image 不匹配",
+        ));
+    }
+    current.set_config_mutation_operation_fence(terminal_fence);
+    save_to_secure(&secure, &current)?;
+    if load_from_secure(&secure)?.config_mutation_operation_fence()?.as_ref()
+        != Some(terminal_fence)
+    {
+        return Err(io::Error::other(
+            "Config mutation terminal fence exact reread 不一致",
+        ));
+    }
+    Ok(())
+}
+
+/// Ordered terminal cleanup: receipt -> terminal fence -> clearing -> unlink
+/// -> final exact terminal fence clear. A crash at any intermediate seam is
+/// left discoverable for the next boot and never clears a replacement.
+pub(crate) fn clear_config_mutation_operation(
+    dir: &Path,
+    expected_terminal_fence: &ConfigMutationOperationFence,
+    expected_terminal_receipt: &[u8],
+    terminal_image: ConfigMutationTerminalConfigImage,
+) -> io::Result<()> {
+    expected_terminal_fence.validate()?;
+    if expected_terminal_fence.phase != "terminal" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config mutation cleanup 需要 terminal fence",
+        ));
+    }
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = open_config_writer(dir, false)?;
+    let _ = read_config_mutation_operation_receipt_in(&secure)?;
+    let mut current = load_from_secure(&secure)?;
+    if current.config_mutation_operation_fence()?.as_ref() != Some(expected_terminal_fence) {
+        return Err(io::Error::other(
+            "Config mutation terminal fence 在 cleanup 前变化",
+        ));
+    }
+    if terminal_image
+        .fingerprint(expected_terminal_fence)
+        .is_some_and(|expected| {
+            config_mutation_config_fingerprint(&current)
+                .map(|actual| actual != expected)
+                .unwrap_or(true)
+        })
+    {
+        return Err(io::Error::other(
+            "Config mutation terminal Config image 在 cleanup 前变化",
+        ));
+    }
+    if secure
+        .read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)?
+        .as_deref()
+        != Some(expected_terminal_receipt)
+    {
+        return Err(io::Error::other(
+            "Config mutation receipt 在 cleanup 前变化；已保留当前记录",
+        ));
+    }
+    secure.rename(
+        CONFIG_MUTATION_OPERATION_RECEIPT_FILE,
+        CONFIG_MUTATION_OPERATION_CLEARING_FILE,
+    )?;
+    secure.sync()?;
+    if secure
+        .read_regular(CONFIG_MUTATION_OPERATION_CLEARING_FILE)?
+        .as_deref()
+        != Some(expected_terminal_receipt)
+    {
+        return Err(io::Error::other(
+            "Config mutation clearing 期间身份变化；保留 clearing 记录",
+        ));
+    }
+    secure.unlink(CONFIG_MUTATION_OPERATION_CLEARING_FILE)?;
+    secure.sync()?;
+
+    current = load_from_secure(&secure)?;
+    if current.config_mutation_operation_fence()?.as_ref() != Some(expected_terminal_fence)
+        || read_config_mutation_operation_receipt_in(&secure)?.is_some()
+    {
+        return Err(io::Error::other(
+            "Config mutation receipt 清理后 terminal fence 身份变化；保留 attention",
+        ));
+    }
+    current.clear_config_mutation_operation_fence();
+    save_to_secure(&secure, &current)
+}
+
+/// Boot-only convergence for a fence left without an active receipt. A begin
+/// fence is cleared only when the exact before-image proves that no effect
+/// could have started; a terminal fence is cleared only when its bounded
+/// terminal image still matches. All other states remain attention.
+pub(crate) fn recover_orphan_config_mutation_operation_fence(
+    dir: &Path,
+) -> io::Result<ConfigMutationOrphanFenceRecovery> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    let (secure, _writer) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(ConfigMutationOrphanFenceRecovery::None)
+        }
+        Err(error) => return Err(error),
+    };
+    let receipt = read_config_mutation_operation_receipt_in(&secure)?;
+    let mut current = load_from_secure(&secure)?;
+    let Some(fence) = current.config_mutation_operation_fence()? else {
+        return Ok(if receipt.is_some() {
+            ConfigMutationOrphanFenceRecovery::Attention
+        } else {
+            ConfigMutationOrphanFenceRecovery::None
+        });
+    };
+    if receipt.is_some() {
+        return Ok(ConfigMutationOrphanFenceRecovery::ActiveReceipt);
+    }
+    if fence.phase == "begin" {
+        if config_mutation_config_fingerprint(&current)? != fence.before_config_fingerprint {
+            return Ok(ConfigMutationOrphanFenceRecovery::Attention);
+        }
+    } else {
+        let Some(state) = fence.config_state.as_deref() else {
+            return Ok(ConfigMutationOrphanFenceRecovery::Attention);
+        };
+        let expected = match state {
+            "before" => fence.before_config_fingerprint.as_str(),
+            "after" => match fence.after_config_fingerprint.as_deref() {
+                Some(value) => value,
+                None => return Ok(ConfigMutationOrphanFenceRecovery::Attention),
+            },
+            _ => return Ok(ConfigMutationOrphanFenceRecovery::Attention),
+        };
+        if config_mutation_config_fingerprint(&current)? != expected {
+            return Ok(ConfigMutationOrphanFenceRecovery::ConfigDrift);
+        }
+    }
+    current.clear_config_mutation_operation_fence();
+    save_to_secure(&secure, &current)?;
+    Ok(ConfigMutationOrphanFenceRecovery::Cleared)
 }
 
 fn config_path(dir: &Path) -> PathBuf {
@@ -3702,7 +4420,14 @@ fn validate_profile_contracts(cfg: &Config) -> io::Result<()> {
             format!("只接受 canonical schema v{CURRENT_SCHEMA_VERSION}"),
         ));
     }
-    cfg.codex_disable_operation_fence()?;
+    let codex_disable_fence = cfg.codex_disable_operation_fence()?;
+    let config_mutation_fence = cfg.config_mutation_operation_fence()?;
+    if codex_disable_fence.is_some() && config_mutation_fence.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "P2-A 与 P2-B Config fence 不能同时存在",
+        ));
+    }
     let mut ids = BTreeSet::new();
     for reserved in [
         "schema_version",
@@ -3955,6 +4680,7 @@ pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
     if let Ok(current) = load_from_secure(&secure) {
         ensure_history_recovery_sibling_authority_unchanged(&current, cfg)?;
         ensure_codex_disable_sibling_authority_unchanged(&current, cfg)?;
+        ensure_config_mutation_sibling_authority_unchanged(&current, cfg)?;
     }
     save_to_secure(&secure, cfg)
 }
@@ -4001,6 +4727,18 @@ fn ensure_codex_disable_sibling_authority_unchanged(
     if current.codex_disable_operation_fence()?.is_some() && current != next {
         return Err(io::Error::other(
             "Codex disable operation 正在持有完整 Config authority；拒绝 sibling config writer",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_config_mutation_sibling_authority_unchanged(
+    current: &Config,
+    next: &Config,
+) -> io::Result<()> {
+    if current.config_mutation_operation_fence()?.is_some() && current != next {
+        return Err(io::Error::other(
+            "Config mutation operation 正在持有 Config authority；拒绝 sibling config writer",
         ));
     }
     Ok(())
@@ -4512,6 +5250,7 @@ pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     f(&mut cfg);
     ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)?;
     ensure_codex_disable_sibling_authority_unchanged(&current, &cfg)?;
+    ensure_config_mutation_sibling_authority_unchanged(&current, &cfg)?;
     #[cfg(test)]
     if CONFIG_UPDATE_COMMIT_FAILURE
         .lock()
@@ -4543,6 +5282,8 @@ where
         ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
         ensure_codex_disable_sibling_authority_unchanged(&current, &cfg)
+            .map_err(|error| error.to_string())?;
+        ensure_config_mutation_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
         #[cfg(test)]
         if CONFIG_UPDATE_COMMIT_FAILURE
@@ -4577,6 +5318,8 @@ where
         ensure_history_recovery_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
         ensure_codex_disable_sibling_authority_unchanged(&current, &cfg)
+            .map_err(|error| error.to_string())?;
+        ensure_config_mutation_sibling_authority_unchanged(&current, &cfg)
             .map_err(|error| error.to_string())?;
         let _ = write_rolling_backup_in(&secure);
         save_to_secure(&secure, &cfg).map_err(|error| error.to_string())?;
@@ -7265,6 +8008,192 @@ mod tests {
         assert_eq!(
             mask("sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaa1234").chars().count(),
             8
+        );
+    }
+
+    fn p2b_test_fence(cfg: &Config) -> ConfigMutationOperationFence {
+        ConfigMutationOperationFence::begin(
+            new_id(),
+            "set_mode_official".into(),
+            "a".repeat(64),
+            config_mutation_config_fingerprint(cfg).unwrap(),
+            None,
+        )
+    }
+
+    #[test]
+    fn p2b_receipt_bounds_no_clobber_and_clearing_matrix() {
+        let dir = tmpdir();
+        let cfg = Config::default();
+        save_to(&dir, &cfg).unwrap();
+        let fence = p2b_test_fence(&cfg);
+        begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt-one").unwrap();
+        assert!(begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt-two").is_err());
+        assert_eq!(
+            read_config_mutation_operation_receipt(&dir).unwrap().as_deref(),
+            Some(b"receipt-one".as_slice())
+        );
+        assert!(write_config_mutation_operation(
+            &dir,
+            &fence,
+            &vec![b'x'; MAX_CONFIG_MUTATION_RECEIPT_BYTES + 1],
+            b"receipt-one",
+        )
+        .is_err());
+        assert!(write_config_mutation_operation(&dir, &fence, b"replacement", b"stale").is_err());
+        assert_eq!(
+            read_config_mutation_operation_receipt(&dir).unwrap().as_deref(),
+            Some(b"receipt-one".as_slice())
+        );
+        let terminal = fence.terminal(
+            "b".repeat(64),
+            "before",
+            "preserved",
+            None,
+            None,
+            None,
+        );
+        publish_config_mutation_terminal_fence(
+            &dir,
+            &fence,
+            &terminal,
+            b"receipt-one",
+            ConfigMutationTerminalConfigImage::Before,
+        )
+        .unwrap();
+        clear_config_mutation_operation(
+            &dir,
+            &terminal,
+            b"receipt-one",
+            ConfigMutationTerminalConfigImage::Before,
+        )
+        .unwrap();
+        assert!(read_config_mutation_operation_receipt(&dir)
+            .unwrap()
+            .is_none());
+        assert!(load_from(&dir)
+            .unwrap()
+            .config_mutation_operation_fence()
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn p2b_fence_mutual_exclusion_with_p2a_and_runtime_journals() {
+        let dir = tmpdir();
+        let mut p2a = Config {
+            experimental_codex_enabled: true,
+            ..Default::default()
+        };
+        let before = codex_disable_config_fingerprint(&p2a).unwrap();
+        let mut after = p2a.clone();
+        after.experimental_codex_enabled = false;
+        let p2a_fence = CodexDisableOperationFence::new(
+            new_id(),
+            "c".repeat(64),
+            before,
+            codex_disable_config_fingerprint(&after).unwrap(),
+        );
+        p2a.set_codex_disable_operation_fence(&p2a_fence);
+        save_to(&dir, &p2a).unwrap();
+        let p2b_fence = p2b_test_fence(&p2a);
+        assert!(begin_config_mutation_operation(&dir, &p2a, &p2b_fence, b"p2b").is_err());
+
+        let journal_cfg = Config {
+            runtime_transaction: Some(
+                RuntimeTransactionV1 {
+                    transaction_id: "legacy-tx".into(),
+                    target_profile_id: "target".into(),
+                    stage: "stop_old_science".into(),
+                    previous_binding: None,
+                    previous_gateway: None,
+                }
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let journal_dir = tmpdir();
+        save_to(&journal_dir, &journal_cfg).unwrap();
+        let journal_fence = p2b_test_fence(&journal_cfg);
+        assert!(begin_config_mutation_operation(
+            &journal_dir,
+            &journal_cfg,
+            &journal_fence,
+            b"p2b"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn p2b_fence_first_orphan_and_receipt_only_corruption_matrix() {
+        let dir = tmpdir();
+        let cfg = Config::default();
+        save_to(&dir, &cfg).unwrap();
+        let fence = p2b_test_fence(&cfg);
+        begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt").unwrap();
+        fs::remove_file(dir.join(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap();
+        assert_eq!(
+            recover_orphan_config_mutation_operation_fence(&dir).unwrap(),
+            ConfigMutationOrphanFenceRecovery::Cleared
+        );
+
+        fs::write(
+            dir.join(CONFIG_MUTATION_OPERATION_RECEIPT_FILE),
+            b"receipt-only-corruption",
+        )
+        .unwrap();
+        assert_eq!(
+            recover_orphan_config_mutation_operation_fence(&dir).unwrap(),
+            ConfigMutationOrphanFenceRecovery::Attention
+        );
+        fs::remove_file(dir.join(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap();
+
+        let drift_fence = p2b_test_fence(&cfg);
+        let mut fenced = cfg.clone();
+        fenced.set_config_mutation_operation_fence(&drift_fence);
+        test_save_to_without_history_authority_guard(&dir, &fenced).unwrap();
+        let mut drifted = fenced.without_config_mutation_operation_fence();
+        drifted.pending_notice = Some("drifted".into());
+        // Keep the malformed state on disk only through the test seam; the
+        // recovery classifier must fail closed rather than clear the fence.
+        let mut drifted_with_fence = drifted.clone();
+        drifted_with_fence.set_config_mutation_operation_fence(&drift_fence);
+        test_save_to_without_history_authority_guard(&dir, &drifted_with_fence).unwrap();
+        assert_eq!(
+            recover_orphan_config_mutation_operation_fence(&dir).unwrap(),
+            ConfigMutationOrphanFenceRecovery::Attention
+        );
+    }
+
+    #[test]
+    fn p2b_open_fence_blocks_all_ordinary_config_writers_cross_process() {
+        let dir = tmpdir();
+        let cfg = Config::default();
+        save_to(&dir, &cfg).unwrap();
+        let fence = p2b_test_fence(&cfg);
+        begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt").unwrap();
+
+        let mut changed = cfg.clone();
+        changed.pending_notice = Some("ordinary-writer".into());
+        assert!(save_to(&dir, &changed).is_err());
+        assert!(update(&dir, |current| {
+            current.pending_notice = Some("ordinary-writer".into());
+        })
+        .is_err());
+        assert!(update_result(&dir, |current| {
+            current.pending_notice = Some("ordinary-writer".into());
+            Ok(((), true))
+        })
+        .is_err());
+        assert!(update_result_with_rolling_backup(&dir, |current| {
+            current.pending_notice = Some("ordinary-writer".into());
+            Ok(((), true))
+        })
+        .is_err());
+        assert!(
+            read_config_mutation_operation_receipt(&dir)
+                .unwrap()
+                .is_some()
         );
     }
 }

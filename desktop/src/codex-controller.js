@@ -8,6 +8,12 @@ import {
   parseCodexDisableCommandError,
 } from "./codex-disable-protocol.js";
 import {
+  formatConfigMutationCommandError,
+  parseConfigIntentOutcome,
+  parseConfigMutationCommandError,
+  parseConfigMutationOutcome,
+} from "./runtime-mutation-protocol.js";
+import {
   PREVIEW,
   completeMockCodexLogin,
   getMockCodexOperation,
@@ -45,6 +51,13 @@ function clearStaleCodexAuthState() {
 }
 
 function runtimeCommandErrorText(error) {
+  let mutationError;
+  try {
+    mutationError = parseConfigMutationCommandError(error);
+  } catch (protocolError) {
+    return protocolError.message;
+  }
+  if (mutationError) return formatConfigMutationCommandError(mutationError);
   let disableError;
   try {
     disableError = parseCodexDisableCommandError(error);
@@ -145,6 +158,9 @@ function parseCodexOperationSnapshot(value) {
   if (value.verification_url != null || value.user_code != null || value.expires_at_ms != null) {
     throw new Error("CSSwitch Codex 浏览器登录 operation 包含旧设备码字段。");
   }
+  if (value.config_mutation_operation_id != null && !/^[0-9a-f]{32}$/.test(String(value.config_mutation_operation_id))) {
+    throw new Error("CSSwitch Codex 登录 operation 缺少合法的 Config mutation operation ID。");
+  }
   const snap = {
     schema_version: 2,
     operation_id: String(value.operation_id),
@@ -153,6 +169,7 @@ function parseCodexOperationSnapshot(value) {
     state: value.state,
     started_at_ms: value.started_at_ms,
     updated_at_ms: value.updated_at_ms,
+    config_mutation_operation_id: value.config_mutation_operation_id ?? null,
     error: null,
   };
   if (value.error != null) {
@@ -343,7 +360,10 @@ async function saveCodexNetwork() {
   setMsg("正在校验 Codex 网络路线并停止受管 Codex 链路；保存后不会自动重启…");
   try {
     const result = await call("set_codex_network", { settings });
-    if (!result || result.mode !== settings.mode || result.restarted !== false) {
+    const mutationOutcome = parseConfigMutationOutcome(result);
+    if (!result || result.operation !== "set_codex_network" ||
+        (mutationOutcome && mutationOutcome.disposition === "attention") ||
+        result.mode !== settings.mode || result.restarted !== false) {
       throw new Error("Codex 网络设置响应不一致。");
     }
     getConfigState().codex_network = settings;
@@ -502,6 +522,8 @@ async function repairCodexProfile() {
   let disposition = null;
   try {
     const result = await call("codex_ensure_profile");
+    const intent = parseConfigIntentOutcome(result);
+    if (!intent || intent.operation !== "codex_ensure_profile") throw new Error("补建配置结果协议不匹配。");
     if (!result || !["created", "existing"].includes(result.disposition) ||
         typeof result.profile_id !== "string" || !result.profile_id || result.profile_id.length > 128) {
       throw new Error("补建配置响应协议不匹配。");
