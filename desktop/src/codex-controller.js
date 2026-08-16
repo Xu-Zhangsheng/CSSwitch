@@ -21,6 +21,81 @@ import {
 } from "./preview-adapter.js";
 import { call, listen } from "./ipc-client.js";
 
+const CODEX_TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
+const CODEX_OPERATION_STATES = new Set(["starting", "waiting", "exchanging", "committing", ...CODEX_TERMINAL_STATES]);
+const CODEX_ERROR_STAGES = new Set(["proxy_config", "browser_open", "callback_wait", "token_exchange", "refresh", "revoke", "credential_commit", "profile_ensure", "cancelled", "terminal"]);
+const CODEX_RESPONSE_KINDS = new Set(["json", "html", "empty", "other", "unknown"]);
+const CODEX_TRANSPORT_KINDS = new Set(["timeout", "dns_connect", "proxy_connect", "tls", "http", "unknown", "durable_receipt"]);
+
+export function parseCodexOperationSnapshot(value) {
+  if (!value || value.schema_version !== 2 || !/^[0-9a-f]{32}$/.test(String(value.operation_id || "")) ||
+      !Number.isSafeInteger(value.sequence) || value.sequence < 1 || value.method !== "browser" ||
+      !CODEX_OPERATION_STATES.has(value.state) || !Number.isSafeInteger(value.started_at_ms) || !Number.isSafeInteger(value.updated_at_ms)) {
+    throw new Error("CSSwitch Codex 登录 operation 协议不匹配。");
+  }
+  if (value.verification_url != null || value.user_code != null || value.expires_at_ms != null) {
+    throw new Error("CSSwitch Codex 浏览器登录 operation 包含旧设备码字段。");
+  }
+  if (value.config_mutation_operation_id != null && !/^[0-9a-f]{32}$/.test(String(value.config_mutation_operation_id))) {
+    throw new Error("CSSwitch Codex 登录 operation 缺少合法的 Config mutation operation ID。");
+  }
+  if (value.state !== "starting" && value.config_mutation_operation_id == null) {
+    throw new Error("CSSwitch Codex 登录进行中或终态缺少 Config mutation operation ID。");
+  }
+  if ((["failed", "cancelled"].includes(value.state) && value.error == null) ||
+      (!["failed", "cancelled"].includes(value.state) && value.error != null)) {
+    throw new Error("CSSwitch Codex 登录 operation state/error 结构不匹配。");
+  }
+  const snap = {
+    schema_version: 2,
+    operation_id: String(value.operation_id),
+    sequence: value.sequence,
+    method: value.method,
+    state: value.state,
+    started_at_ms: value.started_at_ms,
+    updated_at_ms: value.updated_at_ms,
+    config_mutation_operation_id: value.config_mutation_operation_id ?? null,
+    error: null,
+  };
+  if (value.error != null) {
+    const error = value.error;
+    if (!error || typeof error.code !== "string" || !CODEX_ERROR_STAGES.has(error.stage) || typeof error.retryable !== "boolean" ||
+        (error.upstream_status != null && (!Number.isSafeInteger(error.upstream_status) || error.upstream_status < 100 || error.upstream_status > 599)) ||
+        (error.response_kind != null && !CODEX_RESPONSE_KINDS.has(error.response_kind)) ||
+        (error.transport_kind != null && !CODEX_TRANSPORT_KINDS.has(error.transport_kind)) ||
+        (error.challenge_detected != null && typeof error.challenge_detected !== "boolean")) {
+      throw new Error("CSSwitch Codex 登录错误结构不匹配。");
+    }
+    const durableAttention = error.code === "config_mutation_attention";
+    if (durableAttention !== (error.transport_kind === "durable_receipt") ||
+        (durableAttention && (error.retryable || !new Set(["terminal", "profile_ensure"]).has(error.stage))) ||
+        (!durableAttention && error.stage === "terminal")) {
+      throw new Error("CSSwitch Codex 登录 durable terminal attention 结构不匹配。");
+    }
+    snap.error = {
+      code: error.code, stage: error.stage, retryable: error.retryable,
+      upstream_status: error.upstream_status ?? null,
+      response_kind: error.response_kind ?? null,
+      challenge_detected: error.challenge_detected ?? null,
+      transport_kind: error.transport_kind ?? null,
+    };
+  }
+  return snap;
+}
+
+export function codexOperationSnapshotTransitionAccepted(current, next, allowReplacement) {
+  if (current && current.operation_id === next.operation_id &&
+      current.config_mutation_operation_id != null &&
+      next.config_mutation_operation_id !== current.config_mutation_operation_id) {
+    throw new Error("CSSwitch Codex 登录 operation 的 Config mutation identity 被替换。");
+  }
+  if (current && current.operation_id !== next.operation_id && !allowReplacement &&
+      (!CODEX_TERMINAL_STATES.has(current.state) || next.started_at_ms < current.started_at_ms)) {
+    return false;
+  }
+  return !(current && current.operation_id === next.operation_id && next.sequence <= current.sequence);
+}
+
 export function createCodexController({
   els,
   getConfigState,
@@ -143,58 +218,6 @@ function refreshCodexProfileRepairState() {
   );
 }
 
-const CODEX_TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
-const CODEX_OPERATION_STATES = new Set(["starting", "waiting", "exchanging", "committing", ...CODEX_TERMINAL_STATES]);
-const CODEX_ERROR_STAGES = new Set(["proxy_config", "browser_open", "callback_wait", "token_exchange", "refresh", "revoke", "credential_commit", "profile_ensure", "cancelled"]);
-const CODEX_RESPONSE_KINDS = new Set(["json", "html", "empty", "other", "unknown"]);
-const CODEX_TRANSPORT_KINDS = new Set(["timeout", "dns_connect", "proxy_connect", "tls", "http", "unknown"]);
-
-function parseCodexOperationSnapshot(value) {
-  if (!value || value.schema_version !== 2 || !/^[0-9a-f]{32}$/.test(String(value.operation_id || "")) ||
-      !Number.isSafeInteger(value.sequence) || value.sequence < 1 || value.method !== "browser" ||
-      !CODEX_OPERATION_STATES.has(value.state) || !Number.isSafeInteger(value.started_at_ms) || !Number.isSafeInteger(value.updated_at_ms)) {
-    throw new Error("CSSwitch Codex 登录 operation 协议不匹配。");
-  }
-  if (value.verification_url != null || value.user_code != null || value.expires_at_ms != null) {
-    throw new Error("CSSwitch Codex 浏览器登录 operation 包含旧设备码字段。");
-  }
-  if (value.config_mutation_operation_id != null && !/^[0-9a-f]{32}$/.test(String(value.config_mutation_operation_id))) {
-    throw new Error("CSSwitch Codex 登录 operation 缺少合法的 Config mutation operation ID。");
-  }
-  if (value.state !== "starting" && value.config_mutation_operation_id == null) {
-    throw new Error("CSSwitch Codex 登录进行中或终态缺少 Config mutation operation ID。");
-  }
-  const snap = {
-    schema_version: 2,
-    operation_id: String(value.operation_id),
-    sequence: value.sequence,
-    method: value.method,
-    state: value.state,
-    started_at_ms: value.started_at_ms,
-    updated_at_ms: value.updated_at_ms,
-    config_mutation_operation_id: value.config_mutation_operation_id ?? null,
-    error: null,
-  };
-  if (value.error != null) {
-    const error = value.error;
-    if (!error || typeof error.code !== "string" || !CODEX_ERROR_STAGES.has(error.stage) || typeof error.retryable !== "boolean" ||
-        (error.upstream_status != null && (!Number.isSafeInteger(error.upstream_status) || error.upstream_status < 100 || error.upstream_status > 599)) ||
-        (error.response_kind != null && !CODEX_RESPONSE_KINDS.has(error.response_kind)) ||
-        (error.transport_kind != null && !CODEX_TRANSPORT_KINDS.has(error.transport_kind)) ||
-        (error.challenge_detected != null && typeof error.challenge_detected !== "boolean")) {
-      throw new Error("CSSwitch Codex 登录错误结构不匹配。");
-    }
-    snap.error = {
-      code: error.code, stage: error.stage, retryable: error.retryable,
-      upstream_status: error.upstream_status ?? null,
-      response_kind: error.response_kind ?? null,
-      challenge_detected: error.challenge_detected ?? null,
-      transport_kind: error.transport_kind ?? null,
-    };
-  }
-  return snap;
-}
-
 function codexOperationActive() {
   return !!(codexAuthOperation && !CODEX_TERMINAL_STATES.has(codexAuthOperation.state));
 }
@@ -215,6 +238,7 @@ function codexOperationErrorText(error) {
     auth_storage_error: "CSSwitch 无法安全保存 Codex 授权。",
     identity_mismatch: "安装包内 Gateway 与 Desktop 不匹配。",
     profile_ensure_failed: "授权已保存，但 Codex 配置尚未创建。无需重新登录，可直接补建配置。",
+    config_mutation_attention: "Codex 登录已停止，durable mutation 记录需要人工处理。",
   };
   let text = labels[error && error.code] || "Codex 登录未完成。";
   if (error && error.upstream_status) text += " 上游状态码 " + error.upstream_status + "。";
@@ -239,15 +263,7 @@ function renderCodexOperation() {
 
 function acceptCodexOperationSnapshot(raw, allowReplacement) {
   const next = parseCodexOperationSnapshot(raw);
-  if (codexAuthOperation && codexAuthOperation.operation_id === next.operation_id &&
-      codexAuthOperation.config_mutation_operation_id != null &&
-      next.config_mutation_operation_id !== codexAuthOperation.config_mutation_operation_id) {
-    throw new Error("CSSwitch Codex 登录 operation 的 Config mutation identity 被替换。");
-  }
-  if (codexAuthOperation && codexAuthOperation.operation_id !== next.operation_id && !allowReplacement) {
-    if (!CODEX_TERMINAL_STATES.has(codexAuthOperation.state) || next.started_at_ms < codexAuthOperation.started_at_ms) return;
-  }
-  if (codexAuthOperation && codexAuthOperation.operation_id === next.operation_id && next.sequence <= codexAuthOperation.sequence) return;
+  if (!codexOperationSnapshotTransitionAccepted(codexAuthOperation, next, allowReplacement)) return;
   codexAuthOperation = next;
   codexLoginStarting = false;
   renderCodexOperation();

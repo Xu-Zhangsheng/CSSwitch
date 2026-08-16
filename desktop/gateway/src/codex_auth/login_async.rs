@@ -142,6 +142,18 @@ impl LoginControl {
             Ok(())
         }
     }
+
+    pub fn wait_for_start_blocking(&self) -> bool {
+        while self.state.load(Ordering::Acquire) == CONTROL_WAITING_START {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        self.state.load(Ordering::Acquire) == CONTROL_RUNNING
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_awaiting_start(&self) -> bool {
+        self.state.load(Ordering::Acquire) == CONTROL_WAITING_START
+    }
 }
 
 #[derive(Clone)]

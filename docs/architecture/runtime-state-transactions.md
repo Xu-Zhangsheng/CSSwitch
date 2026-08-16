@@ -287,8 +287,9 @@ process-local handoff；durable journal 只保存 crash recovery 所需的最小
 把三类 runtime receipt 合并成一个全局事务。当前七个 operation 是
 `set_mode_official`、`set_settings_destructive`、`codex_auth_start`、`codex_auth_logout`、
 `set_codex_network`、`clear_applied_profile_key` 与 `delete_applied_profile`。普通 Config
-writer、P2-A journal 和运行时 journal 在 fence 打开时都 fail closed；只有持有精确 fence
-identity 的 scoped writer 能提交本次 mutation。
+writer、P2-A journal 和运行时 journal 在 receipt 或 fence 任一存在时都 fail closed；即使异常态
+只剩 receipt，backend admission 仍在同一 Config writer lock 内拒绝后续 mutation，不能靠普通
+command 清掉 boot attention。只有持有精确 fence identity 的 scoped writer 能提交本次 mutation。
 
 receipt 只保存脱敏的 operation id、intent/config fingerprint、runtime plan、bounded effect
 checkpoint、auth sidecar identity 与 terminal digest，不保存 token、API key、OAuth 内容、私有
@@ -297,10 +298,11 @@ exact CAS；成功终结的顺序是 terminal receipt、terminal fence、clearin
 unlink，最后清除 Config fence。中断、receipt/fence 不一致、Config drift、替换 owner 或
 cleanup 失败均保留 receipt/fence 并投影 `attention`，启动恢复不会猜测或静默清除。
 
-涉及 Codex auth start 时，sidecar 先以 inert 状态启动；只有匹配 operation id 与授权 digest
-的 `start_ack` 到达后才允许 network/OAuth flow。logout、network、mode/settings teardown
-和 applied-profile revoke 也在相应 runtime/auth effect 与 Config commit 之间写入 checkpoint，
-因此每个 crash window 都能停在可检查的 manual-recovery 边界。`set_active_profile`、
+每个真实 effect 都先以 exact CAS 持久化 `Pending -> InProgress` 和新的 `attempt_id`，成功后才执行；
+effect 返回后再 CAS 到 `Succeeded|Failed|Uncertain|Skipped`。任一 pre-effect 或 terminal checkpoint
+失败都保留 typed durable attention，不能降级成普通字符串成功/失败。涉及 Codex auth start 时，
+sidecar 先以 inert 状态启动；Gateway 必须先 flush 匹配 operation id 与授权 digest 的 `start_ack`，
+再线性化 start authorization，ack 之前不允许 network/OAuth flow。`set_active_profile`、
 `update_profile_connection` 与 `codex_ensure_profile` 是 intent-only typed outcome，不创建
 P2-B receipt，也不声称 runtime 已应用。
 

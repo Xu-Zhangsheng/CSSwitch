@@ -2944,18 +2944,37 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
         None,
     )
     .map_err(|error| RuntimeCommandError::Mutation(error))?;
-    let action =
-        prepare_codex_auth_mutation_with_fence(app, state, lifecycle, Some(operation.fence()))
-            .map_err(|error| {
-                let _ = operation.finish(
-                    "attention",
-                    "before",
-                    "unknown",
-                    Some("runtime_stop_failed"),
-                    config::ConfigMutationTerminalConfigImage::Before,
-                );
-                RuntimeCommandError::from(error)
-            })?;
+    let runtime_effects = operation.receipt().effects.len().saturating_sub(1);
+    for index in 0..runtime_effects {
+        operation
+            .checkpoint_effect_or_attention(
+                index,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "runtime_stop_checkpoint_failed",
+                "before",
+                "unknown",
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .map_err(RuntimeCommandError::Mutation)?;
+    }
+    let action = match prepare_codex_auth_mutation_with_fence(
+        app,
+        state,
+        lifecycle,
+        Some(operation.fence()),
+    ) {
+        Ok(action) => action,
+        Err(error) => {
+            return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                "runtime_stop_failed",
+                "before",
+                "unknown",
+                config::ConfigMutationTerminalConfigImage::Before,
+                error,
+            )))
+        }
+    };
     let mut index = 0usize;
     for (present, code) in [
         (science_effect, "stopped_science"),
@@ -2963,7 +2982,7 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
     ] {
         if present {
             operation
-                .checkpoint_effect(
+                .checkpoint_effect_or_attention(
                     index,
                     if action == AuthRuntimeAction::StopManagedCodex {
                         crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded
@@ -2975,12 +2994,27 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
                     } else {
                         "preserved_other_provider"
                     }),
+                    "runtime_stop_checkpoint_failed",
+                    "before",
+                    auth_runtime_terminal_state(action),
+                    config::ConfigMutationTerminalConfigImage::Before,
                 )
-                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+                .map_err(RuntimeCommandError::Mutation)?;
             index += 1;
         }
     }
     let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+    operation
+        .checkpoint_effect_or_attention(
+            index,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+            None,
+            "config_commit_checkpoint_failed",
+            "before",
+            auth_runtime_terminal_state(action),
+            config::ConfigMutationTerminalConfigImage::Before,
+        )
+        .map_err(RuntimeCommandError::Mutation)?;
     if let Err(error) = operation.update_config(move |cfg| {
         if config::config_mutation_config_fingerprint(cfg).map_err(|error| error.to_string())?
             != before_fingerprint
@@ -3003,12 +3037,16 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
         });
     }
     operation
-        .checkpoint_effect(
+        .checkpoint_effect_or_attention(
             index,
             crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
             Some("committed"),
+            "config_commit_checkpoint_failed",
+            "after",
+            auth_runtime_terminal_state(action),
+            config::ConfigMutationTerminalConfigImage::After,
         )
-        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+        .map_err(RuntimeCommandError::Mutation)?;
     let outcome = operation
         .finish(
             "completed",
@@ -3529,13 +3567,15 @@ fn spawn_codex_auth_sidecar_at(
         return Err("Codex 认证 HOME 必须是绝对路径。".into());
     }
     let executable_fingerprint = auth_sidecar_executable_fingerprint(binary)?;
+    let controlled_stream =
+        action.is_login() || (action == CodexAuthAction::Logout && operation_id.is_some());
     let mut command = Command::new(binary);
     command
         .arg("codex-auth")
         .arg(action.as_str())
         .env_clear()
         .env("HOME", home)
-        .stdin(if action.is_login() {
+        .stdin(if controlled_stream {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -3547,17 +3587,17 @@ fn spawn_codex_auth_sidecar_at(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    if action.is_login() {
+    if controlled_stream {
         let operation_id = operation_id
             .filter(|value| is_lower_hex(value, 32))
-            .ok_or_else(|| "Codex 登录 operation ID 非法。".to_string())?;
+            .ok_or_else(|| "Codex 认证 operation ID 非法。".to_string())?;
         command.env("CSSWITCH_CODEX_AUTH_OPERATION_ID", operation_id);
         command.env(
             "CSSWITCH_CODEX_AUTH_START_DIGEST",
             auth_start_authorization_digest(operation_id),
         );
     } else if operation_id.is_some() {
-        return Err("非登录 sidecar 不得携带 operation ID。".into());
+        return Err("只读 sidecar 不得携带 operation ID。".into());
     }
     if skip_revoke {
         if action != CodexAuthAction::Logout {
@@ -3579,7 +3619,7 @@ fn spawn_codex_auth_sidecar_at(
         return Err("Codex 认证 sidecar executable identity 已漂移。".into());
     }
     let stdin = child.stdin.take();
-    if action.is_login() && stdin.is_none() {
+    if controlled_stream && stdin.is_none() {
         stop_auth_child(&mut child);
         return Err("无法建立 Codex 认证 sidecar 取消通道。".into());
     }
@@ -3822,14 +3862,25 @@ fn send_start_to_sidecar(
 }
 
 fn wait_for_login_start_ack(
-    mut process: ManagedAuthProcess,
+    process: ManagedAuthProcess,
     operation_id: &str,
     authorization_digest: &str,
     supervisor: &CodexAuthSupervisor,
 ) -> Result<ManagedAuthProcess, String> {
-    if let Err(error) = supervisor.authorize_login_start(operation_id, || {
-        send_start_to_sidecar(&mut process.stdin, operation_id, authorization_digest)
-    }) {
+    wait_for_sidecar_start_ack(process, operation_id, authorization_digest, |stdin| {
+        supervisor.authorize_login_start(operation_id, || {
+            send_start_to_sidecar(stdin, operation_id, authorization_digest)
+        })
+    })
+}
+
+fn wait_for_sidecar_start_ack(
+    mut process: ManagedAuthProcess,
+    operation_id: &str,
+    authorization_digest: &str,
+    authorize: impl FnOnce(&mut Option<std::process::ChildStdin>) -> Result<(), String>,
+) -> Result<ManagedAuthProcess, String> {
+    if let Err(error) = authorize(&mut process.stdin) {
         stop_auth_child(&mut process.child);
         return Err(error);
     }
@@ -3837,11 +3888,12 @@ fn wait_for_login_start_ack(
     let mut pending = std::mem::take(&mut process.pending);
     let mut chunk = [0_u8; 8192];
     loop {
+        let mut output_eof = false;
         loop {
             match process.stdout.read(&mut chunk) {
                 Ok(0) => {
-                    stop_auth_child(&mut process.child);
-                    return Err("Codex 认证 sidecar 在启动授权前退出。".into());
+                    output_eof = true;
+                    break;
                 }
                 Ok(read) => {
                     pending.extend_from_slice(&chunk[..read]);
@@ -3888,6 +3940,10 @@ fn wait_for_login_start_ack(
             process.pending = pending;
             return Ok(process);
         }
+        if output_eof {
+            stop_auth_child(&mut process.child);
+            return Err("Codex 认证 sidecar 在匹配 start_ack 前退出。".into());
+        }
         match process.child.try_wait() {
             Ok(Some(_)) => {
                 stop_auth_child(&mut process.child);
@@ -3915,9 +3971,13 @@ fn wait_for_login_sidecar(
     mut on_progress: impl FnMut(&LoginSidecarEvent),
     mut on_cancel_ack: impl FnMut(&str),
 ) -> Result<Value, String> {
-    if !action.is_login() || !is_lower_hex(operation_id, 32) {
+    if !matches!(
+        action,
+        CodexAuthAction::LoginBrowser | CodexAuthAction::Logout
+    ) || !is_lower_hex(operation_id, 32)
+    {
         stop_auth_child(&mut process.child);
-        return Err("Codex 登录流式协议参数非法。".into());
+        return Err("Codex 认证流式协议参数非法。".into());
     }
     let deadline = Instant::now() + action.timeout();
     let mut pending = std::mem::take(&mut process.pending);
@@ -4047,9 +4107,32 @@ fn wait_for_login_sidecar(
                                     stop_auth_child(&mut process.child);
                                     return Err(error);
                                 }
-                                if !status.authenticated {
+                                let valid_success = match action {
+                                    CodexAuthAction::LoginBrowser => status.authenticated,
+                                    CodexAuthAction::Logout => {
+                                        !status.authenticated
+                                            && status.reason == "state_uncommitted"
+                                            && status.account_hash.is_none()
+                                            && status.expires_at.is_none()
+                                            && status.auth_epoch.is_some()
+                                            && status.auth_generation > 0
+                                    }
+                                    CodexAuthAction::Status => false,
+                                };
+                                if !valid_success {
                                     stop_auth_child(&mut process.child);
-                                    return Err("Codex 认证成功终态必须包含已登录状态。".into());
+                                    return Err(match action {
+                                        CodexAuthAction::LoginBrowser => {
+                                            "Codex 认证成功终态必须包含已登录状态。"
+                                        }
+                                        CodexAuthAction::Logout => {
+                                            "Codex logout 成功终态必须是 exact logged-out generation。"
+                                        }
+                                        CodexAuthAction::Status => {
+                                            "Codex 认证成功终态与 action 语义不匹配。"
+                                        }
+                                    }
+                                    .into());
                                 }
                                 terminal = Some(json!({
                                     "ok": true,
@@ -4283,40 +4366,57 @@ fn run_codex_logout_sidecar_p2b<R: tauri::Runtime>(
         Ok(route) => (route, false),
         Err(_) => (csswitch_codex_network::direct_route(), true),
     };
-    run_codex_logout_sidecar_at_with_identity(
+    let auth_operation_id = operation
+        .receipt()
+        .auth_operation
+        .as_ref()
+        .map(|auth| auth.auth_operation_id.clone())
+        .ok_or_else(|| CodexAuthCommandError::unavailable("auth_state_changed"))?;
+    let mut value = run_codex_logout_sidecar_at_with_identity(
         &binary,
         &production_home()
             .map_err(|_| CodexAuthCommandError::unavailable("sidecar_spawn_failed"))?,
         &route,
         skip_revoke,
         mutation,
+        Some(&auth_operation_id),
         |identity| checkpoint_logout_sidecar_start(operation, identity),
-    )
+    )?;
+    if skip_revoke {
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "warning".into(),
+                json!({"code": "revoke_skipped", "reason": "proxy_config_invalid"}),
+            );
+        }
+    }
+    Ok(value)
 }
 
 fn checkpoint_logout_sidecar_start(
     operation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
     identity: &crate::commands::runtime::config_mutation::AuthSidecarIdentity,
 ) -> Result<(), String> {
-    if !matches!(
-        operation
-            .receipt()
-            .effects
-            .get(2)
-            .map(|effect| &effect.kind),
-        Some(crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSidecar)
-    ) {
+    if !operation.receipt().effects.get(2).is_some_and(|effect| {
+        effect.kind
+            == crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSidecar
+            && effect.state
+                == crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress
+            && effect.attempt_id.is_some()
+    }) {
         return Err("Codex logout sidecar effect identity 不匹配".into());
     }
+    let start_digest = operation
+        .receipt()
+        .auth_operation
+        .as_ref()
+        .map(|auth| auth_start_authorization_digest(&auth.auth_operation_id))
+        .ok_or_else(|| "Codex logout auth operation identity 缺失".to_string())?;
     operation.update_receipt(|receipt| {
         if let Some(auth) = receipt.auth_operation.as_mut() {
-            auth.state = "registered".into();
+            auth.state = "start_prepared".into();
+            auth.start_authorization_digest = Some(start_digest);
             auth.sidecar = Some(identity.clone());
-        }
-        if let Some(effect) = receipt.effects.get_mut(2) {
-            effect.state =
-                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress;
-            effect.outcome_code = Some("identity_persisted".into());
         }
     })
 }
@@ -4334,6 +4434,7 @@ fn run_codex_logout_sidecar_at(
         route,
         skip_revoke,
         mutation,
+        None,
         |_| Ok(()),
     )
 }
@@ -4344,6 +4445,7 @@ fn run_codex_logout_sidecar_at_with_identity(
     route: &csswitch_codex_network::ResolvedCodexNetworkRoute,
     skip_revoke: bool,
     mutation: &CodexMutationLease,
+    operation_id: Option<&str>,
     on_identity: impl FnOnce(
         &crate::commands::runtime::config_mutation::AuthSidecarIdentity,
     ) -> Result<(), String>,
@@ -4353,7 +4455,7 @@ fn run_codex_logout_sidecar_at_with_identity(
         home,
         CodexAuthAction::Logout,
         Some(route),
-        None,
+        operation_id,
         skip_revoke,
     )
     .map_err(|_| CodexAuthCommandError::unavailable("sidecar_spawn_failed"))?;
@@ -4383,14 +4485,47 @@ fn run_codex_logout_sidecar_at_with_identity(
         mutation.clear_pid();
         return Err(CodexAuthCommandError::unavailable("auth_state_changed"));
     }
-    let result = wait_for_single_sidecar_response_controlled(
-        process,
-        CodexAuthAction::Logout,
-        CodexAuthAction::Logout.timeout(),
-        None,
-    );
+    let result: Result<Value, CodexAuthCommandError> = if let Some(operation_id) = operation_id {
+        let digest = auth_start_authorization_digest(operation_id);
+        let process = match wait_for_sidecar_start_ack(process, operation_id, &digest, |stdin| {
+            send_start_to_sidecar(stdin, operation_id, &digest)
+        }) {
+            Ok(process) => process,
+            Err(_) => {
+                mutation.clear_pid();
+                return Err(CodexAuthCommandError::unavailable("auth_state_changed"));
+            }
+        };
+        let cancel = AtomicBool::new(false);
+        wait_for_login_sidecar(
+            process,
+            CodexAuthAction::Logout,
+            operation_id,
+            &cancel,
+            |_| {},
+            |_| {},
+        )
+        .map(|stream| {
+            json!({
+                "schema_version": AUTH_SCHEMA_VERSION,
+                "ok": stream.get("ok").cloned().unwrap_or(Value::Bool(false)),
+                "command": "logout",
+                "status": stream.get("status").cloned().unwrap_or(Value::Null),
+                "error": stream.get("error").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .map_err(|_| CodexAuthCommandError::unavailable("sidecar_protocol_invalid"))
+    } else {
+        wait_for_single_sidecar_response_controlled(
+            process,
+            CodexAuthAction::Logout,
+            CodexAuthAction::Logout.timeout(),
+            None,
+        )
+        .map_err(auth_error_from_sidecar_wait)
+    };
     mutation.clear_pid();
-    result.map_err(auth_error_from_sidecar_wait)
+    result
 }
 
 fn resolve_codex_network_route() -> Result<csswitch_codex_network::ResolvedCodexNetworkRoute, String>
@@ -4719,14 +4854,13 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 Ok(attached) => attached,
                 Err(error) => {
                     supervisor.abort_login_start(&auth_operation_id);
-                    let _ = operation.finish(
-                        "attention",
+                    return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                        "auth_reservation_attach_failed",
                         "before",
                         "unknown",
-                        Some("auth_reservation_attach_failed"),
                         config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(RuntimeCommandError::from(error));
+                        error,
+                    )));
                 }
             };
             let mut reservation = reservation;
@@ -4739,6 +4873,20 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                     current.proxy.is_some(),
                 )
             };
+            for index in 0..=1 {
+                if let Err(error) = operation.checkpoint_effect_or_attention(
+                    index,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                    None,
+                    "runtime_stop_checkpoint_failed",
+                    "before",
+                    "unknown",
+                    config::ConfigMutationTerminalConfigImage::Before,
+                ) {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    return Err(RuntimeCommandError::Mutation(error));
+                }
+            }
             let runtime_action = match prepare_codex_auth_mutation_with_fence(
                 app,
                 state,
@@ -4748,14 +4896,13 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 Ok(action) => action,
                 Err(error) => {
                     supervisor.abort_login_start(&auth_operation_id);
-                    let _ = operation.finish(
-                        "attention",
+                    return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                        "runtime_preflight_failed",
                         "before",
                         "unknown",
-                        Some("runtime_preflight_failed"),
                         config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(RuntimeCommandError::from(error));
+                        error,
+                    )));
                 }
             };
             for (index, present) in [(0, science_present), (1, gateway_present)] {
@@ -4764,17 +4911,31 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 } else {
                     crate::commands::runtime::config_mutation::ConfigMutationEffectState::Skipped
                 };
-                if let Err(error) = operation.checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" })) {
+                if let Err(error) = operation.checkpoint_effect_or_attention(
+                    index,
+                    state,
+                    Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }),
+                    "runtime_stop_checkpoint_failed",
+                    "before",
+                    auth_runtime_terminal_state(runtime_action),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                ) {
                     supervisor.abort_login_start(&auth_operation_id);
-                    let _ = operation.finish(
-                        "attention",
-                        "before",
-                        "unknown",
-                        Some("runtime_stop_checkpoint_failed"),
-                        config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(RuntimeCommandError::from(error.to_string()));
+                    return Err(RuntimeCommandError::Mutation(error));
                 }
+            }
+
+            if let Err(error) = operation.checkpoint_effect_or_attention(
+                2,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "sidecar_effect_checkpoint_failed",
+                "before",
+                auth_runtime_terminal_state(runtime_action),
+                config::ConfigMutationTerminalConfigImage::Before,
+            ) {
+                supervisor.abort_login_start(&auth_operation_id);
+                return Err(RuntimeCommandError::Mutation(error));
             }
 
             let process = match spawn_sidecar(app, action, &auth_operation_id, &route)
@@ -4784,14 +4945,13 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 Ok(process) => process,
                 Err(error) => {
                     supervisor.abort_login_start(&auth_operation_id);
-                    let _ = operation.finish(
-                        "attention",
+                    return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                        "sidecar_spawn_failed",
                         "before",
-                        "unknown",
-                        Some("sidecar_spawn_failed"),
+                        auth_runtime_terminal_state(runtime_action),
                         config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(error);
+                        error.to_string(),
+                    )));
                 }
             };
             let sidecar_identity = match auth_sidecar_identity(&process) {
@@ -4800,14 +4960,13 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                     let mut process = process;
                     stop_auth_child(&mut process.child);
                     supervisor.abort_login_start(&auth_operation_id);
-                    let _ = operation.finish(
-                        "attention",
+                    return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                        "sidecar_identity_unconfirmed",
                         "before",
-                        "unknown",
-                        Some("sidecar_identity_unconfirmed"),
+                        auth_runtime_terminal_state(runtime_action),
                         config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(RuntimeCommandError::from(error));
+                        error,
+                    )));
                 }
             };
             if let Err(error) = supervisor.bind_login_process_identity(
@@ -4820,14 +4979,13 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 let mut process = process;
                 stop_auth_child(&mut process.child);
                 supervisor.abort_login_start(&auth_operation_id);
-                let _ = operation.finish(
-                    "attention",
+                return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                    "sidecar_identity_registration_failed",
                     "before",
-                    "unknown",
-                    Some("sidecar_identity_registration_failed"),
+                    auth_runtime_terminal_state(runtime_action),
                     config::ConfigMutationTerminalConfigImage::Before,
-                );
-                return Err(RuntimeCommandError::from(error));
+                    error,
+                )));
             }
             if let Err(error) = operation.update_receipt(|receipt| {
                 if let Some(auth) = receipt.auth_operation.as_mut() {
@@ -4838,50 +4996,45 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 let mut process = process;
                 stop_auth_child(&mut process.child);
                 supervisor.abort_login_start(&auth_operation_id);
-                let _ = operation.finish(
-                    "attention",
+                return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                    "sidecar_identity_checkpoint_failed",
                     "before",
-                    "unknown",
-                    Some("sidecar_identity_checkpoint_failed"),
+                    auth_runtime_terminal_state(runtime_action),
                     config::ConfigMutationTerminalConfigImage::Before,
-                );
-                return Err(RuntimeCommandError::from(error));
-            }
-            if let Err(error) = operation.checkpoint_effect(
-                    2,
-                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
-                    Some("identity_persisted"),
-                ) {
-                let mut process = process;
-                stop_auth_child(&mut process.child);
-                supervisor.abort_login_start(&auth_operation_id);
-                let _ = operation.finish(
-                    "attention",
-                    "before",
-                    "unknown",
-                    Some("sidecar_effect_checkpoint_failed"),
-                    config::ConfigMutationTerminalConfigImage::Before,
-                );
-                return Err(RuntimeCommandError::from(error.to_string()));
+                    error,
+                )));
             }
             let start_digest = auth_start_authorization_digest(&auth_operation_id);
             if let Err(error) = operation.update_receipt(|receipt| {
                 if let Some(auth) = receipt.auth_operation.as_mut() {
-                    auth.state = "start_authorized".into();
+                    auth.state = "start_prepared".into();
                     auth.start_authorization_digest = Some(start_digest.clone());
                 }
             }) {
                 let mut process = process;
                 stop_auth_child(&mut process.child);
                 supervisor.abort_login_start(&auth_operation_id);
-                let _ = operation.finish(
-                    "attention",
+                return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                    "start_authorization_checkpoint_failed",
                     "before",
-                    "unknown",
-                    Some("start_authorization_checkpoint_failed"),
+                    auth_runtime_terminal_state(runtime_action),
                     config::ConfigMutationTerminalConfigImage::Before,
-                );
-                return Err(RuntimeCommandError::from(error));
+                    error,
+                )));
+            }
+            if let Err(error) = operation.checkpoint_effect_or_attention(
+                3,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "auth_generation_checkpoint_failed",
+                "before",
+                auth_runtime_terminal_state(runtime_action),
+                config::ConfigMutationTerminalConfigImage::Before,
+            ) {
+                let mut process = process;
+                stop_auth_child(&mut process.child);
+                supervisor.abort_login_start(&auth_operation_id);
+                return Err(RuntimeCommandError::Mutation(error));
             }
             let process = match wait_for_login_start_ack(
                 process,
@@ -4892,32 +5045,30 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 Ok(process) => process,
                 Err(error) => {
                     supervisor.abort_login_start(&auth_operation_id);
-                    let _ = operation.finish(
-                        "attention",
+                    return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                        "start_ack_failed",
                         "before",
-                        "unknown",
-                        Some("start_ack_failed"),
+                        auth_runtime_terminal_state(runtime_action),
                         config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(RuntimeCommandError::from(error));
+                        error,
+                    )));
                 }
             };
-            if let Err(error) = operation.checkpoint_effect(
-                    2,
-                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
-                    Some("start_ack"),
-                ) {
+            if let Err(error) = operation.update_receipt(|receipt| {
+                if let Some(auth) = receipt.auth_operation.as_mut() {
+                    auth.state = "start_authorized".into();
+                }
+            }) {
                 let mut process = process;
                 stop_auth_child(&mut process.child);
                 supervisor.abort_login_start(&auth_operation_id);
-                let _ = operation.finish(
-                    "attention",
+                return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                    "start_authorization_checkpoint_failed",
                     "before",
-                    "unknown",
-                    Some("start_ack_checkpoint_failed"),
+                    auth_runtime_terminal_state(runtime_action),
                     config::ConfigMutationTerminalConfigImage::Before,
-                );
-                return Err(RuntimeCommandError::from(error.to_string()));
+                    error,
+                )));
             }
             Ok((reservation, process, operation, runtime_action))
         },
@@ -5019,6 +5170,18 @@ fn operation_error_from_envelope(value: &Value) -> OperationErrorView {
     }
 }
 
+fn durable_mutation_attention_error(stage: &str) -> OperationErrorView {
+    OperationErrorView {
+        code: "config_mutation_attention".into(),
+        stage: stage.into(),
+        retryable: false,
+        upstream_status: None,
+        response_kind: None,
+        challenge_detected: None,
+        transport_kind: Some("durable_receipt".into()),
+    }
+}
+
 fn emit_operation_snapshot<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     snapshot: &OperationSnapshot,
@@ -5087,6 +5250,24 @@ fn complete_login_operation_p2b<R: tauri::Runtime>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn fail_login_with_retained_attention(
+    supervisor: &CodexAuthSupervisor,
+    operation_id: &str,
+    mutation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
+    cause: &str,
+    config_state: &str,
+    runtime_state: &str,
+    terminal_image: config::ConfigMutationTerminalConfigImage,
+    message: impl Into<String>,
+) -> Result<OperationSnapshot, String> {
+    let _ = mutation.retain_attention(cause, config_state, runtime_state, terminal_image, message);
+    supervisor.finish(
+        operation_id,
+        "failed",
+        Some(durable_mutation_attention_error("terminal")),
+    )
+}
+
 fn complete_login_operation_p2b_inner(
     supervisor: &SharedCodexAuthSupervisor,
     lifecycle: &SharedLifecycle,
@@ -5116,20 +5297,32 @@ fn complete_login_operation_p2b_inner(
     record_login_terminal_auth_status(supervisor, &outcome);
     match outcome {
         Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
-            let status: AuthStatusView = serde_json::from_value(
-                value
-                    .get("status")
-                    .cloned()
-                    .ok_or_else(|| "Codex 登录成功终态缺少 status。".to_string())?,
-            )
-            .map_err(|_| "Codex 登录成功终态 status 不可用于 durable 引用。".to_string())?;
+            let status: AuthStatusView = match value
+                .get("status")
+                .cloned()
+                .and_then(|status| serde_json::from_value(status).ok())
+            {
+                Some(status) => status,
+                None => {
+                    return fail_login_with_retained_attention(
+                        supervisor,
+                        operation_id,
+                        &mut mutation,
+                        "auth_terminal_invalid",
+                        "before",
+                        terminal_runtime_state,
+                        config::ConfigMutationTerminalConfigImage::Before,
+                        "Codex 登录成功终态 status 不可用于 durable 引用。",
+                    )
+                }
+            };
             let account_hash = status.account_hash.as_deref().map(|account| {
                 let mut digest = Sha256::new();
                 digest.update(b"csswitch-p2b-auth-account-v1\0");
                 digest.update(account.as_bytes());
                 format!("{:x}", digest.finalize())
             });
-            mutation.update_receipt(|receipt| {
+            if let Err(error) = mutation.update_receipt(|receipt| {
                 if let Some(auth) = receipt.auth_operation.as_mut() {
                     auth.state = "terminal".into();
                     auth.terminal_auth_epoch = status.auth_epoch.clone();
@@ -5139,12 +5332,55 @@ fn complete_login_operation_p2b_inner(
                 receipt.target.auth_generation = Some(status.auth_generation);
                 receipt.target.auth_epoch = status.auth_epoch.clone();
                 receipt.target.auth_account_hash = account_hash.clone();
-            })?;
-            mutation.checkpoint_effect(
-                3,
-                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
-                Some("auth_generation_committed"),
-            )?;
+            }) {
+                return fail_login_with_retained_attention(
+                    supervisor,
+                    operation_id,
+                    &mut mutation,
+                    "auth_terminal_checkpoint_failed",
+                    "before",
+                    terminal_runtime_state,
+                    config::ConfigMutationTerminalConfigImage::Before,
+                    error,
+                );
+            }
+            for (index, outcome_code) in [(2, "sidecar_terminal"), (3, "auth_generation_committed")]
+            {
+                if let Err(error) = mutation.checkpoint_effect_or_attention(
+                    index,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                    Some(outcome_code),
+                    "auth_terminal_checkpoint_failed",
+                    "before",
+                    terminal_runtime_state,
+                    config::ConfigMutationTerminalConfigImage::Before,
+                ) {
+                    return supervisor
+                        .finish(
+                            operation_id,
+                            "failed",
+                            Some(durable_mutation_attention_error("terminal")),
+                        )
+                        .map_err(|supervisor_error| format!("{error}; {supervisor_error}"));
+                }
+            }
+            if let Err(error) = mutation.checkpoint_effect_or_attention(
+                4,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "profile_ensure_checkpoint_failed",
+                "before",
+                terminal_runtime_state,
+                config::ConfigMutationTerminalConfigImage::Before,
+            ) {
+                return supervisor
+                    .finish(
+                        operation_id,
+                        "failed",
+                        Some(durable_mutation_attention_error("profile_ensure")),
+                    )
+                    .map_err(|supervisor_error| format!("{error}; {supervisor_error}"));
+            }
             let ensure = lifecycle.with_mutation(RuntimeMutationDomain::Intent, |_| {
                 crate::runtime::profile::ensure_codex_profile_with_mutation(
                     &config::default_dir(),
@@ -5154,41 +5390,72 @@ fn complete_login_operation_p2b_inner(
             });
             let (ensure, after_config_fingerprint) = match ensure {
                 Ok(ensure) => ensure,
-                Err(_error) => {
-                    let _ = mutation.finish(
-                        "attention",
+                Err(error) => {
+                    let _ = mutation.checkpoint_effect(
+                        4,
+                        crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                        Some("profile_ensure_failed"),
+                    );
+                    let _ = mutation.retain_attention(
+                        "profile_ensure_failed",
                         "before",
                         terminal_runtime_state,
-                        Some("profile_ensure_failed"),
                         config::ConfigMutationTerminalConfigImage::Before,
+                        error,
                     );
                     return supervisor.finish(
                         operation_id,
                         "failed",
-                        Some(OperationErrorView {
-                            code: "profile_ensure_failed".into(),
-                            stage: "profile_ensure".into(),
-                            retryable: true,
-                            upstream_status: None,
-                            response_kind: None,
-                            challenge_detected: None,
-                            transport_kind: None,
-                        }),
+                        Some(durable_mutation_attention_error("profile_ensure")),
                     );
                 }
             };
-            mutation.bind_after_config_fingerprint(after_config_fingerprint)?;
-            mutation.update_receipt(|receipt| {
+            if let Err(error) = mutation.bind_after_config_fingerprint(after_config_fingerprint) {
+                return fail_login_with_retained_attention(
+                    supervisor,
+                    operation_id,
+                    &mut mutation,
+                    "profile_after_bind_failed",
+                    "unknown",
+                    terminal_runtime_state,
+                    config::ConfigMutationTerminalConfigImage::Before,
+                    error,
+                );
+            }
+            if let Err(error) = mutation.update_receipt(|receipt| {
                 receipt.target.profile_id = Some(ensure.profile_id.clone());
-            })?;
-            mutation.checkpoint_effect(
+            }) {
+                return fail_login_with_retained_attention(
+                    supervisor,
+                    operation_id,
+                    &mut mutation,
+                    "profile_reference_checkpoint_failed",
+                    "after",
+                    terminal_runtime_state,
+                    config::ConfigMutationTerminalConfigImage::After,
+                    error,
+                );
+            }
+            if let Err(error) = mutation.checkpoint_effect_or_attention(
                 4,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                 Some(match ensure.disposition {
                     crate::runtime::profile::EnsureCodexProfileDisposition::Created => "created",
                     crate::runtime::profile::EnsureCodexProfileDisposition::Existing => "existing",
                 }),
-            )?;
+                "profile_ensure_checkpoint_failed",
+                "after",
+                terminal_runtime_state,
+                config::ConfigMutationTerminalConfigImage::After,
+            ) {
+                return supervisor
+                    .finish(
+                        operation_id,
+                        "failed",
+                        Some(durable_mutation_attention_error("profile_ensure")),
+                    )
+                    .map_err(|supervisor_error| format!("{error}; {supervisor_error}"));
+            }
             let terminal = mutation.finish(
                 "completed",
                 "after",
@@ -5201,15 +5468,7 @@ fn complete_login_operation_p2b_inner(
                 Err(_) => supervisor.finish(
                     operation_id,
                     "failed",
-                    Some(OperationErrorView {
-                        code: "config_mutation_attention".into(),
-                        stage: "terminal".into(),
-                        retryable: false,
-                        upstream_status: None,
-                        response_kind: None,
-                        challenge_detected: None,
-                        transport_kind: None,
-                    }),
+                    Some(durable_mutation_attention_error("terminal")),
                 ),
             }
         }
@@ -5219,7 +5478,7 @@ fn complete_login_operation_p2b_inner(
             } else {
                 "failed"
             };
-            let _ = mutation.update_receipt(|receipt| {
+            let receipt_checkpoint = mutation.update_receipt(|receipt| {
                 if let Some(auth) = receipt.auth_operation.as_mut() {
                     auth.state = if state == "cancelled" {
                         "cancelled".into()
@@ -5228,11 +5487,22 @@ fn complete_login_operation_p2b_inner(
                     };
                 }
             });
-            let _ = mutation.checkpoint_effect(
-                2,
-                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
-                Some("sidecar_terminal"),
-            );
+            if receipt_checkpoint.is_ok() {
+                let _ = mutation.checkpoint_effect(
+                    2,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                    Some("sidecar_terminal"),
+                );
+                let _ = mutation.checkpoint_effect(
+                    3,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Failed,
+                    Some(if state == "cancelled" {
+                        "auth_cancelled"
+                    } else {
+                        "auth_not_committed"
+                    }),
+                );
+            }
             retain_failed_login_receipt(
                 &mut mutation,
                 runtime_action,
@@ -5245,7 +5515,7 @@ fn complete_login_operation_p2b_inner(
             supervisor.finish(
                 operation_id,
                 state,
-                Some(operation_error_from_envelope(&value)),
+                Some(durable_mutation_attention_error("terminal")),
             )
         }
         Err(_) => {
@@ -5254,19 +5524,21 @@ fn complete_login_operation_p2b_inner(
                     auth.state = "terminal".into();
                 }
             });
+            let _ = mutation.checkpoint_effect(
+                2,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                Some("sidecar_protocol_error"),
+            );
+            let _ = mutation.checkpoint_effect(
+                3,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                Some("auth_generation_unknown"),
+            );
             retain_failed_login_receipt(&mut mutation, runtime_action, "sidecar_protocol_error");
             supervisor.finish(
                 operation_id,
                 "failed",
-                Some(OperationErrorView {
-                    code: "internal_error".into(),
-                    stage: "token_exchange".into(),
-                    retryable: true,
-                    upstream_status: None,
-                    response_kind: None,
-                    challenge_detected: None,
-                    transport_kind: Some("unknown".into()),
-                }),
+                Some(durable_mutation_attention_error("terminal")),
             )
         }
     }
@@ -5529,6 +5801,19 @@ fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
                     current.proxy.is_some(),
                 )
             };
+            for index in 0..=1 {
+                operation
+                    .checkpoint_effect_or_attention(
+                        index,
+                        crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                        None,
+                        "runtime_stop_checkpoint_failed",
+                        "before",
+                        "unknown",
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    )
+                    .map_err(RuntimeCommandError::Mutation)?;
+            }
             let action = match prepare_codex_auth_mutation_with_fence(
                 app,
                 state,
@@ -5537,14 +5822,13 @@ fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
             ) {
                 Ok(action) => action,
                 Err(error) => {
-                    let _ = operation.finish(
-                        "attention",
+                    return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                        "runtime_preflight_failed",
                         "before",
                         "unknown",
-                        Some("runtime_preflight_failed"),
                         config::ConfigMutationTerminalConfigImage::Before,
-                    );
-                    return Err(RuntimeCommandError::from(error));
+                        error,
+                    )));
                 }
             };
             for (index, present) in [(0, science_present), (1, gateway_present)] {
@@ -5554,8 +5838,29 @@ fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
                     crate::commands::runtime::config_mutation::ConfigMutationEffectState::Skipped
                 };
                 operation
-                    .checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }))
-                    .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+                    .checkpoint_effect_or_attention(
+                        index,
+                        state,
+                        Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }),
+                        "runtime_stop_checkpoint_failed",
+                        "before",
+                        auth_runtime_terminal_state(action),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    )
+                    .map_err(RuntimeCommandError::Mutation)?;
+            }
+            for index in 2..=4 {
+                operation
+                    .checkpoint_effect_or_attention(
+                        index,
+                        crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                        None,
+                        "logout_effect_checkpoint_failed",
+                        "before",
+                        auth_runtime_terminal_state(action),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    )
+                    .map_err(RuntimeCommandError::Mutation)?;
             }
             Ok((mutation, operation, action))
         },
@@ -5576,77 +5881,125 @@ fn complete_codex_logout_p2b_inner(
         Ok(value) => value,
         Err(error) => {
             supervisor.record_auth_status("unavailable", None, error.cause);
-            let _ = operation.finish(
-                "attention",
+            for index in 2..=4 {
+                let _ = operation.checkpoint_effect(
+                    index,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                    Some("logout_sidecar_uncertain"),
+                );
+            }
+            return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+                error.cause.unwrap_or("logout_failed"),
                 "before",
                 auth_runtime_terminal_state(runtime_action),
-                Some(error.cause.unwrap_or("logout_failed")),
                 config::ConfigMutationTerminalConfigImage::Before,
-            );
-            return Err(RuntimeCommandError::from(error));
+                format!("Codex logout 失败：{}", error.cause.unwrap_or(error.code)),
+            )));
         }
     };
     record_last_auth_status(supervisor, &value);
     if value.get("ok").and_then(Value::as_bool) == Some(false) {
         let error = require_authenticated_status_typed(&value).unwrap_err();
-        let _ = operation.finish(
-            "attention",
+        for index in 2..=4 {
+            let _ = operation.checkpoint_effect(
+                index,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                Some("logout_sidecar_failed"),
+            );
+        }
+        return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+            error.cause.unwrap_or("logout_failed"),
             "before",
             auth_runtime_terminal_state(runtime_action),
-            Some(error.cause.unwrap_or("logout_failed")),
             config::ConfigMutationTerminalConfigImage::Before,
-        );
-        return Err(RuntimeCommandError::from(error));
+            format!("Codex logout 失败：{}", error.cause.unwrap_or(error.code)),
+        )));
     }
-    let status: AuthStatusView = serde_json::from_value(
-        value
-            .get("status")
-            .cloned()
-            .ok_or_else(|| RuntimeCommandError::from("Codex logout 成功终态缺少 status。"))?,
-    )
-    .map_err(|_| {
-        RuntimeCommandError::from("Codex logout 成功终态 status 不可用于 durable 引用。")
-    })?;
+    let status = value
+        .get("status")
+        .cloned()
+        .ok_or(())
+        .and_then(|status| serde_json::from_value::<AuthStatusView>(status).map_err(|_| ()))
+        .map_err(|_| {
+            for index in 2..=4 {
+                let _ = operation.checkpoint_effect(
+                    index,
+                    crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                    Some("logout_terminal_mismatch"),
+                );
+            }
+            RuntimeCommandError::Mutation(operation.retain_attention(
+                "logout_terminal_mismatch",
+                "before",
+                auth_runtime_terminal_state(runtime_action),
+                config::ConfigMutationTerminalConfigImage::Before,
+                "Codex logout 成功终态 status 不可用于 durable 引用",
+            ))
+        })?;
+    if status.authenticated
+        || status.reason != "state_uncommitted"
+        || status.account_hash.is_some()
+        || status.expires_at.is_some()
+        || status.auth_epoch.is_none()
+        || status.auth_generation == 0
+    {
+        for index in 2..=4 {
+            let _ = operation.checkpoint_effect(
+                index,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+                Some("logout_terminal_mismatch"),
+            );
+        }
+        return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+            "logout_terminal_mismatch",
+            "before",
+            auth_runtime_terminal_state(runtime_action),
+            config::ConfigMutationTerminalConfigImage::Before,
+            "Codex logout 成功终态不是 exact logged-out generation",
+        )));
+    }
     let account_hash = status.account_hash.as_deref().map(|account| {
         let mut digest = Sha256::new();
         digest.update(b"csswitch-p2b-auth-account-v1\0");
         digest.update(account.as_bytes());
         format!("{:x}", digest.finalize())
     });
-    operation
-        .update_receipt(|receipt| {
-            if let Some(auth) = receipt.auth_operation.as_mut() {
-                auth.state = "terminal".into();
-                auth.terminal_auth_epoch = status.auth_epoch.clone();
-                auth.terminal_auth_generation = Some(status.auth_generation);
-                auth.terminal_account_hash = account_hash.clone();
-            }
-            receipt.target.auth_epoch = status.auth_epoch.clone();
-            receipt.target.auth_generation = Some(status.auth_generation);
-            receipt.target.auth_account_hash = account_hash.clone();
-        })
-        .map_err(RuntimeCommandError::from)?;
-    operation
-        .checkpoint_effect(
-            2,
-            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
-            Some("logout_sidecar"),
-        )
-        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
-    operation
-        .checkpoint_effect(
-            3,
-            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
-            Some("auth_generation_committed"),
-        )
-        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
-    operation
-        .checkpoint_effect(
-            4,
-            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
-            Some("logged_out_readback"),
-        )
-        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    if let Err(error) = operation.update_receipt(|receipt| {
+        if let Some(auth) = receipt.auth_operation.as_mut() {
+            auth.state = "terminal".into();
+            auth.terminal_auth_epoch = status.auth_epoch.clone();
+            auth.terminal_auth_generation = Some(status.auth_generation);
+            auth.terminal_account_hash = account_hash.clone();
+        }
+        receipt.target.auth_epoch = status.auth_epoch.clone();
+        receipt.target.auth_generation = Some(status.auth_generation);
+        receipt.target.auth_account_hash = account_hash.clone();
+    }) {
+        return Err(RuntimeCommandError::Mutation(operation.retain_attention(
+            "logout_terminal_checkpoint_failed",
+            "before",
+            auth_runtime_terminal_state(runtime_action),
+            config::ConfigMutationTerminalConfigImage::Before,
+            error,
+        )));
+    }
+    for (index, code) in [
+        (2, "logout_sidecar"),
+        (3, "auth_generation_committed"),
+        (4, "logged_out_readback"),
+    ] {
+        operation
+            .checkpoint_effect_or_attention(
+                index,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+                Some(code),
+                "logout_terminal_checkpoint_failed",
+                "before",
+                auth_runtime_terminal_state(runtime_action),
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .map_err(RuntimeCommandError::Mutation)?;
+    }
     operation
         .finish(
             "completed",
@@ -5831,6 +6184,7 @@ pub(crate) async fn codex_downgrade_export_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::env;
     use std::fs;
     use std::net::TcpListener;
@@ -10469,7 +10823,7 @@ exit 23"#,
             .checkpoint_effect(
                 0,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
-                Some("auth_generation_pending"),
+                None,
             )
             .unwrap();
         assert!(config::read_config_mutation_operation_receipt(&dir.0)
@@ -10628,6 +10982,9 @@ exit 23"#,
 
     #[test]
     fn p2b_codex_logout_never_reactivates_committed_logout() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let dir = TempDir::new("p2b-logout-terminal");
         let cfg = config::Config::default();
         config::save_to(&dir.0, &cfg).unwrap();
@@ -10650,6 +11007,13 @@ exit 23"#,
         )
         .unwrap();
         let mut operation = operation;
+        operation
+            .checkpoint_effect(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+            )
+            .unwrap();
         operation
             .checkpoint_effect(
                 0,
@@ -10706,6 +11070,13 @@ exit 23"#,
             executable_fingerprint: "22".repeat(32),
             process_group_id: 123,
         };
+        identity_operation
+            .checkpoint_effect(
+                2,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+            )
+            .unwrap();
         checkpoint_logout_sidecar_start(&mut identity_operation, &identity).unwrap();
         let bytes = config::read_config_mutation_operation_receipt(&identity_dir.0)
             .unwrap()
@@ -10714,7 +11085,11 @@ exit 23"#,
             serde_json::from_slice(&bytes).unwrap();
         let auth = persisted.auth_operation.unwrap();
         let sidecar = auth.sidecar.unwrap();
-        assert_eq!(auth.state, "registered");
+        assert_eq!(auth.state, "start_prepared");
+        assert_eq!(
+            auth.start_authorization_digest.as_deref(),
+            Some(auth_start_authorization_digest(&"11".repeat(16)).as_str())
+        );
         assert_eq!(sidecar.pid, identity.pid);
         assert_eq!(sidecar.process_start, identity.process_start);
         assert_eq!(
@@ -10726,6 +11101,35 @@ exit 23"#,
             persisted.effects[2].state,
             crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress
         );
+
+        let sidecar_home = TempDir::new("p2b-controlled-logout");
+        let auth_operation_id = "44".repeat(16);
+        let start_digest = auth_start_authorization_digest(&auth_operation_id);
+        let script = sidecar_home.script(&format!(
+            "IFS= read -r start\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{auth_operation_id}\",\"kind\":\"start_ack\",\"authorization_digest\":\"{start_digest}\"}}'\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{auth_operation_id}\",\"kind\":\"terminal\",\"state\":\"succeeded\",\"status\":{{\"authenticated\":false,\"reason\":\"state_uncommitted\",\"account_hash\":null,\"expiry_state\":\"missing\",\"expires_at\":null,\"auth_epoch\":\"{}\",\"auth_generation\":9}}}}'",
+            "55".repeat(16),
+        ));
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let mutation = CodexAuthSupervisor::begin_mutation(&supervisor).unwrap();
+        let identity_seen = Cell::new(false);
+        let logged_out = run_codex_logout_sidecar_at_with_identity(
+            &script,
+            &sidecar_home.0,
+            &csswitch_codex_network::direct_route(),
+            false,
+            &mutation,
+            Some(&auth_operation_id),
+            |identity| {
+                assert_ne!(identity.process_start, format!("pid:{}", identity.pid));
+                identity_seen.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(identity_seen.get());
+        assert_eq!(logged_out["status"]["authenticated"], false);
+        assert_eq!(logged_out["status"]["reason"], "state_uncommitted");
+        assert_eq!(logged_out["status"]["auth_generation"], 9);
 
         let drift_dir = TempDir::new("p2b-logout-after-drift");
         config::save_to(&drift_dir.0, &cfg).unwrap();

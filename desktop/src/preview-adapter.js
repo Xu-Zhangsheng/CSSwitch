@@ -243,14 +243,15 @@ export function mockInvoke(cmd, args) {
       if (!p) return Promise.reject("找不到 profile：" + args.id);
       const commit = () => {
         mockStore.active_id = args.id;
-        mockStore.selection_pending = true;
+        mockStore.selection_pending = args.id !== mockStore.applied_profile_id;
+        const applyState = mockStore.selection_pending ? "pending" : "applied";
         return {
           ...mockIntentOutcome("set_active_profile", "committed", { selected_profile_id: args.id, applied_profile_id: mockStore.applied_profile_id }),
           committed: true,
           status: "ok",
           selected_profile_id: args.id,
           applied_profile_id: mockStore.applied_profile_id,
-          apply_state: "pending",
+          apply_state: applyState,
           science_running: false,
           hint: "（预览：已设为当前选择，待一键开始应用）",
         };

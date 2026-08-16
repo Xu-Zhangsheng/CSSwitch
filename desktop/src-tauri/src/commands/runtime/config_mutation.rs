@@ -440,6 +440,11 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
             receipt.terminal.runtime_state.as_str(),
             "preserved" | "stopped" | "restored" | "unknown"
         )
+        || receipt
+            .terminal
+            .cause
+            .as_deref()
+            .is_some_and(|value| !bounded_token(value, 64))
     {
         return Err("Config mutation receipt terminal state 非法".into());
     }
@@ -455,6 +460,44 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
         {
             return Err("Config mutation effect checkpoint 非法".into());
         }
+        let state_shape_valid = match effect.state {
+            ConfigMutationEffectState::Pending => {
+                effect.attempt_id.is_none() && effect.outcome_code.is_none()
+            }
+            ConfigMutationEffectState::InProgress => {
+                effect.attempt_id.is_some() && effect.outcome_code.is_none()
+            }
+            // A skip can be known before an attempt (Pending -> Skipped) or
+            // discovered by the bounded pre-effect observation after an
+            // attempt was durably opened (InProgress -> Skipped).  Preserve
+            // the latter attempt identity instead of erasing crash evidence.
+            ConfigMutationEffectState::Skipped => effect.outcome_code.is_some(),
+            ConfigMutationEffectState::Succeeded
+            | ConfigMutationEffectState::Failed
+            | ConfigMutationEffectState::Uncertain => {
+                effect.attempt_id.is_some() && effect.outcome_code.is_some()
+            }
+        };
+        if !state_shape_valid {
+            return Err("Config mutation effect state/attempt identity 非法".into());
+        }
+    }
+    let terminal_shape_valid = match receipt.terminal.state.as_str() {
+        "open" => receipt.terminal.cause.is_none(),
+        "completed" => {
+            receipt.terminal.cause.is_none()
+                && receipt.effects.iter().all(|effect| {
+                    matches!(
+                        effect.state,
+                        ConfigMutationEffectState::Succeeded | ConfigMutationEffectState::Skipped
+                    )
+                })
+        }
+        "attention" => receipt.terminal.cause.is_some(),
+        _ => false,
+    };
+    if !terminal_shape_valid {
+        return Err("Config mutation receipt terminal/effect shape 非法".into());
     }
     if let Some(auth) = receipt.auth_operation.as_ref() {
         if !lower_hex(&auth.auth_operation_id, 32)
@@ -463,6 +506,7 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
                 "reserved"
                     | "spawned_inert"
                     | "registered"
+                    | "start_prepared"
                     | "start_authorized"
                     | "cancel_requested"
                     | "cancelled"
@@ -480,6 +524,8 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
                 .terminal_auth_epoch
                 .as_deref()
                 .is_some_and(|value| !bounded_token(value, 128))
+            || matches!(auth.state.as_str(), "start_prepared" | "start_authorized")
+                && auth.start_authorization_digest.is_none()
         {
             return Err("Config mutation auth operation identity 非法".into());
         }
@@ -493,6 +539,7 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
             }
         } else if auth.state == "spawned_inert"
             || auth.state == "registered"
+            || auth.state == "start_prepared"
             || auth.state == "start_authorized"
         {
             return Err("auth sidecar durable identity 不完整".into());
@@ -537,11 +584,13 @@ impl OpenConfigMutation {
     where
         F: FnOnce(&mut ConfigMutationReceipt),
     {
-        f(&mut self.receipt);
-        validate_receipt(&self.receipt)?;
-        let next = encode_receipt(&self.receipt)?;
+        let mut receipt = self.receipt.clone();
+        f(&mut receipt);
+        validate_receipt(&receipt)?;
+        let next = encode_receipt(&receipt)?;
         config::write_config_mutation_operation(&self.dir, &self.fence, &next, &self.bytes)
             .map_err(|error| error.to_string())?;
+        self.receipt = receipt;
         self.bytes = next;
         Ok(())
     }
@@ -552,18 +601,80 @@ impl OpenConfigMutation {
         state: ConfigMutationEffectState,
         outcome_code: Option<&str>,
     ) -> Result<(), String> {
-        let effect = self
-            .receipt
+        let mut receipt = self.receipt.clone();
+        let effect = receipt
             .effects
             .get_mut(index)
             .ok_or_else(|| "Config mutation effect index 越界".to_string())?;
+        let transition_valid = matches!(
+            (effect.state, state),
+            (
+                ConfigMutationEffectState::Pending,
+                ConfigMutationEffectState::InProgress | ConfigMutationEffectState::Skipped
+            ) | (
+                ConfigMutationEffectState::InProgress,
+                ConfigMutationEffectState::Succeeded
+                    | ConfigMutationEffectState::Failed
+                    | ConfigMutationEffectState::Uncertain
+                    | ConfigMutationEffectState::Skipped
+            )
+        );
+        if !transition_valid {
+            return Err("Config mutation effect checkpoint transition 非法".into());
+        }
+        if state == ConfigMutationEffectState::InProgress {
+            effect.attempt_id = Some(config::new_id());
+        } else if state != ConfigMutationEffectState::Skipped && effect.attempt_id.is_none() {
+            return Err("Config mutation terminal effect 缺少 attempt identity".into());
+        }
         effect.state = state;
         effect.outcome_code = outcome_code.map(str::to_string);
-        let next = encode_receipt(&self.receipt)?;
+        validate_receipt(&receipt)?;
+        let next = encode_receipt(&receipt)?;
         config::write_config_mutation_operation(&self.dir, &self.fence, &next, &self.bytes)
             .map_err(|error| error.to_string())?;
+        self.receipt = receipt;
         self.bytes = next;
         Ok(())
+    }
+
+    pub(crate) fn retain_attention(
+        &mut self,
+        cause: &str,
+        config_state: &str,
+        runtime_state: &str,
+        terminal_image: ConfigMutationTerminalConfigImage,
+        message: impl Into<String>,
+    ) -> ConfigMutationCommandErrorV1 {
+        let message = message.into();
+        match self.finish(
+            "attention",
+            config_state,
+            runtime_state,
+            Some(cause),
+            terminal_image,
+        ) {
+            Err(error) => error.with_message(message),
+            Ok(_) => self
+                .attention(cause, "terminal", message.clone(), true)
+                .with_message(message),
+        }
+    }
+
+    pub(crate) fn checkpoint_effect_or_attention(
+        &mut self,
+        index: usize,
+        state: ConfigMutationEffectState,
+        outcome_code: Option<&str>,
+        cause: &str,
+        config_state: &str,
+        runtime_state: &str,
+        terminal_image: ConfigMutationTerminalConfigImage,
+    ) -> Result<(), ConfigMutationCommandErrorV1> {
+        self.checkpoint_effect(index, state, outcome_code)
+            .map_err(|error| {
+                self.retain_attention(cause, config_state, runtime_state, terminal_image, error)
+            })
     }
 
     pub(crate) fn update_config<T, F>(&mut self, f: F) -> Result<T, String>
@@ -618,7 +729,8 @@ impl OpenConfigMutation {
                 true,
             ));
         }
-        self.receipt.terminal = TerminalReceipt {
+        let mut receipt = self.receipt.clone();
+        receipt.terminal = TerminalReceipt {
             state: if disposition == "completed" {
                 "completed".into()
             } else {
@@ -628,10 +740,10 @@ impl OpenConfigMutation {
             runtime_state: runtime_state.into(),
             cause: cause.map(str::to_string),
         };
-        if let Err(error) = validate_receipt(&self.receipt) {
+        if let Err(error) = validate_receipt(&receipt) {
             return Err(self.attention("terminal_invalid", "terminal", error, true));
         }
-        let next = match encode_receipt(&self.receipt) {
+        let next = match encode_receipt(&receipt) {
             Ok(bytes) => bytes,
             Err(error) => return Err(self.attention("terminal_invalid", "terminal", error, true)),
         };
@@ -640,6 +752,8 @@ impl OpenConfigMutation {
         {
             return Err(self.attention("receipt_checkpoint", "terminal", error.to_string(), true));
         }
+        self.receipt = receipt;
+        self.bytes = next.clone();
         let mut terminal_base = self.fence.clone();
         if terminal_base.after_config_fingerprint.is_none() {
             terminal_base.after_config_fingerprint = self.receipt.after_config_fingerprint.clone();
@@ -668,11 +782,9 @@ impl OpenConfigMutation {
             &next,
             terminal_image,
         ) {
-            self.bytes = next;
             return Err(self.attention("terminal_fence", "terminal", error.to_string(), true));
         }
         if disposition != "completed" {
-            self.bytes = next;
             self.fence = terminal_fence;
             return Err(self.attention(
                 "attention_retained",
@@ -687,10 +799,8 @@ impl OpenConfigMutation {
             &next,
             terminal_image,
         ) {
-            self.bytes = next;
             return Err(self.attention("cleanup_incomplete", "terminal", error.to_string(), true));
         }
-        self.bytes = next;
         self.fence = terminal_fence;
         Ok(ConfigMutationOutcomeV1 {
             schema_version: RECEIPT_SCHEMA_VERSION,
@@ -1058,7 +1168,7 @@ mod tests {
     fn p2b_receipt_contract_is_credential_free_and_allowlisted() {
         let dir = config_dir();
         config::save_to(&dir, &Config::default()).unwrap();
-        let operation = open_fixture(&dir);
+        let mut operation = open_fixture(&dir);
         let bytes =
             std::fs::read(dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap();
         let text = String::from_utf8(bytes).unwrap();
@@ -1066,6 +1176,40 @@ mod tests {
         assert!(!text.contains("https://"));
         assert!(!text.contains("api_key"));
         assert_eq!(operation.receipt().schema_version, 1);
+        assert!(operation
+            .checkpoint_effect(0, ConfigMutationEffectState::Succeeded, Some("committed"))
+            .is_err());
+        operation
+            .checkpoint_effect(0, ConfigMutationEffectState::InProgress, None)
+            .unwrap();
+        let attempt_id = operation.receipt().effects[0].attempt_id.clone().unwrap();
+        operation
+            .checkpoint_effect(0, ConfigMutationEffectState::Succeeded, Some("committed"))
+            .unwrap();
+        assert_eq!(
+            operation.receipt().effects[0].attempt_id.as_deref(),
+            Some(attempt_id.as_str())
+        );
+        assert!(operation
+            .checkpoint_effect(0, ConfigMutationEffectState::Failed, Some("late_failure"))
+            .is_err());
+
+        let replacement_dir = config_dir();
+        config::save_to(&replacement_dir, &Config::default()).unwrap();
+        let mut replacement = open_fixture(&replacement_dir);
+        std::fs::write(
+            replacement_dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE),
+            b"foreign-replacement",
+        )
+        .unwrap();
+        assert!(replacement
+            .checkpoint_effect(0, ConfigMutationEffectState::InProgress, None)
+            .is_err());
+        assert_eq!(
+            replacement.receipt().effects[0].state,
+            ConfigMutationEffectState::Pending
+        );
+        assert!(replacement.receipt().effects[0].attempt_id.is_none());
     }
 
     #[test]
@@ -1074,6 +1218,9 @@ mod tests {
         config::save_to(&dir, &Config::default()).unwrap();
         let mut operation = open_fixture(&dir);
         let original = operation.bytes.clone();
+        operation
+            .checkpoint_effect(0, ConfigMutationEffectState::InProgress, None)
+            .unwrap();
         operation
             .checkpoint_effect(0, ConfigMutationEffectState::Succeeded, Some("committed"))
             .unwrap();
@@ -1111,6 +1258,9 @@ mod tests {
         let dir = config_dir();
         config::save_to(&dir, &Config::default()).unwrap();
         let mut operation = open_fixture(&dir);
+        operation
+            .checkpoint_effect(0, ConfigMutationEffectState::InProgress, None)
+            .unwrap();
         operation
             .checkpoint_effect(
                 0,

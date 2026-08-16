@@ -2577,6 +2577,20 @@ fn read_codex_disable_operation_receipt_in(secure: &SecureDir) -> io::Result<Opt
     }
 }
 
+fn require_no_sidecar_mutation_receipts_in(secure: &SecureDir) -> io::Result<()> {
+    if read_codex_disable_operation_receipt_in(secure)?.is_some() {
+        return Err(io::Error::other(
+            "code=codex_disable_operation_in_progress Codex disable operation receipt 尚未结束；拒绝普通 Config writer。",
+        ));
+    }
+    if read_config_mutation_operation_receipt_in(secure)?.is_some() {
+        return Err(io::Error::other(
+            "code=config_mutation_operation_in_progress Config mutation receipt 尚未结束；拒绝普通 Config writer。",
+        ));
+    }
+    Ok(())
+}
+
 /// Snapshot an exact Config-authority proof immediately before one frozen
 /// destructive effect.  The writer flock serializes proof acquisition; the
 /// durable Config field remains after it is released and makes every normal
@@ -2649,7 +2663,9 @@ pub(crate) fn begin_codex_disable_operation(
         ));
     }
     require_no_runtime_transaction(&current).map_err(io::Error::other)?;
-    if read_codex_disable_operation_receipt_in(&secure)?.is_some() {
+    if read_codex_disable_operation_receipt_in(&secure)?.is_some()
+        || read_config_mutation_operation_receipt_in(&secure)?.is_some()
+    {
         return Err(io::Error::other("Codex disable receipt 已存在"));
     }
     current.set_codex_disable_operation_fence(fence);
@@ -4722,6 +4738,7 @@ pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
     let access = config_access();
     ensure_config_access_open(&access)?;
     let (secure, _fence) = open_config_writer(dir, true)?;
+    require_no_sidecar_mutation_receipts_in(&secure)?;
     // `save_to` is also the explicit repair primitive for malformed legacy
     // bytes. Preserve that overwrite contract, but enforce the HistoryRecovery
     // fence whenever a valid current Config can be identified.
@@ -5212,6 +5229,8 @@ fn downgrade_to_v2_unlocked(
 ) -> Result<Option<PathBuf>, DowngradeError> {
     let (secure, _fence) =
         open_config_writer(dir, true).map_err(|error| DowngradeError::safe(error.to_string()))?;
+    require_no_sidecar_mutation_receipts_in(&secure)
+        .map_err(|error| DowngradeError::safe(error.to_string()))?;
     let cfg = load_from_secure(&secure).map_err(|error| DowngradeError::safe(error.to_string()))?;
     require_no_runtime_transaction(&cfg).map_err(DowngradeError::safe)?;
     let preview = prepare_downgrade_to_v2(&cfg, actions)?;
@@ -5293,6 +5312,7 @@ pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     let access = config_access();
     ensure_config_access_open(&access)?;
     let (secure, _fence) = open_config_writer(dir, true)?;
+    require_no_sidecar_mutation_receipts_in(&secure)?;
     let mut cfg = load_from_secure(&secure)?;
     let current = cfg.clone();
     f(&mut cfg);
@@ -5323,6 +5343,7 @@ where
     let access = config_access();
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
     let (secure, _fence) = open_config_writer(dir, true).map_err(|error| error.to_string())?;
+    require_no_sidecar_mutation_receipts_in(&secure).map_err(|error| error.to_string())?;
     let mut cfg = load_from_secure(&secure).map_err(|error| error.to_string())?;
     let current = cfg.clone();
     let (result, changed) = f(&mut cfg)?;
@@ -5359,6 +5380,7 @@ where
     let access = config_access();
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
     let (secure, _fence) = open_config_writer(dir, true).map_err(|error| error.to_string())?;
+    require_no_sidecar_mutation_receipts_in(&secure).map_err(|error| error.to_string())?;
     let mut cfg = load_from_secure(&secure).map_err(|error| error.to_string())?;
     let current = cfg.clone();
     let (result, changed) = f(&mut cfg)?;
@@ -8213,7 +8235,10 @@ mod tests {
     #[test]
     fn p2b_open_fence_blocks_all_ordinary_config_writers_cross_process() {
         let dir = tmpdir();
-        let cfg = Config::default();
+        let cfg = Config {
+            experimental_codex_enabled: true,
+            ..Default::default()
+        };
         save_to(&dir, &cfg).unwrap();
         let fence = p2b_test_fence(&cfg);
         begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt").unwrap();
@@ -8235,6 +8260,35 @@ mod tests {
             Ok(((), true))
         })
         .is_err());
+        assert!(read_config_mutation_operation_receipt(&dir)
+            .unwrap()
+            .is_some());
+
+        // A crash/corruption can leave the durable receipt without its Config
+        // fence.  Admission must still fail closed under the same writer lock;
+        // boot attention is not a substitute for backend enforcement.
+        let no_fence = load_from(&dir)
+            .unwrap()
+            .without_config_mutation_operation_fence();
+        test_save_to_without_history_authority_guard(&dir, &no_fence).unwrap();
+        let mut receipt_only_change = no_fence.clone();
+        receipt_only_change.pending_notice = Some("receipt-only-writer".into());
+        assert!(save_to(&dir, &receipt_only_change).is_err());
+        assert!(update_result(&dir, |current| {
+            current.pending_notice = Some("receipt-only-writer".into());
+            Ok(((), true))
+        })
+        .is_err());
+
+        let mut disabled = no_fence.clone();
+        disabled.experimental_codex_enabled = false;
+        let p2a_fence = CodexDisableOperationFence::new(
+            new_id(),
+            "c".repeat(64),
+            codex_disable_config_fingerprint(&no_fence).unwrap(),
+            codex_disable_config_fingerprint(&disabled).unwrap(),
+        );
+        assert!(begin_codex_disable_operation(&dir, &no_fence, &p2a_fence, b"p2a").is_err());
         assert!(read_config_mutation_operation_receipt(&dir)
             .unwrap()
             .is_some());

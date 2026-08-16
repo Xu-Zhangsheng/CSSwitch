@@ -25,7 +25,8 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertIn("code=runtime_transaction_in_progress", config_source)
         self.assertIn("resolve_launch_plan(profile)?", pin)
         self.assertIn('"apply_state".into()', pin)
-        self.assertIn('serde_json::Value::String("pending".into())', pin)
+        self.assertIn('applied_profile_id.as_deref() == Some(id)', pin)
+        self.assertIn('serde_json::Value::String(apply_state.into())', pin)
         for forbidden in (
             "prepare_provider_auth",
             "scratch_validate_candidate",
@@ -109,7 +110,7 @@ class ProfilePinContractTests(unittest.TestCase):
 
         self.assertIn('call("set_active_profile", { id })', activate)
         self.assertIn("当前选择", activate)
-        self.assertIn("待一键开始应用", activate)
+        self.assertIn("待一键开始核验并应用", activate)
         self.assertNotIn("skipVerify", js)
         self.assertNotIn("can_skip", js)
         self.assertNotIn("pendingSkipActivateId", js)
@@ -125,9 +126,21 @@ class ProfilePinContractTests(unittest.TestCase):
             codex_snapshot_parser,
         )
         self.assertIn(
-            "next.config_mutation_operation_id !== codexAuthOperation.config_mutation_operation_id",
+            "codexOperationSnapshotTransitionAccepted(codexAuthOperation, next, allowReplacement)",
             codex_snapshot_accept,
         )
+        active_intent = js.split("function isExactActiveProfileIntent", 1)[1].split(
+            "\nasync function switchMode", 1
+        )[0]
+        self.assertIn('["committed", "no_change"].includes(outcome.disposition)', active_intent)
+        self.assertIn('outcome.selected_profile_id === selectedProfileId', active_intent)
+        self.assertIn('outcome.validation === "accepted"', active_intent)
+        self.assertIn('typeof outcome.science_running === "boolean"', active_intent)
+        self.assertIn('raw.apply_state === expectedApplyState', active_intent)
+        self.assertIn('outcome.applied_profile_id === selectedProfileId', active_intent)
+        self.assertIn('raw.applied_profile_id === outcome.applied_profile_id', active_intent)
+        self.assertIn('isExactActiveProfileIntent(r, intent, id)', activate)
+        self.assertNotIn("r.hint", activate)
         self.assertIn("当前选择", boundary)
         self.assertIn("当前选择 · 待一键开始应用", js)
         self.assertIn(">上次应用</span>", js)

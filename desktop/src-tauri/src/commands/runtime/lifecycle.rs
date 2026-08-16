@@ -127,25 +127,29 @@ where
             if let Some(operation) = mutation.as_mut() {
                 if let Some(index) = science_index {
                     operation
-                        .checkpoint_effect(
+                        .checkpoint_effect_or_attention(
                             index,
                             config_mutation::ConfigMutationEffectState::InProgress,
                             None,
+                            "science_stop_checkpoint_failed",
+                            "before",
+                            "unknown",
+                            config::ConfigMutationTerminalConfigImage::Before,
                         )
-                        .map_err(|error| {
-                            format!("Config mutation receipt 无法记录 Science effect：{error}")
-                        })?;
+                        .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
                 if let Some(index) = gateway_index {
                     operation
-                        .checkpoint_effect(
+                        .checkpoint_effect_or_attention(
                             index,
                             config_mutation::ConfigMutationEffectState::InProgress,
                             None,
+                            "gateway_stop_checkpoint_failed",
+                            "before",
+                            "unknown",
+                            config::ConfigMutationTerminalConfigImage::Before,
                         )
-                        .map_err(|error| {
-                            format!("Config mutation receipt 无法记录 Gateway effect：{error}")
-                        })?;
+                        .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
             }
             let (owner, request) =
@@ -196,14 +200,16 @@ where
             if let Some(operation) = mutation.as_mut() {
                 if let Some(index) = science_index {
                     operation
-                        .checkpoint_effect(
+                        .checkpoint_effect_or_attention(
                             index,
                             config_mutation::ConfigMutationEffectState::Succeeded,
                             Some("stopped"),
+                            "science_stop_checkpoint_failed",
+                            "before",
+                            "stopped",
+                            config::ConfigMutationTerminalConfigImage::Before,
                         )
-                        .map_err(|error| {
-                            format!("Science stop receipt checkpoint 失败：{error}")
-                        })?;
+                        .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
             }
             let gateway_result = stop_gateway(&mut st);
@@ -237,20 +243,38 @@ where
             if let Some(operation) = mutation.as_mut() {
                 if let Some(index) = gateway_index {
                     operation
-                        .checkpoint_effect(
+                        .checkpoint_effect_or_attention(
                             index,
                             config_mutation::ConfigMutationEffectState::Succeeded,
                             Some("stopped"),
+                            "gateway_stop_checkpoint_failed",
+                            "before",
+                            "stopped",
+                            config::ConfigMutationTerminalConfigImage::Before,
                         )
-                        .map_err(|error| {
-                            format!("Gateway stop receipt checkpoint 失败：{error}")
-                        })?;
+                        .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
             }
         }
         let outcome = if let Some(mut operation) = mutation {
             let mode_for_commit = mode.clone();
             let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+            let commit_index = operation.receipt().effects.len().saturating_sub(1);
+            operation
+                .checkpoint_effect_or_attention(
+                    commit_index,
+                    config_mutation::ConfigMutationEffectState::InProgress,
+                    None,
+                    "config_commit_checkpoint_failed",
+                    "before",
+                    if science_effect || gateway_effect {
+                        "stopped"
+                    } else {
+                        "preserved"
+                    },
+                    config::ConfigMutationTerminalConfigImage::Before,
+                )
+                .map_err(|error| config_mutation::command_error_string(&error))?;
             if let Err(error) = operation.update_config(move |c| {
                 if config::config_mutation_config_fingerprint(c)
                     .map_err(|error| error.to_string())?
@@ -281,14 +305,17 @@ where
                     Ok(_) => error,
                 });
             }
-            let commit_index = operation.receipt().effects.len().saturating_sub(1);
             operation
-                .checkpoint_effect(
+                .checkpoint_effect_or_attention(
                     commit_index,
                     config_mutation::ConfigMutationEffectState::Succeeded,
                     Some("committed"),
+                    "config_commit_checkpoint_failed",
+                    "after",
+                    "stopped",
+                    config::ConfigMutationTerminalConfigImage::After,
                 )
-                .map_err(|error| format!("Config mutation Config checkpoint 失败：{error}"))?;
+                .map_err(|error| config_mutation::command_error_string(&error))?;
             let outcome = operation
                 .finish(
                     "completed",
@@ -523,12 +550,16 @@ where
                 .flatten()
             {
                 operation
-                    .checkpoint_effect(
+                    .checkpoint_effect_or_attention(
                         index,
                         config_mutation::ConfigMutationEffectState::InProgress,
                         None,
+                        "runtime_stop_checkpoint_failed",
+                        "before",
+                        "unknown",
+                        config::ConfigMutationTerminalConfigImage::Before,
                     )
-                    .map_err(|error| format!("settings runtime receipt checkpoint 失败：{error}"))?;
+                    .map_err(|error| config_mutation::command_error_string(&error))?;
             }
         }
 
@@ -580,12 +611,16 @@ where
             if let Some(operation) = mutation.as_mut() {
                 if let Some(index) = science_index {
                     operation
-                        .checkpoint_effect(
+                        .checkpoint_effect_or_attention(
                             index,
                             config_mutation::ConfigMutationEffectState::Succeeded,
                             Some("stopped"),
+                            "science_stop_checkpoint_failed",
+                            "before",
+                            "stopped",
+                            config::ConfigMutationTerminalConfigImage::Before,
                         )
-                        .map_err(|error| format!("Science stop receipt checkpoint 失败：{error}"))?;
+                        .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
             }
             lifecycle.bump_generation();
@@ -619,12 +654,16 @@ where
             if let Some(operation) = mutation.as_mut() {
                 if let Some(index) = gateway_index {
                     operation
-                        .checkpoint_effect(
+                        .checkpoint_effect_or_attention(
                             index,
                             config_mutation::ConfigMutationEffectState::Succeeded,
                             Some("stopped"),
+                            "gateway_stop_checkpoint_failed",
+                            "before",
+                            "stopped",
+                            config::ConfigMutationTerminalConfigImage::Before,
                         )
-                        .map_err(|error| format!("Gateway stop receipt checkpoint 失败：{error}"))?;
+                        .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
             }
         }
@@ -632,12 +671,16 @@ where
         if bridge_owned {
             if let Some(operation) = mutation.as_mut() {
                 operation
-                    .checkpoint_effect(
+                    .checkpoint_effect_or_attention(
                         bridge_index.expect("bridge effect index"),
                         config_mutation::ConfigMutationEffectState::InProgress,
                         None,
+                        "ssh_bridge_checkpoint_failed",
+                        "before",
+                        if teardown { "stopped" } else { "preserved" },
+                        config::ConfigMutationTerminalConfigImage::Before,
                     )
-                    .map_err(|error| format!("SSH bridge receipt checkpoint 失败：{error}"))?;
+                    .map_err(|error| config_mutation::command_error_string(&error))?;
             }
             if let Err(error) = revoke_science_ssh_bridge(&paths.sandbox_home) {
                 if let Some(mut operation) = mutation.take() {
@@ -663,23 +706,31 @@ where
             }
             if let Some(operation) = mutation.as_mut() {
                 operation
-                    .checkpoint_effect(
+                    .checkpoint_effect_or_attention(
                         bridge_index.expect("bridge effect index"),
                         config_mutation::ConfigMutationEffectState::Succeeded,
                         Some("absent"),
+                        "ssh_bridge_checkpoint_failed",
+                        "before",
+                        if teardown { "stopped" } else { "preserved" },
+                        config::ConfigMutationTerminalConfigImage::Before,
                     )
-                    .map_err(|error| format!("SSH bridge receipt checkpoint 失败：{error}"))?;
+                    .map_err(|error| config_mutation::command_error_string(&error))?;
             }
         }
         if stub_owned {
             if let Some(operation) = mutation.as_mut() {
                 operation
-                    .checkpoint_effect(
+                    .checkpoint_effect_or_attention(
                         stub_index.expect("stub effect index"),
                         config_mutation::ConfigMutationEffectState::InProgress,
                         None,
+                        "ssh_stub_checkpoint_failed",
+                        "before",
+                        if teardown { "stopped" } else { "preserved" },
+                        config::ConfigMutationTerminalConfigImage::Before,
                     )
-                    .map_err(|error| format!("SSH stub receipt checkpoint 失败：{error}"))?;
+                    .map_err(|error| config_mutation::command_error_string(&error))?;
             }
             if let Err(error) = remove_managed_sandbox_ssh_stub(&paths.sandbox_home) {
                 if let Some(mut operation) = mutation.take() {
@@ -705,18 +756,33 @@ where
             }
             if let Some(operation) = mutation.as_mut() {
                 operation
-                    .checkpoint_effect(
+                    .checkpoint_effect_or_attention(
                         stub_index.expect("stub effect index"),
                         config_mutation::ConfigMutationEffectState::Succeeded,
                         Some("absent"),
+                        "ssh_stub_checkpoint_failed",
+                        "before",
+                        if teardown { "stopped" } else { "preserved" },
+                        config::ConfigMutationTerminalConfigImage::Before,
                     )
-                    .map_err(|error| format!("SSH stub receipt checkpoint 失败：{error}"))?;
+                    .map_err(|error| config_mutation::command_error_string(&error))?;
             }
         }
 
         if let Some(mut operation) = mutation {
             let before_fingerprint = operation.fence().before_config_fingerprint.clone();
             let next_cfg = cfg;
+            operation
+                .checkpoint_effect_or_attention(
+                    commit_index,
+                    config_mutation::ConfigMutationEffectState::InProgress,
+                    None,
+                    "config_commit_checkpoint_failed",
+                    "before",
+                    "stopped",
+                    config::ConfigMutationTerminalConfigImage::Before,
+                )
+                .map_err(|error| config_mutation::command_error_string(&error))?;
             operation
                 .update_config(move |current| {
                     if config::config_mutation_config_fingerprint(current)
@@ -752,12 +818,16 @@ where
                     }
                 })?;
             operation
-                .checkpoint_effect(
+                .checkpoint_effect_or_attention(
                     commit_index,
                     config_mutation::ConfigMutationEffectState::Succeeded,
                     Some("committed"),
+                    "config_commit_checkpoint_failed",
+                    "after",
+                    if teardown { "stopped" } else { "preserved" },
+                    config::ConfigMutationTerminalConfigImage::After,
                 )
-                .map_err(|error| format!("settings Config checkpoint 失败：{error}"))?;
+                .map_err(|error| config_mutation::command_error_string(&error))?;
             let outcome = operation
                 .finish(
                     "completed",

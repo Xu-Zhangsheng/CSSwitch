@@ -274,6 +274,19 @@ fn clear_profile_key_p2b(
         )
         .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
 
+        operation
+            .checkpoint_effect_or_attention(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "gateway_stop_checkpoint_failed",
+                "before",
+                "unknown",
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         lifecycle.bump_generation();
         if let Err(error) = lock(state).stop_proxy().require_stopped(
             "清除已应用 profile key 前无法安全停止 Gateway；配置未修改",
@@ -286,13 +299,32 @@ fn clear_profile_key_p2b(
             );
         }
         operation
-            .checkpoint_effect(
+            .checkpoint_effect_or_attention(
                 0,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                 Some("stopped"),
+                "gateway_stop_checkpoint_failed",
+                "before",
+                "stopped",
+                config::ConfigMutationTerminalConfigImage::Before,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+        operation
+            .checkpoint_effect_or_attention(
+                1,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "config_commit_checkpoint_failed",
+                "before",
+                "stopped",
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         if let Err(error) = crate::runtime::profile::clear_profile_key_with_mutation(
             dir,
             operation.fence(),
@@ -308,12 +340,18 @@ fn clear_profile_key_p2b(
             );
         }
         operation
-            .checkpoint_effect(
+            .checkpoint_effect_or_attention(
                 1,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                 Some("committed"),
+                "config_commit_checkpoint_failed",
+                "after",
+                "stopped",
+                config::ConfigMutationTerminalConfigImage::After,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         let outcome = operation
             .finish(
                 "completed",
@@ -381,6 +419,19 @@ fn delete_profile_p2b(
         )
         .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
 
+        operation
+            .checkpoint_effect_or_attention(
+                0,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "gateway_stop_checkpoint_failed",
+                "before",
+                "unknown",
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         lifecycle.bump_generation();
         if let Err(error) = lock(state).stop_proxy().require_stopped(
             "删除已应用 profile 前无法安全停止 Gateway；配置未修改",
@@ -393,13 +444,32 @@ fn delete_profile_p2b(
             );
         }
         operation
-            .checkpoint_effect(
+            .checkpoint_effect_or_attention(
                 0,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                 Some("stopped"),
+                "gateway_stop_checkpoint_failed",
+                "before",
+                "stopped",
+                config::ConfigMutationTerminalConfigImage::Before,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         let before_fingerprint = operation.fence().before_config_fingerprint.clone();
+        operation
+            .checkpoint_effect_or_attention(
+                1,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+                None,
+                "config_commit_checkpoint_failed",
+                "before",
+                "stopped",
+                config::ConfigMutationTerminalConfigImage::Before,
+            )
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         if let Err(error) = crate::runtime::profile::delete_profile_with_mutation(
             dir,
             operation.fence(),
@@ -415,12 +485,18 @@ fn delete_profile_p2b(
             );
         }
         operation
-            .checkpoint_effect(
+            .checkpoint_effect_or_attention(
                 1,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                 Some("committed"),
+                "config_commit_checkpoint_failed",
+                "after",
+                "stopped",
+                config::ConfigMutationTerminalConfigImage::After,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                crate::commands::runtime::config_mutation::command_error_string(&error)
+            })?;
         let outcome = operation
             .finish(
                 "completed",
@@ -791,6 +867,11 @@ fn pin_active_profile_in_dir(
         Some(science_running),
     );
     if let Some(object) = result.as_object_mut() {
+        let apply_state = if applied_profile_id.as_deref() == Some(id) {
+            "applied"
+        } else {
+            "pending"
+        };
         object.insert("committed".into(), serde_json::Value::Bool(true));
         object.insert("status".into(), serde_json::Value::String("ok".into()));
         object.insert(
@@ -803,7 +884,7 @@ fn pin_active_profile_in_dir(
         );
         object.insert(
             "apply_state".into(),
-            serde_json::Value::String("pending".into()),
+            serde_json::Value::String(apply_state.into()),
         );
         object.insert(
             "science_running".into(),
@@ -1122,7 +1203,7 @@ mod tests {
         let result = pin_active_profile_in_dir(&dir, &state, "active").unwrap();
         assert_eq!(result["selected_profile_id"], "active");
         assert_eq!(result["applied_profile_id"], "active");
-        assert_eq!(result["apply_state"], "pending");
+        assert_eq!(result["apply_state"], "applied");
         assert_eq!(
             config::load_from(&dir)
                 .unwrap()
@@ -1201,7 +1282,15 @@ mod tests {
             assert_eq!(after, expected, "{label}");
             assert_eq!(result["selected_profile_id"], target, "{label}");
             assert_eq!(result["applied_profile_id"], applied, "{label}");
-            assert_eq!(result["apply_state"], "pending", "{label}");
+            assert_eq!(
+                result["apply_state"],
+                if target == applied {
+                    "applied"
+                } else {
+                    "pending"
+                },
+                "{label}"
+            );
             assert_gateway_identity(&state, true);
             let _ = fs::remove_dir_all(&dir);
         }
@@ -1762,8 +1851,10 @@ mod tests {
         assert_eq!(result["applied_profile_id"], "one");
         assert_eq!(result["science_running"], false);
         assert_eq!(result["disposition"], "committed");
+        assert_eq!(result["apply_state"], "pending");
         let unchanged = pin_active_profile_in_dir(&dir, &state, "two").unwrap();
         assert_eq!(unchanged["disposition"], "no_change");
+        assert_eq!(unchanged["apply_state"], "pending");
 
         config::update(&dir, |current| {
             current.active_id = "one".into();
@@ -1773,6 +1864,7 @@ mod tests {
         let selected_commit = pin_active_profile_in_dir(&dir, &state, "two").unwrap();
         assert_eq!(selected_commit["disposition"], "committed");
         assert_eq!(selected_commit["applied_profile_id"], "two");
+        assert_eq!(selected_commit["apply_state"], "applied");
         assert_eq!(lock(&state).launch_id, "launch-current");
         assert!(config::read_config_mutation_operation_receipt(&dir)
             .unwrap()

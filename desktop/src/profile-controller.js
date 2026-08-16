@@ -486,6 +486,25 @@ function isExactCompletedConfigMutation(outcome, operation, runtimeStates) {
     typeof outcome.operation_id === "string";
 }
 
+function isExactActiveProfileIntent(raw, outcome, selectedProfileId) {
+  const expectedApplyState = outcome && outcome.applied_profile_id === selectedProfileId
+    ? "applied"
+    : "pending";
+  return !!raw && !!outcome &&
+    outcome.operation === "set_active_profile" &&
+    ["committed", "no_change"].includes(outcome.disposition) &&
+    outcome.config_state === "committed" &&
+    outcome.selected_profile_id === selectedProfileId &&
+    outcome.validation === "accepted" &&
+    typeof outcome.science_running === "boolean" &&
+    raw.committed === true &&
+    raw.status === "ok" &&
+    raw.apply_state === expectedApplyState &&
+    raw.selected_profile_id === outcome.selected_profile_id &&
+    raw.applied_profile_id === outcome.applied_profile_id &&
+    raw.science_running === outcome.science_running;
+}
+
 async function switchMode(m) {
   if (m === getMode()) return;
   if (isBusy()) return; // 忙碌中不切模式（防与「一键开始」竞态；按钮亦已禁用，此为双保险）。修 P1-b
@@ -1237,21 +1256,21 @@ async function activate(id) {
   try {
     const r = await call("set_active_profile", { id });
     const intent = parseConfigIntentOutcome(r);
-    if (!intent || intent.operation !== "set_active_profile") throw new Error("当前选择结果协议不匹配。");
-    if (r && r.committed) {
-      runtime.hideHistoryRecovery();
-      await loadConfigAfterCommit();
-      if (r.apply_state === "pending") {
-        getConfigState().selection_pending = true;
-        renderList();
-      }
-      setMsg((r.hint || "已设为当前选择，待一键开始应用。") + (codex
-        ? " 一键开始后，请在 Science 的 More models 中选择 Codex / …；默认 Claude 壳不会被静默映射。"
-        : ""), "ok");
-    } else {
-      await loadConfig();
-      setMsg((r && (r.message || r.hint)) || "当前选择未更改。", "err");
+    if (!isExactActiveProfileIntent(r, intent, id)) {
+      throw new Error("当前选择结果协议不匹配。");
     }
+    runtime.hideHistoryRecovery();
+    await loadConfigAfterCommit();
+    getConfigState().selection_pending = r.apply_state === "pending";
+    renderList();
+    const selectionMessage = r.apply_state === "applied"
+      ? "当前选择已是上次应用配置。"
+      : intent.disposition === "no_change"
+        ? "当前选择未变；仍待一键开始核验并应用。"
+        : "已设为当前选择，待一键开始核验并应用。";
+    setMsg(selectionMessage + (codex
+      ? " 一键开始后，请在 Science 的 More models 中选择 Codex / …；默认 Claude 壳不会被静默映射。"
+      : ""), "ok");
   } catch (e) {
     if (!(e && e.configCommitted)) await loadConfig();
     setMsg(e && e.configCommitted

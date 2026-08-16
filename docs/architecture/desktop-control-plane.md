@@ -93,15 +93,17 @@ cold、healthy reopen 或 interrupted-Gateway recovery 内部流程经 `GatewayC
 `delete_applied_profile`。Rust command 只向 frontend 返回脱敏的 typed outcome 或 typed
 command error；frontend 通过 `runtime-mutation-protocol.js` 严格解析 operation、status、
 effect summary 与 recovery disposition，不把 receipt、fence、credential 或私有路径带过
-invoke 边界。receipt 打开时普通 writer、P2-A journal 与 runtime journal 的冲突统一返回
+invoke 边界。receipt 或 fence 任一存在时，普通 writer、P2-A journal 与 runtime journal 的冲突统一返回
 可识别的 attention/error，不能由 UI 自动重试或把旧状态显示为已应用。
 
 `set_active_profile`、`update_profile_connection` 与 `codex_ensure_profile` 是 intent-only
 结果：它们报告 selected/updated/ensured 的 durable intent，不启动或停止 runtime，也不创建
 P2-B receipt。preview adapter 只镜像这些 typed DTO 与旧字段，不扩大 production caller。
-Codex auth start 的 sidecar 先等待匹配 operation id、authorization digest 的 `start_ack`；
-ack 之前不打开 OAuth/network flow，前端仍通过既有 `codex-auth://operation` snapshot 观察
-脱敏状态。
+每个真实 effect 在执行前先持久化带新 `attempt_id` 的 `InProgress`，返回后再持久化 exact terminal
+outcome；checkpoint 失败统一保留 durable attention。Codex auth start 的 sidecar 先等待匹配
+operation id、authorization digest 的 start control；Gateway flush `start_ack` 后才授权执行，ack
+之前不打开 OAuth/network flow。前端严格接受 `terminal + durable_receipt` attention，并仍通过既有
+`codex-auth://operation` snapshot 观察脱敏状态。
 
 ## event 面
 
