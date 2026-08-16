@@ -22,6 +22,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
 ) -> Result<Value, TypedOneClickFailure> {
     let app_snapshot = AppAuthoritySnapshot::capture(state);
     let prior_config = cfg.clone();
+    let mut rollback_proxy_action = ProxyAction::Reused;
     let attempt = (|| -> Result<Value, TypedOneClickFailure> {
         let _ = reconcile_current_science_runtime_adoption(
             running_runtime,
@@ -42,6 +43,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
                 format!("补齐历史恢复标记失败：{error}"),
             )
         })?;
+        rollback_proxy_action = ProxyAction::Restarted;
         let gateway = GatewayController::ensure_active(
             app,
             state,
@@ -51,6 +53,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             auth_proof,
         )
         .map_err(|message| typed_one_click_err(OneClickFailureKind::GatewayStart, message))?;
+        rollback_proxy_action = gateway.action;
         let secret = gateway.route_secret;
         let proxy_action = gateway.action;
         verify_gateway_model_catalog_traced(trace, cfg.proxy_port, &secret, active_profile)
@@ -156,7 +159,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
                     state,
                     lifecycle,
                     auth_proof,
-                    ProxyAction::Restarted,
+                    rollback_proxy_action,
                 );
                 if let Err(error) = gateway_restore.as_ref() {
                     recovery_errors.push(format!("gateway={error}"));

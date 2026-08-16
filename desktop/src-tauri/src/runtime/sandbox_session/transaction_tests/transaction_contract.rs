@@ -1134,6 +1134,14 @@ fn p2b_one_click_capture_to_destructive_entry_race_has_zero_effects() {
         br#"{"schema_version":1,"test":"capture-entry-race"}"#,
     )
     .unwrap();
+    let blocked = match OneClickEntryPreflight::capture_at(&dir, &state) {
+        Ok(_) => panic!("open P2-B receipt must block fresh one-click capture"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        blocked.kind(),
+        crate::runtime::failure::OneClickFailureKind::Prepare
+    );
     let effects = AtomicUsize::new(0);
     let result = captured.verify_unchanged_at(&dir, &state);
     if result.is_ok() {

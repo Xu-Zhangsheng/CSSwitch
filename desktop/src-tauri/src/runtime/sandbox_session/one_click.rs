@@ -192,6 +192,18 @@ pub(crate) struct OneClickEntryPreflight {
     auth_adapter: String,
 }
 
+fn typed_runtime_effect_admission_error(error: std::io::Error) -> TypedOneClickFailure {
+    let detail = error.to_string();
+    let kind = if detail.contains("code=codex_disable_operation_in_progress")
+        || detail.contains("code=config_mutation_operation_in_progress")
+    {
+        OneClickFailureKind::Prepare
+    } else {
+        OneClickFailureKind::ConfigLoad
+    };
+    typed_one_click_err(kind, detail)
+}
+
 impl OneClickEntryPreflight {
     pub(crate) fn capture(state: &SharedAppState) -> Result<Self, TypedOneClickFailure> {
         Self::capture_at(&config::default_dir(), state)
@@ -201,9 +213,8 @@ impl OneClickEntryPreflight {
         dir: &Path,
         state: &SharedAppState,
     ) -> Result<Self, TypedOneClickFailure> {
-        let cfg = config::load_for_runtime_effect_admission(dir).map_err(|error| {
-            typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
-        })?;
+        let cfg = config::load_for_runtime_effect_admission(dir)
+            .map_err(typed_runtime_effect_admission_error)?;
         let active = cfg.active_profile().ok_or_else(|| {
             typed_one_click_err(
                 OneClickFailureKind::NoActiveProfile,
@@ -566,10 +577,8 @@ pub(crate) fn one_click_login_entry<R: Runtime>(
     let mut finalize_cleanup_replayed = false;
     let mut gateway_recovery = None;
     loop {
-        let facts =
-            config::load_for_runtime_effect_admission(&config::default_dir()).map_err(|error| {
-                typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
-            })?;
+        let facts = config::load_for_runtime_effect_admission(&config::default_dir())
+            .map_err(typed_runtime_effect_admission_error)?;
         if replay_interrupted_one_click_compensation(&app, &state, lifecycle, auth_proof, &facts)
             .map_err(|error| {
                 TypedOneClickFailure::new(
@@ -1847,7 +1856,7 @@ fn one_click_login_with_options<R: Runtime>(
     let trace = OperationTrace::start(OperationKind::OneClickLogin, "command=one_click_login");
     let dir = config::default_dir();
     let cfg = config::load_for_runtime_effect_admission(&dir)
-        .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
+        .map_err(typed_runtime_effect_admission_error)?;
     if cfg.runtime_compensation.is_some() {
         return Err(TypedOneClickFailure::new(
             OneClickFailureKind::Prepare,
