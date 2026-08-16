@@ -45,8 +45,7 @@ const CODEX_DISABLE_OPERATION_RECEIPT_FILE: &str = "codex-disable-operation.v1.j
 const CODEX_DISABLE_OPERATION_RECEIPT_CLEARING_FILE: &str = ".codex-disable-operation.v1.clearing";
 const CODEX_DISABLE_OPERATION_FENCE_KEY: &str = "codex_disable_operation";
 const CODEX_DISABLE_OPERATION_FENCE_SCHEMA_VERSION: u32 = 1;
-pub(crate) const CONFIG_MUTATION_OPERATION_RECEIPT_FILE: &str =
-    "config-mutation-operation.v1.json";
+pub(crate) const CONFIG_MUTATION_OPERATION_RECEIPT_FILE: &str = "config-mutation-operation.v1.json";
 pub(crate) const CONFIG_MUTATION_OPERATION_CLEARING_FILE: &str =
     ".config-mutation-operation.v1.clearing";
 pub(crate) const CONFIG_MUTATION_OPERATION_FENCE_KEY: &str = "config_mutation_operation";
@@ -1804,16 +1803,15 @@ impl ConfigMutationOperationFence {
             && self.auth_epoch.as_deref().is_none_or(|value| {
                 value.len() <= 128
                     && !value.is_empty()
-                    && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
             })
             && self
                 .auth_account_hash
                 .as_deref()
                 .is_none_or(|value| Self::valid_lower_hex(value, 64))
-            && valid_state(
-                self.config_state.as_ref(),
-                &["before", "after", "unknown"],
-            )
+            && valid_state(self.config_state.as_ref(), &["before", "after", "unknown"])
             && valid_state(
                 self.runtime_state.as_ref(),
                 &["preserved", "stopped", "restored", "unknown"],
@@ -1825,16 +1823,23 @@ impl ConfigMutationOperationFence {
             ));
         }
         match self.phase.as_str() {
-            "begin" if self.terminal_receipt_digest.is_none()
-                && self.config_state.is_none()
-                && self.runtime_state.is_none() => Ok(()),
+            "begin"
+                if self.terminal_receipt_digest.is_none()
+                    && self.config_state.is_none()
+                    && self.runtime_state.is_none() =>
+            {
+                Ok(())
+            }
             "terminal"
                 if self
                     .terminal_receipt_digest
                     .as_deref()
                     .is_some_and(|value| Self::valid_lower_hex(value, 64))
                     && self.config_state.is_some()
-                    && self.runtime_state.is_some() => Ok(()),
+                    && self.runtime_state.is_some() =>
+            {
+                Ok(())
+            }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Config mutation operation fence phase/terminal fields 非法",
@@ -2031,9 +2036,7 @@ impl Config {
 
     pub(crate) fn without_config_mutation_operation_fence(&self) -> Self {
         let mut normalized = self.clone();
-        normalized
-            .extra
-            .remove(CONFIG_MUTATION_OPERATION_FENCE_KEY);
+        normalized.extra.remove(CONFIG_MUTATION_OPERATION_FENCE_KEY);
         normalized
     }
 
@@ -2916,9 +2919,7 @@ fn validate_config_mutation_receipt_size(bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn read_config_mutation_operation_receipt_in(
-    secure: &SecureDir,
-) -> io::Result<Option<Vec<u8>>> {
+fn read_config_mutation_operation_receipt_in(secure: &SecureDir) -> io::Result<Option<Vec<u8>>> {
     let active = secure.read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)?;
     let clearing = secure.read_regular(CONFIG_MUTATION_OPERATION_CLEARING_FILE)?;
     if let Some(bytes) = active.as_deref() {
@@ -2955,9 +2956,7 @@ fn read_config_mutation_operation_receipt_in(
 /// Read the independent P2-B receipt through the secure Config directory.
 /// A recoverable clearing tombstone is resurrected before the bytes are
 /// returned, preserving the exact terminal record across a crash.
-pub(crate) fn read_config_mutation_operation_receipt(
-    dir: &Path,
-) -> io::Result<Option<Vec<u8>>> {
+pub(crate) fn read_config_mutation_operation_receipt(dir: &Path) -> io::Result<Option<Vec<u8>>> {
     let access = config_access();
     ensure_config_access_open(&access)?;
     let (secure, _fence) = match open_config_writer(dir, false) {
@@ -2993,9 +2992,7 @@ pub(crate) fn begin_config_mutation_operation(
             "P2-B begin 前已有互斥 operation fence",
         ));
     }
-    if config_mutation_config_fingerprint(expected_config)?
-        != fence.before_config_fingerprint
-    {
+    if config_mutation_config_fingerprint(expected_config)? != fence.before_config_fingerprint {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Config mutation begin before-image fingerprint 不匹配",
@@ -3037,8 +3034,7 @@ pub(crate) fn begin_config_mutation_operation(
         let rollback = (|| {
             let fenced = load_from_secure(&secure)?;
             if fenced.config_mutation_operation_fence()?.as_ref() != Some(fence)
-                || config_mutation_config_fingerprint(&fenced)?
-                    != fence.before_config_fingerprint
+                || config_mutation_config_fingerprint(&fenced)? != fence.before_config_fingerprint
                 || read_config_mutation_operation_receipt_in(&secure)?.is_some()
             {
                 return Err(io::Error::other(
@@ -3081,7 +3077,30 @@ pub(crate) fn update_config_mutation_operation<T, F>(
 where
     F: FnOnce(&mut Config) -> Result<(T, bool), String>,
 {
-    expected_fence.validate().map_err(|error| error.to_string())?;
+    update_config_mutation_operation_with_after_fingerprint(
+        dir,
+        expected_fence,
+        expected_receipt,
+        f,
+    )
+    .map(|(result, _after_fingerprint)| result)
+}
+
+/// The dynamic-after variant returns the exact Config image observed while
+/// the Config writer lock is still held. Callers must checkpoint that digest
+/// into their durable receipt before claiming an `after` terminal image.
+pub(crate) fn update_config_mutation_operation_with_after_fingerprint<T, F>(
+    dir: &Path,
+    expected_fence: &ConfigMutationOperationFence,
+    expected_receipt: &[u8],
+    f: F,
+) -> Result<(T, String), String>
+where
+    F: FnOnce(&mut Config) -> Result<(T, bool), String>,
+{
+    expected_fence
+        .validate()
+        .map_err(|error| error.to_string())?;
     let access = config_access();
     ensure_config_access_open(&access).map_err(|error| error.to_string())?;
     let (secure, _writer) = open_config_writer(dir, false).map_err(|error| error.to_string())?;
@@ -3131,7 +3150,23 @@ where
         }
         save_to_secure(&secure, &current).map_err(|error| error.to_string())?;
     }
-    Ok(result)
+    let committed = load_from_secure(&secure).map_err(|error| error.to_string())?;
+    if committed
+        .config_mutation_operation_fence()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(expected_fence)
+        || secure
+            .read_regular(CONFIG_MUTATION_OPERATION_RECEIPT_FILE)
+            .map_err(|error| error.to_string())?
+            .as_deref()
+            != Some(expected_receipt)
+    {
+        return Err("Config mutation dynamic after-image 回读身份不匹配".into());
+    }
+    let after_fingerprint =
+        config_mutation_config_fingerprint(&committed).map_err(|error| error.to_string())?;
+    Ok((result, after_fingerprint))
 }
 
 /// Exact-byte checkpoint for the durable receipt. It cannot create a
@@ -3210,7 +3245,7 @@ pub(crate) fn publish_config_mutation_terminal_fence(
             "Config mutation begin fence 在 terminal checkpoint 前变化",
         ));
     }
-    let expected_fingerprint = terminal_image.fingerprint(expected_begin_fence);
+    let expected_fingerprint = terminal_image.fingerprint(terminal_fence);
     if expected_fingerprint.is_some_and(|expected| {
         config_mutation_config_fingerprint(&current)
             .map(|actual| actual != expected)
@@ -3222,7 +3257,9 @@ pub(crate) fn publish_config_mutation_terminal_fence(
     }
     current.set_config_mutation_operation_fence(terminal_fence);
     save_to_secure(&secure, &current)?;
-    if load_from_secure(&secure)?.config_mutation_operation_fence()?.as_ref()
+    if load_from_secure(&secure)?
+        .config_mutation_operation_fence()?
+        .as_ref()
         != Some(terminal_fence)
     {
         return Err(io::Error::other(
@@ -8041,7 +8078,9 @@ mod tests {
         begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt-one").unwrap();
         assert!(begin_config_mutation_operation(&dir, &cfg, &fence, b"receipt-two").is_err());
         assert_eq!(
-            read_config_mutation_operation_receipt(&dir).unwrap().as_deref(),
+            read_config_mutation_operation_receipt(&dir)
+                .unwrap()
+                .as_deref(),
             Some(b"receipt-one".as_slice())
         );
         assert!(write_config_mutation_operation(
@@ -8053,17 +8092,12 @@ mod tests {
         .is_err());
         assert!(write_config_mutation_operation(&dir, &fence, b"replacement", b"stale").is_err());
         assert_eq!(
-            read_config_mutation_operation_receipt(&dir).unwrap().as_deref(),
+            read_config_mutation_operation_receipt(&dir)
+                .unwrap()
+                .as_deref(),
             Some(b"receipt-one".as_slice())
         );
-        let terminal = fence.terminal(
-            "b".repeat(64),
-            "before",
-            "preserved",
-            None,
-            None,
-            None,
-        );
+        let terminal = fence.terminal("b".repeat(64), "before", "preserved", None, None, None);
         publish_config_mutation_terminal_fence(
             &dir,
             &fence,
@@ -8201,10 +8235,8 @@ mod tests {
             Ok(((), true))
         })
         .is_err());
-        assert!(
-            read_config_mutation_operation_receipt(&dir)
-                .unwrap()
-                .is_some()
-        );
+        assert!(read_config_mutation_operation_receipt(&dir)
+            .unwrap()
+            .is_some());
     }
 }

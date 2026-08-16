@@ -71,6 +71,14 @@ test("attention errors are retry-disabled and can be safely formatted", () => {
 
 test("malformed or unknown envelopes fail closed without becoming retryable success", () => {
   assert.equal(parseConfigMutationResponse({ status: "ok" }), null);
+  assert.equal(parseConfigMutationOutcome({
+    schema_version: 1,
+    operation: "set_codex_network",
+    disposition: "completed",
+    config_state: "after",
+    runtime_state: "preserved",
+    recovery_state: "not_needed",
+  }), null);
   assert.throws(() => parseConfigMutationCommandError({
     schema_version: 1,
     code: "config_mutation_attention",

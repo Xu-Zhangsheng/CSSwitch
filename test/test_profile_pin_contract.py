@@ -24,7 +24,7 @@ class ProfilePinContractTests(unittest.TestCase):
         config_source = (ROOT / "desktop/src-tauri/src/config.rs").read_text()
         self.assertIn("code=runtime_transaction_in_progress", config_source)
         self.assertIn("resolve_launch_plan(profile)?", pin)
-        self.assertIn('object.insert("apply_state".into()', pin)
+        self.assertIn('"apply_state".into()', pin)
         self.assertIn('serde_json::Value::String("pending".into())', pin)
         for forbidden in (
             "prepare_provider_auth",
@@ -113,6 +113,21 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertNotIn("skipVerify", js)
         self.assertNotIn("can_skip", js)
         self.assertNotIn("pendingSkipActivateId", js)
+        codex_controller = (ROOT / "desktop/src/codex-controller.js").read_text()
+        codex_snapshot_parser = codex_controller.split(
+            "function parseCodexOperationSnapshot(value)", 1
+        )[1].split("\nfunction codexOperationActive", 1)[0]
+        codex_snapshot_accept = codex_controller.split(
+            "function acceptCodexOperationSnapshot(raw, allowReplacement)", 1
+        )[1].split("\nasync function registerCodexAuthEvents", 1)[0]
+        self.assertIn(
+            'value.state !== "starting" && value.config_mutation_operation_id == null',
+            codex_snapshot_parser,
+        )
+        self.assertIn(
+            "next.config_mutation_operation_id !== codexAuthOperation.config_mutation_operation_id",
+            codex_snapshot_accept,
+        )
         self.assertIn("当前选择", boundary)
         self.assertIn("当前选择 · 待一键开始应用", js)
         self.assertIn(">上次应用</span>", js)
@@ -122,6 +137,51 @@ class ProfilePinContractTests(unittest.TestCase):
         self.assertNotIn("skip_verify", command)
         html = (ROOT / "desktop/src/index.html").read_text()
         self.assertNotIn("skipActivateBtn", html)
+
+    def test_mode_switch_accepts_only_exact_typed_terminal_outcomes(self):
+        main = (ROOT / "desktop/src/profile-controller.js").read_text()
+        exact_intent = main.split("function isExactConfigIntent", 1)[1].split(
+            "\nfunction isExactCompletedConfigMutation", 1
+        )[0]
+        exact_terminal = main.split("function isExactCompletedConfigMutation", 1)[1].split(
+            "\nasync function switchMode", 1
+        )[0]
+        switch_mode = main.split("async function switchMode(m)", 1)[1].split(
+            "\nasync function openOfficial", 1
+        )[0]
+        settings = main.split("async function persistRuntimeSettings()", 1)[1].split(
+            "\n// ── 模型候选", 1
+        )[0]
+        clear_key = main.split("async function doClearKey(id)", 1)[1].split(
+            "\n// ── C4", 1
+        )[0]
+        delete = main.split("async function doDelete(id)", 1)[1].split(
+            "\n// 设为当前", 1
+        )[0]
+
+        self.assertIn("dispositions.includes(outcome.disposition)", exact_intent)
+        self.assertIn('outcome.config_state === "committed"', exact_intent)
+        self.assertIn('typeof outcome.intent_id === "string"', exact_intent)
+        self.assertIn('outcome.validation === "not_run"', exact_intent)
+        self.assertIn("outcome.science_running === false", exact_intent)
+        self.assertIn('outcome.disposition === "completed"', exact_terminal)
+        self.assertIn('outcome.config_state === "after"', exact_terminal)
+        self.assertIn("runtimeStates.includes(outcome.runtime_state)", exact_terminal)
+        self.assertIn('outcome.recovery_state === "not_needed"', exact_terminal)
+        self.assertIn('typeof outcome.operation_id === "string"', exact_terminal)
+
+        self.assertIn('isExactConfigIntent(outcome, "set_mode", ["committed"])', switch_mode)
+        self.assertIn('m === "official"', switch_mode)
+        for source, intent, destructive in (
+            (settings, "set_settings", "set_settings_destructive"),
+            (clear_key, "clear_profile_key", "clear_applied_profile_key"),
+            (delete, "delete_profile", "delete_applied_profile"),
+        ):
+            self.assertIn("isExactConfigIntent(", source)
+            self.assertIn(f'"{intent}"', source)
+            self.assertIn(f'"{destructive}"', source)
+            self.assertIn("isExactCompletedConfigMutation(", source)
+        self.assertIn('"set_mode_official"', switch_mode)
 
     def test_success_keeps_single_finally_busy_ownership_through_refresh(self):
         js = (ROOT / "desktop/src/runtime-controller.js").read_text()

@@ -83,12 +83,13 @@ impl LoginControl {
 
     pub fn cancel(&self) -> CancelDisposition {
         loop {
-            match self.state.load(Ordering::Acquire) {
+            let observed = self.state.load(Ordering::Acquire);
+            match observed {
                 CONTROL_RUNNING | CONTROL_WAITING_START => {
                     if self
                         .state
                         .compare_exchange(
-                            CONTROL_RUNNING,
+                            observed,
                             CONTROL_CANCELLED,
                             Ordering::AcqRel,
                             Ordering::Acquire,
@@ -1199,6 +1200,10 @@ mod tests {
 
     #[test]
     fn cancel_and_commit_use_one_atomic_barrier() {
+        let awaiting_start = LoginControl::awaiting_start();
+        assert_eq!(awaiting_start.cancel(), CancelDisposition::Accepted);
+        assert!(!awaiting_start.authorize_start());
+
         let cancel_first = LoginControl::default();
         assert_eq!(cancel_first.cancel(), CancelDisposition::Accepted);
         assert_eq!(

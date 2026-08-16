@@ -179,14 +179,13 @@ where
                     );
                     if let Err(attention) = attention {
                         return Err(config_mutation::command_error_string(
-                            &attention.with_message(if error
-                                .to_string()
-                                .contains("process-local owner 已变化")
-                            {
-                                "停止沙箱失败：process-local owner 已变化"
-                            } else {
-                                "停止沙箱失败，未切换到官方模式"
-                            }),
+                            &attention.with_message(
+                                if error.to_string().contains("process-local owner 已变化") {
+                                    "停止沙箱失败：process-local owner 已变化"
+                                } else {
+                                    "停止沙箱失败，未切换到官方模式"
+                                },
+                            ),
                         ));
                     }
                 }
@@ -202,7 +201,9 @@ where
                             config_mutation::ConfigMutationEffectState::Succeeded,
                             Some("stopped"),
                         )
-                        .map_err(|error| format!("Science stop receipt checkpoint 失败：{error}"))?;
+                        .map_err(|error| {
+                            format!("Science stop receipt checkpoint 失败：{error}")
+                        })?;
                 }
             }
             let gateway_result = stop_gateway(&mut st);
@@ -241,7 +242,9 @@ where
                             config_mutation::ConfigMutationEffectState::Succeeded,
                             Some("stopped"),
                         )
-                        .map_err(|error| format!("Gateway stop receipt checkpoint 失败：{error}"))?;
+                        .map_err(|error| {
+                            format!("Gateway stop receipt checkpoint 失败：{error}")
+                        })?;
                 }
             }
         }
@@ -266,15 +269,15 @@ where
                     config::ConfigMutationTerminalConfigImage::Before,
                 );
                 return Err(match attention {
-                    Err(attention) => config_mutation::command_error_string(
-                        &attention.with_message(if error
-                            .contains("test-only config update commit failure")
-                        {
-                            "test-only config update commit failure"
-                        } else {
-                            "官方模式配置未提交"
-                        }),
-                    ),
+                    Err(attention) => {
+                        config_mutation::command_error_string(&attention.with_message(
+                            if error.contains("test-only config update commit failure") {
+                                "test-only config update commit failure"
+                            } else {
+                                "官方模式配置未提交"
+                            },
+                        ))
+                    }
                     Ok(_) => error,
                 });
             }
@@ -771,7 +774,7 @@ where
             crate::clear_boot_attention(&app);
             Ok(config_mutation::outcome_json(&outcome))
         } else {
-            config::update_result(&paths.config_dir, move |current| {
+            let changed = config::update_result(&paths.config_dir, move |current| {
                 config::require_no_runtime_transaction(current)?;
                 let changed = current.proxy_port != cfg.proxy_port
                     || current.sandbox_port != cfg.sandbox_port
@@ -789,7 +792,7 @@ where
             crate::clear_boot_attention(&app);
             Ok(config_mutation::typed_intent_outcome(
                 "set_settings",
-                if teardown { "committed" } else { "no_change" },
+                if changed { "committed" } else { "no_change" },
                 "committed",
                 None,
                 None,

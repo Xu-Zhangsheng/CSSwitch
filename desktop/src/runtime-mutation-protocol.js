@@ -90,13 +90,14 @@ export function parseConfigMutationOutcome(raw) {
   const value = jsonObject(raw);
   if (!value || value.schema_version !== 1 || !OPERATIONS.has(value.operation) ||
       !DISPOSITIONS.has(value.disposition) || !CONFIG_STATES.has(value.config_state) ||
-      !RUNTIME_STATES.has(value.runtime_state) || !boundedToken(value.recovery_state)) return null;
-  if (value.operation_id != null && !HEX32.test(String(value.operation_id))) {
+      !RUNTIME_STATES.has(value.runtime_state) || !boundedToken(value.recovery_state) ||
+      value.operation_id == null) return null;
+  if (!HEX32.test(String(value.operation_id))) {
     throw new Error("CSSwitch 普通配置变更结果 operation_id 不匹配。");
   }
   return {
     schema_version: 1,
-    operation_id: value.operation_id == null ? null : String(value.operation_id),
+    operation_id: String(value.operation_id),
     operation: value.operation,
     disposition: value.disposition,
     config_state: value.config_state,

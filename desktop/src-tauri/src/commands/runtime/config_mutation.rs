@@ -54,7 +54,9 @@ impl ConfigMutationOperation {
     }
 
     fn parse(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|operation| operation.as_str() == value)
+        Self::ALL
+            .into_iter()
+            .find(|operation| operation.as_str() == value)
     }
 }
 
@@ -292,9 +294,9 @@ impl ConfigMutationCommandErrorV1 {
         let message = message.into();
         if !message.is_empty()
             && message.chars().count() <= 512
-            && message.chars().all(|character| {
-                character != '\n' && character != '\r' && character != '\0'
-            })
+            && message
+                .chars()
+                .all(|character| character != '\n' && character != '\r' && character != '\0')
         {
             self.message = Some(message);
         }
@@ -339,9 +341,9 @@ fn lower_hex(value: &str, length: usize) -> bool {
 fn bounded_token(value: &str, max: usize) -> bool {
     !value.is_empty()
         && value.len() <= max
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
 fn digest_bytes(prefix: &[u8], bytes: impl AsRef<[u8]>) -> String {
@@ -426,8 +428,14 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
     if !bounded_token(&receipt.terminal.state, 32)
         || !bounded_token(&receipt.terminal.config_state, 32)
         || !bounded_token(&receipt.terminal.runtime_state, 32)
-        || !matches!(receipt.terminal.state.as_str(), "open" | "completed" | "attention")
-        || !matches!(receipt.terminal.config_state.as_str(), "before" | "after" | "unknown")
+        || !matches!(
+            receipt.terminal.state.as_str(),
+            "open" | "completed" | "attention"
+        )
+        || !matches!(
+            receipt.terminal.config_state.as_str(),
+            "before" | "after" | "unknown"
+        )
         || !matches!(
             receipt.terminal.runtime_state.as_str(),
             "preserved" | "stopped" | "restored" | "unknown"
@@ -565,6 +573,28 @@ impl OpenConfigMutation {
         config::update_config_mutation_operation(&self.dir, &self.fence, &self.bytes, f)
     }
 
+    pub(crate) fn bind_after_config_fingerprint(
+        &mut self,
+        after_config_fingerprint: String,
+    ) -> Result<(), String> {
+        if self
+            .fence
+            .after_config_fingerprint
+            .as_ref()
+            .is_some_and(|expected| expected != &after_config_fingerprint)
+            || self
+                .receipt
+                .after_config_fingerprint
+                .as_ref()
+                .is_some_and(|expected| expected != &after_config_fingerprint)
+        {
+            return Err("Config mutation dynamic after-image 与既有约束不匹配".into());
+        }
+        self.update_receipt(|receipt| {
+            receipt.after_config_fingerprint = Some(after_config_fingerprint);
+        })
+    }
+
     pub(crate) fn finish(
         &mut self,
         disposition: &str,
@@ -573,38 +603,20 @@ impl OpenConfigMutation {
         cause: Option<&str>,
         terminal_image: ConfigMutationTerminalConfigImage,
     ) -> Result<ConfigMutationOutcomeV1, ConfigMutationCommandErrorV1> {
-        // Some operations (notably auth start) cannot know their exact
-        // Config after-image until the idempotent profile handoff completes.
-        // Bind that image immediately before terminal publication; cleanup
-        // must never fall back to an unbounded `Unknown` image for a claimed
-        // Config commit.
+        // Dynamic-after operations must bind the image at their scoped Config
+        // commit. Reading it here would absorb an out-of-band drift as the
+        // authorized after-image.
         if disposition == "completed"
             && matches!(terminal_image, ConfigMutationTerminalConfigImage::After)
             && self.fence.after_config_fingerprint.is_none()
+            && self.receipt.after_config_fingerprint.is_none()
         {
-            let current = match config::load_from(&self.dir) {
-                Ok(current) => current,
-                Err(error) => {
-                    return Err(self.attention(
-                        "terminal_config_read",
-                        "terminal",
-                        error.to_string(),
-                        true,
-                    ))
-                }
-            };
-            let fingerprint = match config::config_mutation_config_fingerprint(&current) {
-                Ok(fingerprint) => fingerprint,
-                Err(error) => {
-                    return Err(self.attention(
-                        "terminal_config_fingerprint",
-                        "terminal",
-                        error.to_string(),
-                        true,
-                    ))
-                }
-            };
-            self.receipt.after_config_fingerprint = Some(fingerprint);
+            return Err(self.attention(
+                "terminal_after_unbound",
+                "terminal",
+                "dynamic after-image was not bound at the scoped Config commit".into(),
+                true,
+            ));
         }
         self.receipt.terminal = TerminalReceipt {
             state: if disposition == "completed" {
@@ -623,12 +635,9 @@ impl OpenConfigMutation {
             Ok(bytes) => bytes,
             Err(error) => return Err(self.attention("terminal_invalid", "terminal", error, true)),
         };
-        if let Err(error) = config::write_config_mutation_operation(
-            &self.dir,
-            &self.fence,
-            &next,
-            &self.bytes,
-        ) {
+        if let Err(error) =
+            config::write_config_mutation_operation(&self.dir, &self.fence, &next, &self.bytes)
+        {
             return Err(self.attention("receipt_checkpoint", "terminal", error.to_string(), true));
         }
         let mut terminal_base = self.fence.clone();
@@ -728,14 +737,29 @@ pub(crate) fn begin(
     auth_operation: Option<AuthOperationReceipt>,
     ssh_plan: Option<SshPlan>,
 ) -> Result<OpenConfigMutation, ConfigMutationCommandErrorV1> {
-    let before_fingerprint = config::config_mutation_config_fingerprint(before).map_err(|error| {
-        command_error(operation, "fingerprint", "config_fingerprint", false, false, error.to_string())
-    })?;
+    let before_fingerprint =
+        config::config_mutation_config_fingerprint(before).map_err(|error| {
+            command_error(
+                operation,
+                "fingerprint",
+                "config_fingerprint",
+                false,
+                false,
+                error.to_string(),
+            )
+        })?;
     let after_fingerprint = after
         .map(|config| config::config_mutation_config_fingerprint(config))
         .transpose()
         .map_err(|error| {
-            command_error(operation, "fingerprint", "config_fingerprint", false, false, error.to_string())
+            command_error(
+                operation,
+                "fingerprint",
+                "config_fingerprint",
+                false,
+                false,
+                error.to_string(),
+            )
         })?;
     let operation_id = config::new_id();
     let effect_receipts = effects
@@ -782,9 +806,8 @@ pub(crate) fn begin(
         before_fingerprint,
         after_fingerprint,
     );
-    let fence_bytes = serialize_fence(&fence).map_err(|error| {
-        command_error(operation, "intent", "fence_schema", false, false, error)
-    })?;
+    let fence_bytes = serialize_fence(&fence)
+        .map_err(|error| command_error(operation, "intent", "fence_schema", false, false, error))?;
     if fence_bytes.len() > 8 * 1024 {
         return Err(command_error(
             operation,
@@ -803,7 +826,14 @@ pub(crate) fn begin(
         } else {
             "intent"
         };
-        command_error(operation, "intent", cause, cause == "mutation_conflict", false, error.to_string())
+        command_error(
+            operation,
+            "intent",
+            cause,
+            cause == "mutation_conflict",
+            false,
+            error.to_string(),
+        )
     })?;
     // Keep the in-memory copy canonical after the successful publication.
     receipt.fenced_before_fingerprint = fence.before_config_fingerprint.clone();
@@ -846,14 +876,16 @@ fn command_error(
 }
 
 pub(crate) fn outcome_json(outcome: &ConfigMutationOutcomeV1) -> Value {
-    serde_json::to_value(outcome).unwrap_or_else(|_| json!({
-        "schema_version": RECEIPT_SCHEMA_VERSION,
-        "operation": outcome.operation,
-        "disposition": "attention",
-        "config_state": "unknown",
-        "runtime_state": "unknown",
-        "recovery_state": "attention"
-    }))
+    serde_json::to_value(outcome).unwrap_or_else(|_| {
+        json!({
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "operation": outcome.operation,
+            "disposition": "attention",
+            "config_state": "unknown",
+            "runtime_state": "unknown",
+            "recovery_state": "attention"
+        })
+    })
 }
 
 pub(crate) fn command_error_string(error: &ConfigMutationCommandErrorV1) -> String {
@@ -880,7 +912,9 @@ pub(crate) fn typed_intent_outcome(
         validation: validation.map(str::to_string),
         science_running,
     })
-    .unwrap_or_else(|_| json!({"schema_version": INTENT_SCHEMA_VERSION, "disposition": "inconclusive"}))
+    .unwrap_or_else(
+        |_| json!({"schema_version": INTENT_SCHEMA_VERSION, "disposition": "inconclusive"}),
+    )
 }
 
 fn boot_attention(operation: Option<&str>, cause: &str) -> Value {
@@ -903,13 +937,13 @@ fn boot_attention(operation: Option<&str>, cause: &str) -> Value {
 /// typed attention result and therefore stop normal Gateway/Science boot.
 pub(crate) fn boot_recover(dir: &Path) -> Result<Option<Value>, String> {
     let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
-    let p2a_receipt = config::read_codex_disable_operation_receipt(dir)
-        .map_err(|error| error.to_string())?;
+    let p2a_receipt =
+        config::read_codex_disable_operation_receipt(dir).map_err(|error| error.to_string())?;
     let p2a_fence = cfg
         .codex_disable_operation_fence()
         .map_err(|error| error.to_string())?;
-    let p2b_receipt = config::read_config_mutation_operation_receipt(dir)
-        .map_err(|error| error.to_string())?;
+    let p2b_receipt =
+        config::read_config_mutation_operation_receipt(dir).map_err(|error| error.to_string())?;
     let p2b_fence = cfg
         .config_mutation_operation_fence()
         .map_err(|error| error.to_string())?;
@@ -930,8 +964,9 @@ pub(crate) fn boot_recover(dir: &Path) -> Result<Option<Value>, String> {
     if let Some(bytes) = p2b_receipt {
         let receipt: ConfigMutationReceipt = serde_json::from_slice(&bytes)
             .map_err(|_| "Config mutation boot receipt 非法；已保留 attention".to_string())?;
-        validate_receipt(&receipt)
-            .map_err(|_| "Config mutation boot receipt schema 非法；已保留 attention".to_string())?;
+        validate_receipt(&receipt).map_err(|_| {
+            "Config mutation boot receipt schema 非法；已保留 attention".to_string()
+        })?;
         let Some(fence) = p2b_fence.as_ref() else {
             return Ok(Some(boot_attention(
                 Some(receipt.operation.as_str()),
@@ -942,8 +977,7 @@ pub(crate) fn boot_recover(dir: &Path) -> Result<Option<Value>, String> {
             || receipt.operation != fence.operation
             || receipt.terminal.state != "completed"
             || fence.phase != "terminal"
-            || fence.terminal_receipt_digest.as_deref()
-                != Some(receipt_digest(&bytes).as_str())
+            || fence.terminal_receipt_digest.as_deref() != Some(receipt_digest(&bytes).as_str())
         {
             return Ok(Some(boot_attention(
                 Some(receipt.operation.as_str()),
@@ -1025,7 +1059,8 @@ mod tests {
         let dir = config_dir();
         config::save_to(&dir, &Config::default()).unwrap();
         let operation = open_fixture(&dir);
-        let bytes = std::fs::read(dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap();
+        let bytes =
+            std::fs::read(dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("set_mode_official"));
         assert!(!text.contains("https://"));
@@ -1077,7 +1112,11 @@ mod tests {
         config::save_to(&dir, &Config::default()).unwrap();
         let mut operation = open_fixture(&dir);
         operation
-            .checkpoint_effect(0, ConfigMutationEffectState::Succeeded, Some("config_commit"))
+            .checkpoint_effect(
+                0,
+                ConfigMutationEffectState::Succeeded,
+                Some("config_commit"),
+            )
             .unwrap();
         let outcome = operation
             .finish(
@@ -1092,8 +1131,9 @@ mod tests {
         assert!(!dir
             .join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE)
             .exists());
-        assert!(config::config_mutation_config_fingerprint(&config::load_from(&dir).unwrap())
-            .is_ok());
+        assert!(
+            config::config_mutation_config_fingerprint(&config::load_from(&dir).unwrap()).is_ok()
+        );
     }
 
     #[test]

@@ -706,7 +706,11 @@ fn commit_profile_connection_in_dir(
         "committed",
         None,
         None,
-        Some(if validated { "accepted" } else { "inconclusive" }),
+        Some(if validated {
+            "accepted"
+        } else {
+            "inconclusive"
+        }),
         None,
     );
     if let Some(object) = result.as_object_mut() {
@@ -750,7 +754,7 @@ fn pin_active_profile_in_dir(
     state: &SharedAppState,
     id: &str,
 ) -> Result<serde_json::Value, String> {
-    let applied_profile_id = config::update_result(dir, |cfg| {
+    let (applied_profile_id, changed) = config::update_result(dir, |cfg| {
         config::require_no_runtime_transaction(cfg)?;
         let profile = cfg
             .profile_by_id(id)
@@ -765,7 +769,7 @@ fn pin_active_profile_in_dir(
             .map(|binding| binding.profile_id.clone());
         let changed = cfg.active_id != id;
         cfg.active_id = id.to_string();
-        Ok((applied, changed))
+        Ok(((applied, changed), changed))
     })?;
 
     let science_running = {
@@ -779,11 +783,7 @@ fn pin_active_profile_in_dir(
     };
     let mut result = crate::commands::runtime::config_mutation::typed_intent_outcome(
         "set_active_profile",
-        if applied_profile_id.as_deref() == Some(id) {
-            "no_change"
-        } else {
-            "committed"
-        },
+        if changed { "committed" } else { "no_change" },
         "committed",
         Some(id.to_string()),
         applied_profile_id.clone(),
@@ -793,13 +793,22 @@ fn pin_active_profile_in_dir(
     if let Some(object) = result.as_object_mut() {
         object.insert("committed".into(), serde_json::Value::Bool(true));
         object.insert("status".into(), serde_json::Value::String("ok".into()));
-        object.insert("selected_profile_id".into(), serde_json::Value::String(id.into()));
+        object.insert(
+            "selected_profile_id".into(),
+            serde_json::Value::String(id.into()),
+        );
         object.insert(
             "applied_profile_id".into(),
             applied_profile_id.map_or(serde_json::Value::Null, serde_json::Value::String),
         );
-        object.insert("apply_state".into(), serde_json::Value::String("pending".into()));
-        object.insert("science_running".into(), serde_json::Value::Bool(science_running));
+        object.insert(
+            "apply_state".into(),
+            serde_json::Value::String("pending".into()),
+        );
+        object.insert(
+            "science_running".into(),
+            serde_json::Value::Bool(science_running),
+        );
         object.insert("hint".into(), serde_json::Value::String(hint.into()));
     }
     Ok(result)
@@ -808,12 +817,11 @@ fn pin_active_profile_in_dir(
 #[cfg(test)]
 mod tests {
     use super::{
-        acknowledge_pending_notice_inner, apply_profile_preset_sync_inner_cmd, catalog_edit_from_parts, clear_profile_key_cmd,
-        clear_profile_key_cmd_with, clear_profile_key_p2b, delete_profile_cmd,
-        delete_profile_cmd_with, delete_profile_p2b,
-        update_profile_metadata_inner,
+        acknowledge_pending_notice_inner, apply_profile_preset_sync_inner_cmd,
+        catalog_edit_from_parts, clear_profile_key_cmd, clear_profile_key_cmd_with,
+        clear_profile_key_p2b, delete_profile_cmd, delete_profile_cmd_with, delete_profile_p2b,
         persist_profile_candidate_inner, pin_active_profile_in_dir, require_preview_fingerprint,
-        update_profile_connection_with,
+        update_profile_connection_with, update_profile_metadata_inner,
     };
     use crate::{
         config::{self, Config, Profile, RuntimeBindingCommit, RuntimeTransactionJournal},
@@ -1715,7 +1723,14 @@ mod tests {
             };
             let outcome = result.unwrap();
             assert_eq!(outcome["schema_version"], 1, "{operation}");
-            assert_eq!(outcome["operation"], if operation == "clear" { "clear_applied_profile_key" } else { "delete_applied_profile" });
+            assert_eq!(
+                outcome["operation"],
+                if operation == "clear" {
+                    "clear_applied_profile_key"
+                } else {
+                    "delete_applied_profile"
+                }
+            );
             assert_eq!(outcome["disposition"], "completed");
             let after = config::load_from(&dir).unwrap();
             if operation == "clear" {
@@ -1746,6 +1761,18 @@ mod tests {
         assert_eq!(result["selected_profile_id"], "two");
         assert_eq!(result["applied_profile_id"], "one");
         assert_eq!(result["science_running"], false);
+        assert_eq!(result["disposition"], "committed");
+        let unchanged = pin_active_profile_in_dir(&dir, &state, "two").unwrap();
+        assert_eq!(unchanged["disposition"], "no_change");
+
+        config::update(&dir, |current| {
+            current.active_id = "one".into();
+            current.runtime_binding = Some(binding("two"));
+        })
+        .unwrap();
+        let selected_commit = pin_active_profile_in_dir(&dir, &state, "two").unwrap();
+        assert_eq!(selected_commit["disposition"], "committed");
+        assert_eq!(selected_commit["applied_profile_id"], "two");
         assert_eq!(lock(&state).launch_id, "launch-current");
         assert!(config::read_config_mutation_operation_receipt(&dir)
             .unwrap()

@@ -1101,6 +1101,17 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
                 self.assertIn("record.config-mutation-operation-v1", operation["durable_records"][access])
             self.assertTrue(any("fence" in effect.lower() for effect in operation["ordered_effects"]))
 
+        controller = (ROOT / "desktop/src/codex-controller.js").read_text(encoding="utf-8")
+        self.assertIn("const destructiveCompleted = mutationOutcome", controller)
+        self.assertIn('mutationOutcome.operation === "set_codex_network"', controller)
+        self.assertIn('typeof mutationOutcome.operation_id === "string"', controller)
+        self.assertIn("const intentCommitted = intentOutcome", controller)
+        self.assertIn('intentOutcome.operation === "set_codex_network"', controller)
+        self.assertIn('intentOutcome.config_state === "committed"', controller)
+        self.assertIn('intentOutcome.validation === "not_run"', controller)
+        self.assertIn("intentOutcome.science_running === false", controller)
+        self.assertIn("(!destructiveCompleted && !intentCommitted)", controller)
+
     def test_integrity_checks_reject_representative_bad_inventory(self):
         inventory = load_inventory()
         bad = copy.deepcopy(inventory)

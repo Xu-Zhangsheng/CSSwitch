@@ -161,6 +161,9 @@ function parseCodexOperationSnapshot(value) {
   if (value.config_mutation_operation_id != null && !/^[0-9a-f]{32}$/.test(String(value.config_mutation_operation_id))) {
     throw new Error("CSSwitch Codex 登录 operation 缺少合法的 Config mutation operation ID。");
   }
+  if (value.state !== "starting" && value.config_mutation_operation_id == null) {
+    throw new Error("CSSwitch Codex 登录进行中或终态缺少 Config mutation operation ID。");
+  }
   const snap = {
     schema_version: 2,
     operation_id: String(value.operation_id),
@@ -236,6 +239,11 @@ function renderCodexOperation() {
 
 function acceptCodexOperationSnapshot(raw, allowReplacement) {
   const next = parseCodexOperationSnapshot(raw);
+  if (codexAuthOperation && codexAuthOperation.operation_id === next.operation_id &&
+      codexAuthOperation.config_mutation_operation_id != null &&
+      next.config_mutation_operation_id !== codexAuthOperation.config_mutation_operation_id) {
+    throw new Error("CSSwitch Codex 登录 operation 的 Config mutation identity 被替换。");
+  }
   if (codexAuthOperation && codexAuthOperation.operation_id !== next.operation_id && !allowReplacement) {
     if (!CODEX_TERMINAL_STATES.has(codexAuthOperation.state) || next.started_at_ms < codexAuthOperation.started_at_ms) return;
   }
@@ -361,8 +369,21 @@ async function saveCodexNetwork() {
   try {
     const result = await call("set_codex_network", { settings });
     const mutationOutcome = parseConfigMutationOutcome(result);
-    if (!result || result.operation !== "set_codex_network" ||
-        (mutationOutcome && mutationOutcome.disposition === "attention") ||
+    const intentOutcome = parseConfigIntentOutcome(result);
+    const destructiveCompleted = mutationOutcome &&
+      mutationOutcome.operation === "set_codex_network" &&
+      mutationOutcome.disposition === "completed" &&
+      mutationOutcome.config_state === "after" &&
+      ["stopped", "preserved"].includes(mutationOutcome.runtime_state) &&
+      mutationOutcome.recovery_state === "not_needed" &&
+      typeof mutationOutcome.operation_id === "string";
+    const intentCommitted = intentOutcome &&
+      intentOutcome.operation === "set_codex_network" &&
+      ["committed", "no_change"].includes(intentOutcome.disposition) &&
+      intentOutcome.config_state === "committed" &&
+      intentOutcome.validation === "not_run" &&
+      intentOutcome.science_running === false;
+    if (!result || (!destructiveCompleted && !intentCommitted) ||
         result.mode !== settings.mode || result.restarted !== false) {
       throw new Error("Codex 网络设置响应不一致。");
     }

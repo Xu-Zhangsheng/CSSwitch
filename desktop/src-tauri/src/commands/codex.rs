@@ -15,8 +15,8 @@ use crate::codex_auth_supervisor::{
     AuthPreflightReservation, CodexAuthReadyProof, CodexAuthSupervisor, CodexMutationLease,
     LoginReservation, OperationErrorView, OperationSnapshot, SharedCodexAuthSupervisor,
 };
-use crate::lifecycle::RuntimeMutationDomain;
 use crate::commands::runtime::config_mutation::ConfigMutationCommandErrorV1;
+use crate::lifecycle::RuntimeMutationDomain;
 use crate::proc::ChildLiveness;
 use crate::runtime::proxy_lifecycle::{
     gateway_bin_path, DurableGatewayObservation, GatewayController, GatewayStopClaim,
@@ -838,6 +838,7 @@ struct ManagedAuthProcess {
     stdin: Option<std::process::ChildStdin>,
     stdout: std::process::ChildStdout,
     pending: Vec<u8>,
+    executable_fingerprint: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1116,6 +1117,27 @@ enum AuthRuntimeAction {
     Noop,
     PreserveOtherProvider,
     StopManagedCodex,
+}
+
+fn auth_runtime_terminal_state(action: AuthRuntimeAction) -> &'static str {
+    match action {
+        AuthRuntimeAction::StopManagedCodex => "stopped",
+        AuthRuntimeAction::Noop | AuthRuntimeAction::PreserveOtherProvider => "preserved",
+    }
+}
+
+fn retain_failed_login_receipt(
+    mutation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
+    runtime_action: AuthRuntimeAction,
+    cause: &'static str,
+) {
+    let _ = mutation.finish(
+        "attention",
+        "before",
+        auth_runtime_terminal_state(runtime_action),
+        Some(cause),
+        config::ConfigMutationTerminalConfigImage::Before,
+    );
 }
 
 enum ExperimentalCodexDisablePlan {
@@ -2875,8 +2897,8 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
     resolved: &csswitch_codex_network::ResolvedCodexNetworkRoute,
 ) -> Result<Value, RuntimeCommandError> {
     let dir = config::default_dir();
-    let before = config::load_from(&dir)
-        .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+    let before =
+        config::load_from(&dir).map_err(|error| RuntimeCommandError::from(error.to_string()))?;
     config::require_no_runtime_transaction(&before).map_err(RuntimeCommandError::from)?;
     let mode = settings.mode;
     if !codex_network_requires_destructive_receipt(&before, state) {
@@ -2893,14 +2915,12 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
     };
     let mut effects = Vec::new();
     if science_effect {
-        effects.push(
-            crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopScience,
-        );
+        effects
+            .push(crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopScience);
     }
     if gateway_effect {
-        effects.push(
-            crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
-        );
+        effects
+            .push(crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway);
     }
     effects.push(crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ConfigCommit);
     let mut operation = crate::commands::runtime::config_mutation::begin(
@@ -2924,22 +2944,18 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
         None,
     )
     .map_err(|error| RuntimeCommandError::Mutation(error))?;
-    let action = prepare_codex_auth_mutation_with_fence(
-        app,
-        state,
-        lifecycle,
-        Some(operation.fence()),
-    )
-    .map_err(|error| {
-        let _ = operation.finish(
-            "attention",
-            "before",
-            "unknown",
-            Some("runtime_stop_failed"),
-            config::ConfigMutationTerminalConfigImage::Before,
-        );
-        RuntimeCommandError::from(error)
-    })?;
+    let action =
+        prepare_codex_auth_mutation_with_fence(app, state, lifecycle, Some(operation.fence()))
+            .map_err(|error| {
+                let _ = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("runtime_stop_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                RuntimeCommandError::from(error)
+            })?;
     let mut index = 0usize;
     for (present, code) in [
         (science_effect, "stopped_science"),
@@ -2966,15 +2982,14 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
     }
     let before_fingerprint = operation.fence().before_config_fingerprint.clone();
     if let Err(error) = operation.update_config(move |cfg| {
-            if config::config_mutation_config_fingerprint(cfg)
-                .map_err(|error| error.to_string())?
-                != before_fingerprint
-            {
-                return Err("Codex network Config before-image 已变化；拒绝提交".into());
-            }
-            cfg.codex_network = settings;
-            Ok(((), true))
-        }) {
+        if config::config_mutation_config_fingerprint(cfg).map_err(|error| error.to_string())?
+            != before_fingerprint
+        {
+            return Err("Codex network Config before-image 已变化；拒绝提交".into());
+        }
+        cfg.codex_network = settings;
+        Ok(((), true))
+    }) {
         let attention = operation.finish(
             "attention",
             "before",
@@ -3011,11 +3026,13 @@ fn set_codex_network_with_p2b<R: tauri::Runtime>(
     if let Some(object) = response.as_object_mut() {
         object.insert(
             "mode".into(),
-            Value::String(match mode {
-                csswitch_codex_network::CodexNetworkMode::Auto => "auto",
-                csswitch_codex_network::CodexNetworkMode::Custom => "custom",
-            }
-            .into()),
+            Value::String(
+                match mode {
+                    csswitch_codex_network::CodexNetworkMode::Auto => "auto",
+                    csswitch_codex_network::CodexNetworkMode::Custom => "custom",
+                }
+                .into(),
+            ),
         );
         object.insert(
             "source".into(),
@@ -3050,16 +3067,14 @@ fn set_codex_network_at(
         Ok((changed, changed))
     })
     .map_err(|error| error.to_string())?;
-    let outcome = crate::commands::runtime::config_mutation::outcome_json(
-        &crate::commands::runtime::config_mutation::ConfigMutationOutcomeV1 {
-            schema_version: crate::commands::runtime::config_mutation::RECEIPT_SCHEMA_VERSION,
-            operation_id: None,
-            operation: "set_codex_network".into(),
-            disposition: if changed { "completed" } else { "no_change" }.into(),
-            config_state: "after".into(),
-            runtime_state: "preserved".into(),
-            recovery_state: "not_needed".into(),
-        },
+    let outcome = crate::commands::runtime::config_mutation::typed_intent_outcome(
+        "set_codex_network",
+        if changed { "committed" } else { "no_change" },
+        "committed",
+        None,
+        None,
+        Some("not_run"),
+        Some(false),
     );
     let mut response = outcome;
     if let Some(object) = response.as_object_mut() {
@@ -3513,6 +3528,7 @@ fn spawn_codex_auth_sidecar_at(
     if !home.is_absolute() {
         return Err("Codex 认证 HOME 必须是绝对路径。".into());
     }
+    let executable_fingerprint = auth_sidecar_executable_fingerprint(binary)?;
     let mut command = Command::new(binary);
     command
         .arg("codex-auth")
@@ -3526,6 +3542,11 @@ fn spawn_codex_auth_sidecar_at(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     if action.is_login() {
         let operation_id = operation_id
             .filter(|value| is_lower_hex(value, 32))
@@ -3552,6 +3573,11 @@ fn spawn_codex_auth_sidecar_at(
     let mut child = command
         .spawn()
         .map_err(|_| "无法启动 Codex 认证 sidecar。".to_string())?;
+    if auth_sidecar_executable_fingerprint(binary).as_deref() != Ok(executable_fingerprint.as_str())
+    {
+        stop_auth_child(&mut child);
+        return Err("Codex 认证 sidecar executable identity 已漂移。".into());
+    }
     let stdin = child.stdin.take();
     if action.is_login() && stdin.is_none() {
         stop_auth_child(&mut child);
@@ -3571,7 +3597,82 @@ fn spawn_codex_auth_sidecar_at(
         stdin,
         stdout,
         pending: Vec::new(),
+        executable_fingerprint,
     })
+}
+
+fn auth_sidecar_executable_fingerprint(binary: &Path) -> Result<String, String> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    const MAX_SIDECAR_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
+    let named_before = binary
+        .symlink_metadata()
+        .map_err(|_| "Codex 认证 sidecar executable identity 不可读。".to_string())?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(binary)
+        .map_err(|_| "Codex 认证 sidecar executable identity 不可读。".to_string())?;
+    let opened_before = file
+        .metadata()
+        .map_err(|_| "Codex 认证 sidecar executable identity 不可读。".to_string())?;
+    if !opened_before.file_type().is_file()
+        || opened_before.permissions().mode() & 0o111 == 0
+        || opened_before.len() > MAX_SIDECAR_EXECUTABLE_BYTES
+        || opened_before.dev() != named_before.dev()
+        || opened_before.ino() != named_before.ino()
+    {
+        return Err("Codex 认证 sidecar executable identity 非法。".into());
+    }
+    let mut content = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "Codex 认证 sidecar executable identity 读取失败。".to_string())?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(read as u64)
+            .filter(|total| *total <= MAX_SIDECAR_EXECUTABLE_BYTES)
+            .ok_or_else(|| "Codex 认证 sidecar executable 超过上限。".to_string())?;
+        content.update(&buffer[..read]);
+    }
+    let opened_after = file
+        .metadata()
+        .map_err(|_| "Codex 认证 sidecar executable identity 不可读。".to_string())?;
+    let named_after = binary
+        .symlink_metadata()
+        .map_err(|_| "Codex 认证 sidecar executable identity 不可读。".to_string())?;
+    let identity = |metadata: &std::fs::Metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.mode(),
+        )
+    };
+    if total != opened_before.len()
+        || identity(&opened_before) != identity(&opened_after)
+        || identity(&opened_after) != identity(&named_after)
+    {
+        return Err("Codex 认证 sidecar executable identity 已漂移。".into());
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-codex-auth-sidecar-executable-v1\0");
+    digest.update(opened_after.dev().to_be_bytes());
+    digest.update(opened_after.ino().to_be_bytes());
+    digest.update(opened_after.len().to_be_bytes());
+    digest.update(opened_after.mtime().to_be_bytes());
+    digest.update(opened_after.mtime_nsec().to_be_bytes());
+    digest.update(opened_after.mode().to_be_bytes());
+    digest.update(content.finalize());
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn auth_start_authorization_digest(operation_id: &str) -> String {
@@ -3606,6 +3707,7 @@ fn wait_for_single_sidecar_response_controlled(
         stdin: _,
         ref mut stdout,
         pending,
+        executable_fingerprint: _,
     } = process;
 
     let deadline = Instant::now() + timeout;
@@ -3699,8 +3801,8 @@ fn send_start_to_sidecar(
     operation_id: &str,
     authorization_digest: &str,
 ) -> Result<(), String> {
-    let mut input = stdin
-        .take()
+    let input = stdin
+        .as_mut()
         .ok_or_else(|| "Codex 认证 sidecar 启动授权通道不可用。".to_string())?;
     let line = serde_json::to_vec(&json!({
         "schema_version": AUTH_SCHEMA_VERSION,
@@ -3723,8 +3825,14 @@ fn wait_for_login_start_ack(
     mut process: ManagedAuthProcess,
     operation_id: &str,
     authorization_digest: &str,
+    supervisor: &CodexAuthSupervisor,
 ) -> Result<ManagedAuthProcess, String> {
-    send_start_to_sidecar(&mut process.stdin, operation_id, authorization_digest)?;
+    if let Err(error) = supervisor.authorize_login_start(operation_id, || {
+        send_start_to_sidecar(&mut process.stdin, operation_id, authorization_digest)
+    }) {
+        stop_auth_child(&mut process.child);
+        return Err(error);
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut pending = std::mem::take(&mut process.pending);
     let mut chunk = [0_u8; 8192];
@@ -3756,8 +3864,13 @@ fn wait_for_login_start_ack(
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
-            let event: LoginSidecarEvent = serde_json::from_slice(&line)
-                .map_err(|_| "Codex 认证启动授权响应不是合法 NDJSON。".to_string())?;
+            let event: LoginSidecarEvent = match serde_json::from_slice(&line) {
+                Ok(event) => event,
+                Err(_) => {
+                    stop_auth_child(&mut process.child);
+                    return Err("Codex 认证启动授权响应不是合法 NDJSON。".into());
+                }
+            };
             if event.schema_version != AUTH_SCHEMA_VERSION || event.operation_id != operation_id {
                 stop_auth_child(&mut process.child);
                 return Err("Codex 认证启动授权 operation 不匹配。".into());
@@ -3775,9 +3888,16 @@ fn wait_for_login_start_ack(
             process.pending = pending;
             return Ok(process);
         }
-        if process.child.try_wait().ok().flatten().is_some() {
-            stop_auth_child(&mut process.child);
-            return Err("Codex 认证 sidecar 未返回匹配的 start_ack。".into());
+        match process.child.try_wait() {
+            Ok(Some(_)) => {
+                stop_auth_child(&mut process.child);
+                return Err("Codex 认证 sidecar 未返回匹配的 start_ack。".into());
+            }
+            Ok(None) => {}
+            Err(_) => {
+                stop_auth_child(&mut process.child);
+                return Err("无法确认 Codex 认证 sidecar 启动状态。".into());
+            }
         }
         if Instant::now() >= deadline {
             stop_auth_child(&mut process.child);
@@ -3812,163 +3932,175 @@ fn wait_for_login_sidecar(
 
     loop {
         if cancel.load(Ordering::SeqCst) && !cancel_sent {
-            send_cancel_to_sidecar(&mut process.stdin, operation_id)?;
+            if let Err(error) = send_cancel_to_sidecar(&mut process.stdin, operation_id) {
+                stop_auth_child(&mut process.child);
+                return Err(error);
+            }
             cancel_sent = true;
         }
         loop {
-            match process.stdout.read(&mut chunk) {
-                Ok(0) => {
-                    output_eof = true;
-                    break;
-                }
-                Ok(read) => {
-                    total = total.saturating_add(read as u64);
-                    if total > MAX_AUTH_OUTPUT_BYTES {
-                        stop_auth_child(&mut process.child);
-                        return Err("Codex 认证 sidecar 输出超过 64 KiB。".into());
+            if !pending.contains(&b'\n') {
+                match process.stdout.read(&mut chunk) {
+                    Ok(0) => {
+                        output_eof = true;
+                        break;
                     }
-                    pending.extend_from_slice(&chunk[..read]);
-                    while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
-                        let mut line = pending.drain(..=newline).collect::<Vec<_>>();
-                        line.pop();
-                        if line.last() == Some(&b'\r') {
-                            line.pop();
-                        }
-                        if line.is_empty() || line.len() > MAX_AUTH_LINE_BYTES {
+                    Ok(read) => {
+                        total = total.saturating_add(read as u64);
+                        if total > MAX_AUTH_OUTPUT_BYTES {
                             stop_auth_child(&mut process.child);
-                            return Err("Codex 认证 sidecar NDJSON 行非法。".into());
+                            return Err("Codex 认证 sidecar 输出超过 64 KiB。".into());
                         }
-                        let event: LoginSidecarEvent = serde_json::from_slice(&line)
-                            .map_err(|_| "Codex 认证 sidecar 返回了非法 NDJSON。".to_string())?;
-                        if event.schema_version != AUTH_SCHEMA_VERSION
-                            || event.operation_id != operation_id
+                        pending.extend_from_slice(&chunk[..read]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        stop_auth_child(&mut process.child);
+                        return Err("Codex 认证 sidecar 输出读取失败。".into());
+                    }
+                }
+            }
+            while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                let mut line = pending.drain(..=newline).collect::<Vec<_>>();
+                line.pop();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if line.is_empty() || line.len() > MAX_AUTH_LINE_BYTES {
+                    stop_auth_child(&mut process.child);
+                    return Err("Codex 认证 sidecar NDJSON 行非法。".into());
+                }
+                let event: LoginSidecarEvent = match serde_json::from_slice(&line) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        stop_auth_child(&mut process.child);
+                        return Err("Codex 认证 sidecar 返回了非法 NDJSON。".into());
+                    }
+                };
+                if event.schema_version != AUTH_SCHEMA_VERSION || event.operation_id != operation_id
+                {
+                    stop_auth_child(&mut process.child);
+                    return Err("Codex 认证 sidecar operation 不匹配。".into());
+                }
+                match event.kind.as_str() {
+                    "progress" => {
+                        if terminal.is_some()
+                            || event.status.is_some()
+                            || event.error.is_some()
+                            || event.disposition.is_some()
+                            || event.authorization_digest.is_some()
                         {
                             stop_auth_child(&mut process.child);
-                            return Err("Codex 认证 sidecar operation 不匹配。".into());
+                            return Err("Codex 认证 progress 字段非法。".into());
                         }
-                        match event.kind.as_str() {
-                            "progress" => {
-                                if terminal.is_some()
-                                    || event.status.is_some()
-                                    || event.error.is_some()
-                                    || event.disposition.is_some()
-                                    || event.authorization_digest.is_some()
-                                {
+                        let state = event.state.as_deref().unwrap_or_default();
+                        if !matches!(state, "waiting" | "exchanging" | "committing") {
+                            stop_auth_child(&mut process.child);
+                            return Err("Codex 认证 progress 状态非法。".into());
+                        }
+                        on_progress(&event);
+                    }
+                    "cancel_ack" => {
+                        if !cancel_sent
+                            || event.state.is_some()
+                            || event.status.is_some()
+                            || event.error.is_some()
+                            || event.authorization_digest.is_some()
+                        {
+                            stop_auth_child(&mut process.child);
+                            return Err("Codex 认证 cancel ack 字段非法。".into());
+                        }
+                        let disposition = event.disposition.as_deref().unwrap_or_default();
+                        if !matches!(
+                            disposition,
+                            "accepted" | "commit_in_progress" | "already_terminal"
+                        ) {
+                            stop_auth_child(&mut process.child);
+                            return Err("Codex 认证 cancel ack 结果非法。".into());
+                        }
+                        if disposition == "accepted" {
+                            accepted_at = Some(Instant::now());
+                        }
+                        on_cancel_ack(disposition);
+                    }
+                    "terminal" => {
+                        if terminal.is_some()
+                            || event.disposition.is_some()
+                            || event.authorization_digest.is_some()
+                        {
+                            stop_auth_child(&mut process.child);
+                            return Err("Codex 认证 terminal 字段非法。".into());
+                        }
+                        let state = event.state.as_deref().unwrap_or_default();
+                        match state {
+                            "succeeded" => {
+                                let Some(status) = event.status.as_ref() else {
                                     stop_auth_child(&mut process.child);
-                                    return Err("Codex 认证 progress 字段非法。".into());
-                                }
-                                let state = event.state.as_deref().unwrap_or_default();
-                                if !matches!(state, "waiting" | "exchanging" | "committing") {
+                                    return Err("Codex 认证成功终态缺少状态。".into());
+                                };
+                                if event.error.is_some() {
                                     stop_auth_child(&mut process.child);
-                                    return Err("Codex 认证 progress 状态非法。".into());
+                                    return Err("Codex 认证成功终态包含错误。".into());
                                 }
-                                on_progress(&event);
+                                if let Err(error) = validate_status(status) {
+                                    stop_auth_child(&mut process.child);
+                                    return Err(error);
+                                }
+                                if !status.authenticated {
+                                    stop_auth_child(&mut process.child);
+                                    return Err("Codex 认证成功终态必须包含已登录状态。".into());
+                                }
+                                terminal = Some(json!({
+                                    "ok": true,
+                                    "state": "succeeded",
+                                    "status": status,
+                                }));
                             }
-                            "cancel_ack" => {
-                                if !cancel_sent
-                                    || event.state.is_some()
-                                    || event.status.is_some()
-                                    || event.error.is_some()
-                                    || event.authorization_digest.is_some()
+                            "failed" | "cancelled" => {
+                                let Some(error) = event.error.as_ref() else {
+                                    stop_auth_child(&mut process.child);
+                                    return Err("Codex 认证失败终态缺少错误。".into());
+                                };
+                                if event.status.is_some()
+                                    || !validate_login_sidecar_error(error)
+                                    || (state == "cancelled" && error.code != "auth_cancelled")
                                 {
                                     stop_auth_child(&mut process.child);
-                                    return Err("Codex 认证 cancel ack 字段非法。".into());
+                                    return Err("Codex 认证失败终态字段非法。".into());
                                 }
-                                let disposition = event.disposition.as_deref().unwrap_or_default();
-                                if !matches!(
-                                    disposition,
-                                    "accepted" | "commit_in_progress" | "already_terminal"
-                                ) {
-                                    stop_auth_child(&mut process.child);
-                                    return Err("Codex 认证 cancel ack 结果非法。".into());
-                                }
-                                if disposition == "accepted" {
-                                    accepted_at = Some(Instant::now());
-                                }
-                                on_cancel_ack(disposition);
-                            }
-                            "terminal" => {
-                                if terminal.is_some()
-                                    || event.disposition.is_some()
-                                    || event.authorization_digest.is_some()
-                                {
-                                    stop_auth_child(&mut process.child);
-                                    return Err("Codex 认证 terminal 字段非法。".into());
-                                }
-                                let state = event.state.as_deref().unwrap_or_default();
-                                match state {
-                                    "succeeded" => {
-                                        let Some(status) = event.status.as_ref() else {
-                                            stop_auth_child(&mut process.child);
-                                            return Err("Codex 认证成功终态缺少状态。".into());
-                                        };
-                                        if event.error.is_some() {
-                                            stop_auth_child(&mut process.child);
-                                            return Err("Codex 认证成功终态包含错误。".into());
-                                        }
-                                        validate_status(status)?;
-                                        if !status.authenticated {
-                                            stop_auth_child(&mut process.child);
-                                            return Err(
-                                                "Codex 认证成功终态必须包含已登录状态。".into()
-                                            );
-                                        }
-                                        terminal = Some(json!({
-                                            "ok": true,
-                                            "state": "succeeded",
-                                            "status": status,
-                                        }));
-                                    }
-                                    "failed" | "cancelled" => {
-                                        let Some(error) = event.error.as_ref() else {
-                                            stop_auth_child(&mut process.child);
-                                            return Err("Codex 认证失败终态缺少错误。".into());
-                                        };
-                                        if event.status.is_some()
-                                            || !validate_login_sidecar_error(error)
-                                            || (state == "cancelled"
-                                                && error.code != "auth_cancelled")
-                                        {
-                                            stop_auth_child(&mut process.child);
-                                            return Err("Codex 认证失败终态字段非法。".into());
-                                        }
-                                        terminal_error_code = Some(error.code.clone());
-                                        terminal = Some(json!({
-                                            "ok": false,
-                                            "state": state,
-                                            "error": error,
-                                        }));
-                                    }
-                                    _ => {
-                                        stop_auth_child(&mut process.child);
-                                        return Err("Codex 认证 terminal 状态非法。".into());
-                                    }
-                                }
+                                terminal_error_code = Some(error.code.clone());
+                                terminal = Some(json!({
+                                    "ok": false,
+                                    "state": state,
+                                    "error": error,
+                                }));
                             }
                             _ => {
                                 stop_auth_child(&mut process.child);
-                                return Err("Codex 认证 sidecar 事件类型非法。".into());
+                                return Err("Codex 认证 terminal 状态非法。".into());
                             }
                         }
                     }
-                    if pending.len() > MAX_AUTH_LINE_BYTES {
+                    _ => {
                         stop_auth_child(&mut process.child);
-                        return Err("Codex 认证 sidecar NDJSON 行超过 8 KiB。".into());
+                        return Err("Codex 认证 sidecar 事件类型非法。".into());
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => {
-                    stop_auth_child(&mut process.child);
-                    return Err("Codex 认证 sidecar 输出读取失败。".into());
-                }
+            }
+            if pending.len() > MAX_AUTH_LINE_BYTES {
+                stop_auth_child(&mut process.child);
+                return Err("Codex 认证 sidecar NDJSON 行超过 8 KiB。".into());
             }
         }
         if exit_status.is_none() {
-            exit_status = process
-                .child
-                .try_wait()
-                .map_err(|_| "无法确认 Codex 认证 sidecar 退出状态。".to_string())?;
+            exit_status = match process.child.try_wait() {
+                Ok(status) => status,
+                Err(_) => {
+                    stop_auth_child(&mut process.child);
+                    return Err("无法确认 Codex 认证 sidecar 退出状态。".into());
+                }
+            };
         }
         if exit_status.is_some() && output_eof {
             break;
@@ -4034,7 +4166,24 @@ fn run_codex_auth_preflight_sidecar_at(
         false,
     )
     .map_err(|_| CodexAuthCommandError::unavailable("sidecar_spawn_failed"))?;
-    if reservation.set_pid(process.child.id()).is_err() {
+    let identity = match auth_sidecar_identity(&process) {
+        Ok(identity) => identity,
+        Err(_) => {
+            stop_auth_child(&mut process.child);
+            return Err(CodexAuthCommandError::unavailable(
+                "sidecar_identity_unconfirmed",
+            ));
+        }
+    };
+    if reservation
+        .set_process_identity(
+            identity.pid,
+            &identity.process_start,
+            &identity.executable_fingerprint,
+            identity.process_group_id,
+        )
+        .is_err()
+    {
         stop_auth_child(&mut process.child);
         return Err(CodexAuthCommandError::busy());
     }
@@ -4092,47 +4241,84 @@ fn register_login_process(
 
 fn auth_sidecar_identity(
     process: &ManagedAuthProcess,
-) -> crate::commands::runtime::config_mutation::AuthSidecarIdentity {
+) -> Result<crate::commands::runtime::config_mutation::AuthSidecarIdentity, String> {
     let pid = process.child.id();
-    let mut digest = Sha256::new();
-    digest.update(b"csswitch-codex-auth-sidecar-executable-v1\0");
-    digest.update(b"desktop-gateway");
+    let process_start = crate::runtime::science::process_start_identity_digest(pid)
+        .ok_or_else(|| "Codex 认证 sidecar process-start identity 不可确认。".to_string())?;
     let process_group_id = {
         #[cfg(unix)]
         {
             let value = unsafe { libc::getpgid(pid as libc::pid_t) };
-            if value > 0 { value } else { pid as i32 }
+            if value > 0 {
+                value
+            } else {
+                return Err("Codex 认证 sidecar process group identity 不可确认。".into());
+            }
         }
         #[cfg(not(unix))]
         {
             pid as i32
         }
     };
-    crate::commands::runtime::config_mutation::AuthSidecarIdentity {
-        pid,
-        process_start: format!("pid:{pid}"),
-        executable_fingerprint: format!("{:x}", digest.finalize()),
-        process_group_id,
+    if process_group_id != i32::try_from(pid).unwrap_or_default() {
+        return Err("Codex 认证 sidecar process group 未隔离。".into());
     }
+    Ok(
+        crate::commands::runtime::config_mutation::AuthSidecarIdentity {
+            pid,
+            process_start,
+            executable_fingerprint: process.executable_fingerprint.clone(),
+            process_group_id,
+        },
+    )
 }
 
-fn run_codex_logout_sidecar<R: tauri::Runtime>(
+fn run_codex_logout_sidecar_p2b<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     mutation: &CodexMutationLease,
+    operation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
 ) -> Result<Value, CodexAuthCommandError> {
     let binary = codex_gateway_bin(app)?;
     let (route, skip_revoke) = match resolve_codex_network_route() {
         Ok(route) => (route, false),
         Err(_) => (csswitch_codex_network::direct_route(), true),
     };
-    run_codex_logout_sidecar_at(
+    run_codex_logout_sidecar_at_with_identity(
         &binary,
         &production_home()
             .map_err(|_| CodexAuthCommandError::unavailable("sidecar_spawn_failed"))?,
         &route,
         skip_revoke,
         mutation,
+        |identity| checkpoint_logout_sidecar_start(operation, identity),
     )
+}
+
+fn checkpoint_logout_sidecar_start(
+    operation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
+    identity: &crate::commands::runtime::config_mutation::AuthSidecarIdentity,
+) -> Result<(), String> {
+    if !matches!(
+        operation
+            .receipt()
+            .effects
+            .get(2)
+            .map(|effect| &effect.kind),
+        Some(crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSidecar)
+    ) {
+        return Err("Codex logout sidecar effect identity 不匹配".into());
+    }
+    operation.update_receipt(|receipt| {
+        if let Some(auth) = receipt.auth_operation.as_mut() {
+            auth.state = "registered".into();
+            auth.sidecar = Some(identity.clone());
+        }
+        if let Some(effect) = receipt.effects.get_mut(2) {
+            effect.state =
+                crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress;
+            effect.outcome_code = Some("identity_persisted".into());
+        }
+    })
 }
 
 fn run_codex_logout_sidecar_at(
@@ -4141,6 +4327,26 @@ fn run_codex_logout_sidecar_at(
     route: &csswitch_codex_network::ResolvedCodexNetworkRoute,
     skip_revoke: bool,
     mutation: &CodexMutationLease,
+) -> Result<Value, CodexAuthCommandError> {
+    run_codex_logout_sidecar_at_with_identity(
+        binary,
+        home,
+        route,
+        skip_revoke,
+        mutation,
+        |_| Ok(()),
+    )
+}
+
+fn run_codex_logout_sidecar_at_with_identity(
+    binary: &Path,
+    home: &Path,
+    route: &csswitch_codex_network::ResolvedCodexNetworkRoute,
+    skip_revoke: bool,
+    mutation: &CodexMutationLease,
+    on_identity: impl FnOnce(
+        &crate::commands::runtime::config_mutation::AuthSidecarIdentity,
+    ) -> Result<(), String>,
 ) -> Result<Value, CodexAuthCommandError> {
     let mut process = spawn_codex_auth_sidecar_at(
         binary,
@@ -4151,8 +4357,30 @@ fn run_codex_logout_sidecar_at(
         skip_revoke,
     )
     .map_err(|_| CodexAuthCommandError::unavailable("sidecar_spawn_failed"))?;
-    if mutation.set_pid(process.child.id()).is_err() {
+    let identity = match auth_sidecar_identity(&process) {
+        Ok(identity) => identity,
+        Err(_) => {
+            stop_auth_child(&mut process.child);
+            return Err(CodexAuthCommandError::unavailable(
+                "sidecar_identity_unconfirmed",
+            ));
+        }
+    };
+    if mutation
+        .set_process_identity(
+            identity.pid,
+            &identity.process_start,
+            &identity.executable_fingerprint,
+            identity.process_group_id,
+        )
+        .is_err()
+    {
         stop_auth_child(&mut process.child);
+        return Err(CodexAuthCommandError::unavailable("auth_state_changed"));
+    }
+    if on_identity(&identity).is_err() {
+        stop_auth_child(&mut process.child);
+        mutation.clear_pid();
         return Err(CodexAuthCommandError::unavailable("auth_state_changed"));
     }
     let result = wait_for_single_sidecar_response_controlled(
@@ -4382,7 +4610,7 @@ pub(crate) async fn codex_auth_start<R: tauri::Runtime>(
     let worker_app = app.clone();
     let worker_lifecycle = lifecycle.clone();
     let worker_supervisor = supervisor.clone();
-    let (reservation, process, mutation) = crate::run_blocking_typed(move || {
+    let (reservation, process, mutation, runtime_action) = crate::run_blocking_typed(move || {
         start_codex_login_p2b_inner(
             &app,
             &state,
@@ -4407,6 +4635,7 @@ pub(crate) async fn codex_auth_start<R: tauri::Runtime>(
             process,
             action,
             mutation,
+            runtime_action,
         );
     });
     Ok(response)
@@ -4429,6 +4658,7 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
         LoginReservation,
         ManagedAuthProcess,
         crate::commands::runtime::config_mutation::OpenConfigMutation,
+        AuthRuntimeAction,
     ),
     RuntimeCommandError,
 > {
@@ -4447,7 +4677,7 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 .begin_login()
                 .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
             let auth_operation_id = reservation.operation_id.clone();
-            let mut operation = crate::commands::runtime::config_mutation::begin(
+            let operation = crate::commands::runtime::config_mutation::begin(
                 &dir,
                 crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthStart,
                 &before,
@@ -4475,11 +4705,30 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                     terminal_account_hash: None,
                 }),
                 None,
-            )
-            .map_err(RuntimeCommandError::Mutation)?;
-            let attached = supervisor
+            );
+            let mut operation = match operation {
+                Ok(operation) => operation,
+                Err(error) => {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    return Err(RuntimeCommandError::Mutation(error));
+                }
+            };
+            let attached = match supervisor
                 .attach_config_mutation_operation(&auth_operation_id, operation.operation_id())
-                .map_err(RuntimeCommandError::from)?;
+            {
+                Ok(attached) => attached,
+                Err(error) => {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("auth_reservation_attach_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(RuntimeCommandError::from(error));
+                }
+            };
             let mut reservation = reservation;
             reservation.snapshot = attached;
 
@@ -4515,9 +4764,17 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                 } else {
                     crate::commands::runtime::config_mutation::ConfigMutationEffectState::Skipped
                 };
-                operation
-                    .checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }))
-                    .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+                if let Err(error) = operation.checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" })) {
+                    supervisor.abort_login_start(&auth_operation_id);
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("runtime_stop_checkpoint_failed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(RuntimeCommandError::from(error.to_string()));
+                }
             }
 
             let process = match spawn_sidecar(app, action, &auth_operation_id, &route)
@@ -4537,32 +4794,101 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                     return Err(error);
                 }
             };
-            let sidecar_identity = auth_sidecar_identity(&process);
-            operation
-                .update_receipt(|receipt| {
-                    if let Some(auth) = receipt.auth_operation.as_mut() {
-                        auth.state = "spawned_inert".into();
-                        auth.sidecar = Some(sidecar_identity.clone());
-                    }
-                })
-                .map_err(RuntimeCommandError::from)?;
-            operation
-                .checkpoint_effect(
+            let sidecar_identity = match auth_sidecar_identity(&process) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    let mut process = process;
+                    stop_auth_child(&mut process.child);
+                    supervisor.abort_login_start(&auth_operation_id);
+                    let _ = operation.finish(
+                        "attention",
+                        "before",
+                        "unknown",
+                        Some("sidecar_identity_unconfirmed"),
+                        config::ConfigMutationTerminalConfigImage::Before,
+                    );
+                    return Err(RuntimeCommandError::from(error));
+                }
+            };
+            if let Err(error) = supervisor.bind_login_process_identity(
+                &auth_operation_id,
+                sidecar_identity.pid,
+                &sidecar_identity.process_start,
+                &sidecar_identity.executable_fingerprint,
+                sidecar_identity.process_group_id,
+            ) {
+                let mut process = process;
+                stop_auth_child(&mut process.child);
+                supervisor.abort_login_start(&auth_operation_id);
+                let _ = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("sidecar_identity_registration_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                return Err(RuntimeCommandError::from(error));
+            }
+            if let Err(error) = operation.update_receipt(|receipt| {
+                if let Some(auth) = receipt.auth_operation.as_mut() {
+                    auth.state = "spawned_inert".into();
+                    auth.sidecar = Some(sidecar_identity.clone());
+                }
+            }) {
+                let mut process = process;
+                stop_auth_child(&mut process.child);
+                supervisor.abort_login_start(&auth_operation_id);
+                let _ = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("sidecar_identity_checkpoint_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                return Err(RuntimeCommandError::from(error));
+            }
+            if let Err(error) = operation.checkpoint_effect(
                     2,
                     crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
                     Some("identity_persisted"),
-                )
-                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
+                ) {
+                let mut process = process;
+                stop_auth_child(&mut process.child);
+                supervisor.abort_login_start(&auth_operation_id);
+                let _ = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("sidecar_effect_checkpoint_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                return Err(RuntimeCommandError::from(error.to_string()));
+            }
             let start_digest = auth_start_authorization_digest(&auth_operation_id);
-            operation
-                .update_receipt(|receipt| {
-                    if let Some(auth) = receipt.auth_operation.as_mut() {
-                        auth.state = "start_authorized".into();
-                        auth.start_authorization_digest = Some(start_digest.clone());
-                    }
-                })
-                .map_err(RuntimeCommandError::from)?;
-            let process = match wait_for_login_start_ack(process, &auth_operation_id, &start_digest) {
+            if let Err(error) = operation.update_receipt(|receipt| {
+                if let Some(auth) = receipt.auth_operation.as_mut() {
+                    auth.state = "start_authorized".into();
+                    auth.start_authorization_digest = Some(start_digest.clone());
+                }
+            }) {
+                let mut process = process;
+                stop_auth_child(&mut process.child);
+                supervisor.abort_login_start(&auth_operation_id);
+                let _ = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("start_authorization_checkpoint_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                return Err(RuntimeCommandError::from(error));
+            }
+            let process = match wait_for_login_start_ack(
+                process,
+                &auth_operation_id,
+                &start_digest,
+                supervisor,
+            ) {
                 Ok(process) => process,
                 Err(error) => {
                     supervisor.abort_login_start(&auth_operation_id);
@@ -4576,14 +4902,24 @@ fn start_codex_login_p2b_inner<R: tauri::Runtime>(
                     return Err(RuntimeCommandError::from(error));
                 }
             };
-            operation
-                .checkpoint_effect(
+            if let Err(error) = operation.checkpoint_effect(
                     2,
                     crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                     Some("start_ack"),
-                )
-                .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
-            Ok((reservation, process, operation))
+                ) {
+                let mut process = process;
+                stop_auth_child(&mut process.child);
+                supervisor.abort_login_start(&auth_operation_id);
+                let _ = operation.finish(
+                    "attention",
+                    "before",
+                    "unknown",
+                    Some("start_ack_checkpoint_failed"),
+                    config::ConfigMutationTerminalConfigImage::Before,
+                );
+                return Err(RuntimeCommandError::from(error.to_string()));
+            }
+            Ok((reservation, process, operation, runtime_action))
         },
     )
 }
@@ -4699,6 +5035,7 @@ fn complete_login_operation_p2b<R: tauri::Runtime>(
     process: ManagedAuthProcess,
     action: CodexAuthAction,
     mutation: crate::commands::runtime::config_mutation::OpenConfigMutation,
+    runtime_action: AuthRuntimeAction,
 ) {
     let progress_app = app.clone();
     let progress_supervisor = supervisor.clone();
@@ -4713,6 +5050,7 @@ fn complete_login_operation_p2b<R: tauri::Runtime>(
         process,
         action,
         mutation,
+        runtime_action,
         move |event| {
             let Some(state) = event.state.as_deref() else {
                 return;
@@ -4725,7 +5063,24 @@ fn complete_login_operation_p2b<R: tauri::Runtime>(
         move |disposition| {
             ack_supervisor.record_cancel_disposition(&ack_operation_id, disposition);
         },
-    );
+    )
+    .or_else(|error| {
+        supervisor
+            .finish(
+                &operation_id,
+                "failed",
+                Some(OperationErrorView {
+                    code: "config_mutation_attention".into(),
+                    stage: "terminal".into(),
+                    retryable: false,
+                    upstream_status: None,
+                    response_kind: None,
+                    challenge_detected: None,
+                    transport_kind: Some("durable_receipt".into()),
+                }),
+            )
+            .map_err(|finish_error| format!("{error}; {finish_error}"))
+    });
     if let Ok(snapshot) = snapshot {
         emit_operation_snapshot(&app, &snapshot);
     }
@@ -4740,9 +5095,11 @@ fn complete_login_operation_p2b_inner(
     process: ManagedAuthProcess,
     action: CodexAuthAction,
     mut mutation: crate::commands::runtime::config_mutation::OpenConfigMutation,
+    runtime_action: AuthRuntimeAction,
     on_progress: impl FnMut(&LoginSidecarEvent),
     on_cancel_ack: impl FnMut(&str),
 ) -> Result<OperationSnapshot, String> {
+    let terminal_runtime_state = auth_runtime_terminal_state(runtime_action);
     let outcome = wait_for_login_sidecar(
         process,
         action,
@@ -4751,6 +5108,11 @@ fn complete_login_operation_p2b_inner(
         on_progress,
         on_cancel_ack,
     );
+    // The Child has been waited/reaped on every return from the bounded sidecar
+    // reader.  Clear the supervisor's signal target before any later durable
+    // write can fail so native-exit cleanup can never signal a PID-reuse
+    // replacement for an already-terminal sidecar.
+    supervisor.clear_login_pid(operation_id);
     record_login_terminal_auth_status(supervisor, &outcome);
     match outcome {
         Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
@@ -4790,15 +5152,15 @@ fn complete_login_operation_p2b_inner(
                     mutation.receipt_bytes(),
                 )
             });
-            let ensure = match ensure {
+            let (ensure, after_config_fingerprint) = match ensure {
                 Ok(ensure) => ensure,
                 Err(_error) => {
                     let _ = mutation.finish(
                         "attention",
-                        "after",
-                        "stopped",
+                        "before",
+                        terminal_runtime_state,
                         Some("profile_ensure_failed"),
-                        config::ConfigMutationTerminalConfigImage::After,
+                        config::ConfigMutationTerminalConfigImage::Before,
                     );
                     return supervisor.finish(
                         operation_id,
@@ -4815,6 +5177,7 @@ fn complete_login_operation_p2b_inner(
                     );
                 }
             };
+            mutation.bind_after_config_fingerprint(after_config_fingerprint)?;
             mutation.update_receipt(|receipt| {
                 receipt.target.profile_id = Some(ensure.profile_id.clone());
             })?;
@@ -4829,7 +5192,7 @@ fn complete_login_operation_p2b_inner(
             let terminal = mutation.finish(
                 "completed",
                 "after",
-                "stopped",
+                terminal_runtime_state,
                 None,
                 config::ConfigMutationTerminalConfigImage::After,
             );
@@ -4870,12 +5233,14 @@ fn complete_login_operation_p2b_inner(
                 crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
                 Some("sidecar_terminal"),
             );
-            let _ = mutation.finish(
-                "attention",
-                "before",
-                "unknown",
-                Some(if state == "cancelled" { "auth_cancelled" } else { "auth_failed" }),
-                config::ConfigMutationTerminalConfigImage::Before,
+            retain_failed_login_receipt(
+                &mut mutation,
+                runtime_action,
+                if state == "cancelled" {
+                    "auth_cancelled"
+                } else {
+                    "auth_failed"
+                },
             );
             supervisor.finish(
                 operation_id,
@@ -4889,13 +5254,7 @@ fn complete_login_operation_p2b_inner(
                     auth.state = "terminal".into();
                 }
             });
-            let _ = mutation.finish(
-                "attention",
-                "before",
-                "unknown",
-                Some("sidecar_protocol_error"),
-                config::ConfigMutationTerminalConfigImage::Before,
-            );
+            retain_failed_login_receipt(&mut mutation, runtime_action, "sidecar_protocol_error");
             supervisor.finish(
                 operation_id,
                 "failed",
@@ -5082,7 +5441,7 @@ pub(crate) async fn codex_auth_logout(
     let supervisor = supervisor.inner().clone();
     let logout_supervisor = supervisor.clone();
     let logout_app = app.clone();
-    let (mutation, operation) = crate::run_blocking_typed(move || {
+    let (mutation, operation, runtime_action) = crate::run_blocking_typed(move || {
         prepare_codex_logout_p2b_inner(&app, &state, lifecycle.as_ref(), &supervisor)
     })
     .await?;
@@ -5093,7 +5452,10 @@ pub(crate) async fn codex_auth_logout(
                 &logout_supervisor,
                 operation,
                 mutation,
-                |mutation| run_codex_logout_sidecar(&logout_app, mutation),
+                runtime_action,
+                |mutation, operation| {
+                    run_codex_logout_sidecar_p2b(&logout_app, mutation, operation)
+                },
             )?;
             if let Some(object) = response.as_object_mut() {
                 object.insert(
@@ -5116,6 +5478,7 @@ fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
     (
         CodexMutationLease,
         crate::commands::runtime::config_mutation::OpenConfigMutation,
+        AuthRuntimeAction,
     ),
     RuntimeCommandError,
 > {
@@ -5133,7 +5496,7 @@ fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
                 &dir,
                 crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthLogout,
                 &before,
-                None,
+                Some(&before),
                 crate::commands::runtime::config_mutation::MutationTarget::default(),
                 crate::commands::runtime::config_mutation::RuntimePlan {
                     owner_generation: lifecycle.current_generation(),
@@ -5194,7 +5557,7 @@ fn prepare_codex_logout_p2b_inner<R: tauri::Runtime>(
                     .checkpoint_effect(index, state, Some(if state == crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded { "stopped" } else { "not_present" }))
                     .map_err(|error| RuntimeCommandError::from(error.to_string()))?;
             }
-            Ok((mutation, operation))
+            Ok((mutation, operation, action))
         },
     )
 }
@@ -5203,16 +5566,20 @@ fn complete_codex_logout_p2b_inner(
     supervisor: &SharedCodexAuthSupervisor,
     mut operation: crate::commands::runtime::config_mutation::OpenConfigMutation,
     mutation: CodexMutationLease,
-    run_sidecar: impl FnOnce(&CodexMutationLease) -> Result<Value, CodexAuthCommandError>,
+    runtime_action: AuthRuntimeAction,
+    run_sidecar: impl FnOnce(
+        &CodexMutationLease,
+        &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
+    ) -> Result<Value, CodexAuthCommandError>,
 ) -> Result<Value, RuntimeCommandError> {
-    let value = match run_sidecar(&mutation) {
+    let value = match run_sidecar(&mutation, &mut operation) {
         Ok(value) => value,
         Err(error) => {
             supervisor.record_auth_status("unavailable", None, error.cause);
             let _ = operation.finish(
                 "attention",
                 "before",
-                "unknown",
+                auth_runtime_terminal_state(runtime_action),
                 Some(error.cause.unwrap_or("logout_failed")),
                 config::ConfigMutationTerminalConfigImage::Before,
             );
@@ -5225,7 +5592,7 @@ fn complete_codex_logout_p2b_inner(
         let _ = operation.finish(
             "attention",
             "before",
-            "unknown",
+            auth_runtime_terminal_state(runtime_action),
             Some(error.cause.unwrap_or("logout_failed")),
             config::ConfigMutationTerminalConfigImage::Before,
         );
@@ -5237,7 +5604,9 @@ fn complete_codex_logout_p2b_inner(
             .cloned()
             .ok_or_else(|| RuntimeCommandError::from("Codex logout 成功终态缺少 status。"))?,
     )
-    .map_err(|_| RuntimeCommandError::from("Codex logout 成功终态 status 不可用于 durable 引用。"))?;
+    .map_err(|_| {
+        RuntimeCommandError::from("Codex logout 成功终态 status 不可用于 durable 引用。")
+    })?;
     let account_hash = status.account_hash.as_deref().map(|account| {
         let mut digest = Sha256::new();
         digest.update(b"csswitch-p2b-auth-account-v1\0");
@@ -5282,7 +5651,7 @@ fn complete_codex_logout_p2b_inner(
         .finish(
             "completed",
             "after",
-            "stopped",
+            auth_runtime_terminal_state(runtime_action),
             None,
             config::ConfigMutationTerminalConfigImage::After,
         )
@@ -5376,13 +5745,7 @@ pub(crate) async fn set_codex_network(
             |_| -> Result<_, RuntimeCommandError> {
                 let _mutation = CodexAuthSupervisor::begin_mutation(&supervisor)
                     .map_err(|_| RuntimeCommandError::from(CodexAuthCommandError::busy()))?;
-                set_codex_network_with_p2b(
-                    &app,
-                    &state,
-                    lifecycle.as_ref(),
-                    settings,
-                    &resolved,
-                )
+                set_codex_network_with_p2b(&app, &state, lifecycle.as_ref(), settings, &resolved)
             },
         )
     })
@@ -5520,6 +5883,25 @@ mod tests {
             "ab".repeat(16),
             "cd".repeat(16)
         )
+    }
+
+    fn bind_test_login_process(
+        supervisor: &CodexAuthSupervisor,
+        operation_id: &str,
+        process: ManagedAuthProcess,
+    ) -> ManagedAuthProcess {
+        let process = register_login_process(supervisor, operation_id, process).unwrap();
+        let identity = auth_sidecar_identity(&process).unwrap();
+        supervisor
+            .bind_login_process_identity(
+                operation_id,
+                identity.pid,
+                &identity.process_start,
+                &identity.executable_fingerprint,
+                identity.process_group_id,
+            )
+            .unwrap();
+        process
     }
 
     fn p2a_receipt_fixture(dir: &Path) -> CodexDisableOperationReceipt {
@@ -6075,6 +6457,22 @@ mod tests {
             SandboxScienceState::Unknown,
         )
         .is_err());
+    }
+
+    #[test]
+    fn p2b_auth_terminal_runtime_state_matches_the_actual_preflight_action() {
+        assert_eq!(
+            auth_runtime_terminal_state(AuthRuntimeAction::StopManagedCodex),
+            "stopped"
+        );
+        assert_eq!(
+            auth_runtime_terminal_state(AuthRuntimeAction::PreserveOtherProvider),
+            "preserved"
+        );
+        assert_eq!(
+            auth_runtime_terminal_state(AuthRuntimeAction::Noop),
+            "preserved"
+        );
     }
 
     #[test]
@@ -9792,7 +10190,10 @@ exit 23"#,
             .attach_config_mutation_operation(&reservation.operation_id, &config_operation_id)
             .unwrap();
         assert_eq!(snapshot.operation_id, reservation.operation_id);
-        assert_eq!(snapshot.config_mutation_operation_id.as_deref(), Some(config_operation_id.as_str()));
+        assert_eq!(
+            snapshot.config_mutation_operation_id.as_deref(),
+            Some(config_operation_id.as_str())
+        );
         assert!(auth_start_authorization_digest(&reservation.operation_id).len() == 64);
         assert!(auth_start_authorization_digest(&reservation.operation_id)
             .bytes()
@@ -9800,6 +10201,248 @@ exit 23"#,
         assert!(supervisor
             .attach_config_mutation_operation(&reservation.operation_id, "not-an-id")
             .is_err());
+    }
+
+    #[test]
+    fn p2b_auth_sidecar_receipt_identity_binds_live_process_and_executable() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp = TempDir::new("p2b-sidecar-identity");
+        let operation_id = "ad".repeat(16);
+        let script = temp.script("IFS= read -r control\nexit 0");
+        let expected_fingerprint = auth_sidecar_executable_fingerprint(&script).unwrap();
+        let mut process = spawn_codex_auth_sidecar_at(
+            &script,
+            &temp.0,
+            CodexAuthAction::LoginBrowser,
+            None,
+            Some(&operation_id),
+            false,
+        )
+        .unwrap();
+
+        let identity = auth_sidecar_identity(&process).unwrap();
+
+        assert_eq!(identity.pid, process.child.id());
+        assert_eq!(identity.process_group_id, identity.pid as i32);
+        assert_eq!(identity.executable_fingerprint, expected_fingerprint);
+        assert_ne!(identity.process_start, format!("pid:{}", identity.pid));
+        assert_eq!(
+            crate::runtime::science::process_start_identity_digest(identity.pid).as_deref(),
+            Some(identity.process_start.as_str())
+        );
+        stop_auth_child(&mut process.child);
+    }
+
+    #[test]
+    fn p2b_start_authorization_keeps_cancel_channel_until_terminal() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp = TempDir::new("p2b-start-cancel-channel");
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let reservation = supervisor.begin_login().unwrap();
+        let operation_id = reservation.operation_id.clone();
+        let digest = auth_start_authorization_digest(&operation_id);
+        let script = temp.script(&format!(
+            "IFS= read -r start\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"start_ack\",\"authorization_digest\":\"{digest}\"}}'\nIFS= read -r cancel\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"cancel_ack\",\"disposition\":\"accepted\"}}'\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"terminal\",\"state\":\"cancelled\",\"error\":{{\"code\":\"auth_cancelled\",\"stage\":\"cancelled\",\"retryable\":true}}}}'\nexit 7"
+        ));
+        let process = spawn_codex_auth_sidecar_at(
+            &script,
+            &temp.0,
+            CodexAuthAction::LoginBrowser,
+            None,
+            Some(&operation_id),
+            false,
+        )
+        .unwrap();
+        let process = bind_test_login_process(&supervisor, &operation_id, process);
+        let process =
+            wait_for_login_start_ack(process, &operation_id, &digest, &supervisor).unwrap();
+        assert!(process.stdin.is_some());
+
+        let cancel = AtomicBool::new(true);
+        let terminal = wait_for_login_sidecar(
+            process,
+            CodexAuthAction::LoginBrowser,
+            &operation_id,
+            &cancel,
+            |_| {},
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(terminal["state"], "cancelled");
+        supervisor.clear_login_pid(&operation_id);
+        supervisor.abort_login_start(&operation_id);
+    }
+
+    #[test]
+    fn p2b_protocol_error_reaps_sidecar_before_pid_is_forgotten() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp = TempDir::new("p2b-protocol-reap");
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let reservation = supervisor.begin_login().unwrap();
+        let operation_id = reservation.operation_id.clone();
+        let digest = auth_start_authorization_digest(&operation_id);
+        let script = temp.script(&format!(
+            "IFS= read -r start\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"start_ack\",\"authorization_digest\":\"{digest}\"}}'\nprintf '%s\\n' 'not-json'\nexec /bin/sleep 30"
+        ));
+        let process = spawn_codex_auth_sidecar_at(
+            &script,
+            &temp.0,
+            CodexAuthAction::LoginBrowser,
+            None,
+            Some(&operation_id),
+            false,
+        )
+        .unwrap();
+        let process = bind_test_login_process(&supervisor, &operation_id, process);
+        let process =
+            wait_for_login_start_ack(process, &operation_id, &digest, &supervisor).unwrap();
+        let pid = process.child.id();
+
+        let error = wait_for_login_sidecar(
+            process,
+            CodexAuthAction::LoginBrowser,
+            &operation_id,
+            &AtomicBool::new(false),
+            |_| {},
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.contains("非法 NDJSON"), "unexpected error: {error}");
+        assert!(crate::runtime::science::process_start_identity_digest(pid).is_none());
+        supervisor.clear_login_pid(&operation_id);
+        supervisor.abort_login_start(&operation_id);
+    }
+
+    #[test]
+    fn p2b_receipt_admission_failure_releases_login_reservation_without_spawn() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp = TempDir::new("p2b-admission-release");
+        let prior_home = env::var_os("HOME");
+        env::set_var("HOME", &temp.0);
+        let config_dir = config::default_dir();
+        let cfg = config::Config {
+            experimental_codex_enabled: true,
+            ..Default::default()
+        };
+        config::save_to(&config_dir, &cfg).unwrap();
+        let conflicting_receipt = config_dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE);
+        fs::write(&conflicting_receipt, b"foreign-receipt").unwrap();
+        fs::set_permissions(&conflicting_receipt, fs::Permissions::from_mode(0o600)).unwrap();
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let state = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let result = start_codex_login_p2b_inner(
+            app.handle(),
+            &state,
+            &lifecycle,
+            &supervisor,
+            CodexAuthAction::LoginBrowser,
+            |_, _, _, _| panic!("conflicting receipt must reject before sidecar spawn"),
+        );
+
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("conflicting receipt unexpectedly admitted Codex login"),
+        };
+        assert!(matches!(error, RuntimeCommandError::Mutation(_)));
+        assert!(supervisor.snapshot().is_none());
+        let next = supervisor.begin_login().unwrap();
+        supervisor.abort_login_start(&next.operation_id);
+        match prior_home {
+            Some(home) => env::set_var("HOME", home),
+            None => env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn p2b_terminal_receipt_failure_clears_pid_and_finishes_supervisor() {
+        let _serial = R0_CODEX_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp = TempDir::new("p2b-terminal-receipt-failure");
+        let prior_home = env::var_os("HOME");
+        env::set_var("HOME", &temp.0);
+        let config_dir = config::default_dir();
+        config::save_to(
+            &config_dir,
+            &config::Config {
+                experimental_codex_enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let supervisor = Arc::new(CodexAuthSupervisor::default());
+        let state = Arc::new(Mutex::new(AppState::default()));
+        let lifecycle = Arc::new(crate::lifecycle::Lifecycle::new());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (reservation, process, mutation, runtime_action) = start_codex_login_p2b_inner(
+            app.handle(),
+            &state,
+            lifecycle.as_ref(),
+            &supervisor,
+            CodexAuthAction::LoginBrowser,
+            |_, action, operation_id, route| {
+                let digest = auth_start_authorization_digest(operation_id);
+                let script = temp.script(&format!(
+                    "IFS= read -r start\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"start_ack\",\"authorization_digest\":\"{digest}\"}}'\n/bin/sleep 1\nprintf '%s\\n' '{{\"schema_version\":3,\"operation_id\":\"{operation_id}\",\"kind\":\"terminal\",\"state\":\"succeeded\",\"status\":{{\"authenticated\":true,\"reason\":\"ready\",\"account_hash\":\"{}\",\"expiry_state\":\"valid\",\"expires_at\":2000000000,\"auth_epoch\":\"{}\",\"auth_generation\":7}}}}'",
+                    "ab".repeat(16),
+                    "cd".repeat(16),
+                ));
+                spawn_codex_auth_sidecar_at(
+                    &script,
+                    &temp.0,
+                    action,
+                    Some(route),
+                    Some(operation_id),
+                    false,
+                )
+                .map_err(|_| CodexAuthCommandError::unavailable("sidecar_spawn_failed"))
+            },
+        )
+        .unwrap();
+        let receipt = config_dir.join(config::CONFIG_MUTATION_OPERATION_RECEIPT_FILE);
+        fs::rename(&receipt, config_dir.join("preserved-auth-receipt.json")).unwrap();
+        fs::write(&receipt, b"replacement-receipt").unwrap();
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o600)).unwrap();
+
+        complete_login_operation_p2b(
+            app.handle().clone(),
+            lifecycle,
+            supervisor.clone(),
+            reservation.operation_id.clone(),
+            reservation.cancel,
+            process,
+            CodexAuthAction::LoginBrowser,
+            mutation,
+            runtime_action,
+        );
+
+        let terminal = supervisor.snapshot().unwrap();
+        assert_eq!(terminal.state, "failed");
+        assert_eq!(terminal.error.unwrap().code, "config_mutation_attention");
+        assert!(supervisor
+            .wait_for_auth_children_exit(Duration::from_millis(1))
+            .is_empty());
+        let next = supervisor.begin_login().unwrap();
+        supervisor.abort_login_start(&next.operation_id);
+        match prior_home {
+            Some(home) => env::set_var("HOME", home),
+            None => env::remove_var("HOME"),
+        }
     }
 
     #[test]
@@ -9845,6 +10488,142 @@ exit 23"#,
         assert!(config::read_config_mutation_operation_receipt(&dir.0)
             .unwrap()
             .is_some());
+
+        for (action_index, runtime_action) in [
+            AuthRuntimeAction::Noop,
+            AuthRuntimeAction::PreserveOtherProvider,
+            AuthRuntimeAction::StopManagedCodex,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (cause_index, cause) in ["auth_failed", "auth_cancelled", "sidecar_protocol_error"]
+                .into_iter()
+                .enumerate()
+            {
+                let terminal_dir =
+                    TempDir::new(&format!("p2b-auth-terminal-{action_index}-{cause_index}"));
+                config::save_to(&terminal_dir.0, &cfg).unwrap();
+                let mut terminal = crate::commands::runtime::config_mutation::begin(
+                    &terminal_dir.0,
+                    crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthStart,
+                    &cfg,
+                    None,
+                    crate::commands::runtime::config_mutation::MutationTarget::default(),
+                    crate::commands::runtime::config_mutation::RuntimePlan {
+                        owner_generation: 0,
+                        ..Default::default()
+                    },
+                    vec![crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthGenerationCommit],
+                    None,
+                    None,
+                )
+                .unwrap();
+                retain_failed_login_receipt(&mut terminal, runtime_action, cause);
+                let bytes = config::read_config_mutation_operation_receipt(&terminal_dir.0)
+                    .unwrap()
+                    .unwrap();
+                let receipt: crate::commands::runtime::config_mutation::ConfigMutationReceipt =
+                    serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(receipt.terminal.state, "attention");
+                assert_eq!(
+                    receipt.terminal.runtime_state,
+                    auth_runtime_terminal_state(runtime_action)
+                );
+                assert_eq!(receipt.terminal.cause.as_deref(), Some(cause));
+            }
+        }
+
+        let dynamic_dir = TempDir::new("p2b-auth-dynamic-after-drift");
+        config::save_to(&dynamic_dir.0, &cfg).unwrap();
+        let mut dynamic = crate::commands::runtime::config_mutation::begin(
+            &dynamic_dir.0,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthStart,
+            &cfg,
+            None,
+            crate::commands::runtime::config_mutation::MutationTarget::default(),
+            crate::commands::runtime::config_mutation::RuntimePlan::default(),
+            vec![
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ProfileEnsure,
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        let ((), after_fingerprint) =
+            config::update_config_mutation_operation_with_after_fingerprint(
+                &dynamic_dir.0,
+                dynamic.fence(),
+                dynamic.receipt_bytes(),
+                |current| {
+                    current.reuse_system_ssh = !current.reuse_system_ssh;
+                    Ok(((), true))
+                },
+            )
+            .unwrap();
+        dynamic
+            .bind_after_config_fingerprint(after_fingerprint)
+            .unwrap();
+        let mut drifted = config::load_from(&dynamic_dir.0).unwrap();
+        drifted.reuse_system_ssh = !drifted.reuse_system_ssh;
+        config::test_save_to_without_history_authority_guard(&dynamic_dir.0, &drifted).unwrap();
+        let drift = dynamic
+            .finish(
+                "completed",
+                "after",
+                "preserved",
+                None,
+                config::ConfigMutationTerminalConfigImage::After,
+            )
+            .unwrap_err();
+        assert!(drift.attention_required);
+        assert!(
+            config::read_config_mutation_operation_receipt(&dynamic_dir.0)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn p2b_codex_network_non_destructive_returns_intent_identity() {
+        let dir = TempDir::new("p2b-network-intent");
+        let mut cfg = config::Config::default();
+        cfg.codex_network.mode = csswitch_codex_network::CodexNetworkMode::Custom;
+        cfg.codex_network.proxy_url = "http://127.0.0.1:8080".into();
+        config::save_to(&dir.0, &cfg).unwrap();
+        let settings = csswitch_codex_network::CodexNetworkSettings::default();
+        let resolved = csswitch_codex_network::direct_route();
+
+        let committed =
+            set_codex_network_at(&dir.0, settings.clone(), &resolved, || Ok(())).unwrap();
+        assert_eq!(committed.get("schema_version"), Some(&json!(1)));
+        assert_eq!(
+            committed.get("operation"),
+            Some(&json!("set_codex_network"))
+        );
+        assert_eq!(committed.get("disposition"), Some(&json!("committed")));
+        assert_eq!(committed.get("config_state"), Some(&json!("committed")));
+        assert_eq!(committed.get("validation"), Some(&json!("not_run")));
+        assert_eq!(committed.get("science_running"), Some(&json!(false)));
+        assert!(committed.get("operation_id").is_none());
+        assert!(config::read_config_mutation_operation_receipt(&dir.0)
+            .unwrap()
+            .is_none());
+        let committed_intent = committed.get("intent_id").and_then(Value::as_str).unwrap();
+        assert_eq!(committed_intent.len(), 32);
+        assert!(committed_intent
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit()));
+
+        let unchanged = set_codex_network_at(&dir.0, settings, &resolved, || Ok(())).unwrap();
+        assert_eq!(unchanged.get("disposition"), Some(&json!("no_change")));
+        let unchanged_intent = unchanged.get("intent_id").and_then(Value::as_str).unwrap();
+        assert_eq!(unchanged_intent.len(), 32);
+        assert_ne!(unchanged_intent, committed_intent);
+        assert!(unchanged.get("operation_id").is_none());
+        assert!(config::read_config_mutation_operation_receipt(&dir.0)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -9856,7 +10635,7 @@ exit 23"#,
             &dir.0,
             crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthLogout,
             &cfg,
-            None,
+            Some(&cfg),
             crate::commands::runtime::config_mutation::MutationTarget {
                 auth_generation: Some(7),
                 ..Default::default()
@@ -9891,5 +10670,92 @@ exit 23"#,
         assert!(config::read_config_mutation_operation_receipt(&dir.0)
             .unwrap()
             .is_none());
+
+        let identity_dir = TempDir::new("p2b-logout-sidecar-identity");
+        config::save_to(&identity_dir.0, &cfg).unwrap();
+        let mut identity_operation = crate::commands::runtime::config_mutation::begin(
+            &identity_dir.0,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthLogout,
+            &cfg,
+            Some(&cfg),
+            crate::commands::runtime::config_mutation::MutationTarget::default(),
+            crate::commands::runtime::config_mutation::RuntimePlan::default(),
+            vec![
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopScience,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::AuthSidecar,
+            ],
+            Some(
+                crate::commands::runtime::config_mutation::AuthOperationReceipt {
+                    auth_operation_id: "11".repeat(16),
+                    supervisor_sequence: 1,
+                    state: "reserved".into(),
+                    start_authorization_digest: None,
+                    sidecar: None,
+                    terminal_auth_epoch: None,
+                    terminal_auth_generation: None,
+                    terminal_account_hash: None,
+                },
+            ),
+            None,
+        )
+        .unwrap();
+        let identity = crate::commands::runtime::config_mutation::AuthSidecarIdentity {
+            pid: 123,
+            process_start: "process-start-123".into(),
+            executable_fingerprint: "22".repeat(32),
+            process_group_id: 123,
+        };
+        checkpoint_logout_sidecar_start(&mut identity_operation, &identity).unwrap();
+        let bytes = config::read_config_mutation_operation_receipt(&identity_dir.0)
+            .unwrap()
+            .unwrap();
+        let persisted: crate::commands::runtime::config_mutation::ConfigMutationReceipt =
+            serde_json::from_slice(&bytes).unwrap();
+        let auth = persisted.auth_operation.unwrap();
+        let sidecar = auth.sidecar.unwrap();
+        assert_eq!(auth.state, "registered");
+        assert_eq!(sidecar.pid, identity.pid);
+        assert_eq!(sidecar.process_start, identity.process_start);
+        assert_eq!(
+            sidecar.executable_fingerprint,
+            identity.executable_fingerprint
+        );
+        assert_eq!(sidecar.process_group_id, identity.process_group_id);
+        assert_eq!(
+            persisted.effects[2].state,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress
+        );
+
+        let drift_dir = TempDir::new("p2b-logout-after-drift");
+        config::save_to(&drift_dir.0, &cfg).unwrap();
+        let mut drift_operation = crate::commands::runtime::config_mutation::begin(
+            &drift_dir.0,
+            crate::commands::runtime::config_mutation::ConfigMutationOperation::CodexAuthLogout,
+            &cfg,
+            Some(&cfg),
+            crate::commands::runtime::config_mutation::MutationTarget::default(),
+            crate::commands::runtime::config_mutation::RuntimePlan::default(),
+            vec![],
+            None,
+            None,
+        )
+        .unwrap();
+        let mut drifted = config::load_from(&drift_dir.0).unwrap();
+        drifted.reuse_system_ssh = !drifted.reuse_system_ssh;
+        config::test_save_to_without_history_authority_guard(&drift_dir.0, &drifted).unwrap();
+        let drift = drift_operation
+            .finish(
+                "completed",
+                "after",
+                "stopped",
+                None,
+                config::ConfigMutationTerminalConfigImage::After,
+            )
+            .unwrap_err();
+        assert!(drift.attention_required);
+        assert!(config::read_config_mutation_operation_receipt(&drift_dir.0)
+            .unwrap()
+            .is_some());
     }
 }

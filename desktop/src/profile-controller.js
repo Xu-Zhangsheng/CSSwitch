@@ -466,6 +466,26 @@ function applyMode(m) {
   renderCurrentSummary();
 }
 
+function isExactConfigIntent(outcome, operation, dispositions) {
+  return !!outcome &&
+    outcome.operation === operation &&
+    dispositions.includes(outcome.disposition) &&
+    outcome.config_state === "committed" &&
+    typeof outcome.intent_id === "string" &&
+    outcome.validation === "not_run" &&
+    outcome.science_running === false;
+}
+
+function isExactCompletedConfigMutation(outcome, operation, runtimeStates) {
+  return !!outcome &&
+    outcome.operation === operation &&
+    outcome.disposition === "completed" &&
+    outcome.config_state === "after" &&
+    runtimeStates.includes(outcome.runtime_state) &&
+    outcome.recovery_state === "not_needed" &&
+    typeof outcome.operation_id === "string";
+}
+
 async function switchMode(m) {
   if (m === getMode()) return;
   if (isBusy()) return; // 忙碌中不切模式（防与「一键开始」竞态；按钮亦已禁用，此为双保险）。修 P1-b
@@ -475,7 +495,14 @@ async function switchMode(m) {
   try {
     const result = await call("set_mode", { mode: m });
     const outcome = parseConfigMutationResponse(result);
-    if (!outcome || outcome.operation !== "set_mode" || outcome.disposition === "attention") {
+    const validOutcome =
+      isExactConfigIntent(outcome, "set_mode", ["committed"]) ||
+      (m === "official" && isExactCompletedConfigMutation(
+        outcome,
+        "set_mode_official",
+        ["stopped"]
+      ));
+    if (!validOutcome) {
       throw new Error("模式切换结果协议不匹配。");
     }
   } catch (e) {
@@ -537,7 +564,14 @@ async function persistRuntimeSettings() {
   try {
     const result = await call("set_settings", { cfg: { proxy_port: p, sandbox_port: s, reuse_system_ssh: reuseSystemSsh } });
     const outcome = parseConfigMutationResponse(result);
-    if (!outcome || !["set_settings", "set_settings_destructive"].includes(outcome.operation) || outcome.disposition === "attention") {
+    const validOutcome =
+      isExactConfigIntent(outcome, "set_settings", ["committed", "no_change"]) ||
+      isExactCompletedConfigMutation(
+        outcome,
+        "set_settings_destructive",
+        ["stopped", "preserved"]
+      );
+    if (!validOutcome) {
       throw new Error("运行设置结果协议不匹配。");
     }
     getConfigState().proxy_port = p;
@@ -1079,18 +1113,29 @@ function clearKey(id) {
 }
 async function doClearKey(id) {
   const wasSelected = id === getConfigState().active_id;
-  const wasApplied = id === getConfigState().applied_profile_id;
   setBusy(true);
   setMsg("清除 key 中…");
   try {
     const outcome = parseConfigMutationResponse(await call("clear_profile_key", { id }));
-    if (!outcome || !["clear_profile_key", "clear_applied_profile_key"].includes(outcome.operation) || outcome.disposition === "attention") {
+    const appliedMutation = isExactCompletedConfigMutation(
+      outcome,
+      "clear_applied_profile_key",
+      ["stopped"]
+    );
+    const intentMutation = isExactConfigIntent(
+      outcome,
+      "clear_profile_key",
+      ["committed", "no_change"]
+    );
+    if (!appliedMutation && !intentMutation) {
       throw new Error("清除 key 结果协议不匹配。");
     }
     await loadConfigAfterCommit();
     setMsg(
-      wasApplied
+      appliedMutation
         ? "已清除 key（该配置属于上次提交的运行绑定，代理已停止；请重新填写并一键开始）。"
+        : outcome.disposition === "no_change"
+        ? "配置已不存在，无需清除 key。"
         : wasSelected
         ? "已清除当前选择的 key；当前运行链保持不变，重新填写后再一键开始。"
         : "已清除 key。",
@@ -1139,18 +1184,29 @@ function del(id) {
 }
 async function doDelete(id) {
   const wasSelected = id === getConfigState().active_id;
-  const wasApplied = id === getConfigState().applied_profile_id;
   setBusy(true);
   setMsg("删除中…");
   try {
     const outcome = parseConfigMutationResponse(await call("delete_profile", { id }));
-    if (!outcome || !["delete_profile", "delete_applied_profile"].includes(outcome.operation) || outcome.disposition === "attention") {
+    const appliedMutation = isExactCompletedConfigMutation(
+      outcome,
+      "delete_applied_profile",
+      ["stopped"]
+    );
+    const intentMutation = isExactConfigIntent(
+      outcome,
+      "delete_profile",
+      ["committed", "no_change"]
+    );
+    if (!appliedMutation && !intentMutation) {
       throw new Error("删除配置结果协议不匹配。");
     }
     await loadConfigAfterCommit();
     setMsg(
-      wasApplied
+      appliedMutation
         ? "已删除上次提交的运行绑定配置，相关代理已停止。"
+        : outcome.disposition === "no_change"
+        ? "配置已不存在，无需再次删除。"
         : wasSelected
         ? "已删除当前选择，请重新选择一条并「设为当前」。"
         : "已删除。",

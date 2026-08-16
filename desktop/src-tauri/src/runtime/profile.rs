@@ -533,7 +533,7 @@ pub(crate) fn ensure_codex_profile_with_mutation(
     dir: &Path,
     fence: &crate::config::ConfigMutationOperationFence,
     receipt: &[u8],
-) -> Result<EnsureCodexProfileResult, String> {
+) -> Result<(EnsureCodexProfileResult, String), String> {
     let template = templates::by_id("codex").ok_or("Codex 模板不可用。")?;
     let contract = crate::provider_contracts::contract_for(template.id, template.api_format)?;
     if contract.default_credential_source
@@ -565,9 +565,12 @@ pub(crate) fn ensure_codex_profile_with_mutation(
         notes: None,
         extra: Default::default(),
     };
-    config::update_config_mutation_operation(dir, fence, receipt, |cfg| {
+    config::update_config_mutation_operation_with_after_fingerprint(dir, fence, receipt, |cfg| {
         config::require_template_enabled(cfg, "codex")?;
-        if let Some(existing) = cfg.profiles.iter().find(|profile| is_canonical_codex_profile(profile))
+        if let Some(existing) = cfg
+            .profiles
+            .iter()
+            .find(|profile| is_canonical_codex_profile(profile))
         {
             return Ok((
                 EnsureCodexProfileResult {
@@ -1650,11 +1653,7 @@ mod tests {
             "openai_models_or_manual"
         );
         assert_eq!(custom["capabilities"]["base_url_required"], true);
-        for id in [
-            "opencode-go-openai",
-            "opencode-go-anthropic",
-            "grok",
-        ] {
+        for id in ["opencode-go-openai", "opencode-go-anthropic", "grok"] {
             let template = v.iter().find(|template| template["id"] == id).unwrap();
             assert_eq!(template["capabilities"]["model_required"], true);
             assert_eq!(
@@ -1662,7 +1661,10 @@ mod tests {
                 "兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"
             );
         }
-        let gemini = v.iter().find(|template| template["id"] == "gemini").unwrap();
+        let gemini = v
+            .iter()
+            .find(|template| template["id"] == "gemini")
+            .unwrap();
         assert_eq!(gemini["capabilities"]["model_required"], true);
         assert_eq!(
             gemini["compatibility_notice"],

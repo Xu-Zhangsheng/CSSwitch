@@ -9635,11 +9635,7 @@ fn r0_set_mode_config_failure_leaves_runtime_stopped() {
     );
 }
 
-fn assert_p2b_attention_preserves_config_authority(
-    config_dir: &Path,
-    before: &Config,
-    case: &str,
-) {
+fn assert_p2b_attention_preserves_config_authority(config_dir: &Path, before: &Config, case: &str) {
     let current = config::load_from(config_dir).unwrap();
     assert_eq!(
         current.without_config_mutation_operation_fence(),
@@ -9711,12 +9707,18 @@ fn set_mode_rejects_config_commit_when_gateway_stop_is_uncertain() {
         .as_ref()
         .is_err_and(|error| error.contains("未切换到官方模式")));
     let current = config::load_from(&config_dir).unwrap();
-    assert_eq!(current.without_config_mutation_operation_fence(), config_authority_before);
+    assert_eq!(
+        current.without_config_mutation_operation_fence(),
+        config_authority_before
+    );
     assert!(current.config_mutation_operation_fence().unwrap().is_some());
     assert!(config::read_config_mutation_operation_receipt(&config_dir)
         .unwrap()
         .is_some());
-    assert_ne!(fs::read(config_dir.join("config.json")).unwrap(), config_before);
+    assert_ne!(
+        fs::read(config_dir.join("config.json")).unwrap(),
+        config_before
+    );
     let cleanup = lock(&state).rejected_gateway_candidates.clone();
     assert_eq!(cleanup.owned_pids(), vec![child_pid]);
     cleanup
@@ -10024,12 +10026,18 @@ fn set_settings_rejects_config_commit_when_gateway_stop_is_uncertain() {
         .as_ref()
         .is_err_and(|error| error.contains("设置未更改")));
     let current = config::load_from(&config_dir).unwrap();
-    assert_eq!(current.without_config_mutation_operation_fence(), config_authority_before);
+    assert_eq!(
+        current.without_config_mutation_operation_fence(),
+        config_authority_before
+    );
     assert!(current.config_mutation_operation_fence().unwrap().is_some());
     assert!(config::read_config_mutation_operation_receipt(&config_dir)
         .unwrap()
         .is_some());
-    assert_ne!(fs::read(config_dir.join("config.json")).unwrap(), config_before);
+    assert_ne!(
+        fs::read(config_dir.join("config.json")).unwrap(),
+        config_before
+    );
     let cleanup = lock(&state).rejected_gateway_candidates.clone();
     assert_eq!(cleanup.owned_pids(), vec![child_pid]);
     cleanup

@@ -609,14 +609,18 @@ fn cleanup_for_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> GatewayStop
         |timeout| supervisor.wait_for_auth_children_exit(timeout),
         |pid| {
             #[cfg(unix)]
-            unsafe {
-                libc::kill(pid as i32, libc::SIGTERM);
+            if supervisor.auth_signal_target_is_current(pid) {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
             }
         },
         |pid| {
             #[cfg(unix)]
-            unsafe {
-                libc::kill(pid as i32, libc::SIGKILL);
+            if supervisor.auth_signal_target_is_current(pid) {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
             }
         },
         ScienceHostAdapter::claim_stop,
@@ -803,7 +807,9 @@ fn run_boot_decision(app: tauri::AppHandle) {
         Err(error) => {
             mark_boot_attention(
                 &app,
-                boot_prepare_failure(format!("P2-B Config mutation recovery 需要人工处理：{error}")),
+                boot_prepare_failure(format!(
+                    "P2-B Config mutation recovery 需要人工处理：{error}"
+                )),
             );
             return;
         }

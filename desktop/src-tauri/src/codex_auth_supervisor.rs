@@ -66,10 +66,62 @@ impl OperationSnapshot {
 }
 
 #[derive(Clone)]
+struct AuthSignalIdentity {
+    process_start: String,
+    executable_fingerprint: String,
+    process_group_id: i32,
+}
+
+impl AuthSignalIdentity {
+    fn new(
+        process_start: &str,
+        executable_fingerprint: &str,
+        process_group_id: i32,
+    ) -> Result<Self, String> {
+        let exact_hex = |value: &str| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        };
+        if !exact_hex(process_start) || !exact_hex(executable_fingerprint) || process_group_id <= 1
+        {
+            return Err("Codex auth sidecar signal identity 非法。".into());
+        }
+        Ok(Self {
+            process_start: process_start.to_string(),
+            executable_fingerprint: executable_fingerprint.to_string(),
+            process_group_id,
+        })
+    }
+
+    fn is_current(&self, pid: u32) -> bool {
+        // The executable fingerprint is verified before this identity is bound.
+        // Exact microsecond start time plus the unchanged process group then
+        // proves this is still that same loaded process rather than PID reuse.
+        if self.executable_fingerprint.len() != 64
+            || crate::runtime::science::process_start_identity_digest(pid).as_deref()
+                != Some(self.process_start.as_str())
+        {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            unsafe { libc::getpgid(pid as libc::pid_t) == self.process_group_id }
+        }
+        #[cfg(not(unix))]
+        {
+            i32::try_from(pid).ok() == Some(self.process_group_id)
+        }
+    }
+}
+
+#[derive(Clone)]
 struct LoginOperation {
     snapshot: OperationSnapshot,
     cancel: Arc<AtomicBool>,
     pid: Option<u32>,
+    signal_identity: Option<AuthSignalIdentity>,
     cancel_disposition: Option<String>,
 }
 
@@ -77,6 +129,7 @@ struct PreflightOperation {
     id: u64,
     cancel: Arc<AtomicBool>,
     pid: Option<u32>,
+    signal_identity: Option<AuthSignalIdentity>,
 }
 
 #[derive(Default)]
@@ -84,6 +137,7 @@ struct SupervisorInner {
     codex_users: usize,
     other_mutation: bool,
     mutation_pid: Option<u32>,
+    mutation_signal_identity: Option<AuthSignalIdentity>,
     shutting_down: bool,
     active_login: Option<LoginOperation>,
     active_preflight: Option<PreflightOperation>,
@@ -154,6 +208,22 @@ impl AuthPreflightReservation {
 
     pub(crate) fn set_pid(&self, pid: u32) -> Result<(), String> {
         self.supervisor.set_preflight_pid(self.id, Some(pid))
+    }
+
+    pub(crate) fn set_process_identity(
+        &self,
+        pid: u32,
+        process_start: &str,
+        executable_fingerprint: &str,
+        process_group_id: i32,
+    ) -> Result<(), String> {
+        self.supervisor.set_preflight_process_identity(
+            self.id,
+            pid,
+            process_start,
+            executable_fingerprint,
+            process_group_id,
+        )
     }
 
     pub(crate) fn clear_pid(&self) {
@@ -233,6 +303,7 @@ impl Drop for CodexMutationLease {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         inner.mutation_pid = None;
+        inner.mutation_signal_identity = None;
         inner.other_mutation = false;
         self.released = true;
         drop(inner);
@@ -251,6 +322,29 @@ impl CodexMutationLease {
             return Err("Codex 正在退出或认证变更已失效，拒绝登记 sidecar。".into());
         }
         inner.mutation_pid = Some(pid);
+        inner.mutation_signal_identity = None;
+        Ok(())
+    }
+
+    pub(crate) fn set_process_identity(
+        &self,
+        pid: u32,
+        process_start: &str,
+        executable_fingerprint: &str,
+        process_group_id: i32,
+    ) -> Result<(), String> {
+        let identity =
+            AuthSignalIdentity::new(process_start, executable_fingerprint, process_group_id)?;
+        let mut inner = self
+            .supervisor
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if inner.shutting_down || !inner.other_mutation || inner.mutation_pid.is_some() {
+            return Err("Codex 正在退出或认证变更已失效，拒绝登记 sidecar identity。".into());
+        }
+        inner.mutation_pid = Some(pid);
+        inner.mutation_signal_identity = Some(identity);
         Ok(())
     }
 
@@ -261,6 +355,7 @@ impl CodexMutationLease {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         inner.mutation_pid = None;
+        inner.mutation_signal_identity = None;
         drop(inner);
         self.supervisor.cancel_changed.notify_all();
     }
@@ -286,6 +381,7 @@ impl CodexAuthSupervisor {
             snapshot: snapshot.clone(),
             cancel: cancel.clone(),
             pid: None,
+            signal_identity: None,
             cancel_disposition: None,
         });
         inner.last_snapshot = Some(snapshot.clone());
@@ -323,7 +419,81 @@ impl CodexAuthSupervisor {
             return Err("Codex 正在退出，拒绝登记登录 sidecar。".into());
         }
         operation.pid = Some(pid);
+        operation.signal_identity = None;
         Ok(())
+    }
+
+    pub(crate) fn bind_login_process_identity(
+        &self,
+        operation_id: &str,
+        pid: u32,
+        process_start: &str,
+        executable_fingerprint: &str,
+        process_group_id: i32,
+    ) -> Result<(), String> {
+        let identity =
+            AuthSignalIdentity::new(process_start, executable_fingerprint, process_group_id)?;
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if inner.shutting_down {
+            return Err("Codex 正在退出，拒绝登记登录 sidecar identity。".into());
+        }
+        let operation = inner
+            .active_login
+            .as_mut()
+            .filter(|operation| operation.snapshot.operation_id == operation_id)
+            .ok_or_else(|| "Codex 登录 operation 已失效。".to_string())?;
+        if operation.pid != Some(pid)
+            || operation.cancel.load(Ordering::SeqCst)
+            || operation.signal_identity.as_ref().is_some_and(|existing| {
+                existing.process_start != process_start
+                    || existing.executable_fingerprint != executable_fingerprint
+                    || existing.process_group_id != process_group_id
+            })
+        {
+            return Err("Codex 登录 sidecar PID 已失效。".into());
+        }
+        operation.signal_identity = Some(identity);
+        Ok(())
+    }
+
+    pub(crate) fn authorize_login_start(
+        &self,
+        operation_id: &str,
+        send: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        // Keep the supervisor lock across the bounded first control write so
+        // interactive cancel/native exit and `start` have one linear winner.
+        // cancel()/cancel_for_exit() take this same lock before setting the
+        // operation cancel bit; once either wins, OAuth/network work can no
+        // longer be authorized for an inert sidecar.
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let operation = inner
+            .active_login
+            .as_ref()
+            .filter(|operation| operation.snapshot.operation_id == operation_id)
+            .ok_or_else(|| "Codex 登录 operation 已失效。".to_string())?;
+        if inner.shutting_down
+            || operation.cancel.load(Ordering::SeqCst)
+            || operation.pid.is_none()
+            || operation.signal_identity.is_none()
+        {
+            return Err("Codex 登录已取消，拒绝发送 sidecar start 授权。".into());
+        }
+        send()
+    }
+
+    pub(crate) fn clear_login_pid(&self, operation_id: &str) {
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(operation) = inner
+            .active_login
+            .as_mut()
+            .filter(|operation| operation.snapshot.operation_id == operation_id)
+        {
+            operation.pid = None;
+            operation.signal_identity = None;
+        }
+        drop(inner);
+        self.cancel_changed.notify_all();
     }
 
     #[cfg(test)]
@@ -371,6 +541,7 @@ impl CodexAuthSupervisor {
             id,
             cancel: cancel.clone(),
             pid: None,
+            signal_identity: None,
         });
         Ok(AuthPreflightReservation {
             supervisor: supervisor.clone(),
@@ -394,6 +565,36 @@ impl CodexAuthSupervisor {
             return Err("Codex 正在退出，拒绝登记认证 preflight sidecar。".into());
         }
         operation.pid = pid;
+        operation.signal_identity = None;
+        drop(inner);
+        self.cancel_changed.notify_all();
+        Ok(())
+    }
+
+    fn set_preflight_process_identity(
+        &self,
+        id: u64,
+        pid: u32,
+        process_start: &str,
+        executable_fingerprint: &str,
+        process_group_id: i32,
+    ) -> Result<(), String> {
+        let identity =
+            AuthSignalIdentity::new(process_start, executable_fingerprint, process_group_id)?;
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if inner.shutting_down {
+            return Err("Codex 正在退出，拒绝登记认证 preflight sidecar identity。".into());
+        }
+        let operation = inner
+            .active_preflight
+            .as_mut()
+            .filter(|operation| operation.id == id)
+            .ok_or_else(|| "Codex 认证 preflight 已失效。".to_string())?;
+        if operation.pid.is_some() || operation.cancel.load(Ordering::SeqCst) {
+            return Err("Codex 正在退出，拒绝登记认证 preflight sidecar identity。".into());
+        }
+        operation.pid = Some(pid);
+        operation.signal_identity = Some(identity);
         drop(inner);
         self.cancel_changed.notify_all();
         Ok(())
@@ -431,6 +632,7 @@ impl CodexAuthSupervisor {
         }
         inner.other_mutation = true;
         inner.mutation_pid = None;
+        inner.mutation_signal_identity = None;
         Ok(CodexMutationLease {
             supervisor: supervisor.clone(),
             released: false,
@@ -639,9 +841,9 @@ impl CodexAuthSupervisor {
     }
 
     pub(crate) fn cancel_for_exit(&self) -> Vec<u32> {
-        self.exit_cancel.store(true, Ordering::SeqCst);
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         inner.shutting_down = true;
+        self.exit_cancel.store(true, Ordering::SeqCst);
         let mut pids = Vec::new();
         if let Some(operation) = inner.active_login.as_ref() {
             operation.cancel.store(true, Ordering::SeqCst);
@@ -659,6 +861,30 @@ impl CodexAuthSupervisor {
             pids.push(pid);
         }
         pids
+    }
+
+    pub(crate) fn auth_signal_target_is_current(&self, pid: u32) -> bool {
+        let expected = {
+            let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+            inner
+                .active_login
+                .as_ref()
+                .filter(|operation| operation.pid == Some(pid))
+                .and_then(|operation| operation.signal_identity.clone())
+                .or_else(|| {
+                    inner
+                        .active_preflight
+                        .as_ref()
+                        .filter(|operation| operation.pid == Some(pid))
+                        .and_then(|operation| operation.signal_identity.clone())
+                })
+                .or_else(|| {
+                    (inner.mutation_pid == Some(pid))
+                        .then(|| inner.mutation_signal_identity.clone())
+                        .flatten()
+                })
+        };
+        expected.is_some_and(|identity| identity.is_current(pid))
     }
 
     pub(crate) fn wait_for_auth_children_exit(&self, timeout: Duration) -> Vec<u32> {
@@ -794,9 +1020,30 @@ mod tests {
     fn exit_cancellation_covers_login_pid_without_finishing_it_early() {
         let supervisor = CodexAuthSupervisor::default();
         let reservation = supervisor.begin_login().unwrap();
-        supervisor.set_pid(&reservation.operation_id, 4343).unwrap();
-        assert_eq!(supervisor.cancel_for_exit(), vec![4343]);
+        let pid = std::process::id();
+        let process_start = crate::runtime::science::process_start_identity_digest(pid).unwrap();
+        let executable_fingerprint = "ab".repeat(32);
+        let process_group_id = unsafe { libc::getpgid(pid as libc::pid_t) };
+        supervisor.set_pid(&reservation.operation_id, pid).unwrap();
+        supervisor
+            .bind_login_process_identity(
+                &reservation.operation_id,
+                pid,
+                &process_start,
+                &executable_fingerprint,
+                process_group_id,
+            )
+            .unwrap();
+        assert_eq!(supervisor.cancel_for_exit(), vec![pid]);
         assert!(reservation.cancel.load(Ordering::SeqCst));
+        let sent = AtomicBool::new(false);
+        assert!(supervisor
+            .authorize_login_start(&reservation.operation_id, || {
+                sent.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .is_err());
+        assert!(!sent.load(Ordering::SeqCst));
         assert_eq!(
             supervisor.snapshot().unwrap().state,
             "starting",
@@ -808,6 +1055,94 @@ mod tests {
         assert!(supervisor
             .wait_for_auth_children_exit(Duration::from_millis(1))
             .is_empty());
+    }
+
+    #[test]
+    fn reaped_login_pid_is_not_returned_while_durable_terminalization_runs() {
+        let supervisor = CodexAuthSupervisor::default();
+        let reservation = supervisor.begin_login().unwrap();
+        let pid = std::process::id();
+        let process_start = crate::runtime::science::process_start_identity_digest(pid).unwrap();
+        let executable_fingerprint = "ab".repeat(32);
+        let process_group_id = unsafe { libc::getpgid(pid as libc::pid_t) };
+        supervisor.set_pid(&reservation.operation_id, pid).unwrap();
+        assert!(!supervisor.auth_signal_target_is_current(pid));
+        supervisor
+            .bind_login_process_identity(
+                &reservation.operation_id,
+                pid,
+                &process_start,
+                &executable_fingerprint,
+                process_group_id,
+            )
+            .unwrap();
+        assert!(supervisor.auth_signal_target_is_current(pid));
+
+        supervisor.clear_login_pid(&reservation.operation_id);
+
+        assert!(!supervisor.auth_signal_target_is_current(pid));
+        assert!(supervisor
+            .wait_for_auth_children_exit(Duration::from_millis(1))
+            .is_empty());
+        assert_eq!(supervisor.snapshot().unwrap().state, "starting");
+        supervisor
+            .finish(&reservation.operation_id, "failed", None)
+            .unwrap();
+    }
+
+    #[test]
+    fn every_auth_signal_target_requires_exact_process_identity() {
+        let pid = std::process::id();
+        let process_start = crate::runtime::science::process_start_identity_digest(pid).unwrap();
+        let executable_fingerprint = "cd".repeat(32);
+        let process_group_id = unsafe { libc::getpgid(pid as libc::pid_t) };
+
+        let preflight_supervisor = Arc::new(CodexAuthSupervisor::default());
+        let preflight = CodexAuthSupervisor::begin_auth_preflight(&preflight_supervisor).unwrap();
+        preflight.set_pid(pid).unwrap();
+        assert!(!preflight_supervisor.auth_signal_target_is_current(pid));
+        preflight.clear_pid();
+        preflight
+            .set_process_identity(
+                pid,
+                &process_start,
+                &executable_fingerprint,
+                process_group_id,
+            )
+            .unwrap();
+        assert!(preflight_supervisor.auth_signal_target_is_current(pid));
+        preflight.clear_pid();
+        assert!(!preflight_supervisor.auth_signal_target_is_current(pid));
+        drop(preflight);
+
+        let mutation_supervisor = Arc::new(CodexAuthSupervisor::default());
+        let mutation = CodexAuthSupervisor::begin_mutation(&mutation_supervisor).unwrap();
+        mutation.set_pid(pid).unwrap();
+        assert!(!mutation_supervisor.auth_signal_target_is_current(pid));
+        mutation.clear_pid();
+        mutation
+            .set_process_identity(
+                pid,
+                &process_start,
+                &executable_fingerprint,
+                process_group_id,
+            )
+            .unwrap();
+        assert!(mutation_supervisor.auth_signal_target_is_current(pid));
+        mutation.clear_pid();
+        assert!(!mutation_supervisor.auth_signal_target_is_current(pid));
+    }
+
+    #[test]
+    fn failed_receipt_admission_can_release_login_reservation() {
+        let supervisor = CodexAuthSupervisor::default();
+        let reservation = supervisor.begin_login().unwrap();
+
+        supervisor.abort_login_start(&reservation.operation_id);
+
+        assert!(supervisor.snapshot().is_none());
+        let next = supervisor.begin_login().unwrap();
+        supervisor.abort_login_start(&next.operation_id);
     }
 
     #[test]

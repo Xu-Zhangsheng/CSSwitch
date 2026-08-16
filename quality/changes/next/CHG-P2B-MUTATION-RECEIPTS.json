@@ -21,6 +21,7 @@
       "desktop/src-tauri/src/config.rs",
       "desktop/src-tauri/src/lib.rs",
       "desktop/src-tauri/src/runtime/profile.rs",
+      "desktop/src-tauri/src/runtime/science/runtime_state.rs",
       "desktop/src-tauri/src/runtime/settings.rs",
       "desktop/src-tauri/src/runtime/ssh_bridge.rs",
       "desktop/src/codex-controller.js",
@@ -90,7 +91,14 @@
       "basis": [
         "exact P2-A source candidate 09cbc686c61228eba592475dec6e9e327658b4a2 is the frozen implementation base",
         "credential-free receipt and Config-fence unit tests cover bounded size, no-clobber CAS, clearing tombstone, mutual exclusion, orphan recovery, receipt-only corruption, and ordinary-writer blocking",
-        "runtime/profile/Codex tests cover applied versus intent-only outcomes, inert auth sidecar identity, matching start authorization, generation references, logout terminality, and dual-receipt boot conflict",
+        "auth start tests serialize the bounded start write against supervisor cancel and native exit, then preserve the post-start cancel channel",
+        "auth stream tests consume buffered events, reap protocol errors, persist exact in-progress identity for login and logout, and require exact signal identity for every auth sidecar",
+        "Codex network UI accepts only receipt-free exact committed intents for non-destructive writes or operation-id-bound exact completed terminal receipts for destructive writes",
+        "mode-switch UI accepts only the exact set_mode intent outcome or the exact destructive set_mode_official terminal outcome before publishing the selected mode",
+        "settings, clear-key, and delete UI consumers distinguish exact committed/no-change intents from exact completed destructive terminal outcomes before publishing success state",
+        "non-destructive set_settings and active-profile selection propagate the actual atomic Config update result into committed versus no_change intent disposition",
+        "Codex login success, failure, cancellation, protocol-error, and logout terminal receipts derive stopped versus preserved runtime state from the actual fenced preflight action",
+        "auth failure-seam tests cover reservation release, terminal PID clearing, dynamic after-image drift, logout in-progress identity, terminal mutation-ID binding, generation references, and dual-receipt boot conflict",
         "frontend and preview tests parse only safe typed envelopes and reject attention or malformed responses",
         "no artifact, installed App, live provider, live Science, credentials, signing, notarization, or public release evidence is claimed"
       ]

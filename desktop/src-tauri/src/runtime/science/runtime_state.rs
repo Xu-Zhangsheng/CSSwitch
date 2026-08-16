@@ -170,7 +170,7 @@ fn managed_launch_path() -> PathBuf {
     config::default_dir().join(MANAGED_LAUNCH_FILE)
 }
 
-fn process_start_identity(pid: u32) -> Option<String> {
+pub(crate) fn process_start_identity(pid: u32) -> Option<String> {
     if pid <= 1 {
         return None;
     }
@@ -183,25 +183,8 @@ fn process_start_identity(pid: u32) -> Option<String> {
     {
         return Some("Mon Jan  1 00:00:00 2001".into());
     }
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let info_size = std::mem::size_of::<libc::proc_bsdinfo>();
-    let read = unsafe {
-        libc::proc_pidinfo(
-            i32::try_from(pid).ok()?,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            info.as_mut_ptr().cast(),
-            i32::try_from(info_size).ok()?,
-        )
-    };
-    if usize::try_from(read).ok()? != info_size {
-        return None;
-    }
-    let info = unsafe { info.assume_init() };
-    if info.pbi_pid != pid || info.pbi_start_tvsec == 0 {
-        return None;
-    }
-    let seconds = libc::time_t::try_from(info.pbi_start_tvsec).ok()?;
+    let (start_seconds, _) = process_start_timestamp(pid)?;
+    let seconds = libc::time_t::try_from(start_seconds).ok()?;
     let output = Command::new("/bin/date")
         .args(["-r", &seconds.to_string(), "+%a %b %e %T %Y"])
         .env_clear()
@@ -222,6 +205,43 @@ fn process_start_identity(pid: u32) -> Option<String> {
     // Preserve the trimmed `ps -o lstart=` representation already stored in
     // schema-v1 managed receipts, without spawning the sandbox-blocked `ps`.
     Some(identity.to_string())
+}
+
+pub(crate) fn process_start_identity_digest(pid: u32) -> Option<String> {
+    let (start_seconds, start_microseconds) = process_start_timestamp(pid)?;
+    let mut digest = Sha256::new();
+    digest.update(b"csswitch-process-start-identity-v1\0");
+    digest.update(pid.to_be_bytes());
+    digest.update(start_seconds.to_be_bytes());
+    digest.update(start_microseconds.to_be_bytes());
+    Some(format!("{:x}", digest.finalize()))
+}
+
+fn process_start_timestamp(pid: u32) -> Option<(u64, u64)> {
+    if pid <= 1 {
+        return None;
+    }
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let info_size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let read = unsafe {
+        libc::proc_pidinfo(
+            i32::try_from(pid).ok()?,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            i32::try_from(info_size).ok()?,
+        )
+    };
+    if usize::try_from(read).ok()? != info_size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    let start_seconds = u64::try_from(info.pbi_start_tvsec).ok()?;
+    let start_microseconds = u64::try_from(info.pbi_start_tvusec).ok()?;
+    if info.pbi_pid != pid || start_seconds == 0 || start_microseconds >= 1_000_000 {
+        return None;
+    }
+    Some((start_seconds, start_microseconds))
 }
 
 fn data_dir_identity() -> Option<(PathBuf, u64, u64)> {
