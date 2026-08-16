@@ -651,7 +651,9 @@ where
                         config::ConfigMutationTerminalConfigImage::Before,
                     );
                     if let Err(attention) = attention {
-                        return Err(config_mutation::command_error_string(&attention));
+                        return Err(config_mutation::command_error_string(
+                            &attention.with_message("撤销隔离 SSH config 失败"),
+                        ));
                     }
                 }
                 return Err(error);
@@ -691,7 +693,9 @@ where
                         config::ConfigMutationTerminalConfigImage::Before,
                     );
                     if let Err(attention) = attention {
-                        return Err(config_mutation::command_error_string(&attention));
+                        return Err(config_mutation::command_error_string(
+                            &attention.with_message("撤销隔离 SSH config 失败"),
+                        ));
                     }
                 }
                 return Err(error);

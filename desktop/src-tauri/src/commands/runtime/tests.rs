@@ -9635,6 +9635,29 @@ fn r0_set_mode_config_failure_leaves_runtime_stopped() {
     );
 }
 
+fn assert_p2b_attention_preserves_config_authority(
+    config_dir: &Path,
+    before: &Config,
+    case: &str,
+) {
+    let current = config::load_from(config_dir).unwrap();
+    assert_eq!(
+        current.without_config_mutation_operation_fence(),
+        before.without_config_mutation_operation_fence(),
+        "{case}"
+    );
+    assert!(
+        current.config_mutation_operation_fence().unwrap().is_some(),
+        "{case}"
+    );
+    assert!(
+        config::read_config_mutation_operation_receipt(config_dir)
+            .unwrap()
+            .is_some(),
+        "{case}"
+    );
+}
+
 #[test]
 #[allow(clippy::result_large_err)]
 fn set_mode_rejects_config_commit_when_gateway_stop_is_uncertain() {
@@ -9829,7 +9852,7 @@ fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement()
             },
         )
         .unwrap();
-        let config_before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
 
         let (state, proxy_pid) = r0_d_proxy_state();
         {
@@ -9899,10 +9922,11 @@ fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement()
                 .is_err_and(|error| error.contains("process-local owner 已变化")),
             "{case}: {switched:?}"
         );
-        assert_eq!(
-            fs::read(root.join(format!("config-{case}/config.json"))).unwrap(),
-            config_before,
-            "{case}"
+        let case_config_dir = root.join(format!("config-{case}"));
+        assert_p2b_attention_preserves_config_authority(
+            &case_config_dir,
+            &config_authority_before,
+            case,
         );
         let current = lock(&state);
         let expected_runtime = if replace_identity {
@@ -10055,7 +10079,7 @@ fn r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replaceme
             },
         )
         .unwrap();
-        let config_before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
 
         let (state, proxy_pid) = r0_d_proxy_state();
         {
@@ -10133,10 +10157,11 @@ fn r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replaceme
                 .is_err_and(|error| error.contains("process-local owner 已变化")),
             "{case}: {changed:?}"
         );
-        assert_eq!(
-            fs::read(root.join(format!("config-{case}/config.json"))).unwrap(),
-            config_before,
-            "{case}"
+        let case_config_dir = root.join(format!("config-{case}"));
+        assert_p2b_attention_preserves_config_authority(
+            &case_config_dir,
+            &config_authority_before,
+            case,
         );
         assert_eq!(
             lifecycle.current_generation(),
@@ -10391,7 +10416,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         let sandbox_port = sandbox_listener.local_addr().unwrap().port();
         assert_ne!(sandbox_port, 8765);
         let config_dir = r0_d_config(&stop_home, sandbox_port, free_port());
-        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
         let (state, proxy_pid) = r0_d_proxy_state();
         let lifecycle = Arc::new(lifecycle::Lifecycle::new());
         let generation = lifecycle.current_generation();
@@ -10403,7 +10428,11 @@ fn isolated_r0_d_lifecycle_command_contract() {
         )
         .unwrap_err();
         assert!(failed.contains("停止沙箱失败"), "{failed}");
-        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_p2b_attention_preserves_config_authority(
+            &config_dir,
+            &config_authority_before,
+            "set-mode-stop",
+        );
         assert_eq!(lifecycle.current_generation(), generation + 1);
         assert!(lock(&state).proxy.is_some());
         assert!(r0_d_process_is_running(proxy_pid));
@@ -10412,7 +10441,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         let commit_home = root.join("mode-commit-home");
         fs::create_dir_all(&commit_home).unwrap();
         let config_dir = r0_d_config(&commit_home, free_port(), free_port());
-        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
         let (state, proxy_pid) = r0_d_proxy_state();
         let lifecycle = Arc::new(lifecycle::Lifecycle::new());
         let fault = config::test_arm_update_commit_failure(config_dir.clone());
@@ -10425,7 +10454,11 @@ fn isolated_r0_d_lifecycle_command_contract() {
         .unwrap_err();
         drop(fault);
         assert!(failed.contains("test-only config update commit failure"));
-        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_p2b_attention_preserves_config_authority(
+            &config_dir,
+            &config_authority_before,
+            "set-mode-commit",
+        );
         assert!(lock(&state).proxy.is_none());
         assert!(!r0_d_process_is_running(proxy_pid));
     }
@@ -10469,7 +10502,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         let sandbox_port = sandbox_listener.local_addr().unwrap().port();
         assert_ne!(sandbox_port, 8765);
         let config_dir = r0_d_config(&stop_home, sandbox_port, free_port());
-        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
         let (state, proxy_pid) = r0_d_proxy_state();
         let lifecycle = Arc::new(lifecycle::Lifecycle::new());
         let generation = lifecycle.current_generation();
@@ -10485,7 +10518,11 @@ fn isolated_r0_d_lifecycle_command_contract() {
         )
         .unwrap_err();
         assert!(failed.contains("设置未更改"), "{failed}");
-        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_p2b_attention_preserves_config_authority(
+            &config_dir,
+            &config_authority_before,
+            "set-settings-stop",
+        );
         assert_eq!(lifecycle.current_generation(), generation);
         assert!(lock(&state).proxy.is_some());
         assert!(r0_d_process_is_running(proxy_pid));
@@ -10516,14 +10553,15 @@ fn isolated_r0_d_lifecycle_command_contract() {
         .unwrap_err();
         assert!(failed.contains("符号链接"), "{failed}");
         assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
-        assert_eq!(lifecycle.current_generation(), generation + 1);
-        assert!(lock(&state).proxy.is_none());
-        assert!(!r0_d_process_is_running(proxy_pid));
+        assert_eq!(lifecycle.current_generation(), generation);
+        assert!(lock(&state).proxy.is_some());
+        assert!(r0_d_process_is_running(proxy_pid));
+        let _ = lock(&state).stop_proxy();
 
         let commit_home = root.join("settings-commit-home");
         fs::create_dir_all(&commit_home).unwrap();
         let config_dir = r0_d_config(&commit_home, free_port(), free_port());
-        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
         let (state, proxy_pid) = r0_d_proxy_state();
         let lifecycle = Arc::new(lifecycle::Lifecycle::new());
         let fault = config::test_arm_update_commit_failure(config_dir.clone());
@@ -10540,7 +10578,11 @@ fn isolated_r0_d_lifecycle_command_contract() {
         .unwrap_err();
         drop(fault);
         assert!(failed.contains("test-only config update commit failure"));
-        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_p2b_attention_preserves_config_authority(
+            &config_dir,
+            &config_authority_before,
+            "set-settings-commit",
+        );
         assert!(lock(&state).proxy.is_none());
         assert!(!r0_d_process_is_running(proxy_pid));
     }
@@ -10552,7 +10594,7 @@ fn isolated_r0_d_lifecycle_command_contract() {
         fs::write(&system_config, b"Host isolated-managed-host\n").unwrap();
         fs::set_permissions(&system_config, fs::Permissions::from_mode(0o600)).unwrap();
         let config_dir = r0_d_config(&home, free_port(), free_port());
-        let before = fs::read(config_dir.join("config.json")).unwrap();
+        let config_authority_before = config::load_from(&config_dir).unwrap();
         let sandbox_home = science::sandbox_home();
         let science_data = sandbox_home.join(".claude-science");
         fs::create_dir_all(&science_data).unwrap();
@@ -10593,7 +10635,11 @@ fn isolated_r0_d_lifecycle_command_contract() {
         fs::set_permissions(&sandbox_ssh, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(failed.contains("撤销隔离 SSH config 失败"), "{failed}");
-        assert_eq!(fs::read(config_dir.join("config.json")).unwrap(), before);
+        assert_p2b_attention_preserves_config_authority(
+            &config_dir,
+            &config_authority_before,
+            "set-settings-stub-remove",
+        );
         assert_eq!(lifecycle.current_generation(), generation + 1);
         assert!(lock(&state).proxy.is_none());
         assert!(!r0_d_process_is_running(proxy_pid));

@@ -3118,6 +3118,17 @@ where
         return Err("Config mutation closure 不得改变 operation fence".into());
     }
     if changed {
+        #[cfg(test)]
+        if CONFIG_UPDATE_COMMIT_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|(thread, armed_dir)| {
+                *thread == std::thread::current().id() && armed_dir == dir
+            })
+        {
+            return Err("test-only config update commit failure".into());
+        }
         save_to_secure(&secure, &current).map_err(|error| error.to_string())?;
     }
     Ok(result)
