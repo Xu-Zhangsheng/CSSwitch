@@ -846,6 +846,34 @@ class RuntimeMutationInventoryTests(unittest.TestCase):
             "record.runtime-transaction-v1", one_click["durable_records"]["writes"]
         )
 
+        healthy_reopen = operations["op.healthy-reopen"]
+        self.assertTrue(
+            {
+                "record.sandbox-ssh-stub-v2",
+                "record.science-adoption-v1",
+                "record.science-receipt-v1",
+                "record.science-ssh-bridge-v1",
+            }.issubset(healthy_reopen["durable_records"]["reads"])
+        )
+        self.assertIn(
+            "record.science-adoption-v1",
+            healthy_reopen["durable_records"]["writes"],
+        )
+        healthy_effects = healthy_reopen["ordered_effects"]
+        capture_index = healthy_effects.index("capture Config and AppState snapshots")
+        adoption_index = healthy_effects.index(
+            "best-effort reconcile the exact managed Science adoption ledger from its launch receipt and committed binding"
+        )
+        ssh_index = healthy_effects.index(
+            "validate the running system SSH bridge when enabled"
+        )
+        marker_index = healthy_effects.index("bootstrap missing history marker if needed")
+        gateway_index = healthy_effects.index("ensure Gateway")
+        self.assertLess(capture_index, adoption_index)
+        self.assertLess(adoption_index, ssh_index)
+        self.assertLess(ssh_index, marker_index)
+        self.assertLess(marker_index, gateway_index)
+
         self.assertEqual(
             operations["op.select-profile"]["durable_records"]["clears"],
             [],
