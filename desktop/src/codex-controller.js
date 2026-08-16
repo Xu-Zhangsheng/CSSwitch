@@ -96,6 +96,50 @@ export function codexOperationSnapshotTransitionAccepted(current, next, allowRep
   return !(current && current.operation_id === next.operation_id && next.sequence <= current.sequence);
 }
 
+export function unwrapCodexAuthEnvelope(response, expectedCommand) {
+  if (!response || response.schema_version !== 3 || response.command !== expectedCommand || typeof response.ok !== "boolean") {
+    throw new Error("CSSwitch Codex 认证响应协议不匹配。");
+  }
+  if (!response.ok) {
+    throw new Error("CSSwitch Codex 认证失败响应未通过结构化错误通道交付。");
+  }
+  const status = response.status;
+  const validHash = status && (status.account_hash === null || typeof status.account_hash === "string");
+  const validExpiry = status && (status.expires_at === null || Number.isSafeInteger(status.expires_at));
+  const validEpoch = status && (status.auth_epoch === null || typeof status.auth_epoch === "string");
+  const validReason = status && CODEX_AUTH_REASONS.has(status.reason);
+  const validCombination = status && ((status.authenticated && status.reason === "ready") || (!status.authenticated && status.reason !== "ready"));
+  if (!status || typeof status.authenticated !== "boolean" || typeof status.expiry_state !== "string" ||
+      !validHash || !validExpiry || !validEpoch || !Number.isSafeInteger(status.auth_generation) || status.auth_generation < 0) {
+    throw new Error("CSSwitch Codex 认证状态结构不匹配。");
+  }
+  if (!validReason || !validCombination) throw new Error("CSSwitch Codex 认证状态 reason 不匹配。");
+  if (expectedCommand === "logout") {
+    const warning = response.warning;
+    const validWarning = warning == null || (
+      warning && typeof warning === "object" && !Array.isArray(warning) &&
+      Object.keys(warning).length === 2 &&
+      warning.code === "revoke_skipped" && warning.reason === "proxy_config_invalid"
+    );
+    if (!/^[0-9a-f]{32}$/.test(String(response.config_mutation_operation_id || "")) ||
+        status.authenticated !== false || status.reason !== "state_uncommitted" ||
+        status.account_hash !== null || status.expiry_state !== "missing" ||
+        status.expires_at !== null || !/^[0-9a-f]{32}$/.test(String(status.auth_epoch || "")) ||
+        status.auth_generation < 1 || !validWarning) {
+      throw new Error("CSSwitch Codex logout durable terminal 协议不匹配。");
+    }
+  }
+  return {
+    authenticated: status.authenticated,
+    account_hash: status.account_hash,
+    expiry_state: status.expiry_state,
+    expires_at: status.expires_at,
+    auth_epoch: status.auth_epoch,
+    auth_generation: status.auth_generation,
+    reason: status.reason,
+  };
+}
+
 export function createCodexController({
   els,
   getConfigState,
@@ -154,36 +198,6 @@ function runtimeCommandErrorText(error) {
   }
   clearStaleCodexAuthState();
   return formatCodexAuthCommandError(authError);
-}
-
-function unwrapCodexAuthEnvelope(response, expectedCommand) {
-  if (!response || response.schema_version !== 3 || response.command !== expectedCommand || typeof response.ok !== "boolean") {
-    throw new Error("CSSwitch Codex 认证响应协议不匹配。");
-  }
-  if (!response.ok) {
-    throw new Error("CSSwitch Codex 认证失败响应未通过结构化错误通道交付。");
-  }
-  const status = response.status;
-  const validHash = status && (status.account_hash === null || typeof status.account_hash === "string");
-  const validExpiry = status && (status.expires_at === null || Number.isSafeInteger(status.expires_at));
-  const validEpoch = status && (status.auth_epoch === null || typeof status.auth_epoch === "string");
-  const validReason = status && CODEX_AUTH_REASONS.has(status.reason);
-  const validCombination = status && ((status.authenticated && status.reason === "ready") || (!status.authenticated && status.reason !== "ready"));
-  if (!status || typeof status.authenticated !== "boolean" || typeof status.expiry_state !== "string" ||
-      !validHash || !validExpiry || !validEpoch || !Number.isSafeInteger(status.auth_generation) || status.auth_generation < 0) {
-    throw new Error("CSSwitch Codex 认证状态结构不匹配。");
-  }
-  if (!validReason || !validCombination) throw new Error("CSSwitch Codex 认证状态 reason 不匹配。");
-  // 只投影 UI 需要的脱敏字段。即使后端未来扩展响应，未知字段也不会进入前端状态。
-  return {
-    authenticated: status.authenticated,
-    account_hash: status.account_hash,
-    expiry_state: status.expiry_state,
-    expires_at: status.expires_at,
-    auth_epoch: status.auth_epoch,
-    auth_generation: status.auth_generation,
-    reason: status.reason,
-  };
 }
 
 function renderCodexAuthState() {

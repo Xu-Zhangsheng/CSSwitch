@@ -133,7 +133,7 @@ function mockIntentOutcome(operation, disposition, extra = {}) {
     operation,
     intent_id: "abcdef0123456789abcdef0123456789",
     disposition,
-    config_state: disposition === "no_change" ? "unchanged" : "committed",
+    config_state: operation === "set_active_profile" || disposition !== "no_change" ? "committed" : "unchanged",
     validation: "accepted",
     science_running: false,
     ...extra,
@@ -146,7 +146,7 @@ export function mockInvoke(cmd, args) {
     operation,
     intent_id: "abcdef0123456789abcdef0123456789",
     disposition,
-    config_state: disposition === "no_change" ? "unchanged" : "committed",
+    config_state: operation === "set_active_profile" || disposition !== "no_change" ? "committed" : "unchanged",
     validation: "accepted",
     science_running: false,
     ...extra,
@@ -242,11 +242,12 @@ export function mockInvoke(cmd, args) {
       const p = mockStore.profiles.find((x) => x.id === args.id);
       if (!p) return Promise.reject("找不到 profile：" + args.id);
       const commit = () => {
+        const disposition = mockStore.active_id === args.id ? "no_change" : "committed";
         mockStore.active_id = args.id;
         mockStore.selection_pending = args.id !== mockStore.applied_profile_id;
         const applyState = mockStore.selection_pending ? "pending" : "applied";
         return {
-          ...mockIntentOutcome("set_active_profile", "committed", { selected_profile_id: args.id, applied_profile_id: mockStore.applied_profile_id }),
+          ...mockIntentOutcome("set_active_profile", disposition, { selected_profile_id: args.id, applied_profile_id: mockStore.applied_profile_id }),
           committed: true,
           status: "ok",
           selected_profile_id: args.id,

@@ -94,7 +94,9 @@ cold、healthy reopen 或 interrupted-Gateway recovery 内部流程经 `GatewayC
 command error；frontend 通过 `runtime-mutation-protocol.js` 严格解析 operation、status、
 effect summary 与 recovery disposition，不把 receipt、fence、credential 或私有路径带过
 invoke 边界。receipt 或 fence 任一存在时，普通 writer、P2-A journal 与 runtime journal 的冲突统一返回
-可识别的 attention/error，不能由 UI 自动重试或把旧状态显示为已应用。
+可识别的 attention/error，不能由 UI 自动重试或把旧状态显示为已应用。one-click 也在 capture、
+destructive entry 与 effect route 三层使用 secure reader 重验 active/clearing receipt 和两类 fence，
+因此 attention 期间不会先行启动 Gateway/Science effect。
 
 `set_active_profile`、`update_profile_connection` 与 `codex_ensure_profile` 是 intent-only
 结果：它们报告 selected/updated/ensured 的 durable intent，不启动或停止 runtime，也不创建
@@ -102,8 +104,10 @@ P2-B receipt。preview adapter 只镜像这些 typed DTO 与旧字段，不扩�
 每个真实 effect 在执行前先持久化带新 `attempt_id` 的 `InProgress`，返回后再持久化 exact terminal
 outcome；checkpoint 失败统一保留 durable attention。Codex auth start 的 sidecar 先等待匹配
 operation id、authorization digest 的 start control；Gateway flush `start_ack` 后才授权执行，ack
-之前不打开 OAuth/network flow。前端严格接受 `terminal + durable_receipt` attention，并仍通过既有
-`codex-auth://operation` snapshot 观察脱敏状态。
+之前不打开 OAuth/network flow。profile revoke 把滚动备份删除作为独立 durable effect，只有
+unlink、目录 fsync 和 absence 回读都通过才完成。前端严格接受 `terminal + durable_receipt`
+attention；logout success 还必须绑定 exact Config mutation id、logged-out epoch/generation 与 bounded
+warning，并仍通过既有 `codex-auth://operation` snapshot 观察脱敏状态。
 
 ## event 面
 

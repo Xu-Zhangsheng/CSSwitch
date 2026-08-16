@@ -9825,6 +9825,25 @@ fn p2a_codex_disable_fence_blocks_mode_and_settings_before_effects() {
 }
 
 #[test]
+fn p2b_settings_ssh_cleanup_only_attention_preserves_runtime_truth() {
+    assert_eq!(super::lifecycle::settings_runtime_state(false), "preserved");
+    assert_eq!(super::lifecycle::settings_runtime_state(true), "stopped");
+    let source = include_str!("lifecycle.rs");
+    let settings = source
+        .split("pub(super) fn set_settings_inner_with")
+        .nth(1)
+        .and_then(|tail| tail.split("pub(super) async fn stop_all_command").next())
+        .expect("set_settings implementation must remain discoverable");
+    assert!(
+        settings
+            .matches("settings_runtime_state(teardown)")
+            .count()
+            >= 7,
+        "every SSH/config checkpoint and terminal projection must derive stopped versus preserved from the actual teardown action"
+    );
+}
+
+#[test]
 #[allow(clippy::result_large_err)]
 fn r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement() {
     let root = tmpdir("r1-set-mode-owner-cas");

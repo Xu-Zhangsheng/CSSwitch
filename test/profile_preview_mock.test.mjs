@@ -53,6 +53,14 @@ test("preview pin preserves applied binding until one-click succeeds", async () 
   assert.equal(context.mockStore.selection_pending, true);
   assert.equal(pin.applied_profile_id, "a");
   assert.equal(pin.apply_state, "pending");
+  assert.equal(pin.disposition, "committed");
+  assert.equal(pin.config_state, "committed");
+
+  const repeated = await context.mockInvoke("set_active_profile", { id: "b" });
+  assert.equal(repeated.disposition, "no_change");
+  assert.equal(repeated.config_state, "committed");
+  assert.equal(repeated.committed, true);
+  assert.equal(repeated.apply_state, "pending");
 
   await context.mockInvoke("one_click_login", {});
   assert.equal(context.mockStore.applied_profile_id, "b");

@@ -289,7 +289,10 @@ process-local handoff；durable journal 只保存 crash recovery 所需的最小
 `set_codex_network`、`clear_applied_profile_key` 与 `delete_applied_profile`。普通 Config
 writer、P2-A journal 和运行时 journal 在 receipt 或 fence 任一存在时都 fail closed；即使异常态
 只剩 receipt，backend admission 仍在同一 Config writer lock 内拒绝后续 mutation，不能靠普通
-command 清掉 boot attention。只有持有精确 fence identity 的 scoped writer 能提交本次 mutation。
+command 清掉 boot attention。one-click 在 auth preflight capture、destructive lease 内的 replay/route
+入口以及最终 effect route 都用同一个 secure admission reader 复核 P2-A/P2-B active receipt、clearing
+receipt 与 Config fence；任一存在时，在 Gateway/Science/provider effect 前拒绝。只有持有精确 fence
+identity 的 scoped writer 能提交本次 mutation。
 
 receipt 只保存脱敏的 operation id、intent/config fingerprint、runtime plan、bounded effect
 checkpoint、auth sidecar identity 与 terminal digest，不保存 token、API key、OAuth 内容、私有
@@ -304,7 +307,9 @@ effect 返回后再 CAS 到 `Succeeded|Failed|Uncertain|Skipped`。任一 pre-ef
 sidecar 先以 inert 状态启动；Gateway 必须先 flush 匹配 operation id 与授权 digest 的 `start_ack`，
 再线性化 start authorization，ack 之前不允许 network/OAuth flow。`set_active_profile`、
 `update_profile_connection` 与 `codex_ensure_profile` 是 intent-only typed outcome，不创建
-P2-B receipt，也不声称 runtime 已应用。
+P2-B receipt，也不声称 runtime 已应用。已应用 profile 的 key 清理/删除在 ConfigCommit 后还有独立
+`DeleteRollingBackup` effect：只有 `config.json.bak` unlink、目录 fsync 与 exact absence 回读全部成功，
+才允许 completed；任一步不确定都保留 after-image receipt/fence 与 typed attention。
 
 ## 三个阶段域
 

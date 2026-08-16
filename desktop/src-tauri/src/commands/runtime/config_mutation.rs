@@ -72,6 +72,7 @@ pub(crate) enum ConfigMutationEffectKind {
     AuthGenerationCommit,
     AuthSecretCleanupObservation,
     ConfigCommit,
+    DeleteRollingBackup,
     ProfileEnsure,
 }
 

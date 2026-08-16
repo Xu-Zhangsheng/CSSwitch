@@ -53,6 +53,7 @@ test("rejects unknown fields and illegal reason cause retryability combinations"
   const {
     codexOperationSnapshotTransitionAccepted,
     parseCodexOperationSnapshot,
+    unwrapCodexAuthEnvelope,
   } = await import("../desktop/src/codex-controller.js");
   const durableTerminal = {
     schema_version: 2,
@@ -88,4 +89,42 @@ test("rejects unknown fields and illegal reason cause retryability combinations"
     sequence: 9,
     config_mutation_operation_id: "33".repeat(16),
   }, false));
+
+  const logout = {
+    schema_version: 3,
+    ok: true,
+    command: "logout",
+    config_mutation_operation_id: "44".repeat(16),
+    status: {
+      authenticated: false,
+      reason: "state_uncommitted",
+      account_hash: null,
+      expiry_state: "missing",
+      expires_at: null,
+      auth_epoch: "55".repeat(16),
+      auth_generation: 9,
+    },
+  };
+  assert.equal(unwrapCodexAuthEnvelope(logout, "logout").auth_generation, 9);
+  assert.equal(unwrapCodexAuthEnvelope({
+    ...logout,
+    warning: { code: "revoke_skipped", reason: "proxy_config_invalid" },
+  }, "logout").reason, "state_uncommitted");
+  const invalidLogout = [
+    { ...logout, config_mutation_operation_id: undefined },
+    { ...logout, config_mutation_operation_id: "GG".repeat(16) },
+    { ...logout, status: { ...logout.status, authenticated: true, reason: "ready" } },
+    { ...logout, status: { ...logout.status, reason: "state_missing" } },
+    { ...logout, status: { ...logout.status, account_hash: "aa".repeat(16) } },
+    { ...logout, status: { ...logout.status, expiry_state: "valid" } },
+    { ...logout, status: { ...logout.status, expires_at: 2000000000 } },
+    { ...logout, status: { ...logout.status, auth_epoch: null } },
+    { ...logout, status: { ...logout.status, auth_epoch: "AA".repeat(16) } },
+    { ...logout, status: { ...logout.status, auth_generation: 0 } },
+    { ...logout, warning: { code: "revoke_skipped", reason: "future" } },
+    { ...logout, warning: { code: "revoke_skipped", reason: "proxy_config_invalid", extra: true } },
+  ];
+  for (const value of invalidLogout) {
+    assert.throws(() => unwrapCodexAuthEnvelope(value, "logout"));
+  }
 });

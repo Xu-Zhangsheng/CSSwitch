@@ -50,6 +50,7 @@ EXPECTED_STATE_OWNERS = {
     "config.binding",
     "config.codex-disable-receipt",
     "config.mutation-operation",
+    "config.rolling-backup",
     "config.desired",
     "config.migration-backups",
     "config.transaction",

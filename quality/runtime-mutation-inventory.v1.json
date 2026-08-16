@@ -64,6 +64,14 @@
       "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "ConfigMutationOperationFence"}
     },
     {
+      "id": "config.rolling-backup",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Single rolling config.json.bak copy. Credential/profile revocation completion requires proven unlink, directory fsync, and exact absence.",
+      "fields": ["config.json.bak"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "drop_rolling_backup"}
+    },
+    {
       "id": "app.gateway",
       "kind": "process-local",
       "durability": "process",
@@ -709,12 +717,12 @@
         {"kind": "tauri-command", "name": "clear_profile_key", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "bundled_callers": ["desktop/src/profile-controller.js::doClearKey"]},
         {"kind": "tauri-command", "name": "delete_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile"}, "bundled_callers": ["desktop/src/profile-controller.js::doDelete"]}
       ],
-      "state_owners": ["app.gateway", "app.science", "config.binding", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway"],
+      "state_owners": ["app.gateway", "app.science", "config.binding", "config.desired", "config.mutation-operation", "config.rolling-backup", "config.transaction", "lifecycle.global", "process.gateway"],
       "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.runtime-binding-v1"]},
-      "ordered_effects": ["reject any open runtime journal or P2-A/P2-B receipt/fence", "derive applied role from runtime_binding", "for selected-only intent, return a typed no-runtime-effect outcome", "for applied revoke, publish the credential-free receipt and exact Config fence", "mark StopGateway InProgress with a fresh attempt id before bumping generation or stopping the tracked Gateway", "terminalize the stop attempt, then mark ConfigCommit InProgress before key clear/profile delete against the exact before-image", "terminalize ConfigCommit, publish terminal fence, and clear receipt/fence only after the terminal image is proven", "always retain Science"],
-      "failure_points": [{"id": "revoke-profile.config", "after_effects": ["no runtime stop yet"], "observed_outcome": "Atomic config failure leaves Gateway unchanged.", "compensation": "none"}],
+      "ordered_effects": ["reject any open runtime journal or P2-A/P2-B receipt/fence", "derive applied role from runtime_binding", "for selected-only intent, return a typed no-runtime-effect outcome", "for applied revoke, publish the credential-free receipt and exact Config fence", "mark StopGateway InProgress with a fresh attempt id before bumping generation or stopping the tracked Gateway", "terminalize the stop attempt, then mark ConfigCommit InProgress before key clear/profile delete against the exact before-image", "terminalize ConfigCommit, then mark DeleteRollingBackup InProgress before unlinking config.json.bak", "prove backup unlink plus directory fsync plus exact absence before terminalizing DeleteRollingBackup", "publish terminal fence and clear receipt/fence only after ConfigCommit and DeleteRollingBackup are both proven", "always retain Science"],
+      "failure_points": [{"id": "revoke-profile.config", "after_effects": ["no runtime stop yet"], "observed_outcome": "Atomic config failure leaves Gateway unchanged.", "compensation": "none"}, {"id": "revoke-profile.rolling-backup", "after_effects": ["Gateway stopped", "Config revocation committed", "rolling backup unlink or directory fsync may be uncertain"], "observed_outcome": "DeleteRollingBackup is marked Uncertain and the exact receipt/fence remain in typed attention; completion is forbidden until backup absence is proven.", "compensation": "none"}],
       "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "contract": "Config-first revocation uses runtime_binding truth; selected-only returns intent-only typed state, while applied revocation retains receipt attention on stop or commit uncertainty and Science remains."},
-      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_profile_revocation_selected_applied_role_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_applied_profile_revoke_crash_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_intent_only_outcomes_have_zero_runtime_effect"],
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_profile_revocation_selected_applied_role_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_applied_profile_revoke_crash_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_applied_profile_backup_scrub_is_an_exact_durable_effect", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_intent_only_outcomes_have_zero_runtime_effect"],
       "known_gaps": ["P2-B retains the applied revoke receipt on uncertainty but deliberately provides no runtime restart or credential rollback."]
     },
     {

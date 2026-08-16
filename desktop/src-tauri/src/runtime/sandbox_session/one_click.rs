@@ -185,7 +185,6 @@ impl OneClickGatewayPreflightSnapshot {
 /// outside the destructive lease. Runtime entry owns capture and verification.
 pub(crate) struct OneClickEntryPreflight {
     config: Option<config::Config>,
-    codex_disable_operation: Option<config::CodexDisableOperationFence>,
     runtime_transaction: Option<config::RuntimeTransactionRecord>,
     runtime_compensation: Option<config::RuntimeCompensationJournal>,
     prior_gateway: Option<OneClickGatewayPreflightSnapshot>,
@@ -194,18 +193,16 @@ pub(crate) struct OneClickEntryPreflight {
 
 impl OneClickEntryPreflight {
     pub(crate) fn capture(state: &SharedAppState) -> Result<Self, TypedOneClickFailure> {
-        let cfg = config::load_from(&config::default_dir()).map_err(|error| {
+        Self::capture_at(&config::default_dir(), state)
+    }
+
+    pub(crate) fn capture_at(
+        dir: &Path,
+        state: &SharedAppState,
+    ) -> Result<Self, TypedOneClickFailure> {
+        let cfg = config::load_for_runtime_effect_admission(dir).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
-        let codex_disable_operation = cfg.codex_disable_operation_fence().map_err(|message| {
-            typed_one_click_err(OneClickFailureKind::ConfigLoad, message.to_string())
-        })?;
-        if codex_disable_operation.is_some() {
-            return Err(typed_one_click_err(
-                OneClickFailureKind::Prepare,
-                "code=codex_disable_operation_in_progress Codex disable operation 尚未结束；请先完成恢复或处理 attention。",
-            ));
-        }
         let active = cfg.active_profile().ok_or_else(|| {
             typed_one_click_err(
                 OneClickFailureKind::NoActiveProfile,
@@ -229,7 +226,6 @@ impl OneClickEntryPreflight {
                 })?
                 .unwrap_or(false);
         Ok(Self {
-            codex_disable_operation,
             runtime_transaction: cfg.runtime_transaction.clone(),
             runtime_compensation: cfg.runtime_compensation.clone(),
             config: (adapter != "codex").then_some(cfg),
@@ -250,27 +246,24 @@ impl OneClickEntryPreflight {
         &self,
         state: &SharedAppState,
     ) -> Result<(), TypedOneClickFailure> {
-        let current_codex_disable_operation = config::load_from(&config::default_dir())
-            .and_then(|current| current.codex_disable_operation_fence())
-            .map_err(|_| {
+        self.verify_unchanged_at(&config::default_dir(), state)
+    }
+
+    pub(crate) fn verify_unchanged_at(
+        &self,
+        dir: &Path,
+        state: &SharedAppState,
+    ) -> Result<(), TypedOneClickFailure> {
+        let current =
+            config::load_for_runtime_effect_admission(dir).map_err(|error| {
                 typed_one_click_err(
                     OneClickFailureKind::PreflightSnapshot,
-                    "config_changed_retry：无法复核 Codex disable operation fence，请重试。",
+                    format!(
+                        "config_changed_retry：无法复核 P2-A/P2-B runtime mutation admission，请重试：{error}"
+                    ),
                 )
             })?;
-        if current_codex_disable_operation != self.codex_disable_operation {
-            return Err(typed_one_click_err(
-                OneClickFailureKind::PreflightSnapshot,
-                "config_changed_retry：Codex disable operation 在认证检查期间发生变化，请重试。",
-            ));
-        }
         if let Some(expected) = self.config.as_ref() {
-            let current = config::load_from(&config::default_dir()).map_err(|_| {
-                typed_one_click_err(
-                    OneClickFailureKind::PreflightSnapshot,
-                    "config_changed_retry：无法复核候选启动配置，请重试。",
-                )
-            })?;
             if &current != expected {
                 return Err(typed_one_click_err(
                     OneClickFailureKind::PreflightSnapshot,
@@ -278,12 +271,6 @@ impl OneClickEntryPreflight {
                 ));
             }
         } else {
-            let current = config::load_from(&config::default_dir()).map_err(|_| {
-                typed_one_click_err(
-                    OneClickFailureKind::PreflightSnapshot,
-                    "config_changed_retry：无法复核认证期间的 runtime transaction，请重试。",
-                )
-            })?;
             if current.runtime_transaction != self.runtime_transaction
                 || current.runtime_compensation != self.runtime_compensation
             {
@@ -578,9 +565,10 @@ pub(crate) fn one_click_login_entry<R: Runtime>(
     let mut finalize_cleanup_replayed = false;
     let mut gateway_recovery = None;
     loop {
-        let facts = config::load_from(&config::default_dir()).map_err(|error| {
-            typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
-        })?;
+        let facts =
+            config::load_for_runtime_effect_admission(&config::default_dir()).map_err(|error| {
+                typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
+            })?;
         if replay_interrupted_one_click_compensation(&app, &state, lifecycle, auth_proof, &facts)
             .map_err(|error| {
                 TypedOneClickFailure::new(
@@ -1857,7 +1845,7 @@ fn one_click_login_with_options<R: Runtime>(
 ) -> Result<Value, TypedOneClickFailure> {
     let trace = OperationTrace::start(OperationKind::OneClickLogin, "command=one_click_login");
     let dir = config::default_dir();
-    let cfg = config::load_from(&dir)
+    let cfg = config::load_for_runtime_effect_admission(&dir)
         .map_err(|e| typed_one_click_err(OneClickFailureKind::ConfigLoad, e.to_string()))?;
     if cfg.runtime_compensation.is_some() {
         return Err(TypedOneClickFailure::new(

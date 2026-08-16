@@ -221,6 +221,56 @@ fn profile_mutation_attention(
     }
 }
 
+fn scrub_profile_rolling_backup(
+    operation: &mut crate::commands::runtime::config_mutation::OpenConfigMutation,
+    effect_index: usize,
+    dir: &Path,
+) -> Result<(), String> {
+    operation
+        .checkpoint_effect_or_attention(
+            effect_index,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::InProgress,
+            None,
+            "rolling_backup_checkpoint_failed",
+            "after",
+            "stopped",
+            config::ConfigMutationTerminalConfigImage::After,
+        )
+        .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))?;
+    if let Err(error) = config::drop_rolling_backup(dir) {
+        let _ = operation.checkpoint_effect(
+            effect_index,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Uncertain,
+            Some("rolling_backup_delete_uncertain"),
+        );
+        return match operation.finish(
+            "attention",
+            "after",
+            "stopped",
+            Some("rolling_backup_delete_uncertain"),
+            config::ConfigMutationTerminalConfigImage::After,
+        ) {
+            Ok(_) => Err(format!("滚动备份删除结果不确定：{error}")),
+            Err(attention) => Err(
+                crate::commands::runtime::config_mutation::command_error_string(
+                    &attention.with_message("滚动备份删除结果不确定；已保留 durable attention"),
+                ),
+            ),
+        };
+    }
+    operation
+        .checkpoint_effect_or_attention(
+            effect_index,
+            crate::commands::runtime::config_mutation::ConfigMutationEffectState::Succeeded,
+            Some("absent"),
+            "rolling_backup_checkpoint_failed",
+            "after",
+            "stopped",
+            config::ConfigMutationTerminalConfigImage::After,
+        )
+        .map_err(|error| crate::commands::runtime::config_mutation::command_error_string(&error))
+}
+
 fn clear_profile_key_p2b(
     dir: &Path,
     state: &SharedAppState,
@@ -268,6 +318,7 @@ fn clear_profile_key_p2b(
             vec![
                 crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ConfigCommit,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::DeleteRollingBackup,
             ],
             None,
             None,
@@ -352,6 +403,7 @@ fn clear_profile_key_p2b(
             .map_err(|error| {
                 crate::commands::runtime::config_mutation::command_error_string(&error)
             })?;
+        scrub_profile_rolling_backup(&mut operation, 2, dir)?;
         let outcome = operation
             .finish(
                 "completed",
@@ -413,6 +465,7 @@ fn delete_profile_p2b(
             vec![
                 crate::commands::runtime::config_mutation::ConfigMutationEffectKind::StopGateway,
                 crate::commands::runtime::config_mutation::ConfigMutationEffectKind::ConfigCommit,
+                crate::commands::runtime::config_mutation::ConfigMutationEffectKind::DeleteRollingBackup,
             ],
             None,
             None,
@@ -497,6 +550,7 @@ fn delete_profile_p2b(
             .map_err(|error| {
                 crate::commands::runtime::config_mutation::command_error_string(&error)
             })?;
+        scrub_profile_rolling_backup(&mut operation, 2, dir)?;
         let outcome = operation
             .finish(
                 "completed",
@@ -1830,6 +1884,85 @@ mod tests {
             assert!(after.runtime_binding.is_none());
             assert!(lock(&state).proxy.is_none());
             let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn p2b_applied_profile_backup_scrub_is_an_exact_durable_effect() {
+        for operation in ["clear", "delete"] {
+            for scenario in ["absent", "present", "unlink_failure", "sync_failure"] {
+                let dir = tmpdir(&format!("p2b-revoke-backup-{operation}-{scenario}"));
+                let cfg = Config {
+                    profiles: vec![profile("applied", "sk-backup-secret")],
+                    active_id: "applied".into(),
+                    runtime_binding: Some(binding("applied")),
+                    ..Default::default()
+                };
+                config::save_to(&dir, &cfg).unwrap();
+                if scenario != "absent" {
+                    config::write_rolling_backup(&dir).unwrap();
+                    assert!(fs::read_to_string(dir.join("config.json.bak"))
+                        .unwrap()
+                        .contains("sk-backup-secret"));
+                }
+                let _fault = match scenario {
+                    "unlink_failure" => Some(config::test_arm_drop_rolling_backup_failure(
+                        dir.clone(),
+                        config::DropRollingBackupFault::Unlink,
+                    )),
+                    "sync_failure" => Some(config::test_arm_drop_rolling_backup_failure(
+                        dir.clone(),
+                        config::DropRollingBackupFault::DirectorySync,
+                    )),
+                    _ => None,
+                };
+                let state = state_with_proxy_identity();
+                let lifecycle = lifecycle::Lifecycle::new();
+                let result = if operation == "clear" {
+                    clear_profile_key_p2b(&dir, &state, &lifecycle, "applied")
+                } else {
+                    delete_profile_p2b(&dir, &state, &lifecycle, "applied")
+                };
+                let failed = scenario.ends_with("failure");
+                if failed {
+                    let error = result.unwrap_err();
+                    assert!(
+                        error.contains("config_mutation_attention"),
+                        "{operation}/{scenario}: {error}"
+                    );
+                    let receipt: serde_json::Value = serde_json::from_slice(
+                        &config::read_config_mutation_operation_receipt(&dir)
+                            .unwrap()
+                            .expect("failed backup scrub must retain receipt"),
+                    )
+                    .unwrap();
+                    assert_eq!(receipt["terminal"]["state"], "attention");
+                    assert_eq!(receipt["terminal"]["config_state"], "after");
+                    assert_eq!(receipt["effects"][1]["state"], "succeeded");
+                    assert_eq!(receipt["effects"][2]["kind"], "delete_rolling_backup");
+                    assert_eq!(receipt["effects"][2]["state"], "uncertain");
+                    assert!(config::load_from(&dir)
+                        .unwrap()
+                        .config_mutation_operation_fence()
+                        .unwrap()
+                        .is_some());
+                    assert_eq!(
+                        dir.join("config.json.bak").exists(),
+                        scenario == "unlink_failure"
+                    );
+                } else {
+                    let outcome = result.unwrap();
+                    assert_eq!(
+                        outcome["disposition"], "completed",
+                        "{operation}/{scenario}"
+                    );
+                    assert!(!dir.join("config.json.bak").exists());
+                    assert!(config::read_config_mutation_operation_receipt(&dir)
+                        .unwrap()
+                        .is_none());
+                }
+                let _ = fs::remove_dir_all(&dir);
+            }
         }
     }
 

@@ -215,6 +215,28 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
     let lifecycle_command_source = include_str!("../../../commands/runtime/lifecycle.rs");
     let codex_command_source = include_str!("../../../commands/codex.rs");
 
+    assert_eq!(
+        source
+            .matches("config::load_for_runtime_effect_admission")
+            .count(),
+        4,
+        "one-click must reject P2-A/P2-B active, clearing, or fenced sidecars at capture, capture-to-entry verification, destructive entry before replay, and the final effect route"
+    );
+    let runtime_effect_admission = config_source
+        .split("pub(crate) fn load_for_runtime_effect_admission")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(crate) fn load_current_from_read_only")
+                .next()
+        })
+        .expect("runtime effect admission helper must remain discoverable");
+    assert!(
+        runtime_effect_admission.contains("require_no_sidecar_mutation_receipts_in(&secure)")
+            && runtime_effect_admission.contains("codex_disable_operation_fence")
+            && runtime_effect_admission.contains("config_mutation_operation_fence"),
+        "one-click runtime effect admission must share the secure receipt reader and reject both P2-A/P2-B fences"
+    );
+
     let failure_production = failure_source
         .split("#[cfg(test)]\nmod tests")
         .next()
@@ -1059,6 +1081,70 @@ fn one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel() {
         1,
         "all post-snapshot AST must contain exactly one compensation call, solely in Err"
     );
+}
+
+#[test]
+fn p2b_one_click_capture_to_destructive_entry_race_has_zero_effects() {
+    use super::super::OneClickEntryPreflight;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let dir = std::env::temp_dir().join(format!(
+        "csswitch-p2b-one-click-admission-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (model_catalog, default_model_route_id, role_bindings) =
+        crate::model_catalog::new_profile_catalog(
+            "deepseek",
+            "anthropic",
+            Some("deepseek-v4-flash"),
+        )
+        .unwrap();
+    let cfg = crate::config::Config {
+        profiles: vec![crate::config::Profile {
+            id: "target".into(),
+            template_id: "deepseek".into(),
+            api_format: "anthropic".into(),
+            model: "deepseek-v4-flash".into(),
+            model_catalog,
+            default_model_route_id,
+            role_bindings,
+            model_policy: crate::provider_contracts::ModelPolicy::SavedCatalog,
+            ..Default::default()
+        }],
+        active_id: "target".into(),
+        ..Default::default()
+    };
+    crate::config::save_to(&dir, &cfg).unwrap();
+    let state: crate::SharedAppState = Arc::new(Mutex::new(crate::AppState::default()));
+    let captured = OneClickEntryPreflight::capture_at(&dir, &state).unwrap();
+    let fence = crate::config::ConfigMutationOperationFence::begin(
+        crate::config::new_id(),
+        "set_settings_destructive".into(),
+        "11".repeat(32),
+        crate::config::config_mutation_config_fingerprint(&cfg).unwrap(),
+        Some(crate::config::config_mutation_config_fingerprint(&cfg).unwrap()),
+    );
+    crate::config::begin_config_mutation_operation(
+        &dir,
+        &cfg,
+        &fence,
+        br#"{"schema_version":1,"test":"capture-entry-race"}"#,
+    )
+    .unwrap();
+    let effects = AtomicUsize::new(0);
+    let result = captured.verify_unchanged_at(&dir, &state);
+    if result.is_ok() {
+        effects.fetch_add(1, Ordering::SeqCst);
+    }
+    assert!(result.is_err());
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    assert!(crate::config::read_config_mutation_operation_receipt(&dir)
+        .unwrap()
+        .is_some());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

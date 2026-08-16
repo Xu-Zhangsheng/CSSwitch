@@ -634,7 +634,7 @@ pub(crate) fn clear_profile_key_inner(dir: &Path, id: &str) -> Result<(), String
         Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
-    config::drop_rolling_backup(dir); // 清 key 后净化滚动备份，旧明文不可从 .bak 恢复
+    config::drop_rolling_backup(dir).map_err(|error| error.to_string())?; // 清 key 后净化滚动备份，旧明文不可从 .bak 恢复
     Ok(())
 }
 
@@ -664,7 +664,6 @@ pub(crate) fn clear_profile_key_with_mutation(
         }
         Ok(((), true))
     })?;
-    config::drop_rolling_backup(dir);
     Ok(())
 }
 
@@ -685,7 +684,7 @@ pub(crate) fn delete_profile_inner(dir: &Path, id: &str) -> Result<(), String> {
         Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
-    config::drop_rolling_backup(dir);
+    config::drop_rolling_backup(dir).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -716,7 +715,6 @@ pub(crate) fn delete_profile_with_mutation(
         }
         Ok(((), true))
     })?;
-    config::drop_rolling_backup(dir);
     Ok(())
 }
 

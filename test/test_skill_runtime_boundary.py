@@ -207,7 +207,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "fn one_click_login_with_options", 1
         )[1]
         state_check = one_click.index("let entry_facts = capture_one_click_entry_facts(")
-        self.assertLess(one_click.index("config::load_from(&dir)"), state_check)
+        self.assertLess(
+            one_click.index("config::load_for_runtime_effect_admission(&dir)"),
+            state_check,
+        )
         self.assertNotIn("GatewayController::ensure_active(", one_click[:state_check])
 
         runtime_selection = one_click.index("match decide_one_click_entry(entry_facts)")

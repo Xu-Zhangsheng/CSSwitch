@@ -192,6 +192,18 @@ static CONFIG_UPDATE_COMMIT_FAILURE: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DropRollingBackupFault {
+    Unlink,
+    DirectorySync,
+}
+
+#[cfg(test)]
+static DROP_ROLLING_BACKUP_FAILURE: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf, DropRollingBackupFault)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(test)]
 static DOWNGRADE_COMMIT_FAILURE: std::sync::LazyLock<
     std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf, bool)>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
@@ -219,6 +231,30 @@ pub(crate) fn test_arm_update_commit_failure(dir: PathBuf) -> ConfigUpdateCommit
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some((std::thread::current().id(), dir));
     ConfigUpdateCommitFailureGuard
+}
+
+#[cfg(test)]
+pub(crate) struct DropRollingBackupFailureGuard;
+
+#[cfg(test)]
+impl Drop for DropRollingBackupFailureGuard {
+    fn drop(&mut self) {
+        *DROP_ROLLING_BACKUP_FAILURE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_arm_drop_rolling_backup_failure(
+    dir: PathBuf,
+    fault: DropRollingBackupFault,
+) -> DropRollingBackupFailureGuard {
+    *DROP_ROLLING_BACKUP_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some((std::thread::current().id(), dir, fault));
+    DropRollingBackupFailureGuard
 }
 
 #[cfg(test)]
@@ -4226,16 +4262,53 @@ fn write_rolling_backup_in(secure: &SecureDir) -> io::Result<()> {
     })
 }
 
-/// 清 key / 删 profile 后净化滚动备份：直接删，避免旧明文 key 残留可恢复。
-pub fn drop_rolling_backup(dir: &Path) {
+/// 清 key / 删 profile 后净化滚动备份。调用方只有在 unlink、目录 fsync 与
+/// exact absence 回读都成功后，才能把 credential/profile revocation 记为完成。
+pub fn drop_rolling_backup(dir: &Path) -> io::Result<()> {
     let access = config_access();
-    if ensure_config_access_open(&access).is_err() {
-        return;
+    ensure_config_access_open(&access)?;
+    let (secure, _fence) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if secure.read_regular("config.json.bak")?.is_none() {
+        return Ok(());
     }
-    if let Ok((secure, _fence)) = open_config_writer(dir, false) {
-        let _ = secure.unlink("config.json.bak");
-        let _ = secure.sync();
+    #[cfg(test)]
+    if DROP_ROLLING_BACKUP_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|(thread, armed_dir, fault)| {
+            *thread == std::thread::current().id()
+                && armed_dir == dir
+                && *fault == DropRollingBackupFault::Unlink
+        })
+    {
+        return Err(io::Error::other("test-only rolling backup unlink failure"));
     }
+    secure.unlink("config.json.bak")?;
+    #[cfg(test)]
+    if DROP_ROLLING_BACKUP_FAILURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|(thread, armed_dir, fault)| {
+            *thread == std::thread::current().id()
+                && armed_dir == dir
+                && *fault == DropRollingBackupFault::DirectorySync
+        })
+    {
+        return Err(io::Error::other(
+            "test-only rolling backup directory sync failure",
+        ));
+    }
+    secure.sync()?;
+    if secure.read_regular("config.json.bak")?.is_some() {
+        return Err(io::Error::other("滚动备份删除后的 exact absence 回读失败"));
+    }
+    Ok(())
 }
 
 /// 从 `dir/config.json` 读配置。文件不存在返回 [`Config::default`]。
@@ -4251,6 +4324,35 @@ pub fn load_from(dir: &Path) -> io::Result<Config> {
         Err(error) => return Err(error),
     };
     load_from_secure(&secure)
+}
+
+/// One-click and other effect owners use this immediately before any external
+/// effect. It snapshots Config and all P2-A/P2-B sidecar admission state under
+/// the same writer lock, including resurrection of an interrupted clearing
+/// receipt. One-click's own runtime journal is intentionally allowed here so
+/// its dedicated replay owner can converge it.
+pub(crate) fn load_for_runtime_effect_admission(dir: &Path) -> io::Result<Config> {
+    let access = config_access();
+    ensure_config_access_open(&access)?;
+    assert_not_symlink(dir)?;
+    let (secure, _fence) = match open_config_writer(dir, false) {
+        Ok(writer) => writer,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(error) => return Err(error),
+    };
+    require_no_sidecar_mutation_receipts_in(&secure)?;
+    let cfg = load_from_secure(&secure)?;
+    if cfg.codex_disable_operation_fence()?.is_some() {
+        return Err(io::Error::other(
+            "code=codex_disable_operation_in_progress Codex disable operation 尚未结束；拒绝 runtime effect。",
+        ));
+    }
+    if cfg.config_mutation_operation_fence()?.is_some() {
+        return Err(io::Error::other(
+            "code=config_mutation_operation_in_progress Config mutation operation 尚未结束；拒绝 runtime effect。",
+        ));
+    }
+    Ok(cfg)
 }
 
 /// Read the already-canonical config without migration, normalization writes, or
@@ -6654,7 +6756,7 @@ mod tests {
         write_rolling_backup(&d).unwrap();
         let bak = d.join("config.json.bak");
         assert!(fs::read_to_string(&bak).unwrap().contains("sk-SECRET-TAIL"));
-        drop_rolling_backup(&d);
+        drop_rolling_backup(&d).unwrap();
         assert!(
             !bak.exists(),
             "净化后滚动备份应删除，清了的 key 不可从 .bak 恢复"
@@ -7830,7 +7932,7 @@ mod tests {
         ] {
             assert!(error.to_string().contains("终态退出"));
         }
-        drop_rolling_backup(&dir);
+        assert!(drop_rolling_backup(&dir).is_err());
         assert_eq!(
             fs::read(dir.join("config.json.bak")).unwrap(),
             backup_before
@@ -7981,7 +8083,7 @@ mod tests {
         write_rolling_backup(&d).unwrap();
         cfg.profiles[0].api_key.clear();
         save_to(&d, &cfg).unwrap();
-        drop_rolling_backup(&d);
+        drop_rolling_backup(&d).unwrap();
         for entry in fs::read_dir(&d).unwrap().filter_map(Result::ok) {
             if entry.file_type().unwrap().is_file() {
                 let bytes = fs::read(entry.path()).unwrap();
@@ -8143,6 +8245,60 @@ mod tests {
             .config_mutation_operation_fence()
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn p2b_runtime_effect_admission_rejects_every_receipt_and_fence_shape() {
+        for shape in ["receipt", "clearing", "begin_fence", "terminal_fence"] {
+            let dir = tmpdir().join(format!(".csswitch-runtime-admission-{shape}"));
+            let cfg = Config::default();
+            save_to(&dir, &cfg).unwrap();
+            match shape {
+                "receipt" => {
+                    fs::write(
+                        dir.join(CONFIG_MUTATION_OPERATION_RECEIPT_FILE),
+                        br#"{"schema_version":1,"test":"receipt-only"}"#,
+                    )
+                    .unwrap();
+                }
+                "clearing" => {
+                    fs::write(
+                        dir.join(CONFIG_MUTATION_OPERATION_CLEARING_FILE),
+                        br#"{"schema_version":1,"test":"clearing-only"}"#,
+                    )
+                    .unwrap();
+                }
+                "begin_fence" | "terminal_fence" => {
+                    let begin = ConfigMutationOperationFence::begin(
+                        "11".repeat(16),
+                        "set_settings_destructive".into(),
+                        "22".repeat(32),
+                        config_mutation_config_fingerprint(&cfg).unwrap(),
+                        Some(config_mutation_config_fingerprint(&cfg).unwrap()),
+                    );
+                    let fence = if shape == "terminal_fence" {
+                        begin.terminal("33".repeat(32), "after", "preserved", None, None, None)
+                    } else {
+                        begin
+                    };
+                    let mut fenced = cfg.clone();
+                    fenced.set_config_mutation_operation_fence(&fence);
+                    test_save_to_without_history_authority_guard(&dir, &fenced).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let error = load_for_runtime_effect_admission(&dir).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("config_mutation_operation_in_progress"),
+                "{shape}: {error}"
+            );
+            if shape == "clearing" {
+                assert!(dir.join(CONFIG_MUTATION_OPERATION_RECEIPT_FILE).is_file());
+                assert!(!dir.join(CONFIG_MUTATION_OPERATION_CLEARING_FILE).exists());
+            }
+        }
     }
 
     #[test]

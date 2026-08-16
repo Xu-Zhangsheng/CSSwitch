@@ -7,6 +7,10 @@ fn require_confirmed_gateway_stop(
     outcome.require_stopped(context)
 }
 
+pub(super) fn settings_runtime_state(teardown: bool) -> &'static str {
+    if teardown { "stopped" } else { "preserved" }
+}
+
 /// 切换运行模式（"proxy" 第三方 / "official" 官方）。切官方要先拆第三方链路成功再落盘。
 pub(super) async fn set_mode_command(
     app: tauri::AppHandle,
@@ -677,7 +681,7 @@ where
                         None,
                         "ssh_bridge_checkpoint_failed",
                         "before",
-                        if teardown { "stopped" } else { "preserved" },
+                        settings_runtime_state(teardown),
                         config::ConfigMutationTerminalConfigImage::Before,
                     )
                     .map_err(|error| config_mutation::command_error_string(&error))?;
@@ -712,7 +716,7 @@ where
                         Some("absent"),
                         "ssh_bridge_checkpoint_failed",
                         "before",
-                        if teardown { "stopped" } else { "preserved" },
+                        settings_runtime_state(teardown),
                         config::ConfigMutationTerminalConfigImage::Before,
                     )
                     .map_err(|error| config_mutation::command_error_string(&error))?;
@@ -727,7 +731,7 @@ where
                         None,
                         "ssh_stub_checkpoint_failed",
                         "before",
-                        if teardown { "stopped" } else { "preserved" },
+                        settings_runtime_state(teardown),
                         config::ConfigMutationTerminalConfigImage::Before,
                     )
                     .map_err(|error| config_mutation::command_error_string(&error))?;
@@ -762,7 +766,7 @@ where
                         Some("absent"),
                         "ssh_stub_checkpoint_failed",
                         "before",
-                        if teardown { "stopped" } else { "preserved" },
+                        settings_runtime_state(teardown),
                         config::ConfigMutationTerminalConfigImage::Before,
                     )
                     .map_err(|error| config_mutation::command_error_string(&error))?;
@@ -779,7 +783,7 @@ where
                     None,
                     "config_commit_checkpoint_failed",
                     "before",
-                    "stopped",
+                    settings_runtime_state(teardown),
                     config::ConfigMutationTerminalConfigImage::Before,
                 )
                 .map_err(|error| config_mutation::command_error_string(&error))?;
@@ -824,7 +828,7 @@ where
                     Some("committed"),
                     "config_commit_checkpoint_failed",
                     "after",
-                    if teardown { "stopped" } else { "preserved" },
+                    settings_runtime_state(teardown),
                     config::ConfigMutationTerminalConfigImage::After,
                 )
                 .map_err(|error| config_mutation::command_error_string(&error))?;
@@ -832,7 +836,7 @@ where
                 .finish(
                     "completed",
                     "after",
-                    if teardown { "stopped" } else { "preserved" },
+                    settings_runtime_state(teardown),
                     None,
                     config::ConfigMutationTerminalConfigImage::After,
                 )
