@@ -56,18 +56,18 @@ mod transaction;
 
 use compensation_replay::persist_compensation_replay_manifest;
 pub(super) use compensation_replay::replay_interrupted_one_click_compensation;
+pub(super) use transaction::{
+    begin_healthy_reopen_gateway_intent, begin_one_click_compensation_step,
+    begin_one_click_finalize, begin_prior_stop_intent, commit_healthy_reopen_binding,
+    complete_one_click_finalize, finish_one_click_authority_restore_step,
+    finish_one_click_compensation, finish_one_click_compensation_step, publish_prior_stop_outcome,
+    resolve_gateway_terminal_handoff, write_one_click_checkpoint, OneClickJournalProgress,
+    OneClickTransactionIdentity,
+};
 #[cfg(test)]
 pub(super) use transaction::{
     begin_one_click_compensation, clear_one_click_transaction, commit_runtime_binding,
     one_click_phase_exposure,
-};
-pub(super) use transaction::{
-    begin_one_click_compensation_step, begin_one_click_finalize, begin_prior_stop_intent,
-    commit_healthy_reopen_binding, complete_one_click_finalize,
-    finish_one_click_authority_restore_step, finish_one_click_compensation,
-    finish_one_click_compensation_step, healthy_reopen_transaction_matches,
-    publish_prior_stop_outcome, resolve_gateway_terminal_handoff, write_one_click_checkpoint,
-    OneClickJournalProgress, OneClickTransactionIdentity,
 };
 use transaction::{
     begin_one_click_compensation_with_id, clear_prior_stop_transition, config_authority_matches,
@@ -1920,26 +1920,12 @@ fn one_click_login_with_options<R: Runtime>(
             OneClickEntryDecision::HealthyReopen {
                 runtime: running_runtime,
             } => {
-                let _ = reconcile_current_science_runtime_adoption(
-                    &running_runtime,
-                    cfg.runtime_binding.as_ref(),
-                );
-                if cfg.reuse_system_ssh {
-                    validate_running_system_ssh_bridge(&app, &sbx_home).map_err(|message| {
-                        typed_one_click_err(OneClickFailureKind::Prepare, message)
-                    })?;
-                }
-                oauth_forge::bootstrap_marker_for_intact_login(
-                    &auth_dir,
-                    "virtual@localhost.invalid",
-                    &sbx_home,
+                let gateway_intent = begin_healthy_reopen_gateway_intent(
+                    &dir,
+                    &cfg,
+                    gateway_terminal_handoff.as_ref(),
                 )
-                .map_err(|error| {
-                    typed_one_click_err(
-                        OneClickFailureKind::SandboxLogin,
-                        format!("补齐历史恢复标记失败：{error}"),
-                    )
-                })?;
+                .map_err(|error| typed_one_click_err(OneClickFailureKind::Prepare, error))?;
                 let mut reopened = healthy_reopen_with_gateway_rollback(
                     &app,
                     &state,
@@ -1953,7 +1939,7 @@ fn one_click_login_with_options<R: Runtime>(
                     sport,
                     &running_runtime,
                     open_surface,
-                    gateway_terminal_handoff.as_ref(),
+                    &gateway_intent,
                 )?;
                 if interrupted_environment_runtime_id.is_some() {
                     reopened["recovery_status"] = json!("environment_uncertain");

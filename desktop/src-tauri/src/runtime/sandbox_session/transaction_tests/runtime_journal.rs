@@ -50,6 +50,55 @@ fn terminal_gateway_record(binding: Option<RuntimeBindingCommit>) -> config::Run
     }
 }
 
+#[test]
+fn p2b_healthy_reopen_intent_closes_verify_to_gateway_effect_race() {
+    let dir = std::env::temp_dir().join(format!(
+        "csswitch-p2b-healthy-reopen-intent-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let initial = runtime_journal_test_config(None, None);
+    config::save_to(&dir, &initial).unwrap();
+
+    let intent = begin_healthy_reopen_gateway_intent(&dir, &initial, None).unwrap();
+    assert_eq!(
+        intent.phase,
+        config::RuntimeTransactionPhase::StartFormalGateway
+    );
+    assert_eq!(
+        config::load_from(&dir).unwrap().runtime_transaction,
+        Some(config::RuntimeTransactionRecord::V2(intent.clone()))
+    );
+
+    let fenced = config::load_from(&dir).unwrap();
+    let mutation_fence = config::ConfigMutationOperationFence::begin(
+        config::new_id(),
+        "set_settings_destructive".into(),
+        "11".repeat(32),
+        config::config_mutation_config_fingerprint(&fenced).unwrap(),
+        Some(config::config_mutation_config_fingerprint(&fenced).unwrap()),
+    );
+    let error = config::begin_config_mutation_operation(
+        &dir,
+        &fenced,
+        &mutation_fence,
+        br#"{"schema_version":1,"test":"verify-effect-race"}"#,
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("runtime_transaction_in_progress"));
+    assert!(config::read_config_mutation_operation_receipt(&dir)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        config::load_from(&dir).unwrap().runtime_transaction,
+        Some(config::RuntimeTransactionRecord::V2(intent))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn record_compensation_step(
     dir: &Path,
     progress: &mut OneClickJournalProgress,

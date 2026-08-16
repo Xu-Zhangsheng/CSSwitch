@@ -261,21 +261,62 @@ pub(in super::super) fn healthy_reopen_transaction_matches(
     !journal.is_some_and(config::RuntimeTransactionRecord::is_v2)
 }
 
+pub(in super::super) fn begin_healthy_reopen_gateway_intent(
+    dir: &Path,
+    expected_config: &config::Config,
+    expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
+) -> Result<config::RuntimeTransactionV2, String> {
+    config::update_result(dir, |current| {
+        if current != expected_config
+            || !healthy_reopen_transaction_matches(
+                current.runtime_transaction.as_ref(),
+                expected_gateway_terminal_handoff,
+                &current.active_id,
+                current.runtime_binding.as_ref(),
+            )
+        {
+            return Err(
+                "healthy reopen admission found Config drift or a retargeted runtime handoff"
+                    .into(),
+            );
+        }
+        let record = config::RuntimeTransactionV2 {
+            schema_version: config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: config::new_id(),
+            operation: config::RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: current.active_id.clone(),
+            phase: config::RuntimeTransactionPhase::StartFormalGateway,
+            runtime_fingerprint: None,
+            environment_exposure: config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: current.runtime_binding.clone(),
+            previous_gateway: expected_gateway_terminal_handoff
+                .and_then(|handoff| handoff.previous_gateway.clone()),
+            compensation: config::RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: config::RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: config::RuntimePriorStopState::NotRequired,
+            finalize: config::RuntimeFinalizeState::NotStarted,
+        };
+        current.runtime_transaction = Some(config::RuntimeTransactionRecord::V2(record.clone()));
+        Ok((record, true))
+    })
+}
+
 pub(in super::super) fn commit_healthy_reopen_binding(
     dir: &Path,
-    expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
+    expected_gateway_intent: &config::RuntimeTransactionV2,
     committed: &config::RuntimeBindingCommit,
 ) -> Result<(), String> {
     config::update_result(dir, |config| {
-        if !healthy_reopen_transaction_matches(
-            config.runtime_transaction.as_ref(),
-            expected_gateway_terminal_handoff,
-            &config.active_id,
-            config.runtime_binding.as_ref(),
-        ) {
+        if config.runtime_transaction.as_ref()
+            != Some(&config::RuntimeTransactionRecord::V2(
+                expected_gateway_intent.clone(),
+            ))
+            || config.active_id != expected_gateway_intent.target_profile_id
+            || config.runtime_binding.as_ref() != expected_gateway_intent.previous_binding.as_ref()
+        {
             return Err(
-                "runtime journal retargeted healthy reopen; preserved the current transaction"
-                    .into(),
+                "healthy reopen Gateway intent drifted; preserved the current transaction".into(),
             );
         }
         config.runtime_binding = Some(committed.clone());

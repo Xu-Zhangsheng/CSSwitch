@@ -25,11 +25,12 @@ use crate::runtime::science::{
     ScienceHostAdapter, SCIENCE_DOWNLOAD_URL,
 };
 use crate::runtime::settings::{
-    preflight_managed_sandbox_ssh_stub_cleanup, remove_managed_sandbox_ssh_stub,
-    system_ssh_config_path, validate_runtime_ports,
+    managed_sandbox_ssh_stub_path, preflight_managed_sandbox_ssh_stub_cleanup,
+    remove_managed_sandbox_ssh_stub_exact, system_ssh_config_path, validate_runtime_ports,
 };
 use crate::runtime::ssh_bridge::{
-    preflight_science_ssh_bridge_cleanup, revoke_science_ssh_bridge, system_ssh_hosts,
+    preflight_science_ssh_bridge_cleanup, revoke_science_ssh_bridge_exact,
+    science_ssh_bridge_asset_paths, system_ssh_hosts,
 };
 use crate::runtime::system::open_in_browser;
 use crate::{

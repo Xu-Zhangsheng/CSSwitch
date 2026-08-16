@@ -96,7 +96,9 @@ effect summary 与 recovery disposition，不把 receipt、fence、credential �
 invoke 边界。receipt 或 fence 任一存在时，普通 writer、P2-A journal 与 runtime journal 的冲突统一返回
 可识别的 attention/error，不能由 UI 自动重试或把旧状态显示为已应用。one-click 也在 capture、
 destructive entry 与 effect route 三层使用 secure reader 重验 active/clearing receipt 和两类 fence，
-因此 attention 期间不会先行启动 Gateway/Science effect。
+因此 attention 期间不会先行启动 Gateway/Science effect；healthy reopen 的最终复核会在同一
+Config writer lock 内发布 durable `StartFormalGateway` intent，再进入 adoption、marker 与 Gateway
+effect，避免 secure reader 返回后的跨进程插入窗口。
 
 `set_active_profile`、`update_profile_connection` 与 `codex_ensure_profile` 是 intent-only
 结果：它们报告 selected/updated/ensured 的 durable intent，不启动或停止 runtime，也不创建
@@ -105,7 +107,10 @@ P2-B receipt。preview adapter 只镜像这些 typed DTO 与旧字段，不扩�
 outcome；checkpoint 失败统一保留 durable attention。Codex auth start 的 sidecar 先等待匹配
 operation id、authorization digest 的 start control；Gateway flush `start_ack` 后才授权执行，ack
 之前不打开 OAuth/network flow。profile revoke 把滚动备份删除作为独立 durable effect，只有
-unlink、目录 fsync 和 absence 回读都通过才完成。前端严格接受 `terminal + durable_receipt`
+unlink、目录 fsync 和 absence 回读都通过才完成。settings SSH cleanup 同样把 bridge config、sidecar
+与 managed stub 的 exact leaf identity 写入 receipt，并在 rename/unlink 后完成父目录 fsync 与
+restored/absent 回读；失败保留 attention，不能宣称 `Succeeded(absent)`。前端严格接受
+`terminal + durable_receipt`
 attention；logout success 还必须绑定 exact Config mutation id、logged-out epoch/generation 与 bounded
 warning，并仍通过既有 `codex-auth://operation` snapshot 观察脱敏状态。
 

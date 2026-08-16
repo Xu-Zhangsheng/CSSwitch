@@ -1,7 +1,8 @@
 use super::{
-    begin_one_click_compensation, begin_one_click_compensation_step, begin_one_click_finalize,
-    begin_prior_stop_intent, cleanup_tombstone_path, clear_one_click_transaction,
-    commit_runtime_binding, complete_one_click_finalize, execute_transaction_science_stop_with,
+    begin_healthy_reopen_gateway_intent, begin_one_click_compensation,
+    begin_one_click_compensation_step, begin_one_click_finalize, begin_prior_stop_intent,
+    cleanup_tombstone_path, clear_one_click_transaction, commit_runtime_binding,
+    complete_one_click_finalize, execute_transaction_science_stop_with,
     finalize_registered_authority_cleanup, finish_one_click_authority_restore_step,
     finish_one_click_compensation, finish_one_click_compensation_step,
     gateway_model_catalog_timeout_ms, one_click_phase_exposure, parse_pending_cleanup_manifest,

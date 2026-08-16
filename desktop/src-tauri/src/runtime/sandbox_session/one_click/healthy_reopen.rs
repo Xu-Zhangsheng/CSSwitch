@@ -18,11 +18,30 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
     sport: u16,
     running_runtime: &ScienceRuntimeIdentity,
     open_surface: bool,
-    expected_gateway_terminal_handoff: Option<&config::RuntimeTransactionV2>,
+    expected_gateway_intent: &config::RuntimeTransactionV2,
 ) -> Result<Value, TypedOneClickFailure> {
     let app_snapshot = AppAuthoritySnapshot::capture(state);
     let prior_config = cfg.clone();
     let attempt = (|| -> Result<Value, TypedOneClickFailure> {
+        let _ = reconcile_current_science_runtime_adoption(
+            running_runtime,
+            cfg.runtime_binding.as_ref(),
+        );
+        if cfg.reuse_system_ssh {
+            validate_running_system_ssh_bridge(app, &sandbox_home())
+                .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
+        }
+        oauth_forge::bootstrap_marker_for_intact_login(
+            auth_dir,
+            "virtual@localhost.invalid",
+            &sandbox_home(),
+        )
+        .map_err(|error| {
+            typed_one_click_err(
+                OneClickFailureKind::SandboxLogin,
+                format!("补齐历史恢复标记失败：{error}"),
+            )
+        })?;
         let gateway = GatewayController::ensure_active(
             app,
             state,
@@ -41,12 +60,14 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         let refreshed_cfg = config::load_from(dir).map_err(|error| {
             typed_one_click_err(OneClickFailureKind::ConfigLoad, error.to_string())
         })?;
-        if !healthy_reopen_transaction_matches(
-            refreshed_cfg.runtime_transaction.as_ref(),
-            expected_gateway_terminal_handoff,
-            &refreshed_cfg.active_id,
-            refreshed_cfg.runtime_binding.as_ref(),
-        ) {
+        if refreshed_cfg.runtime_transaction.as_ref()
+            != Some(&config::RuntimeTransactionRecord::V2(
+                expected_gateway_intent.clone(),
+            ))
+            || refreshed_cfg.active_id != expected_gateway_intent.target_profile_id
+            || refreshed_cfg.runtime_binding.as_ref()
+                != expected_gateway_intent.previous_binding.as_ref()
+        {
             return Err(TypedOneClickFailure::new(
                 OneClickFailureKind::Prepare,
                 "runtime journal retargeted healthy reopen; preserved the current transaction and refused the binding commit",
@@ -64,7 +85,7 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
             running_runtime,
         )
         .map_err(|message| typed_one_click_err(OneClickFailureKind::Prepare, message))?;
-        commit_healthy_reopen_binding(dir, expected_gateway_terminal_handoff, &committed).map_err(
+        commit_healthy_reopen_binding(dir, expected_gateway_intent, &committed).map_err(
             |error| typed_one_click_err(OneClickFailureKind::Prepare, error.to_string()),
         )?;
         let installer = match current_skill_install_bridge_key() {
@@ -125,7 +146,11 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         Err(primary) => {
             let mut recovery_errors = Vec::new();
             let config_restore = config::update_result(dir, |current| {
-                if current.runtime_transaction != prior_config.runtime_transaction {
+                if current.runtime_transaction.as_ref()
+                    != Some(&config::RuntimeTransactionRecord::V2(
+                        expected_gateway_intent.clone(),
+                    ))
+                {
                     return Err("healthy reopen transaction retargeted before rollback; preserved the current transaction".into());
                 }
                 *current = prior_config.clone();

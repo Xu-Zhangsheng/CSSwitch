@@ -5,6 +5,9 @@
 //! P2-A Codex disable, Gateway auth storage, and Skill ledgers retain their
 //! own authority and wire formats.
 
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -167,7 +170,7 @@ pub(crate) struct AuthOperationReceipt {
     pub(crate) terminal_account_hash: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AssetIdentity {
     pub(crate) uid: u32,
@@ -177,6 +180,52 @@ pub(crate) struct AssetIdentity {
     pub(crate) nlink: u64,
     pub(crate) length: u64,
     pub(crate) digest: String,
+}
+
+pub(crate) fn capture_asset_identity(path: &Path) -> Result<Option<AssetIdentity>, String> {
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("无法安全读取 SSH leaf identity：{error}")),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("无法检查 SSH leaf identity：{error}"))?;
+    // SAFETY: geteuid has no preconditions and does not dereference pointers.
+    let uid = unsafe { libc::geteuid() };
+    if !metadata.is_file()
+        || metadata.uid() != uid
+        || metadata.nlink() != 1
+        || metadata.len() > 1024 * 1024
+    {
+        return Err("SSH leaf 不是当前用户拥有的单链接有界普通文件".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("无法读取 SSH leaf identity：{error}"))?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err("SSH leaf 在 identity 读取期间长度变化".into());
+    }
+    Ok(Some(AssetIdentity {
+        uid: metadata.uid(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.permissions().mode() & 0o777,
+        nlink: metadata.nlink(),
+        length: metadata.len(),
+        digest: digest_bytes(b"csswitch-p2b-ssh-leaf-v1\0", bytes),
+    }))
+}
+
+pub(crate) fn require_asset_absent(path: &Path) -> Result<(), String> {
+    match capture_asset_identity(path)? {
+        None => Ok(()),
+        Some(_) => Err("SSH leaf 删除后的 exact absence 回读失败".into()),
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -546,7 +595,73 @@ fn validate_receipt(receipt: &ConfigMutationReceipt) -> Result<(), String> {
             return Err("auth sidecar durable identity 不完整".into());
         }
     }
+    if let Some(plan) = receipt.ssh_plan.as_ref() {
+        if receipt.operation != ConfigMutationOperation::SetSettingsDestructive.as_str() {
+            return Err("SSH plan 只能属于 destructive settings operation".into());
+        }
+        for leaf in [
+            plan.bridge_config.as_ref(),
+            plan.bridge_sidecar.as_ref(),
+            plan.managed_stub.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !matches!(leaf.expected_after.as_str(), "restored" | "absent")
+                || leaf.before_identity_or_absent.is_none()
+                || leaf
+                    .before_identity_or_absent
+                    .as_ref()
+                    .is_some_and(|identity| !valid_asset_identity(identity))
+                || leaf
+                    .observed_after_identity_or_absent
+                    .as_ref()
+                    .is_some_and(|identity| !valid_asset_identity(identity))
+                || leaf.expected_after == "absent"
+                    && leaf.observed_after_identity_or_absent.is_some()
+                || leaf.expected_after == "restored"
+                    && receipt.terminal.state == "completed"
+                    && leaf.observed_after_identity_or_absent.is_none()
+            {
+                return Err("SSH plan exact before/after identity 非法".into());
+            }
+        }
+        if receipt
+            .effects
+            .iter()
+            .any(|effect| effect.kind == ConfigMutationEffectKind::DeleteSshBridgeSidecar)
+            && (plan.bridge_config.is_none() || plan.bridge_sidecar.is_none())
+        {
+            return Err("SSH bridge delete effect 缺少 exact leaf plan".into());
+        }
+        if receipt
+            .effects
+            .iter()
+            .any(|effect| effect.kind == ConfigMutationEffectKind::DeleteManagedSshStub)
+            && plan.managed_stub.is_none()
+        {
+            return Err("SSH stub delete effect 缺少 exact leaf plan".into());
+        }
+    } else if receipt.effects.iter().any(|effect| {
+        matches!(
+            effect.kind,
+            ConfigMutationEffectKind::DeleteSshBridgeSidecar
+                | ConfigMutationEffectKind::DeleteManagedSshStub
+        )
+    }) {
+        return Err("SSH delete effect 缺少 durable SSH plan".into());
+    }
     Ok(())
+}
+
+fn valid_asset_identity(identity: &AssetIdentity) -> bool {
+    identity.uid == unsafe { libc::geteuid() }
+        && identity.device > 0
+        && identity.inode > 0
+        && identity.nlink == 1
+        && identity.length <= 1024 * 1024
+        && identity.mode & !0o777 == 0
+        && lower_hex(&identity.digest, 64)
 }
 
 fn serialize_fence(fence: &ConfigMutationOperationFence) -> Result<Vec<u8>, String> {
@@ -1288,9 +1403,42 @@ mod tests {
     }
 
     #[test]
+    fn p2b_set_mode_generation_effect_is_after_durable_attempts() {
+        let source = include_str!("lifecycle.rs");
+        let body = source
+            .split_once("if mode == \"official\" {")
+            .expect("set_mode official branch")
+            .1;
+        let science_checkpoint = body
+            .find("science_stop_checkpoint_failed")
+            .expect("Science attempt checkpoint");
+        let gateway_checkpoint = body
+            .find("gateway_stop_checkpoint_failed")
+            .expect("Gateway attempt checkpoint");
+        let generation_effect = body
+            .find("let generation = lifecycle.bump_generation();")
+            .expect("generation invalidation effect");
+        let first_stop = body
+            .find("claim_process_local_science_stop")
+            .expect("first process stop effect");
+        assert!(science_checkpoint < generation_effect);
+        assert!(gateway_checkpoint < generation_effect);
+        assert!(generation_effect < first_stop);
+    }
+
+    #[test]
     fn p2b_set_settings_ssh_false_to_false_owned_absent_foreign_matrix() {
         let dir = config_dir();
         config::save_to(&dir, &Config::default()).unwrap();
+        let identity = AssetIdentity {
+            uid: unsafe { libc::geteuid() },
+            device: 1,
+            inode: 1,
+            mode: 0o600,
+            nlink: 1,
+            length: 1,
+            digest: "11".repeat(32),
+        };
         let operation = begin(
             &dir,
             ConfigMutationOperation::SetSettingsDestructive,
@@ -1305,7 +1453,14 @@ mod tests {
             RuntimePlan::default(),
             vec![ConfigMutationEffectKind::DeleteManagedSshStub],
             None,
-            Some(SshPlan::default()),
+            Some(SshPlan {
+                managed_stub: Some(SshLeafReceipt {
+                    before_identity_or_absent: Some(identity),
+                    expected_after: "absent".into(),
+                    observed_after_identity_or_absent: None,
+                }),
+                ..Default::default()
+            }),
         )
         .unwrap();
         assert_eq!(operation.receipt().target.reuse_system_ssh, Some(false));

@@ -254,13 +254,17 @@ pub(crate) fn system_ssh_config_path() -> Result<PathBuf, String> {
     system_ssh_config_path_for_home(&home)
 }
 
-/// Revoke only the narrow config stub created by CSSwitch. Foreign files,
-/// symlinks and special files fail closed instead of being deleted or exposed
-/// to a later isolated Science launch.
-pub(crate) fn remove_managed_sandbox_ssh_stub(sandbox_home: &Path) -> Result<(), String> {
+pub(crate) fn managed_sandbox_ssh_stub_path(sandbox_home: &Path) -> PathBuf {
+    sandbox_home.join(".ssh/config")
+}
+
+pub(crate) fn remove_managed_sandbox_ssh_stub_exact(
+    sandbox_home: &Path,
+    expected: &crate::commands::runtime::config_mutation::AssetIdentity,
+) -> Result<(), String> {
     let _authority_guard = crate::config::acquire_authority_writer_guard()
         .map_err(|error| format!("authority writer fence failed: {error}"))?;
-    remove_managed_sandbox_ssh_stub_unfenced(sandbox_home)
+    remove_managed_sandbox_ssh_stub_unfenced(sandbox_home, Some(expected))
 }
 
 pub(crate) fn remove_managed_sandbox_ssh_stub_with_authority_bypass(
@@ -268,17 +272,20 @@ pub(crate) fn remove_managed_sandbox_ssh_stub_with_authority_bypass(
     bypass: &crate::config::AuthorityWriterBypass<'_>,
 ) -> Result<(), String> {
     let _authority_guard = crate::config::authority_writer_guard_from_bypass(bypass);
-    remove_managed_sandbox_ssh_stub_unfenced(sandbox_home)
+    remove_managed_sandbox_ssh_stub_unfenced(sandbox_home, None)
 }
 
-fn remove_managed_sandbox_ssh_stub_unfenced(sandbox_home: &Path) -> Result<(), String> {
+fn remove_managed_sandbox_ssh_stub_unfenced(
+    sandbox_home: &Path,
+    expected: Option<&crate::commands::runtime::config_mutation::AssetIdentity>,
+) -> Result<(), String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("无法确认系统 HOME，不能撤销系统 SSH 配置。")?;
     if !home.is_absolute() {
         return Err("无法确认系统 HOME，不能撤销系统 SSH 配置。".into());
     }
-    remove_managed_sandbox_ssh_stub_for_config(sandbox_home, &home.join(".ssh/config"))
+    remove_managed_sandbox_ssh_stub_for_config(sandbox_home, &home.join(".ssh/config"), expected)
 }
 
 pub(crate) fn validate_managed_sandbox_ssh_stub(
@@ -437,6 +444,7 @@ fn validate_managed_sandbox_ssh_stub_for_config(
 fn remove_managed_sandbox_ssh_stub_for_config(
     sandbox_home: &Path,
     expected_system_config: &Path,
+    expected_identity: Option<&crate::commands::runtime::config_mutation::AssetIdentity>,
 ) -> Result<(), String> {
     let mut ancestor = Some(sandbox_home);
     for _ in 0..3 {
@@ -454,7 +462,13 @@ fn remove_managed_sandbox_ssh_stub_for_config(
     let ssh_dir = sandbox_home.join(".ssh");
     let dir_metadata = match std::fs::symlink_metadata(&ssh_dir) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return if expected_identity.is_some() {
+                Err("隔离 SSH stub parent 在 exact 撤销前消失".into())
+            } else {
+                Ok(())
+            }
+        }
         Err(error) => return Err(format!("检查隔离 SSH 配置目录失败：{error}")),
     };
     // SAFETY: geteuid has no preconditions and does not dereference pointers.
@@ -463,6 +477,13 @@ fn remove_managed_sandbox_ssh_stub_for_config(
         return Err("隔离 SSH 配置目录不安全，拒绝撤销授权".into());
     }
     let config = ssh_dir.join("config");
+    if let Some(expected) = expected_identity {
+        if crate::commands::runtime::config_mutation::capture_asset_identity(&config)?.as_ref()
+            != Some(expected)
+        {
+            return Err("隔离 SSH stub identity 在撤销前变化".into());
+        }
+    }
     let mut file = match std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
@@ -471,7 +492,11 @@ fn remove_managed_sandbox_ssh_stub_for_config(
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let _ = std::fs::remove_dir(&ssh_dir);
-            return Ok(());
+            return if expected_identity.is_some() {
+                Err("隔离 SSH stub 在 exact 撤销前消失".into())
+            } else {
+                Ok(())
+            };
         }
         Err(error) => return Err(format!("检查隔离 SSH config 失败：{error}")),
     };
@@ -487,9 +512,65 @@ fn remove_managed_sandbox_ssh_stub_for_config(
     if !managed_ssh_stub_text(&text, expected_system_config) {
         return Err("隔离 SSH config 不是 CSSwitch 管理的入口，拒绝删除".into());
     }
+    if let Some(expected) = expected_identity {
+        if crate::commands::runtime::config_mutation::capture_asset_identity(&config)?.as_ref()
+            != Some(expected)
+        {
+            return Err("隔离 SSH stub identity 在 unlink 前变化".into());
+        }
+    }
     std::fs::remove_file(&config).map_err(|error| format!("撤销隔离 SSH config 失败：{error}"))?;
-    let _ = std::fs::remove_dir(&ssh_dir);
+    #[cfg(test)]
+    if test_take_stub_directory_sync_fault() {
+        return Err("test-only managed SSH stub directory sync failure".into());
+    }
+    let ssh_dir_handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&ssh_dir)
+        .map_err(|error| format!("打开隔离 SSH 目录进行同步失败：{error}"))?;
+    ssh_dir_handle
+        .sync_all()
+        .map_err(|error| format!("同步隔离 SSH 目录失败：{error}"))?;
+    crate::commands::runtime::config_mutation::require_asset_absent(&config)?;
+    if std::fs::remove_dir(&ssh_dir).is_ok() {
+        let sandbox_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(sandbox_home)
+            .map_err(|error| format!("打开 sandbox HOME 进行同步失败：{error}"))?;
+        sandbox_handle
+            .sync_all()
+            .map_err(|error| format!("同步 sandbox HOME 失败：{error}"))?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+fn test_stub_directory_sync_fault() -> &'static std::sync::Mutex<Option<std::thread::ThreadId>> {
+    static FAULT: std::sync::OnceLock<std::sync::Mutex<Option<std::thread::ThreadId>>> =
+        std::sync::OnceLock::new();
+    FAULT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+fn test_arm_stub_directory_sync_failure() {
+    *test_stub_directory_sync_fault()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(std::thread::current().id());
+}
+
+#[cfg(test)]
+fn test_take_stub_directory_sync_fault() -> bool {
+    let mut fault = test_stub_directory_sync_fault()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if fault.as_ref() == Some(&std::thread::current().id()) {
+        *fault = None;
+        true
+    } else {
+        false
+    }
 }
 
 pub(crate) fn validate_runtime_ports(proxy_port: u16, sandbox_port: u16) -> Result<(), String> {
@@ -512,8 +593,9 @@ mod tests {
 
     use super::{
         remove_managed_sandbox_ssh_stub_for_config, system_ssh_config_path_for_home,
-        validate_managed_sandbox_ssh_stub_for_config, validate_runtime_ports, ManagedSshStubBefore,
-        ManagedSshStubTransaction, SSH_STUB_MARKER, SSH_STUB_MARKER_V2,
+        test_arm_stub_directory_sync_failure, validate_managed_sandbox_ssh_stub_for_config,
+        validate_runtime_ports, ManagedSshStubBefore, ManagedSshStubTransaction, SSH_STUB_MARKER,
+        SSH_STUB_MARKER_V2,
     };
 
     #[test]
@@ -576,7 +658,7 @@ mod tests {
             ),
         )
         .unwrap();
-        remove_managed_sandbox_ssh_stub_for_config(&home, &expected_system_config).unwrap();
+        remove_managed_sandbox_ssh_stub_for_config(&home, &expected_system_config, None).unwrap();
         assert!(!config.exists());
 
         std::fs::create_dir_all(home.join(".ssh")).unwrap();
@@ -586,11 +668,44 @@ mod tests {
         )
         .unwrap();
         assert!(
-            remove_managed_sandbox_ssh_stub_for_config(&home, &expected_system_config).is_err()
+            remove_managed_sandbox_ssh_stub_for_config(&home, &expected_system_config, None)
+                .is_err()
         );
         assert!(std::fs::read_to_string(&config)
             .unwrap()
             .contains("Host foreign"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn p2b_exact_stub_revoke_propagates_directory_sync_failure() {
+        let home = std::env::temp_dir().join(format!(
+            "csswitch-p2b-ssh-stub-sync-test-{}",
+            crate::config::new_id()
+        ));
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let config = home.join(".ssh/config");
+        let expected_system_config = home.join("real-home/.ssh/config");
+        std::fs::write(
+            &config,
+            format!(
+                "{SSH_STUB_MARKER}\nInclude \"{}\"\n",
+                expected_system_config.display()
+            ),
+        )
+        .unwrap();
+        let identity = crate::commands::runtime::config_mutation::capture_asset_identity(&config)
+            .unwrap()
+            .unwrap();
+        test_arm_stub_directory_sync_failure();
+        let error = remove_managed_sandbox_ssh_stub_for_config(
+            &home,
+            &expected_system_config,
+            Some(&identity),
+        )
+        .unwrap_err();
+        assert!(error.contains("test-only managed SSH stub directory sync failure"));
+        assert!(!config.exists());
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -690,7 +805,7 @@ mod tests {
         let fifo_c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
         // SAFETY: fifo_c is a valid NUL-terminated path and mode is conventional.
         assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
-        assert!(remove_managed_sandbox_ssh_stub_for_config(&home, &expected).is_err());
+        assert!(remove_managed_sandbox_ssh_stub_for_config(&home, &expected, None).is_err());
         assert!(std::fs::symlink_metadata(&fifo)
             .unwrap()
             .file_type()
@@ -705,7 +820,7 @@ mod tests {
         .unwrap();
         let linked_home = base.join("linked-home");
         std::os::unix::fs::symlink(&outside, &linked_home).unwrap();
-        assert!(remove_managed_sandbox_ssh_stub_for_config(&linked_home, &expected).is_err());
+        assert!(remove_managed_sandbox_ssh_stub_for_config(&linked_home, &expected, None).is_err());
         assert!(outside.join(".ssh/config").is_file());
         let _ = std::fs::remove_dir_all(base);
     }

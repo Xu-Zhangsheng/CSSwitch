@@ -75,7 +75,7 @@ exact source closure 与下游证据从[已验证状态](../../.agents/context/v
 | 路径 | entry 与判定 | effect / transaction owner | 终点与不能外推的边界 |
 |---|---|---|---|
 | 手动 one-click entry | `desktop/src-tauri/src/commands/runtime/one_click.rs::one_click_login_cmd` 先把 one-click compensation 与 history recovery 重放到收敛，再捕获并复核 `OneClickEntryPreflight`；provider auth 在 `RuntimeMutationLease` 外完成，业务 entry 在 `Destructive` lease 内调用 | command 只拥有 pre-auth recovery/auth/failure DTO 边界；`runtime/sandbox_session/one_click.rs::one_click_login_entry` 是 runtime entry façade | command 不解释 journal outcome，也不启动 Gateway / Science；auth 失败前后仍会再次收敛可重放的本地 authority recovery |
-| healthy reopen | `one_click_login_with_options` 通过 `capture_one_click_entry_facts` + `decide_one_click_entry` 同时证明 Science `RunningHealthy`、virtual login intact、desired binding 不要求 Science restart | `one_click/healthy_reopen.rs::healthy_reopen_with_gateway_rollback` 独立拥有 Gateway ensure/catalog、binding commit、route best-effort、surface 与 config/Gateway rollback | 不捕获 `AuthorityTransaction`，不创建 one-click snapshot ticket 或 `RuntimeCompensationJournal`；失败只回滚该分支的 config/Gateway before-image，不能外推 cold compensation |
+| healthy reopen | `one_click_login_with_options` 通过 `capture_one_click_entry_facts` + `decide_one_click_entry` 同时证明 Science `RunningHealthy`、virtual login intact、desired binding 不要求 Science restart；分支在同一 Config writer lock 内复核 P2-A/P2-B admission 并发布 `ProfileSwitch/StartFormalGateway` durable intent，随后才允许 adoption、marker 或 Gateway effect | `one_click/healthy_reopen.rs::healthy_reopen_with_gateway_rollback` 独立拥有 Gateway ensure/catalog、binding commit、route best-effort、surface 与 config/Gateway rollback；commit/rollback 都 exact-CAS 该 intent | 不捕获 `AuthorityTransaction`，不创建 one-click snapshot ticket 或 `RuntimeCompensationJournal`；失败只回滚该分支的 config/Gateway before-image，不能外推 cold compensation；崩溃由既有 interrupted-Gateway recovery 消费该 intent |
 | mutating cold start / restart | stopped，或 healthy 但 login / binding 不满足 reopen 时进入 `one_click/cold.rs::run_cold_one_click`；若 pending authority cleanup 实际被清除，entry 必须重采 facts 后重新判定 | cold coordinator 顺序拥有 prior Science durable stop、authority capture、SSH、Gateway/catalog、Science phase dispatch、route 与 success finalize；`cold/science_phase.rs` 拥有 managed Science launch/health/DB-restart phase；`cold/compensation.rs` 拥有五步 live compensation | 产生新的 `operation=one_click` V2 identity、verified snapshot ticket 与需要时的独立 V2 compensation；cold 并不接管 history credential commit，也不接管 interrupted-Gateway listener 的精确 stop |
 | History restore-only / restore-and-resume | `history_recovery.rs::restore_history_choice_entry` 从一次性 reference 开始，以 `operation=history_recovery` V2、完整 Config authority fingerprint、typed quiescence 与 protected snapshot 完成 credential publication | restore 与 interrupted restore replay 由 `history_recovery.rs` 独立拥有；四项 history private manifest、`acquire_runtime_history_effect_lease`、complete-record CAS 和 durable restore outcome 不属于 one-click compensation | restore-only 清 journal 并保持 stopped；以后点击 one-click 是新 destructive operation。restore-and-resume 只在同一 IPC / destructive lease 内发布 `ResumeAfterHistoryRestore` terminal handoff，随后仍先清 History record，再进入现有 one-click owner |
 | interrupted-Gateway recovery | `one_click_login_entry` 每轮重采 facts 后调用 `proxy_lifecycle::recover_interrupted_gateway`；只接受旧 profile-switch V1，或 `operation=profile_switch` 且处于 `StartFormalGateway|RecoverInterruptedGateway` 的 V2 | `runtime/proxy_lifecycle/recovery.rs` 拥有 listener proof、pending/outcome complete-record CAS 与 stop；runtime entry 只保留不可序列化的 affine terminal handoff | terminal record 保留到 healthy/cold 的首个接管点；ordinary one-click 不能伪造 expected record。该路径不恢复 prior Gateway，不处理 one-click/history snapshot，也不是当前 profile-switch writer |
@@ -291,8 +291,11 @@ writer、P2-A journal 和运行时 journal 在 receipt 或 fence 任一存在时
 只剩 receipt，backend admission 仍在同一 Config writer lock 内拒绝后续 mutation，不能靠普通
 command 清掉 boot attention。one-click 在 auth preflight capture、destructive lease 内的 replay/route
 入口以及最终 effect route 都用同一个 secure admission reader 复核 P2-A/P2-B active receipt、clearing
-receipt 与 Config fence；任一存在时，在 Gateway/Science/provider effect 前拒绝。只有持有精确 fence
-identity 的 scoped writer 能提交本次 mutation。
+receipt 与 Config fence；任一存在时，在 Gateway/Science/provider effect 前拒绝。healthy reopen 还在同一
+Config writer lock 内把该最终复核线性化为 durable `StartFormalGateway` intent，消除 reader 返回到
+adoption、marker 与 Gateway ensure 之间的插入窗口；P2-B begin 要么先赢并使 intent publication 零 effect
+失败，要么后到并被该 runtime journal 阻断。只有持有精确 fence identity 的 scoped writer 能提交本次
+mutation。
 
 receipt 只保存脱敏的 operation id、intent/config fingerprint、runtime plan、bounded effect
 checkpoint、auth sidecar identity 与 terminal digest，不保存 token、API key、OAuth 内容、私有
@@ -310,6 +313,11 @@ sidecar 先以 inert 状态启动；Gateway 必须先 flush 匹配 operation id 
 P2-B receipt，也不声称 runtime 已应用。已应用 profile 的 key 清理/删除在 ConfigCommit 后还有独立
 `DeleteRollingBackup` effect：只有 `config.json.bak` unlink、目录 fsync 与 exact absence 回读全部成功，
 才允许 completed；任一步不确定都保留 after-image receipt/fence 与 typed attention。
+`set_mode_official` 的 generation invalidation 也位于所有实际 stop effect 的 durable InProgress checkpoint
+之后。`set_settings_destructive` 在 begin receipt 前记录 bridge config、ownership sidecar 与 managed stub
+的 exact uid/device/inode/mode/nlink/length/digest；effect 内重新绑定 before identity，config rename 与每个
+unlink 都同步相应父目录并回读 restored after-image 或 exact absence，任一 metadata/sync/readback 失败都
+保持 InProgress/Uncertain receipt 与 attention，不能发布 `Succeeded(absent)` 后清 fence。
 
 ## 三个阶段域
 

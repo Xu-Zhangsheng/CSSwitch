@@ -8,7 +8,11 @@ fn require_confirmed_gateway_stop(
 }
 
 pub(super) fn settings_runtime_state(teardown: bool) -> &'static str {
-    if teardown { "stopped" } else { "preserved" }
+    if teardown {
+        "stopped"
+    } else {
+        "preserved"
+    }
 }
 
 /// 切换运行模式（"proxy" 第三方 / "official" 官方）。切官方要先拆第三方链路成功再落盘。
@@ -117,7 +121,6 @@ where
             None
         };
         if mode == "official" {
-            let generation = lifecycle.bump_generation();
             let mut science_index = None;
             let mut gateway_index = None;
             let mut next_effect = 0usize;
@@ -156,6 +159,9 @@ where
                         .map_err(|error| config_mutation::command_error_string(&error))?;
                 }
             }
+            // Generation invalidation is part of the destructive stop effect,
+            // so it must remain behind every durable InProgress checkpoint.
+            let generation = lifecycle.bump_generation();
             let (owner, request) =
                 claim_process_local_science_stop(&state, generation, claim_science);
             // The stop script and bounded TERM/KILL waits intentionally run
@@ -462,6 +468,29 @@ where
         } else {
             false
         };
+        let (bridge_config_path, bridge_sidecar_path) =
+            science_ssh_bridge_asset_paths(&paths.sandbox_home);
+        let bridge_config_before = bridge_owned
+            .then(|| config_mutation::capture_asset_identity(&bridge_config_path))
+            .transpose()?
+            .flatten();
+        let bridge_sidecar_before = bridge_owned
+            .then(|| config_mutation::capture_asset_identity(&bridge_sidecar_path))
+            .transpose()?
+            .flatten();
+        if bridge_owned
+            && (bridge_config_before.is_none() || bridge_sidecar_before.is_none())
+        {
+            return Err("SSH bridge exact cleanup identity 缺失".into());
+        }
+        let stub_path = managed_sandbox_ssh_stub_path(&paths.sandbox_home);
+        let stub_before = stub_owned
+            .then(|| config_mutation::capture_asset_identity(&stub_path))
+            .transpose()?
+            .flatten();
+        if stub_owned && stub_before.is_none() {
+            return Err("managed SSH stub exact cleanup identity 缺失".into());
+        }
         let destructive = teardown || bridge_owned || stub_owned;
         let mut after = old.clone();
         after.proxy_port = cfg.proxy_port;
@@ -503,7 +532,29 @@ where
                     },
                     effects,
                     None,
-                    Some(config_mutation::SshPlan::default()),
+                    Some(config_mutation::SshPlan {
+                        bridge_config: bridge_config_before.clone().map(|identity| {
+                            config_mutation::SshLeafReceipt {
+                                before_identity_or_absent: Some(identity),
+                                expected_after: "restored".into(),
+                                observed_after_identity_or_absent: None,
+                            }
+                        }),
+                        bridge_sidecar: bridge_sidecar_before.clone().map(|identity| {
+                            config_mutation::SshLeafReceipt {
+                                before_identity_or_absent: Some(identity),
+                                expected_after: "absent".into(),
+                                observed_after_identity_or_absent: None,
+                            }
+                        }),
+                        managed_stub: stub_before.clone().map(|identity| {
+                            config_mutation::SshLeafReceipt {
+                                before_identity_or_absent: Some(identity),
+                                expected_after: "absent".into(),
+                                observed_after_identity_or_absent: None,
+                            }
+                        }),
+                    }),
                 )
                 .map_err(|error| config_mutation::command_error_string(&error))?,
             )
@@ -686,7 +737,16 @@ where
                     )
                     .map_err(|error| config_mutation::command_error_string(&error))?;
             }
-            if let Err(error) = revoke_science_ssh_bridge(&paths.sandbox_home) {
+            let bridge_after = revoke_science_ssh_bridge_exact(
+                &paths.sandbox_home,
+                bridge_config_before
+                    .as_ref()
+                    .expect("bridge config identity preflight"),
+                bridge_sidecar_before
+                    .as_ref()
+                    .expect("bridge sidecar identity preflight"),
+            );
+            if let Err(error) = bridge_after.as_ref() {
                 if let Some(mut operation) = mutation.take() {
                     let _ = operation.checkpoint_effect(
                         bridge_index.expect("bridge effect index"),
@@ -706,9 +766,27 @@ where
                         ));
                     }
                 }
-                return Err(error);
+                return Err(error.clone());
             }
             if let Some(operation) = mutation.as_mut() {
+                let bridge_after = bridge_after.expect("checked bridge after-image");
+                if let Err(error) = operation.update_receipt(|receipt| {
+                    if let Some(plan) = receipt.ssh_plan.as_mut() {
+                        if let Some(config) = plan.bridge_config.as_mut() {
+                            config.observed_after_identity_or_absent = Some(bridge_after);
+                        }
+                    }
+                }) {
+                    return Err(config_mutation::command_error_string(
+                        &operation.retain_attention(
+                            "ssh_bridge_after_checkpoint_failed",
+                            "before",
+                            settings_runtime_state(teardown),
+                            config::ConfigMutationTerminalConfigImage::Before,
+                            error,
+                        ),
+                    ));
+                }
                 operation
                     .checkpoint_effect_or_attention(
                         bridge_index.expect("bridge effect index"),
@@ -736,7 +814,10 @@ where
                     )
                     .map_err(|error| config_mutation::command_error_string(&error))?;
             }
-            if let Err(error) = remove_managed_sandbox_ssh_stub(&paths.sandbox_home) {
+            if let Err(error) = remove_managed_sandbox_ssh_stub_exact(
+                &paths.sandbox_home,
+                stub_before.as_ref().expect("stub identity preflight"),
+            ) {
                 if let Some(mut operation) = mutation.take() {
                     let _ = operation.checkpoint_effect(
                         stub_index.expect("stub effect index"),
