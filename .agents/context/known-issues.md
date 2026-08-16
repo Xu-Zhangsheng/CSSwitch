@@ -2,9 +2,9 @@
 
 状态：当前；唯一工程路线；验收层级和执行合同以[生产链路验收](../../docs/operations/real-machine-acceptance.md)为准
 
-最后复核：2026-08-15（Asia/Taipei）
+最后复核：2026-08-16（Asia/Taipei）
 
-当前 accepted source candidate：`d077a1c18892c8ccbfc0b70d049445a799d83fb7`
+当前 accepted source candidate：`d786a2d833dfd5f95b02d15f84f122a8b9fd4225`
 
 失效条件：production owner / caller、candidate source、artifact identity、Science / Gateway runtime、Provider capability、质量元数据、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
@@ -14,9 +14,9 @@ NEXT、实施授权或验收结论。
 
 ## 一句话判断
 
-P1 Science control bounded primitive 已持久化闭合：`d077a1c18892c8ccbfc0b70d049445a799d83fb7`
+P2 non-one-click mutation receipts 已持久化闭合：`d786a2d833dfd5f95b02d15f84f122a8b9fd4225`
 的 metadata ChangeRecord coverage 与 impact-release 均为 `PASS`，其 exact canonical source gate、
-fresh completion review 和 immutable source-candidate record 均已验收。此结论只覆盖 source；
+fresh completion review 和 immutable source-candidate record 均已验收。P3 未执行。此结论只覆盖 source；
 不能升级为 artifact、runtime、Provider、Science、SSH、账号、签名或公开 Release 完成。
 
 ## 已完成的结构
@@ -34,6 +34,9 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 - `ScienceHostAdapter` 已类型化 launch encoding、health/listener proof、managed receipt 与 stop surface。
 - Desktop post-start `configure-third-party` caller 已改用 same-crate bounded primitive，具备 caller 起算的
   absolute deadline、双流 output cap、private process group、异常 cleanup/reap 与 typed outcomes。
+- 七类 non-one-click destructive operation 已统一进入 credential-free durable receipt/fence、per-effect
+  attempt WAL、exact Config CAS/tombstone 与 boot fail-closed；one-click/P2-A/P2-B admission 和 Codex auth
+  sidecar exact identity/terminal consumer 已闭合。
 - Skill 扩展面已完成 Phase 2 inspect-only、in-memory package adapter；它不等于 plan、apply、安装或
   runtime 可达。
 
@@ -55,8 +58,8 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 
 | 层 | 当前状态 | 解释 |
 |---|---|---|
-| Accepted exact source candidate | `SOURCE-GREEN` | `d077a1c18892c8ccbfc0b70d049445a799d83fb7`；metadata ChangeRecord coverage 与 impact-release 均为 `PASS`；immutable record 为 `quality/source-candidates/d077a1c18892c8ccbfc0b70d049445a799d83fb7.json`，SHA-256 `fda8192674363dedafbc302e0ced85c66315f9cd113b99657a27dcf797cd867b` |
-| Canonical source gate | `PASS` | retained 0700 root `/private/tmp/csg.d5IAF2`；run `508066b928442d0f95af34cecaf68c85`；seal `evidence/runs/508066b928442d0f95af34cecaf68c85/completion-seal.json` 的 SHA-256 为 `453b15ef5c3349d377e3da1d6af5795c23661481485ae371630b65d08d539eda`；runner exit `0`、15/15 suites、15 results + 15 observations |
+| Accepted exact source candidate | `SOURCE-GREEN` | `d786a2d833dfd5f95b02d15f84f122a8b9fd4225`；metadata ChangeRecord coverage 与 impact-release 均为 `PASS`；immutable record 为 `quality/source-candidates/d786a2d833dfd5f95b02d15f84f122a8b9fd4225.json`，SHA-256 `5aa204b54c594e2410a7eeee98daf4c278907a83a77e484886dafa603c0b9b95` |
+| Canonical source gate | `PASS` | retained 0700 root `/private/tmp/csg.kTHgJq`；run `7d5319a6343e47741a316d9c883e80e8`；seal `evidence/runs/7d5319a6343e47741a316d9c883e80e8/completion-seal.json` 的 SHA-256 为 `25e170ce5602563ba0ba5e35978de9b5ff2cc2f4f388b8ab28ffc8da209ab148`；runner exit `0`、15/15 suites、15 results + 15 observations |
 | Fresh clean-context completion review | `PASS` | 独立 review 只接受上述 exact candidate；没有把旧 SHA 的 review 继承为当前结论 |
 | Exact artifact | `NOT-RUN` | 本轮未构建 artifact |
 | Temporary / installed runtime | `NOT-RUN` | 本轮未启动临时或已安装 runtime，也未读取、替换或启动已安装 App |
@@ -64,8 +67,8 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
 | Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
 | Public release | `NOT-RUN` | 未创建 tag、DMG 或 Release；不得虚构 release readiness |
 
-证据时间线：旧 accepted candidate `5f9f0e2ab23b871e23d030c05f7941eabcd154b3` 的 seal 与 review
-没有继承给 P1。已验收 root 是上表明确的 `/private/tmp/csg.d5IAF2`；任何新 SHA、source 修改或
+证据时间线：旧 accepted candidate `d077a1c18892c8ccbfc0b70d049445a799d83fb7` 的 seal 与 review
+没有继承给 P2。已验收 root 是上表明确的 `/private/tmp/csg.kTHgJq`；任何新 implementation SHA、source 修改或
 运行环境变化都不能继承它的 seal。
 
 ## P0 source closure 已闭合
@@ -89,17 +92,19 @@ fresh completion review 和 immutable source-candidate record 均已验收。此
   environment-only control URL、loopback/JSON/connector/用户错误合同保持不变。
 - 本 slice 没有开始 Skill inspect → plan → confirm → apply，也没有进入 artifact/live/release。
 
+## P2 source slice 已闭合
+
+- set-mode、set-settings、clear/delete applied profile、Codex login/logout 与 Codex network 七类
+  destructive operation 具有 typed plan、credential-free durable receipt/fence、明确 inverse/no-inverse、
+  per-effect Pending→InProgress attempt WAL、exact terminal/clearing tombstone 与 fresh boot replay。
+- ordinary Config writer、P2-A、one-click 和 P2-B 之间的 admission 在真实 effect 前 fail-closed；
+  receipt-only、fence-only、clearing resurrection 与 capture→entry race 均有 zero-effect regression。
+- SSH bridge/stub revoke、applied-profile backup scrub、Gateway rollback、Codex auth sidecar start/cancel/exit
+  均绑定 durable after-image 或 exact process identity；typed terminal consumer 要求 exact mutation ID。
+- 本 slice 没有进入 P3 Skill apply、artifact、temporary/installed runtime、live Provider、Science、SSH、
+  account、signing 或 release。
+
 ## 仍开放的工程缺口
-
-### P2｜非 one-click mutation receipt
-
-- 优先处理 set-mode、set-settings、Codex/profile 操作中“先 stop、后 config commit、失败不恢复 prior
-  runtime”的窗口。
-- native exit 重复事件/generation、Gateway 外部 bridge lease、Skill route mutation 和其他共享事务
-  缺口继续以 runtime mutation inventory 为机器权威。
-
-完成条件：每个目标 operation 有 typed plan、durable receipt、明确 inverse / no-inverse、fresh replay
-和 replacement-preserving fixture；不把全部 mutation 强行塞进 one-click journal。
 
 ### P3｜Skill Phase 3
 
@@ -121,8 +126,8 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 唯一立即 NEXT
 
-本轮停在已闭合的 P1 source slice；P2/P3 均未开始。若后续另获授权，唯一下一工程 slice 才是
-P2 非 one-click mutation receipt 的只读 scope freeze 与最小候选，不得由本轮自动进入实现，也不得
+本轮停在已闭合的 P2 source slice；P3 未执行。若后续另获授权，唯一下一工程 slice 才是
+P3 Skill Phase 3 的只读 scope freeze 与最小候选，不得由本轮自动进入实现，也不得
 自动启动 artifact、temporary/installed runtime、live Provider、Science、SSH、账号、signing、
 notarization、Gatekeeper 或 public release；这些层当前全部仍为 `NOT-RUN`。
 
