@@ -45,9 +45,10 @@ pub(crate) use one_click::one_click_login;
 use one_click::replay_interrupted_one_click_compensation;
 #[cfg(test)]
 use one_click::{
-    begin_healthy_reopen_gateway_intent, begin_one_click_compensation,
-    begin_one_click_compensation_step, begin_one_click_finalize, begin_prior_stop_intent,
-    clear_one_click_transaction, commit_runtime_binding, complete_one_click_finalize,
+    admit_healthy_reopen_gateway_rollback, begin_healthy_reopen_gateway_intent,
+    begin_one_click_compensation, begin_one_click_compensation_step, begin_one_click_finalize,
+    begin_prior_stop_intent, clear_one_click_transaction, commit_runtime_binding,
+    complete_healthy_reopen_gateway_rollback, complete_one_click_finalize,
     finish_one_click_authority_restore_step, finish_one_click_compensation,
     finish_one_click_compensation_step, one_click_phase_exposure, publish_prior_stop_outcome,
     resolve_gateway_terminal_handoff, runtime_environment_fingerprint_changed,

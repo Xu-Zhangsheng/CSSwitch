@@ -21,6 +21,8 @@
       "desktop/src-tauri/src/config.rs",
       "desktop/src-tauri/src/lib.rs",
       "desktop/src-tauri/src/runtime/profile.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs",
+      "desktop/src-tauri/src/runtime/proxy_lifecycle/tests.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
       "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs",
@@ -99,7 +101,7 @@
       ],
       "basis": [
         "exact P2-A source candidate 09cbc686c61228eba592475dec6e9e327658b4a2 is the frozen implementation base",
-        "receipt and fence tests cover CAS, clearing resurrection, orphan recovery, ordinary/P2-A admission, and a healthy-reopen Gateway intent published under the final one-click admission lock",
+        "receipt and fence tests cover CAS, clearing resurrection, orphan recovery, ordinary/P2-A admission, and a healthy-reopen Gateway intent held from final admission through success or Gateway rollback",
         "every real effect exact-CASes Pending to InProgress before execution and then terminalizes or retains attention; set_mode generation invalidation follows the stop checkpoints",
         "auth start tests serialize the bounded start write against supervisor cancel and native exit, flush start_ack before Gateway authorization, then preserve the post-start cancel channel",
         "auth stream tests reap protocol errors, persist exact in-progress identity for login and logout, require exact signal identity for each sidecar, and reject logout success without an exact logged-out generation",

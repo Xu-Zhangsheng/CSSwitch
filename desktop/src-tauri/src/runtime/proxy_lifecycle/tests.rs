@@ -1935,6 +1935,37 @@ fn mismatched_recovery_target_preserves_listener_and_journal() {
         Some(managed_journal.clone().into())
     );
 
+    let healthy_start_intent =
+        crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
+            schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,
+            transaction_id: "tx-healthy-reopen-before-gateway-effect".into(),
+            operation: crate::config::RuntimeTransactionOperation::ProfileSwitch,
+            target_profile_id: managed_journal.target_profile_id.clone(),
+            phase: crate::config::RuntimeTransactionPhase::StartFormalGateway,
+            runtime_fingerprint: None,
+            environment_exposure: crate::config::RuntimeEnvironmentExposure::NotExposed,
+            snapshot_ticket: None,
+            previous_binding: managed_journal.previous_binding.clone(),
+            previous_gateway: managed_journal.previous_gateway.clone(),
+            compensation: crate::config::RuntimeCompensationState::NotStarted,
+            gateway_stop_outcome: crate::config::RuntimeGatewayStopOutcome::NotAttempted,
+            prior_stop: crate::config::RuntimePriorStopState::NotRequired,
+            finalize: crate::config::RuntimeFinalizeState::NotStarted,
+        });
+    no_listener_cfg.runtime_transaction = Some(healthy_start_intent.clone());
+    crate::config::save_to(&dir, &no_listener_cfg).unwrap();
+    let healthy_start_outcome =
+        recover_interrupted_gateway_from_dir(app.handle(), &state, &dir).unwrap();
+    assert!(matches!(
+        healthy_start_outcome,
+        InterruptedGatewayRecoveryOutcome::Terminal(_)
+    ));
+    assert_r0_recovery_stage(
+        &dir,
+        &healthy_start_intent,
+        crate::config::RuntimeGatewayStopOutcome::AbsentAfterAttempt,
+    );
+
     let attempted_journal =
         crate::config::RuntimeTransactionRecord::V2(crate::config::RuntimeTransactionV2 {
             schema_version: crate::config::RUNTIME_TRANSACTION_SCHEMA_VERSION_V2,

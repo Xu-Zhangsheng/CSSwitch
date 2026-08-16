@@ -57,8 +57,9 @@ mod transaction;
 use compensation_replay::persist_compensation_replay_manifest;
 pub(super) use compensation_replay::replay_interrupted_one_click_compensation;
 pub(super) use transaction::{
-    begin_healthy_reopen_gateway_intent, begin_one_click_compensation_step,
-    begin_one_click_finalize, begin_prior_stop_intent, commit_healthy_reopen_binding,
+    admit_healthy_reopen_gateway_rollback, begin_healthy_reopen_gateway_intent,
+    begin_one_click_compensation_step, begin_one_click_finalize, begin_prior_stop_intent,
+    commit_healthy_reopen_binding, complete_healthy_reopen_gateway_rollback,
     complete_one_click_finalize, finish_one_click_authority_restore_step,
     finish_one_click_compensation, finish_one_click_compensation_step, publish_prior_stop_outcome,
     resolve_gateway_terminal_handoff, write_one_click_checkpoint, OneClickJournalProgress,

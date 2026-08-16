@@ -98,7 +98,8 @@ invoke 边界。receipt 或 fence 任一存在时，普通 writer、P2-A journal
 destructive entry 与 effect route 三层使用 secure reader 重验 active/clearing receipt 和两类 fence，
 因此 attention 期间不会先行启动 Gateway/Science effect；healthy reopen 的最终复核会在同一
 Config writer lock 内发布 durable `StartFormalGateway` intent，再进入 adoption、marker 与 Gateway
-effect，避免 secure reader 返回后的跨进程插入窗口。
+effect，避免 secure reader 返回后的跨进程插入窗口；失败 rollback 也保持该 intent 到 prior Gateway
+恢复完成，最后才 exact-CAS 恢复 Config/清 journal。
 
 `set_active_profile`、`update_profile_connection` 与 `codex_ensure_profile` 是 intent-only
 结果：它们报告 selected/updated/ensured 的 durable intent，不启动或停止 runtime，也不创建

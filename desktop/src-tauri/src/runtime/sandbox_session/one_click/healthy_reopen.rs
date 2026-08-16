@@ -145,29 +145,32 @@ pub(super) fn healthy_reopen_with_gateway_rollback<R: Runtime>(
         Ok(value) => Ok(value),
         Err(primary) => {
             let mut recovery_errors = Vec::new();
-            let config_restore = config::update_result(dir, |current| {
-                if current.runtime_transaction.as_ref()
-                    != Some(&config::RuntimeTransactionRecord::V2(
-                        expected_gateway_intent.clone(),
-                    ))
-                {
-                    return Err("healthy reopen transaction retargeted before rollback; preserved the current transaction".into());
-                }
-                *current = prior_config.clone();
-                Ok(((), true))
-            });
-            if let Err(error) = config_restore.as_ref() {
-                recovery_errors.push(format!("config={error}"));
+            let rollback_admission =
+                admit_healthy_reopen_gateway_rollback(dir, expected_gateway_intent);
+            if let Err(error) = rollback_admission.as_ref() {
+                recovery_errors.push(format!("config_admission={error}"));
             }
-            if config_restore.is_ok() {
-                if let Err(error) = app_snapshot.restore_with_gateway(
+            if let Ok(expected_during_rollback) = rollback_admission {
+                let gateway_restore = app_snapshot.restore_with_gateway(
                     app,
                     state,
                     lifecycle,
                     auth_proof,
                     ProxyAction::Restarted,
-                ) {
+                );
+                if let Err(error) = gateway_restore.as_ref() {
                     recovery_errors.push(format!("gateway={error}"));
+                }
+                if gateway_restore.is_ok() {
+                    if let Err(error) = complete_healthy_reopen_gateway_rollback(
+                        dir,
+                        &expected_during_rollback,
+                        &prior_config,
+                    ) {
+                        recovery_errors.push(format!("config_complete={error}"));
+                    }
+                } else {
+                    recovery_errors.push("config=retained_gateway_intent".into());
                 }
             } else {
                 recovery_errors.push("gateway=skipped_after_transaction_retarget".into());

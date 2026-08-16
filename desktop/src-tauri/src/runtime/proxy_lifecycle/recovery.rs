@@ -247,7 +247,11 @@ fn should_record_absent_after_attempt(journal: &config::RuntimeTransactionRecord
         }
         config::RuntimeTransactionRecord::V2(typed) => {
             typed.operation == config::RuntimeTransactionOperation::ProfileSwitch
-                && typed.phase == config::RuntimeTransactionPhase::RecoverInterruptedGateway
+                && matches!(
+                    typed.phase,
+                    config::RuntimeTransactionPhase::StartFormalGateway
+                        | config::RuntimeTransactionPhase::RecoverInterruptedGateway
+                )
                 && !matches!(
                     typed.gateway_stop_outcome,
                     config::RuntimeGatewayStopOutcome::Stopped

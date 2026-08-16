@@ -94,8 +94,29 @@ fn p2b_healthy_reopen_intent_closes_verify_to_gateway_effect_race() {
         .is_none());
     assert_eq!(
         config::load_from(&dir).unwrap().runtime_transaction,
-        Some(config::RuntimeTransactionRecord::V2(intent))
+        Some(config::RuntimeTransactionRecord::V2(intent.clone()))
     );
+
+    let during_rollback = admit_healthy_reopen_gateway_rollback(&dir, &intent).unwrap();
+    let rollback_race_fence = config::ConfigMutationOperationFence::begin(
+        config::new_id(),
+        "set_settings_destructive".into(),
+        "22".repeat(32),
+        config::config_mutation_config_fingerprint(&during_rollback).unwrap(),
+        Some(config::config_mutation_config_fingerprint(&during_rollback).unwrap()),
+    );
+    let rollback_race = config::begin_config_mutation_operation(
+        &dir,
+        &during_rollback,
+        &rollback_race_fence,
+        br#"{"schema_version":1,"test":"rollback-gateway-race"}"#,
+    )
+    .unwrap_err();
+    assert!(rollback_race
+        .to_string()
+        .contains("runtime_transaction_in_progress"));
+    complete_healthy_reopen_gateway_rollback(&dir, &during_rollback, &initial).unwrap();
+    assert_eq!(config::load_from(&dir).unwrap(), initial);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

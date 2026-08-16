@@ -325,6 +325,42 @@ pub(in super::super) fn commit_healthy_reopen_binding(
     })
 }
 
+pub(in super::super) fn admit_healthy_reopen_gateway_rollback(
+    dir: &Path,
+    expected_gateway_intent: &config::RuntimeTransactionV2,
+) -> Result<config::Config, String> {
+    config::update_result(dir, |current| {
+        if current.runtime_transaction.as_ref()
+            != Some(&config::RuntimeTransactionRecord::V2(
+                expected_gateway_intent.clone(),
+            ))
+        {
+            return Err(
+                "healthy reopen transaction retargeted before Gateway rollback; preserved the current transaction"
+                    .into(),
+            );
+        }
+        Ok((current.clone(), false))
+    })
+}
+
+pub(in super::super) fn complete_healthy_reopen_gateway_rollback(
+    dir: &Path,
+    expected_during_rollback: &config::Config,
+    prior_config: &config::Config,
+) -> Result<(), String> {
+    config::update_result(dir, |current| {
+        if current != expected_during_rollback {
+            return Err(
+                "healthy reopen Config authority drifted during Gateway rollback; preserved the durable intent"
+                    .into(),
+            );
+        }
+        *current = prior_config.clone();
+        Ok(((), true))
+    })
+}
+
 fn new_one_click_journal(
     identity: &OneClickTransactionIdentity,
     transaction_id: String,
