@@ -10682,8 +10682,11 @@ exit 23"#,
         let prior_home = env::var_os("HOME");
         env::set_var("HOME", &temp.0);
         let config_dir = config::default_dir();
+        let (proxy_port, sandbox_port) = r0_distinct_ports();
         let cfg = config::Config {
             experimental_codex_enabled: true,
+            proxy_port,
+            sandbox_port,
             ..Default::default()
         };
         config::save_to(&config_dir, &cfg).unwrap();
@@ -10729,10 +10732,13 @@ exit 23"#,
         let prior_home = env::var_os("HOME");
         env::set_var("HOME", &temp.0);
         let config_dir = config::default_dir();
+        let (proxy_port, sandbox_port) = r0_distinct_ports();
         config::save_to(
             &config_dir,
             &config::Config {
                 experimental_codex_enabled: true,
+                proxy_port,
+                sandbox_port,
                 ..Default::default()
             },
         )

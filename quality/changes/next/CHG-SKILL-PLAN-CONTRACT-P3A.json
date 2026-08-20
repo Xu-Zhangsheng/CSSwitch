@@ -11,6 +11,8 @@
       "desktop/skill-package/src/inspection.rs",
       "desktop/skill-package/src/lib.rs",
       "desktop/skill-package/src/plan.rs",
+      "desktop/src-tauri/src/commands/codex.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
       "quality/changes/next/CHG-SKILL-PLAN-CONTRACT-P3A.json",
       "quality/test-catalog.v1.json",
       "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
@@ -27,6 +29,7 @@
       "kind": "add",
       "required_suite_ids": [
         "SUITE-RUST-SKILL-PACKAGE",
+        "SUITE-RUST-DESKTOP",
         "SUITE-ORPHAN-SKILL-BOUNDARY",
         "SUITE-QUALITY-METADATA",
         "SUITE-QUALITY-FOCUSED",
@@ -62,6 +65,7 @@
         "P3-A only adds pure in-memory plan serialization, digest, validation, summary, and source tests",
         "current caller_asserted_unverified inspection reports are explicitly inspect_only with an unbound target, a non-consumable content-addressed identity, and zero effects",
         "the contract has no product caller and cannot stage, confirm, apply, write a ledger, mutate a package, or attach Science OPERON",
+        "source-gate Rust fixtures allocate isolated dynamic proxy and Science ports instead of probing the installed product defaults",
         "focused tests cover GitHub/local schema, exact package/OPERON values, report closure, sealed confirmable round-trips, invocation tamper, selection, tuple matrix, redaction, and no caller",
         "the existing v1 bridge schema and user-visible behavior remain unchanged"
       ]

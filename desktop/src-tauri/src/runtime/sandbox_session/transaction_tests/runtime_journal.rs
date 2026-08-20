@@ -2029,7 +2029,10 @@ fn o1_e3_fresh_process_replays_durable_compensation_to_convergence() {
             let expected_auth = tree(&auth_dir);
             let expected_state = tree(&sandbox_state);
             let expected_runtime = tree(&csswitch_runtime);
-            let cfg = runtime_journal_test_config(None, None);
+            let sandbox_port = reserve_prior_restart_replay_port();
+            let mut cfg = runtime_journal_test_config(None, None);
+            cfg.sandbox_port = sandbox_port;
+            cfg.proxy_port = sandbox_port + 1;
             config::save_to(&dir, &cfg).unwrap();
             let state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
             let authority =
