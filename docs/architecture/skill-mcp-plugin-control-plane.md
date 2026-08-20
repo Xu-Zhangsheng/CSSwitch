@@ -1,16 +1,27 @@
 # Science Skill / MCP / Plugin 扩展控制面
 
-状态：已接受目标设计；inspect-only source adapter 已存在但尚无产品 caller；plan / apply、artifact 与 runtime 验证均为 `NOT-RUN`
+状态：已接受目标设计；inspect-only adapter、P3-A plan schema 与 P3-B exact GitHub staging / confirmable-plan source contract 已存在但尚无产品 caller；confirmation consumption / apply、artifact 与 runtime 验证均为 `NOT-RUN`
 
 适用范围：CSSwitch 对 Agent Skills、OpenAI Plugin、Claude Plugin 与 local / remote MCP 输入的识别、规划、受控安装、Science 投影、验证、更新和卸载目标架构。
 
-最后复核：2026-08-13
+最后复核：2026-08-20
 
 失效条件：Agent Skills、OpenAI Plugin、Claude Plugin 或 MCP 的上游合同发生不兼容变化；Science 建立新的公开稳定扩展 API；CSSwitch 明确改变扩展控制面的 ownership、安全边界或兼容策略；或本文任一未实现部分开始实现、完成实现或推进证据层时，对应状态与段落立即失效，并须在同一候选中重新评审。
 
-本文冻结尚未实现的目标合同，不描述当前产品已经具备这些能力。源码当前另有一个仅接收
-调用方已取得 archive bytes、无 Gateway / Tauri / Agent caller 的 inspect-only adapter；
-它只产生 quarantine inspection report，不构成 plan、apply、安装或 runtime 能力。
+本文冻结尚未实现的目标合同，不描述当前产品已经具备这些能力。源码当前另有一组仍无
+Gateway / Tauri / Agent caller 的 source-only 合同：inspect-only adapter 只产生 quarantine
+inspection report；P3-A 把 report 投影为不可消费的 inspect-only plan；P3-B 只接受已固定
+40 位 commit 的 GitHub archive bytes，在调用方已打开的当前用户 mode `0700` 私有根下以
+dir-fd relative、no-follow、no-clobber 方式 staging，持久化并复读同一 archive object 后，
+只对完整、单一 `SKILL.md`、无需 payload 子集投影的最小包生成 exact-content-bound、所有
+effect 均为 `NOT_RUN` 的 confirmable plan；只要含 asset、script、Plugin、MCP、未知或其他
+需排除组件，就返回 `CONFIRMABLE_PROJECTION_REQUIRED`，不得拿整包 digest 冒充安全子集
+digest。两个升级构造入口
+仍为 crate-private；调用方自报的 GitHub tuple 与 bytes 本身不构成远端 provenance 证明，后续
+可信 resolver / coordinator 必须先闭合该证明才能建立产品 caller。P3-B 不负责网络
+取得 archive，不支持 local archive 晋级，不提供 confirmation capability consumer，也不
+apply、安装、attach、启动进程或读取凭证；staged handle 的 crash recovery / durable cleanup
+ledger 仍未实现。
 当前已实现的 GitHub / 本地包窄桥、状态码和用户行为只以
 [外部 Skill 安装桥](../features/external-skill-bridge.md)为准；逐能力当前 ownership / non-target / 证据层只以
 [产品与 Claude Science 能力地图](../features/product-science-capability-map.md)为准；

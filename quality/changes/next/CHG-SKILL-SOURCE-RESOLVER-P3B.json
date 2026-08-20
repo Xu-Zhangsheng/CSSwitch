@@ -1,0 +1,74 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-SKILL-SOURCE-RESOLVER-P3B",
+    "version": "v0.8.4-dev",
+    "title": "Add P3-B exact GitHub staging and confirmable plan sealing",
+    "summary": "Adds a crate-private exact-content staging slice for caller-supplied immutable-commit GitHub archive bytes. It uses an opened current-user mode-0700 root, dir-fd-relative no-follow/no-clobber files, durable same-object readback, and a non-consumable confirmable-plan value for a complete single-file Skill only. Extra payload requires a later content-subset projection and fails closed. Drop retains staging; cleanup awaits a durable ledger. Caller bytes do not prove remote GitHub provenance, so upgrade constructors are not exported. There is no product caller, network fetch, confirmation consumer, apply, install, attach, process, or credential access.",
+    "status": "active",
+    "owner": "skill-package",
+    "changed_paths": [
+      "desktop/skill-package/src/lib.rs",
+      "desktop/skill-package/src/plan.rs",
+      "desktop/skill-package/src/resolver.rs",
+      "docs/architecture/skill-mcp-plugin-control-plane.md",
+      "quality/changes/next/CHG-SKILL-SOURCE-RESOLVER-P3B.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "add",
+      "required_suite_ids": [
+        "SUITE-RUST-SKILL-PACKAGE",
+        "SUITE-ORPHAN-SKILL-BOUNDARY",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P1",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "P3-B remains a crate-private shared-crate source contract with no exported upgrade constructor, product caller, or confirmation consumer",
+        "only immutable 40-hex GitHub source claims are accepted and the archive is inspected from the same durably staged opened object; remote GitHub provenance remains unproved",
+        "staging is anchored to a caller-opened current-user mode-0700 directory and uses mkdirat/openat no-follow no-clobber files with 0700/0600 checks and directory sync boundaries",
+        "confirmable plans are limited to complete single-file Skills and bind source content, target identities, total selection, ordered package/OPERON effects, expiry, and reentry; extra payload requires a separately digested projection",
+        "every effect remains NotRun and no function can consume confirmation, apply, install, attach, execute package content, fetch network bytes, or read credentials",
+        "focused tests cover private-root enforcement, exact staged readback, collision, content and namespace drift, retained replacement objects, projection-required rejection, plan sealing, and caller absence"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

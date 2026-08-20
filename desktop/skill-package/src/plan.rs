@@ -278,6 +278,20 @@ pub struct PlanError {
     pub code: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmablePlanTargetV1 {
+    pub science_runtime_identity_sha256: String,
+    pub data_dir_identity_sha256: String,
+    pub active_org_identity_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmablePlanRequestV1 {
+    pub plan_id: String,
+    pub expires_at_unix_seconds: u64,
+    pub target: ConfirmablePlanTargetV1,
+}
+
 impl PlanError {
     fn new(code: &str) -> Self {
         Self { code: code.into() }
@@ -364,6 +378,192 @@ pub fn build_skill_plan(report: &InspectionReportV1) -> Result<SkillPlanV1, Plan
     };
     validate_skill_plan(&plan)?;
     Ok(plan)
+}
+
+/// Seals one exact, staged GitHub inspection into a confirmable plan. The
+/// caller may retain and display this plan, but this crate still exposes no
+/// capability that can consume it or perform any effect.
+pub(crate) fn build_confirmable_skill_plan(
+    report: &InspectionReportV1,
+    source: PlanSourceV1,
+    request: &ConfirmablePlanRequestV1,
+) -> Result<SkillPlanV1, PlanError> {
+    let mut plan = build_skill_plan(report)?;
+    let source = match source {
+        PlanSourceV1::GithubExact {
+            owner,
+            repo,
+            resolved_commit_sha,
+            path,
+            content_sha256,
+            binding: SourceBindingV1::CsswitchExactContentBound,
+        } if owner == report.source_claim.owner
+            && repo == report.source_claim.repo
+            && resolved_commit_sha == report.source_claim.commit_sha
+            && path == report.source_claim.path
+            && content_sha256 == report.package.content_sha256 =>
+        {
+            PlanSourceV1::GithubExact {
+                owner,
+                repo,
+                resolved_commit_sha,
+                path,
+                content_sha256,
+                binding: SourceBindingV1::CsswitchExactContentBound,
+            }
+        }
+        _ => return Err(PlanError::new("EXACT_SOURCE_REPORT_MISMATCH")),
+    };
+    let identity = PlanIdentityV1::Invocation {
+        plan_id: request.plan_id.clone(),
+    };
+    validate_identity(&identity, &"0".repeat(SHA256_HEX_LENGTH))?;
+    let target = PlanTargetV1::Bound {
+        science_runtime_identity_sha256: request.target.science_runtime_identity_sha256.clone(),
+        data_dir_identity_sha256: request.target.data_dir_identity_sha256.clone(),
+        active_org_identity_sha256: request.target.active_org_identity_sha256.clone(),
+        operon: "OPERON".into(),
+    };
+    validate_target(&target)?;
+    if request.expires_at_unix_seconds == 0 {
+        return Err(PlanError::new("INVALID_PLAN_EXPIRY"));
+    }
+
+    for component in &mut plan.components {
+        component.degradation =
+            expected_component_degradation(component, &SourceBindingV1::CsswitchExactContentBound);
+        component.confirmation_reasons = expected_component_reasons(
+            component,
+            &SourceBindingV1::CsswitchExactContentBound,
+            &plan.inspection_outcome,
+        );
+    }
+    let selected_component_ids = plan
+        .components
+        .iter()
+        .filter(|component| {
+            component.kind == ComponentKind::Skill
+                && component.compatibility_status == CompatibilityStatus::Adapted
+                && !component_requires_degraded_selection(component)
+        })
+        .map(|component| component.id.clone())
+        .collect::<Vec<_>>();
+    if selected_component_ids.is_empty() {
+        return Err(PlanError::new("NO_CONFIRMABLE_SKILL_COMPONENT"));
+    }
+    if plan.inspection_outcome != InspectionOutcome::Complete
+        || selected_component_ids.len() != 1
+        || plan.components.len() != 2
+        || plan
+            .components
+            .iter()
+            .filter(|component| component.kind == ComponentKind::Package)
+            .count()
+            != 1
+        || plan.components.iter().any(|component| {
+            !selected_component_ids.contains(&component.id)
+                && (component.kind != ComponentKind::Package
+                    || !component.source_path.is_empty()
+                    || component.compatibility_status != CompatibilityStatus::Unsupported
+                    || component.executable)
+        })
+    {
+        return Err(PlanError::new("CONFIRMABLE_PROJECTION_REQUIRED"));
+    }
+    let selected = selected_component_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let excluded_component_ids = plan
+        .components
+        .iter()
+        .filter(|component| !selected.contains(component.id.as_str()))
+        .map(|component| component.id.clone())
+        .collect::<Vec<_>>();
+    let selection = PlanSelectionV1::Degraded {
+        selected_component_ids: selected_component_ids.clone(),
+        excluded_component_ids,
+    };
+    let mut effects = Vec::new();
+    for component_id in selected_component_ids {
+        let component = plan
+            .components
+            .iter()
+            .find(|candidate| candidate.id == component_id)
+            .ok_or_else(|| PlanError::new("INVALID_PLAN_SELECTION"))?;
+        let target_package_identity_sha256 = digest_json(&TargetPackageIdentityInputV1 {
+            schema: "csswitch.target-package-identity.v1",
+            data_dir_identity_sha256: &request.target.data_dir_identity_sha256,
+            active_org_identity_sha256: &request.target.active_org_identity_sha256,
+            component_id: &component.id,
+            local_name: &component.local_name,
+        })?;
+        let mut confirmation_reasons = vec![
+            ConfirmationReasonV1::ExactTargetBinding,
+            ConfirmationReasonV1::ExactEffectSet,
+        ];
+        confirmation_reasons.sort();
+        effects.push(PlanEffectV1 {
+            order: effects.len() as u32 + 1,
+            kind: PlanEffectKindV1::PackageCommit,
+            subject: PlanEffectSubjectV1::Package {
+                component_id: component.id.clone(),
+                target_package_identity_sha256,
+            },
+            authority: EffectAuthorityV1::CsswitchHost,
+            verifier: EffectVerifierV1::PackageReadback,
+            expected: ExpectedEffectV1::PackageContentBound {
+                content_sha256: report.package.content_sha256.clone(),
+            },
+            rollback: EffectRollbackV1::CompensateByQuarantine,
+            apply: EffectApplyStateV1::NotRun,
+            confirmation_reasons: confirmation_reasons.clone(),
+        });
+        effects.push(PlanEffectV1 {
+            order: effects.len() as u32 + 1,
+            kind: PlanEffectKindV1::OperonAttach,
+            subject: PlanEffectSubjectV1::OperonSkill {
+                component_id: component.id.clone(),
+                skill_name: component.local_name.clone(),
+            },
+            authority: EffectAuthorityV1::CsswitchHost,
+            verifier: EffectVerifierV1::OperonReadback,
+            expected: ExpectedEffectV1::OperonMembershipPresent {
+                skill_name: component.local_name.clone(),
+            },
+            rollback: EffectRollbackV1::CompensateByDetach,
+            apply: EffectApplyStateV1::NotRun,
+            confirmation_reasons,
+        });
+    }
+    if effects.len() > MAX_PLAN_EFFECTS {
+        return Err(PlanError::new("PLAN_EFFECT_LIMIT"));
+    }
+
+    plan.identity = identity;
+    plan.source = source;
+    plan.target = target;
+    plan.eligibility = PlanEligibility::Confirmable;
+    plan.confirmation = PlanConfirmationState::RequiresExactPlanCapability;
+    plan.selection = selection;
+    plan.expiry = PlanExpiryV1::ExpiresAtUnixSeconds {
+        unix_seconds: request.expires_at_unix_seconds,
+    };
+    plan.reentry_policy = ReentryPolicyV1::ReadbackBeforeRetry;
+    plan.effects = effects;
+    plan.summary = summarize(&plan.components, &plan.effects);
+    plan.plan_digest_sha256 = compute_plan_digest(&plan)?;
+    validate_skill_plan(&plan)?;
+    Ok(plan)
+}
+
+#[derive(Serialize)]
+struct TargetPackageIdentityInputV1<'a> {
+    schema: &'static str,
+    data_dir_identity_sha256: &'a str,
+    active_org_identity_sha256: &'a str,
+    component_id: &'a str,
+    local_name: &'a str,
 }
 
 /// Validates a deserialized plan without opening files, resolving a source, or

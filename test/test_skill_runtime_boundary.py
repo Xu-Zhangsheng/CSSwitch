@@ -109,6 +109,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
             ROOT / "desktop/skill-package/src/inspection.rs"
         ).read_text()
         plan = (ROOT / "desktop/skill-package/src/plan.rs").read_text()
+        resolver = (ROOT / "desktop/skill-package/src/resolver.rs").read_text()
+        resolver_production = resolver.split("#[cfg(test)]", 1)[0]
         skill_package_lib = (
             ROOT / "desktop/skill-package/src/lib.rs"
         ).read_text()
@@ -145,6 +147,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("mod inspection;", skill_package_lib)
         self.assertIn("inspect_github_skill_archive", skill_package_lib)
         self.assertIn("build_skill_plan", skill_package_lib)
+        self.assertNotIn("stage_inspect_exact_github_archive", skill_package_lib)
+        self.assertNotIn("build_confirmable_skill_plan", skill_package_lib)
+        self.assertIn("pub(crate) fn stage_inspect_exact_github_archive", resolver)
+        self.assertIn("pub(crate) fn build_confirmable_skill_plan", plan)
         self.assertIn('"csswitch.package-inspection.v1"', inspection)
         self.assertIn('"caller_asserted_unverified"', inspection)
         self.assertIn("serde_saphyr::from_str::<SkillFrontmatter>", inspection)
@@ -156,6 +162,10 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertNotIn("inspect_github_skill_archive", tauri_sources)
         self.assertNotIn("build_skill_plan", gateway_sources)
         self.assertNotIn("build_skill_plan", tauri_sources)
+        self.assertNotIn("stage_inspect_exact_github_archive", gateway_sources)
+        self.assertNotIn("stage_inspect_exact_github_archive", tauri_sources)
+        self.assertNotIn("build_confirmable_skill_plan", gateway_sources)
+        self.assertNotIn("build_confirmable_skill_plan", tauri_sources)
         for forbidden_effect in (
             "commit_package(",
             "install_validated_bundle(",
@@ -173,6 +183,30 @@ class SkillRuntimeBoundary(unittest.TestCase):
         ):
             self.assertNotIn(forbidden_effect, inspection)
             self.assertNotIn(forbidden_effect, plan)
+        for forbidden_effect in (
+            "Command::new(",
+            "Client::builder(",
+            "reqwest::",
+            "attach_skill(",
+            "update_agent_skills(",
+            "commit_package(",
+            "install_validated_bundle(",
+            "std::process",
+            "std::net",
+            "Keychain",
+        ):
+            self.assertNotIn(forbidden_effect, resolver_production)
+        for required_boundary in (
+            "libc::mkdirat",
+            "libc::openat",
+            "libc::O_NOFOLLOW",
+            "libc::O_EXCL",
+            "sync_all()",
+            "mode & 0o7777 != 0o700",
+            "mode & 0o7777 != 0o600",
+            "EffectApplyStateV1::NotRun",
+        ):
+            self.assertIn(required_boundary, resolver + plan)
         self.assertIn("EffectApplyStateV1::NotRun", plan)
         self.assertIn("CALLER_ASSERTED_UNVERIFIED", plan)
         self.assertNotIn(
