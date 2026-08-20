@@ -1206,6 +1206,12 @@ mod tests {
         assert_eq!(report.effects.install, "not_run");
         assert_eq!(report.effects.science_attach, "not_run");
         assert_eq!(report.effects.mcp_launch, "not_run");
+        let plan = crate::build_skill_plan(&report).unwrap();
+        assert_eq!(plan.eligibility, crate::PlanEligibility::InspectOnly);
+        assert!(plan
+            .effects
+            .iter()
+            .all(|effect| effect.apply == crate::EffectApplyStateV1::NotRun));
     }
 
     #[test]

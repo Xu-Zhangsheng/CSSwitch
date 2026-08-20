@@ -4,6 +4,7 @@ mod github;
 mod inspection;
 mod install;
 mod listing;
+mod plan;
 mod science;
 
 use std::path::PathBuf;
@@ -31,6 +32,15 @@ pub use install::{
 pub use listing::{
     inspect_active_org_skills, InstalledSkillSource, InstalledSkillSummary,
     SkillFilesystemSnapshot, SkillListWarning, MAX_LISTED_SKILLS, MAX_SKILL_FRONTMATTER_BYTES,
+};
+pub use plan::{
+    build_skill_plan, validate_skill_plan, ComponentDegradationV1, ConfirmationReasonV1,
+    EffectApplyStateV1, EffectAuthorityV1, EffectRollbackV1, EffectVerifierV1, ExpectedEffectV1,
+    PlanComponentV1, PlanConfirmationState, PlanEffectKindV1, PlanEffectSubjectV1, PlanEffectV1,
+    PlanEligibility, PlanError, PlanExpiryV1, PlanFindingV1, PlanIdentityV1, PlanSelectionV1,
+    PlanSourceV1, PlanSummaryV1, PlanTargetV1, ReentryPolicyV1, SkillPlanV1, SourceBindingV1,
+    MAX_PLAN_COMPONENTS, MAX_PLAN_EFFECTS, MAX_PLAN_FINDINGS, MAX_PLAN_FINDINGS_PER_COMPONENT,
+    SKILL_PLAN_SCHEMA,
 };
 pub use science::{
     attach_skill, open_science_health_session, open_science_health_session_before,

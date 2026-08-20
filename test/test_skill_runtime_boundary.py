@@ -108,6 +108,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         inspection = (
             ROOT / "desktop/skill-package/src/inspection.rs"
         ).read_text()
+        plan = (ROOT / "desktop/skill-package/src/plan.rs").read_text()
         skill_package_lib = (
             ROOT / "desktop/skill-package/src/lib.rs"
         ).read_text()
@@ -143,6 +144,7 @@ class SkillRuntimeBoundary(unittest.TestCase):
         self.assertIn("GithubEndpoints::production()?", github)
         self.assertIn("mod inspection;", skill_package_lib)
         self.assertIn("inspect_github_skill_archive", skill_package_lib)
+        self.assertIn("build_skill_plan", skill_package_lib)
         self.assertIn('"csswitch.package-inspection.v1"', inspection)
         self.assertIn('"caller_asserted_unverified"', inspection)
         self.assertIn("serde_saphyr::from_str::<SkillFrontmatter>", inspection)
@@ -152,6 +154,8 @@ class SkillRuntimeBoundary(unittest.TestCase):
         )
         self.assertNotIn("inspect_github_skill_archive", gateway_sources)
         self.assertNotIn("inspect_github_skill_archive", tauri_sources)
+        self.assertNotIn("build_skill_plan", gateway_sources)
+        self.assertNotIn("build_skill_plan", tauri_sources)
         for forbidden_effect in (
             "commit_package(",
             "install_validated_bundle(",
@@ -168,6 +172,9 @@ class SkillRuntimeBoundary(unittest.TestCase):
             "Keychain",
         ):
             self.assertNotIn(forbidden_effect, inspection)
+            self.assertNotIn(forbidden_effect, plan)
+        self.assertIn("EffectApplyStateV1::NotRun", plan)
+        self.assertIn("CALLER_ASSERTED_UNVERIFIED", plan)
         self.assertNotIn(
             "CSSWITCH_ACCEPTANCE_GITHUB_BASE_URL",
             (ROOT / "desktop/src-tauri/src/runtime/launch_env.rs").read_text(),
