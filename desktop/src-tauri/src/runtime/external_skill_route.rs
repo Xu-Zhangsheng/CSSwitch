@@ -26,9 +26,9 @@ const LEGACY_BUNDLE_PRE_PROGRESS_SHA256: &str =
 const LEGACY_BUNDLE_PROGRESS_V1_SHA256: &str =
     "60555234c2b6aa63ce263f6ce09e9cfad09b4b16f923ec2d4331fb856eb3078c";
 const LEGACY_BUNDLE_PROGRESS_V2_SHA256: &str =
-    "bc13e93dda04d54faa6b81518ad306283b5f55b40c4da587faec1ca8d4a922ae";
+    "0004242a004ff2f6fa7a7d38da423ae725a7bad395224c6b04cdc6043eca5b99";
 const LEGACY_BUNDLE_NO_UNINSTALL_CONFIRMATION_SHA256: &str =
-    "9c80e2c45f2471f408df8d18eee6746a29adc7f51e07212102636ba46273a29e";
+    "dd979d7e60c8e5dffd48bcf176e9f1d1ea7a2a7c361aece902212c6c1403a737";
 
 /// Atomically install the tiny CSSwitch routing Skill into the active org.
 ///

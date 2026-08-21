@@ -20,6 +20,7 @@
       "desktop/skill-package/src/plan.rs",
       "desktop/skill-package/src/resolver.rs",
       "desktop/src-tauri/Cargo.lock",
+      "desktop/src-tauri/src/runtime/external_skill_route.rs",
       "desktop/src-tauri/resources/skills/csswitch-external-skill-tools/SKILL.md",
       "docs/architecture/skill-mcp-plugin-control-plane.md",
       "docs/features/external-skill-bridge.md",
