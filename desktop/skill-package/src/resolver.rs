@@ -1,14 +1,15 @@
-//! P3-B exact GitHub archive staging and confirmable-plan sealing.
+//! Exact GitHub archive inspection and private staging boundary.
 //!
 //! The caller supplies bytes already obtained for an immutable 40-hex GitHub
 //! commit. This module does not trust a mutable path or execute package
 //! content: it creates a new private directory relative to an already-opened
 //! trusted root, durably writes the archive, reads the same staged object back,
 //! runs the inspect-only adapter, and binds the resulting content identity into
-//! a confirmable plan. The upgrade entry remains crate-private because these
-//! bytes do not by themselves prove remote GitHub provenance. A later trusted
-//! resolver/coordinator must own that proof before any product caller exists.
-//! No apply or confirmation-consumption capability exists.
+//! a confirmable plan. These bytes do not by themselves prove remote GitHub
+//! provenance, so this module owns neither the production trusted caller nor
+//! operation coordination: those live in the semantic operation ledger and
+//! Gateway. Capability issuance and confirmation consumption are likewise
+//! ledger-coordinator responsibilities, never resolver responsibilities.
 
 use std::fmt;
 use std::fs::File;
@@ -63,13 +64,50 @@ impl ExactStagedGithubArchive {
         &self.inspection
     }
 
+    pub(crate) fn receipt_sha256(&self) -> &str {
+        &self.receipt_sha256
+    }
+
+    /// Re-reads the same opened archive after all retained-object identity and
+    /// receipt checks.  This is crate-private so only the durable Skill operation
+    /// coordinator can materialise the snapshot; callers never receive a
+    /// mutable staging pathname.
+    pub(crate) fn archive_bytes(&self) -> Result<Vec<u8>, ResolveError> {
+        self.verify_staged_archive()?;
+        read_exact_archive(&self.archive, self.archive_object.size as usize)
+    }
+
     pub fn build_confirmable_plan(
         &self,
         request: &ConfirmablePlanRequestV1,
     ) -> Result<SkillPlanV1, ResolveError> {
         self.verify_staged_archive()?;
-        build_confirmable_skill_plan(&self.inspection, self.identity.source.clone(), request)
-            .map_err(|error| ResolveError::new(&error.code, "plan"))
+        let bytes = self.archive_bytes()?;
+        let PlanSourceV1::GithubExact { path, repo, .. } = &self.identity.source else {
+            return Err(ResolveError::new("EXACT_SOURCE_REPORT_MISMATCH", "plan"));
+        };
+        let package =
+            match crate::archive::package_or_bundle_from_github_archive(&bytes, path, repo)
+                .map_err(|error| ResolveError::new(&error.code, &error.phase))?
+            {
+                crate::ValidatedArchive::Skill(package) => package,
+                _ => return Err(ResolveError::new("CONFIRMABLE_PROJECTION_REQUIRED", "plan")),
+            };
+        let plan = build_confirmable_skill_plan(
+            &self.inspection,
+            self.identity.source.clone(),
+            request,
+            package.content_sha256,
+        )
+        .map_err(|error| ResolveError::new(&error.code, "plan"))?;
+        if !matches!(
+            plan.effects.get(1).map(|effect| &effect.subject),
+            Some(crate::PlanEffectSubjectV1::OperonSkill { skill_name, .. })
+                if skill_name == &package.skill_name
+        ) {
+            return Err(ResolveError::new("CONFIRMABLE_SELECTION_MISMATCH", "plan"));
+        }
+        Ok(plan)
     }
 
     fn verify_staged_archive(&self) -> Result<(), ResolveError> {
@@ -178,17 +216,12 @@ pub(crate) fn stage_inspect_exact_github_archive(
         return Err(ResolveError::new("ARCHIVE_SIZE_INVALID", "staging"));
     }
     let archive_sha256 = sha256_hex(archive_bytes);
-    let directory_digest = digest_json(&StagingDirectoryNameInputV1 {
-        schema: EXACT_STAGED_ARCHIVE_SCHEMA,
-        invocation_id,
-        owner: &source.owner,
-        repo: &source.repo,
-        commit_sha: &source.commit_sha,
-        path: &source.path,
-        archive_sha256: &archive_sha256,
-    })?;
-    let directory_name = format!("p3b-{}", &directory_digest[..32]);
+    let directory_name = exact_staging_directory_name(invocation_id)?;
     mkdir_at(root.as_raw_fd(), &directory_name, 0o700)?;
+    // The staged child itself changes directory metadata such as size.  Bind
+    // the post-create root object (not the pre-create observation) so restart
+    // recovery recomputes the same sealed object identity.
+    let root_object = object_identity(root.as_raw_fd(), ObjectKind::Directory)?;
     let directory = open_directory_at(root.as_raw_fd(), &directory_name)?;
     let initial_directory_object = object_identity(directory.as_raw_fd(), ObjectKind::Directory)?;
     if initial_directory_object.uid != effective_uid()
@@ -224,14 +257,21 @@ pub(crate) fn stage_inspect_exact_github_archive(
         repo: inspection.source_claim.repo.clone(),
         resolved_commit_sha: inspection.source_claim.commit_sha.clone(),
         path: inspection.source_claim.path.clone(),
+        archive_sha256: archive_sha256.clone(),
         content_sha256: inspection.package.content_sha256.clone(),
+        materialized_content_sha256: String::new(),
         binding: SourceBindingV1::CsswitchExactContentBound,
     };
     let mut receipt_file = create_regular_at(directory.as_raw_fd(), STAGING_RECEIPT_FILE, 0o600)?;
     let directory_object = object_identity(directory.as_raw_fd(), ObjectKind::Directory)?;
+    // The shared staging root is intentionally not content-private to an
+    // operation: preparing a second sibling changes its directory size/link
+    // metadata. Bind only the stable authority identity here. The operation's
+    // own child, archive and receipt remain fully identity-bound below.
+    let root_identity = stable_staging_root_identity(&root_object);
     let staging_object_identity_sha256 = digest_json(&StagingObjectIdentityInputV1 {
         schema: EXACT_STAGED_ARCHIVE_SCHEMA,
-        root: &root_object,
+        root: &root_identity,
         directory: &directory_object,
         archive: &archive_object,
         archive_sha256: &archive_sha256,
@@ -280,25 +320,363 @@ pub(crate) fn stage_inspect_exact_github_archive(
     })
 }
 
-#[derive(Serialize)]
-struct StagingDirectoryNameInputV1<'a> {
-    schema: &'static str,
-    invocation_id: &'a str,
-    owner: &'a str,
-    repo: &'a str,
-    commit_sha: &'a str,
-    path: &'a str,
-    archive_sha256: &'a str,
+/// Reopens a sealed exact staged archive snapshot after a coordinator process restart.  The
+/// caller supplies the same already-open trusted root and exact source tuple;
+/// every pathname is reopened no-follow and the receipt, object identity,
+/// archive bytes and inspection identity are reconstructed before returning a
+/// usable handle.
+pub(crate) fn reopen_exact_github_archive(
+    root: &File,
+    invocation_id: &str,
+    source: &GithubInspectionSource,
+    archive_sha256: &str,
+    staging_object_identity_sha256: &str,
+    receipt_sha256: &str,
+) -> Result<ExactStagedGithubArchive, ResolveError> {
+    validate_invocation_id(invocation_id)?;
+    let root_object = object_identity(root.as_raw_fd(), ObjectKind::Directory)?;
+    if root_object.uid != effective_uid() || root_object.mode & 0o7777 != 0o700 {
+        return Err(ResolveError::new("UNSAFE_STAGING_ROOT", "recovery"));
+    }
+    if archive_sha256.len() != 64 || !archive_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ResolveError::new(
+            "STAGING_RECOVERY_IDENTITY_INVALID",
+            "recovery",
+        ));
+    }
+    // The operation id is the pre-reserved host-owned staging name. Exact
+    // receipt and archive identities still bind source content before reuse.
+    let directory_name = exact_staging_directory_name(invocation_id)?;
+    let directory = open_directory_at(root.as_raw_fd(), &directory_name)?;
+    let receipt = open_regular_at(directory.as_raw_fd(), STAGING_RECEIPT_FILE)?;
+    let receipt_object = object_identity(receipt.as_raw_fd(), ObjectKind::RegularFile)?;
+    if receipt_object.size > 64 * 1024 {
+        return Err(ResolveError::new("STAGING_RECEIPT_TOO_LARGE", "recovery"));
+    }
+    let receipt_bytes = read_exact_archive(&receipt, receipt_object.size as usize)?;
+    if sha256_hex(&receipt_bytes) != receipt_sha256 {
+        return Err(ResolveError::new(
+            "STAGING_RECEIPT_CONTENT_DRIFT",
+            "recovery",
+        ));
+    }
+    let identity: ExactStagedArchiveIdentityV1 = serde_json::from_slice(&receipt_bytes)
+        .map_err(|_| ResolveError::new("STAGING_RECEIPT_INVALID", "recovery"))?;
+    let matches_source = matches!(&identity.source, PlanSourceV1::GithubExact { owner, repo, resolved_commit_sha, path, .. } if owner == &source.owner && repo == &source.repo && resolved_commit_sha == &source.commit_sha && path == &source.path);
+    if !matches_source || identity.archive_sha256 != archive_sha256 {
+        return Err(ResolveError::new(
+            "STAGING_RECEIPT_IDENTITY_DRIFT",
+            "recovery",
+        ));
+    }
+    let archive = open_regular_at(directory.as_raw_fd(), STAGED_ARCHIVE_FILE)?;
+    let archive_object = object_identity(archive.as_raw_fd(), ObjectKind::RegularFile)?;
+    let directory_object = object_identity(directory.as_raw_fd(), ObjectKind::Directory)?;
+    let archive_bytes = read_exact_archive(&archive, archive_object.size as usize)?;
+    if sha256_hex(&archive_bytes) != identity.archive_sha256 {
+        return Err(ResolveError::new(
+            "STAGED_ARCHIVE_CONTENT_DRIFT",
+            "recovery",
+        ));
+    }
+    let inspection = inspect_github_skill_archive(source, &archive_bytes)
+        .map_err(|error| ResolveError::new(&error.code, "recovery"))?;
+    let root_identity = stable_staging_root_identity(&root_object);
+    let computed = digest_json(&StagingObjectIdentityInputV1 {
+        schema: EXACT_STAGED_ARCHIVE_SCHEMA,
+        root: &root_identity,
+        directory: &directory_object,
+        archive: &archive_object,
+        archive_sha256: &identity.archive_sha256,
+        content_sha256: &inspection.package.content_sha256,
+    })?;
+    if computed != identity.staging_object_identity_sha256
+        || computed != staging_object_identity_sha256
+    {
+        return Err(ResolveError::new(
+            "STAGED_OBJECT_IDENTITY_DRIFT",
+            "recovery",
+        ));
+    }
+    Ok(ExactStagedGithubArchive {
+        identity,
+        inspection,
+        root: root
+            .try_clone()
+            .map_err(|_| ResolveError::new("STAGING_ROOT_CLONE_FAILED", "recovery"))?,
+        directory,
+        archive,
+        receipt,
+        directory_name,
+        root_object,
+        directory_object,
+        archive_object,
+        receipt_object,
+        receipt_sha256: sha256_hex(&receipt_bytes),
+    })
+}
+
+/// Deletes one already-reopened exact staging object.  This is deliberately
+/// crate-private and only the durable operation lifecycle may call it: the
+/// deterministic child name alone is never deletion authority.  Every
+/// identity and receipt is reopened first, then the two known regular files
+/// and their private directory are removed relative to held descriptors.
+pub(crate) fn remove_exact_github_archive(
+    root: &File,
+    invocation_id: &str,
+    source: &GithubInspectionSource,
+    archive_sha256: &str,
+    staging_object_identity_sha256: &str,
+    receipt_sha256: &str,
+) -> Result<(), ResolveError> {
+    let staged = reopen_exact_github_archive(
+        root,
+        invocation_id,
+        source,
+        archive_sha256,
+        staging_object_identity_sha256,
+        receipt_sha256,
+    )?;
+    staged.verify_staged_archive()?;
+    for name in [STAGED_ARCHIVE_FILE, STAGING_RECEIPT_FILE] {
+        let name = c_string(name)?;
+        if unsafe { libc::unlinkat(staged.directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+            return Err(ResolveError::new(
+                "STAGING_CLEANUP_UNLINK_FAILED",
+                "cleanup",
+            ));
+        }
+    }
+    staged
+        .directory
+        .sync_all()
+        .map_err(|_| ResolveError::new("STAGING_CLEANUP_DIRECTORY_SYNC_FAILED", "cleanup"))?;
+    let directory_name = c_string(&staged.directory_name)?;
+    if unsafe {
+        libc::unlinkat(
+            staged.root.as_raw_fd(),
+            directory_name.as_ptr(),
+            libc::AT_REMOVEDIR,
+        )
+    } != 0
+    {
+        return Err(ResolveError::new("STAGING_CLEANUP_RMDIR_FAILED", "cleanup"));
+    }
+    staged
+        .root
+        .sync_all()
+        .map_err(|_| ResolveError::new("STAGING_CLEANUP_ROOT_SYNC_FAILED", "cleanup"))
+}
+
+/// Reclaims the one pre-reserved staging child when a process stopped before
+/// it could durably seal its receipt. The caller supplies the exact operation
+/// name from the authority lifecycle record; this never scans the root. It
+/// validates the complete child entry set *before* deleting anything: only
+/// the two protocol-created private regular files may be present, and either
+/// may be absent while a write was in flight. An unknown, substituted, or
+/// oversized entry leaves the entire child untouched.
+pub(crate) fn remove_partial_exact_staging(
+    root: &File,
+    invocation_id: &str,
+) -> Result<(), ResolveError> {
+    let root_object = object_identity(root.as_raw_fd(), ObjectKind::Directory)?;
+    if root_object.uid != effective_uid() || root_object.mode & 0o7777 != 0o700 {
+        return Err(ResolveError::new("UNSAFE_STAGING_ROOT", "cleanup"));
+    }
+    let directory_name = exact_staging_directory_name(invocation_id)?;
+    let directory = open_directory_at(root.as_raw_fd(), &directory_name)?;
+    let directory_object = object_identity(directory.as_raw_fd(), ObjectKind::Directory)?;
+    if directory_object.uid != effective_uid() || directory_object.mode & 0o7777 != 0o700 {
+        return Err(ResolveError::new("UNSAFE_STAGING_DIRECTORY", "cleanup"));
+    }
+    let entries = partial_staging_entry_names(&directory)?;
+    for name in &entries {
+        if !matches!(name.as_str(), STAGED_ARCHIVE_FILE | STAGING_RECEIPT_FILE) {
+            return Err(ResolveError::new(
+                "STAGING_PARTIAL_UNEXPECTED_ENTRY",
+                "cleanup",
+            ));
+        }
+    }
+    for (name, max_size) in [
+        (STAGED_ARCHIVE_FILE, MAX_ARCHIVE_BYTES),
+        (STAGING_RECEIPT_FILE, 64 * 1024),
+    ] {
+        if !entries.iter().any(|entry| entry == name) {
+            continue;
+        }
+        let object = object_identity_at(directory.as_raw_fd(), name, ObjectKind::RegularFile)?;
+        if object.uid != effective_uid()
+            || object.mode & 0o7777 != 0o600
+            || object.size > max_size as u64
+        {
+            return Err(ResolveError::new(
+                "STAGING_PARTIAL_IDENTITY_INVALID",
+                "cleanup",
+            ));
+        }
+    }
+    // Every named child is now a checked protocol file.  Verify the held
+    // directory is still the deterministic root child before the irreversible
+    // portion; all unlink operations stay relative to that held descriptor.
+    if object_identity_at(root.as_raw_fd(), &directory_name, ObjectKind::Directory)?
+        != directory_object
+    {
+        return Err(ResolveError::new(
+            "STAGING_PARTIAL_IDENTITY_INVALID",
+            "cleanup",
+        ));
+    }
+    for name in [STAGED_ARCHIVE_FILE, STAGING_RECEIPT_FILE] {
+        if !entries.iter().any(|entry| entry == name) {
+            continue;
+        }
+        let name = c_string(name)?;
+        if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+            return Err(ResolveError::new(
+                "STAGING_CLEANUP_UNLINK_FAILED",
+                "cleanup",
+            ));
+        }
+    }
+    directory
+        .sync_all()
+        .map_err(|_| ResolveError::new("STAGING_CLEANUP_DIRECTORY_SYNC_FAILED", "cleanup"))?;
+    let name = c_string(&directory_name)?;
+    if unsafe { libc::unlinkat(root.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+        return Err(ResolveError::new("STAGING_CLEANUP_RMDIR_FAILED", "cleanup"));
+    }
+    root.sync_all()
+        .map_err(|_| ResolveError::new("STAGING_CLEANUP_ROOT_SYNC_FAILED", "cleanup"))
+}
+
+/// `fdopendir` takes ownership of the duplicated descriptor.  The source
+/// descriptor remains held by the lifecycle caller, so directory enumeration
+/// cannot escape the opened no-follow child through a mutable pathname.
+struct PartialStagingDirStream {
+    raw: *mut libc::DIR,
+}
+
+impl PartialStagingDirStream {
+    fn from_directory(directory: &File) -> Result<Self, ResolveError> {
+        let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
+        if duplicate < 0 {
+            return Err(ResolveError::new(
+                "STAGING_DIRECTORY_OPEN_FAILED",
+                "cleanup",
+            ));
+        }
+        if unsafe { libc::fcntl(duplicate, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+            unsafe { libc::close(duplicate) };
+            return Err(ResolveError::new(
+                "STAGING_DIRECTORY_OPEN_FAILED",
+                "cleanup",
+            ));
+        }
+        if unsafe { libc::lseek(duplicate, 0, libc::SEEK_SET) } < 0 {
+            unsafe { libc::close(duplicate) };
+            return Err(ResolveError::new(
+                "STAGING_DIRECTORY_OPEN_FAILED",
+                "cleanup",
+            ));
+        }
+        let raw = unsafe { libc::fdopendir(duplicate) };
+        if raw.is_null() {
+            unsafe { libc::close(duplicate) };
+            return Err(ResolveError::new(
+                "STAGING_DIRECTORY_OPEN_FAILED",
+                "cleanup",
+            ));
+        }
+        Ok(Self { raw })
+    }
+
+    fn next_name(&mut self) -> Result<Option<Vec<u8>>, ResolveError> {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            *libc::__error() = 0;
+        }
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            *libc::__errno_location() = 0;
+        }
+        let entry = unsafe { libc::readdir(self.raw) };
+        if entry.is_null() {
+            return if std::io::Error::last_os_error().raw_os_error().unwrap_or(0) == 0 {
+                Ok(None)
+            } else {
+                Err(ResolveError::new(
+                    "STAGING_DIRECTORY_READ_FAILED",
+                    "cleanup",
+                ))
+            };
+        }
+        Ok(Some(
+            unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }
+                .to_bytes()
+                .to_vec(),
+        ))
+    }
+}
+
+impl Drop for PartialStagingDirStream {
+    fn drop(&mut self) {
+        unsafe { libc::closedir(self.raw) };
+    }
+}
+
+fn partial_staging_entry_names(directory: &File) -> Result<Vec<String>, ResolveError> {
+    let mut stream = PartialStagingDirStream::from_directory(directory)?;
+    let mut names = Vec::new();
+    while let Some(raw) = stream.next_name()? {
+        if raw == b"." || raw == b".." {
+            continue;
+        }
+        let name = std::str::from_utf8(&raw)
+            .map_err(|_| ResolveError::new("STAGING_PARTIAL_UNEXPECTED_ENTRY", "cleanup"))?;
+        // There can be at most the two protocol files.  Bound before storing
+        // to keep even a hostile private directory enumeration finite.
+        if names.len() >= 2 {
+            return Err(ResolveError::new(
+                "STAGING_PARTIAL_UNEXPECTED_ENTRY",
+                "cleanup",
+            ));
+        }
+        names.push(name.to_string());
+    }
+    Ok(names)
+}
+
+pub(crate) fn exact_staging_directory_name(invocation_id: &str) -> Result<String, ResolveError> {
+    validate_invocation_id(invocation_id)?;
+    Ok(format!("exact-{invocation_id}"))
 }
 
 #[derive(Serialize)]
 struct StagingObjectIdentityInputV1<'a> {
     schema: &'static str,
-    root: &'a ObjectIdentityV1,
+    root: &'a StagingRootIdentityV1,
     directory: &'a ObjectIdentityV1,
     archive: &'a ObjectIdentityV1,
     archive_sha256: &'a str,
     content_sha256: &'a str,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct StagingRootIdentityV1 {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: u32,
+}
+
+fn stable_staging_root_identity(identity: &ObjectIdentityV1) -> StagingRootIdentityV1 {
+    StagingRootIdentityV1 {
+        device: identity.device,
+        inode: identity.inode,
+        mode: identity.mode,
+        uid: identity.uid,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -497,7 +875,7 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "csswitch-p3b-staging-{}-{nonce}-{}",
+                "csswitch-exact-staging-{}-{nonce}-{}",
                 std::process::id(),
                 TEMP_ROOT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             ));
@@ -567,6 +945,8 @@ mod tests {
                 science_runtime_identity_sha256: "a".repeat(64),
                 data_dir_identity_sha256: "b".repeat(64),
                 active_org_identity_sha256: "c".repeat(64),
+                skills_root_device: 1,
+                skills_root_inode: 2,
             },
         }
     }
@@ -576,7 +956,7 @@ mod tests {
         let root = TempRoot::new(0o700);
         let handle = stage_inspect_exact_github_archive(
             &root.open(),
-            "p3b-invocation",
+            "exact-invocation",
             &source(),
             &archive(&[]),
         )
@@ -626,6 +1006,58 @@ mod tests {
                 .code,
             "STAGED_ARCHIVE_CONTENT_DRIFT"
         );
+    }
+
+    #[test]
+    fn shared_staging_root_allows_sibling_prepare_but_rejects_root_replacement() {
+        let root = TempRoot::new(0o700);
+        let first = stage_inspect_exact_github_archive(
+            &root.open(),
+            "shared-root-first",
+            &source(),
+            &archive(&[]),
+        )
+        .unwrap();
+        let archive_sha256 = first.identity.archive_sha256.clone();
+        let object_sha256 = first.identity.staging_object_identity_sha256.clone();
+        let receipt_sha256 = first.receipt_sha256.clone();
+
+        // A different operation is allowed to materialize a sibling below the
+        // same private root. This changes root size/link metadata but does not
+        // change root authority or either operation's private children.
+        let _second = stage_inspect_exact_github_archive(
+            &root.open(),
+            "shared-root-second",
+            &source(),
+            &archive(&[("scripts/run.sh", b"#!/bin/sh\n", true)]),
+        )
+        .unwrap();
+        reopen_exact_github_archive(
+            &root.open(),
+            "shared-root-first",
+            &source(),
+            &archive_sha256,
+            &object_sha256,
+            &receipt_sha256,
+        )
+        .unwrap();
+
+        // Replacing the root object is still a hard failure even if its path
+        // is reused with private permissions.
+        let displaced = root.0.with_extension("displaced");
+        fs::rename(&root.0, &displaced).unwrap();
+        fs::create_dir(&root.0).unwrap();
+        fs::set_permissions(&root.0, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(reopen_exact_github_archive(
+            &root.open(),
+            "shared-root-first",
+            &source(),
+            &archive_sha256,
+            &object_sha256,
+            &receipt_sha256,
+        )
+        .is_err());
+        fs::remove_dir_all(displaced).unwrap();
     }
 
     #[test]

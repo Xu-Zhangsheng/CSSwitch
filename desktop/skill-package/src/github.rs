@@ -16,6 +16,7 @@ use crate::archive::{
 use crate::bundle::{
     bundle_id_for_github, install_validated_bundle, recover_existing_github_bundle,
 };
+use crate::inspection::GithubInspectionSource;
 use crate::install::{
     commit_package, inspect_existing_github_install, ExistingGithubInstall, SourceDescriptor,
 };
@@ -52,6 +53,15 @@ pub struct GithubPackageSource {
     pub repo: String,
     pub reference: String,
     pub path: String,
+}
+
+/// Archive bytes obtained by CSSwitch itself for a fixed GitHub commit.  The
+/// resolver accepts only a 40-hex commit URL, so a later confirmation never
+/// rests on a mutable branch or tag read.
+#[derive(Clone, Debug)]
+pub struct ExactGithubArchive {
+    pub source: GithubInspectionSource,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,9 +108,9 @@ impl GithubEndpoints {
                     .map(|ip| ip.is_loopback())
                     .unwrap_or(false)
         });
-        let explicit_test_port = base.port().is_some_and(|port| {
-            port >= 1024 && !ACCEPTANCE_RESERVED_PORTS.contains(&port)
-        });
+        let explicit_test_port = base
+            .port()
+            .is_some_and(|port| port >= 1024 && !ACCEPTANCE_RESERVED_PORTS.contains(&port));
         if base.scheme() != "http"
             || !loopback
             || !explicit_test_port
@@ -258,6 +268,52 @@ pub fn install_github_package_with_progress(
         &GithubEndpoints::production()?,
         progress,
     )
+}
+
+/// Resolves and downloads one immutable public GitHub archive without
+/// inspecting, committing, or touching a Science data directory.  This is the
+/// production provenance boundary consumed by the durable skill-operation
+/// coordinator.
+pub fn resolve_exact_github_archive(
+    source_url: &str,
+    progress: &mut dyn FnMut(&str, &str),
+) -> Result<ExactGithubArchive, InstallError> {
+    progress("source_resolution", "正在验证固定 GitHub commit 来源");
+    let source = parse_github_package_source(source_url)?;
+    if !is_commit_sha(&source.reference) {
+        return Err(error(
+            "SOURCE_REF_REQUIRES_COMMIT_SHA",
+            "确认式安装只接受 40 位 commit SHA GitHub URL，不能从可变 branch/tag 建立计划",
+            "source_resolution",
+        ));
+    }
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(Policy::none())
+        .build()
+        .map_err(|_| {
+            error(
+                "GITHUB_CLIENT_FAILED",
+                "初始化 GitHub archive 下载客户端失败",
+                "source_resolution",
+            )
+        })?;
+    let endpoints = GithubEndpoints::production()?;
+    let deadline = Instant::now() + GITHUB_BUNDLE_OPERATION_TIMEOUT;
+    let commit = source.reference.to_ascii_lowercase();
+    progress("download", "正在下载已固定 GitHub commit archive");
+    let bytes =
+        download_repository_archive(&client, &source, &commit, &endpoints, deadline, progress)?;
+    Ok(ExactGithubArchive {
+        source: GithubInspectionSource {
+            owner: source.owner,
+            repo: source.repo,
+            commit_sha: commit,
+            path: source.path,
+        },
+        bytes,
+    })
 }
 
 #[cfg(test)]

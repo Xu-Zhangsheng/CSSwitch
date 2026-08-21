@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,9 +12,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use csswitch_skill_install_core::{
-    attach_skill, find_bundle_for_skill, install_github_package_with_progress, quarantine_bundle,
-    update_agent_skills, verify_attach_control_ready, AttachResult, BundleCommit, InstallCommit,
-    InstallError, InstalledPackage, ScienceHostContext, GITHUB_BUNDLE_OPERATION_TIMEOUT_SECONDS,
+    active_org, attach_skill, find_bundle_for_skill, install_github_package_with_progress,
+    quarantine_bundle, read_agent_skill_names, release_unstaged_install_plan_reservation,
+    reserve_install_plan_capacity, resolve_exact_github_archive, update_agent_skills,
+    verify_attach_control_ready, AttachError, AttachResult, BundleCommit, ConfirmablePlanRequestV1,
+    ConfirmablePlanTargetV1, InstallCommit, InstallError, InstalledPackage, ScienceHostContext,
+    SkillOperationConfirmationCapabilityV1, SkillOperationOperonAdapter,
+    SkillOperationPrepareRequestV1, SkillOperationPrepared, SkillOperationRemovalPrepared,
+    SkillOperationTargetBindingV1, SkillRemovalRoots, GITHUB_BUNDLE_OPERATION_TIMEOUT_SECONDS,
     SCHEMA_VERSION,
 };
 #[cfg(test)]
@@ -29,6 +34,8 @@ const MAX_IMPORT_ORIGIN_BYTES: usize = 16 * 1024;
 const BRIDGE_KEY_FILE_ENV: &str = "CSSWITCH_SKILL_BRIDGE_KEY_FILE";
 const BRIDGE_REQUEST_VERSION: u64 = 1;
 const BRIDGE_REQUEST_TTL_SECONDS: u64 = 180;
+const CONFIRMATION_SCHEMA_VERSION: u64 = 1;
+const SKILL_OPERATION_PLAN_TTL_SECONDS: u64 = 300;
 pub(crate) const BRIDGE_INSTALL_RESPONSE_TIMEOUT_SECONDS: u64 =
     GITHUB_BUNDLE_OPERATION_TIMEOUT_SECONDS + 60;
 
@@ -59,6 +66,11 @@ impl Clone for AuthorityFenceDescriptor {
 #[derive(Debug)]
 pub(crate) struct AuthorityFenceSharedGuard {
     file: File,
+    // This clone is made only after the inherited descriptor and its lock
+    // entry have both been revalidated.  It is deliberately not a pathname:
+    // the bridge mailbox is guest-writable and never contains operation
+    // staging, ledgers, or quarantine data.
+    directory: File,
 }
 
 #[cfg(test)]
@@ -81,6 +93,12 @@ impl Drop for AuthorityFenceSharedGuard {
         unsafe {
             libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
         }
+    }
+}
+
+impl AuthorityFenceSharedGuard {
+    pub(crate) fn authority_root(&self) -> &File {
+        &self.directory
     }
 }
 
@@ -241,7 +259,11 @@ impl AuthorityFenceDescriptor {
                     && fresh_metadata.dev() == after_lock.dev()
                     && fresh_metadata.ino() == after_lock.ino()
                 {
-                    return Ok(AuthorityFenceSharedGuard { file });
+                    let directory = self.directory.try_clone().map_err(|_| {
+                        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+                        "无法克隆已验证的 Skill authority root descriptor"
+                    })?;
+                    return Ok(AuthorityFenceSharedGuard { file, directory });
                 }
                 unsafe {
                     libc::flock(file.as_raw_fd(), libc::LOCK_UN);
@@ -395,17 +417,46 @@ fn handle_mcp_request(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            // Apply remains source-url-bound at signed-host validation, but
+            // must not be converted into the legacy name-only response before
+            // it reaches that boundary.
+            let confirmation_operation_action = confirmation_request(&arguments)
+                .ok()
+                .flatten()
+                .is_some_and(|confirmation| {
+                    matches!(
+                        confirmation.action,
+                        ConfirmationAction::Apply
+                            | ConfirmationAction::Reconcile
+                            | ConfirmationAction::Continue
+                    )
+                });
+            let uninstall_operation_authoritative = confirmation_request(&arguments)
+                .ok()
+                .flatten()
+                .is_some_and(|confirmation| {
+                    matches!(
+                        confirmation.action,
+                        ConfirmationAction::Apply
+                            | ConfirmationAction::Reconcile
+                            | ConfirmationAction::Continue
+                    )
+                });
             let payload = match tool_name {
                 INSTALL_TOOL_NAME => {
                     if arguments
                         .get("source_url")
                         .and_then(Value::as_str)
                         .is_none_or(|value| value.trim().is_empty())
+                        && !confirmation_operation_action
                     {
                         install_from_arguments(Path::new("/"), &arguments)
                     } else {
                         host_access_request(bridge_dir, bridge_token, "install", &arguments)
                     }
+                }
+                UNINSTALL_TOOL_NAME if uninstall_operation_authoritative => {
+                    host_access_request(bridge_dir, bridge_token, "uninstall", &arguments)
                 }
                 UNINSTALL_TOOL_NAME => match validate_uninstall_arguments(&arguments) {
                     Ok(_) => host_access_request(bridge_dir, bridge_token, "uninstall", &arguments),
@@ -739,9 +790,23 @@ pub(crate) fn validate_bridge_request(
         .ok_or("本地 Skill 请求参数非法")?;
     match operation {
         "install" => {
-            if arguments
+            let confirmation = confirmation_request(request.get("arguments").unwrap())?;
+            let readback_or_continue = confirmation.is_some_and(|confirmation| {
+                matches!(
+                    confirmation.action,
+                    ConfirmationAction::Reconcile | ConfirmationAction::Continue
+                )
+            });
+            if readback_or_continue {
+                if arguments.keys().any(|key| key != "confirmation") {
+                    return Err(
+                        "确认式安装 reconcile/continue 只能携带 operation_id，不能携带 source_url 或 skill_name"
+                            .into(),
+                    );
+                }
+            } else if arguments
                 .keys()
-                .any(|key| !matches!(key.as_str(), "source_url" | "skill_name"))
+                .any(|key| !matches!(key.as_str(), "source_url" | "skill_name" | "confirmation"))
                 || arguments
                     .get("source_url")
                     .and_then(Value::as_str)
@@ -751,7 +816,27 @@ pub(crate) fn validate_bridge_request(
             }
         }
         "uninstall" => {
-            validate_uninstall_arguments(request.get("arguments").unwrap())?;
+            let arguments = request.get("arguments").unwrap();
+            let operation_authoritative = confirmation_request(arguments)
+                .ok()
+                .flatten()
+                .is_some_and(|confirmation| {
+                    matches!(
+                        confirmation.action,
+                        ConfirmationAction::Apply
+                            | ConfirmationAction::Reconcile
+                            | ConfirmationAction::Continue
+                    )
+                });
+            if operation_authoritative {
+                let object = arguments.as_object().ok_or("本地 Skill 卸载参数非法")?;
+                if object.keys().any(|key| key != "confirmation") {
+                    return Err("确认式卸载 apply/reconcile/continue 只能携带 operation_id".into());
+                }
+                confirmation_request(arguments)?;
+            } else {
+                validate_uninstall_arguments(arguments)?;
+            }
         }
         _ => return Err("未知的本地 Skill 操作".into()),
     }
@@ -786,7 +871,8 @@ fn install_tool_definition() -> Value {
             "type": "object",
             "properties": {
                 "source_url": {"type": "string", "description": "Public GitHub repository, plugin/collection, or exact Skill directory URL."},
-                "skill_name": {"type": "string", "description": "The name supplied by the user when no source URL is available."}
+                "skill_name": {"type": "string", "description": "The name supplied by the user when no source URL is available."},
+                "confirmation": {"type": "object", "description": "Optional exact-plan protocol. schema_version=1; plan creates a short-lived immutable plan, apply consumes its exact operation_id/digest/capability, reconcile is operation_id-only readback, and continue is operation_id-only continuation of a durable verified prefix. Omit it to preserve the legacy installer contract.", "properties": {"schema_version":{"const":1}, "action":{"enum":["plan","apply","reconcile","continue"]}, "operation_id":{"type":"string"}, "plan_digest":{"type":"string"}, "capability":{"type":"string"}}, "required":["schema_version","action"], "additionalProperties":false}
             },
             "additionalProperties": false
         }
@@ -796,14 +882,19 @@ fn install_tool_definition() -> Value {
 fn uninstall_tool_definition() -> Value {
     json!({
         "name": UNINSTALL_TOOL_NAME,
-        "description": "卸载 CSSwitch 导入的外部 Skill。单 Skill 保持原隔离和手工 detach 流程。bundle 成员首次调用只返回 BUNDLE_UNINSTALL_CONFIRMATION_REQUIRED、整包信息和受影响 Skill 列表，不改文件或绑定；必须向用户展示完整列表并等待明确确认。用户确认后才可再次调用，并把响应中的 bundle_id 原样作为 confirm_bundle_id；取消时不得再次调用。确认调用会重新校验 bundle、批量解除 OPERON 绑定并整包隔离，不要逐成员调用 host.agents.detach_skill，也不支持部分物理删除。",
+        "description": "卸载 CSSwitch 导入的外部 Skill。省略 confirmation 时严格保留旧的单 Skill 隔离和手工 detach 流程。confirmation 可选地启用单 Skill 精确计划：plan 只生成短期 capability，apply 只消费原 operation_id、plan_digest、capability。确认式卸载接纳任一带精确 CSSwitch ownership marker 的非 bundle 已安装单 Skill，包括 local_zip；bundle、Plugin、MCP 和其他非单 Skill 形态均不进入确认式路径。bundle 成员首次调用只返回 BUNDLE_UNINSTALL_CONFIRMATION_REQUIRED、整包信息和受影响 Skill 列表，不改文件或绑定；必须向用户展示完整列表并等待明确确认，确认后把响应的 bundle_id 原样作为 confirm_bundle_id 传回；不支持部分物理删除。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "skill_name": {"type": "string", "description": "Exact installed Skill directory name to uninstall."},
-                "confirm_bundle_id": {"type": "string", "description": "Only after explicit user confirmation of BUNDLE_UNINSTALL_CONFIRMATION_REQUIRED, pass that response's exact bundle_id. Omit on the first call and for single-Skill uninstall."}
+                "confirm_bundle_id": {"type": "string", "description": "Only after explicit user confirmation of BUNDLE_UNINSTALL_CONFIRMATION_REQUIRED, pass that response's exact bundle_id. Omit on the first call and for single-Skill uninstall."},
+                "confirmation": {"type": "object", "description": "Optional exact-plan protocol for a single CSSwitch-owned non-bundle Skill. schema_version=1; plan/apply use the exact confirmed plan, reconcile is operation_id-only readback, and continue is operation_id-only verified-prefix continuation. Omit to preserve legacy uninstall exactly.", "properties": {"schema_version":{"const":1}, "action":{"enum":["plan","apply","reconcile","continue"]}, "operation_id":{"type":"string"}, "plan_digest":{"type":"string"}, "capability":{"type":"string"}}, "required":["schema_version","action"], "additionalProperties":false}
             },
-            "required": ["skill_name"],
+            "allOf": [
+                {"if":{"not":{"required":["confirmation"]}},"then":{"required":["skill_name"]}},
+                {"if":{"properties":{"confirmation":{"properties":{"action":{"const":"plan"}},"required":["action"]}},"required":["confirmation"]},"then":{"required":["skill_name"]}},
+                {"if":{"properties":{"confirmation":{"properties":{"action":{"enum":["apply","reconcile","continue"]}},"required":["action"]}},"required":["confirmation"]},"then":{"not":{"anyOf":[{"required":["skill_name"]},{"required":["confirm_bundle_id"]}]}}}
+            ],
             "additionalProperties": false
         }
     })
@@ -830,6 +921,7 @@ fn tool_result(payload: Value) -> Value {
     let status = payload.get("status").and_then(Value::as_str);
     let is_error = status.is_some_and(|status| {
         status.starts_with("GITHUB_")
+            || status.starts_with("SKILL_OPERATION_")
             || matches!(
                 status,
                 "HOST_RESPONSE_TIMEOUT"
@@ -867,6 +959,8 @@ fn with_schema(mut payload: Value) -> Value {
 pub(crate) fn handle_bridge_request_with_progress(
     data_dir: &Path,
     science_context: Option<&ScienceHostContext>,
+    bridge_dir: Option<&Path>,
+    authority_root: Option<&File>,
     request: &Value,
     progress: &mut dyn FnMut(&str, &str),
 ) -> Value {
@@ -879,10 +973,20 @@ pub(crate) fn handle_bridge_request_with_progress(
         "install" => install_from_arguments_with_context_and_progress(
             data_dir,
             science_context,
+            bridge_dir,
+            authority_root,
+            request.get("id").and_then(Value::as_str),
             arguments,
             progress,
         ),
-        "uninstall" => uninstall_from_arguments_with_context(data_dir, science_context, arguments),
+        "uninstall" => uninstall_from_arguments_with_context_and_bridge(
+            data_dir,
+            science_context,
+            bridge_dir,
+            authority_root,
+            request.get("id").and_then(Value::as_str),
+            arguments,
+        ),
         _ => json!({
             "status": "REQUEST_FAILED",
             "message": "未知的本地 Skill 操作",
@@ -905,6 +1009,9 @@ fn install_from_arguments_with_context(
     install_from_arguments_with_context_and_progress(
         data_dir,
         science_context,
+        None,
+        None,
+        None,
         arguments,
         &mut progress,
     )
@@ -913,6 +1020,9 @@ fn install_from_arguments_with_context(
 fn install_from_arguments_with_context_and_progress(
     data_dir: &Path,
     science_context: Option<&ScienceHostContext>,
+    bridge_dir: Option<&Path>,
+    authority_root: Option<&File>,
+    request_id: Option<&str>,
     arguments: &Value,
     progress: &mut dyn FnMut(&str, &str),
 ) -> Value {
@@ -926,6 +1036,55 @@ fn install_from_arguments_with_context_and_progress(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    // Readback and typed continuation are operation-id-only protocol calls.
+    // Do this before the legacy source_url precondition, otherwise a recovery
+    // would be accidentally routed to NEED_SOURCE_URL.
+    if let Ok(Some(confirmation)) = confirmation_request(arguments) {
+        if matches!(
+            confirmation.action,
+            ConfirmationAction::Reconcile | ConfirmationAction::Continue
+        ) {
+            if source_url.is_some() || skill_name.is_some() {
+                return skill_operation_error(
+                    "SKILL_OPERATION_CONFIRMATION_INVALID",
+                    "confirmation",
+                    "reconcile 或 continue 只能携带 operation_id，不能重新提供 source_url 或 skill_name",
+                );
+            }
+            let Some(context) = science_context else {
+                return install_not_ready(None, "CSSwitch 尚未确认可用的 Science runtime");
+            };
+            let Some(_bridge_dir) = bridge_dir else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_BRIDGE_UNAVAILABLE",
+                    "confirmation",
+                    "确认式安装只能由已验证的 CSSwitch bridge 宿主执行",
+                );
+            };
+            let Some(authority_root) = authority_root else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_AUTHORITY_UNAVAILABLE",
+                    "confirmation",
+                    "确认式安装必须持有已验证的 host-only authority root",
+                );
+            };
+            return match confirmation.action {
+                ConfirmationAction::Reconcile => reconcile_skill_operation_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Continue => continue_skill_operation_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                ),
+                _ => unreachable!(),
+            };
+        }
+    }
     let Some(source_url) = source_url else {
         return json!({
             "status": "NEED_SOURCE_URL",
@@ -945,6 +1104,68 @@ fn install_from_arguments_with_context_and_progress(
     let Some(science_context) = science_context else {
         return install_not_ready(skill_name, "CSSwitch 尚未确认可用的 Science runtime");
     };
+    match confirmation_request(arguments) {
+        Ok(Some(confirmation)) => {
+            let Some(_bridge_dir) = bridge_dir else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_BRIDGE_UNAVAILABLE",
+                    "confirmation",
+                    "确认式安装只能由已验证的 CSSwitch bridge 宿主执行",
+                );
+            };
+            let Some(authority_root) = authority_root else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_AUTHORITY_UNAVAILABLE",
+                    "confirmation",
+                    "确认式安装必须持有已验证的 host-only authority root",
+                );
+            };
+            return match confirmation.action {
+                ConfirmationAction::Plan => {
+                    let Some(operation_id) = request_id else {
+                        return skill_operation_error(
+                            "SKILL_OPERATION_REQUEST_ID_REQUIRED",
+                            "confirmation",
+                            "确认式安装缺少宿主分配的 operation identity",
+                        );
+                    };
+                    create_skill_operation_plan(
+                        data_dir,
+                        science_context,
+                        authority_root,
+                        operation_id,
+                        source_url,
+                        progress,
+                    )
+                }
+                ConfirmationAction::Apply => apply_skill_operation_plan(
+                    data_dir,
+                    science_context,
+                    authority_root,
+                    source_url,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                    confirmation.plan_digest.as_deref().unwrap_or_default(),
+                    confirmation.capability.as_deref().unwrap_or_default(),
+                    progress,
+                ),
+                ConfirmationAction::Reconcile => reconcile_skill_operation_plan(
+                    data_dir,
+                    science_context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Continue => unreachable!(),
+            };
+        }
+        Ok(None) => {}
+        Err(message) => {
+            return skill_operation_error(
+                "SKILL_OPERATION_CONFIRMATION_INVALID",
+                "confirmation",
+                &message,
+            )
+        }
+    }
     progress("preflight", "正在确认 Science runtime 与 OPERON 控制面");
     if let Err(error) = verify_attach_control_ready_for_operation(science_context) {
         return install_not_ready(skill_name, &error.message);
@@ -952,6 +1173,792 @@ fn install_from_arguments_with_context_and_progress(
     match install_external_skill(data_dir, source_url, science_context, progress) {
         Ok(value) => value,
         Err(error) => install_error_payload(skill_name, error),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfirmationAction {
+    Plan,
+    Apply,
+    Reconcile,
+    Continue,
+}
+
+#[derive(Clone, Debug)]
+struct ConfirmationRequest {
+    action: ConfirmationAction,
+    operation_id: Option<String>,
+    plan_digest: Option<String>,
+    capability: Option<String>,
+}
+
+fn confirmation_request(arguments: &Value) -> Result<Option<ConfirmationRequest>, String> {
+    let Some(value) = arguments.get("confirmation") else {
+        return Ok(None);
+    };
+    let object = value.as_object().ok_or("confirmation 必须是对象")?;
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "schema_version" | "action" | "operation_id" | "plan_digest" | "capability"
+        )
+    }) || object.get("schema_version").and_then(Value::as_u64)
+        != Some(CONFIRMATION_SCHEMA_VERSION)
+    {
+        return Err("confirmation schema_version 或字段非法".into());
+    }
+    let action = match object.get("action").and_then(Value::as_str) {
+        Some("plan") => ConfirmationAction::Plan,
+        Some("apply") => ConfirmationAction::Apply,
+        Some("reconcile") => ConfirmationAction::Reconcile,
+        Some("continue") => ConfirmationAction::Continue,
+        _ => return Err("confirmation.action 只支持 plan、apply、reconcile 或 continue".into()),
+    };
+    let optional_string = |name: &str| -> Result<Option<String>, String> {
+        match object.get(name) {
+            None => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.to_string())),
+            Some(_) => Err(format!("confirmation.{name} 必须是字符串")),
+        }
+    };
+    let operation_id = optional_string("operation_id")?;
+    let plan_digest = optional_string("plan_digest")?;
+    let capability = optional_string("capability")?;
+    if matches!(action, ConfirmationAction::Plan)
+        && (operation_id.is_some() || plan_digest.is_some() || capability.is_some())
+    {
+        return Err("plan 确认请求不能携带 operation_id、digest 或 capability".into());
+    }
+    if matches!(action, ConfirmationAction::Apply)
+        && (!operation_id.as_deref().is_some_and(valid_operation_id)
+            || !plan_digest.as_deref().is_some_and(is_sha256)
+            || !capability
+                .as_deref()
+                .is_some_and(|value| value.len() <= 256))
+    {
+        return Err(
+            "apply 确认请求必须携带原 operation_id、64 位 plan_digest 和短期 capability".into(),
+        );
+    }
+    if matches!(action, ConfirmationAction::Reconcile)
+        && (!operation_id.as_deref().is_some_and(valid_operation_id)
+            || plan_digest.is_some()
+            || capability.is_some())
+    {
+        return Err(
+            "reconcile 只能携带原 operation_id，且不能携带 digest、capability 或 source".into(),
+        );
+    }
+    if matches!(action, ConfirmationAction::Continue)
+        && (!operation_id.as_deref().is_some_and(valid_operation_id)
+            || plan_digest.is_some()
+            || capability.is_some())
+    {
+        return Err(
+            "continue 只能携带原 operation_id；它只允许完成已验证前缀后的下一个未开始 effect"
+                .into(),
+        );
+    }
+    Ok(Some(ConfirmationRequest {
+        action,
+        operation_id,
+        plan_digest,
+        capability,
+    }))
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_operation_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn skill_operation_error(code: &str, phase: &str, message: &str) -> Value {
+    json!({
+        "status": code,
+        "phase": phase,
+        "directory_commit": false,
+        "attach_attempted": false,
+        "attach_verified": false,
+        "recovery_required": false,
+        "message": message,
+        "restart_required": false,
+    })
+}
+
+fn operation_error(error: csswitch_skill_install_core::SkillOperationError) -> Value {
+    let recovery_required = error.recovery_required();
+    // The core owns this classification.  Do not turn deterministic request
+    // rejection into a fictional durable recovery path; conversely, preserve
+    // unknown fields only when the core says an authority receipt may need
+    // readback.
+    json!({
+        "status": error.code,
+        "phase": error.phase,
+        "directory_commit": if recovery_required { Value::Null } else { Value::Bool(false) },
+        "attach_verified": if recovery_required { Value::Null } else { Value::Bool(false) },
+        "recovery_required": recovery_required,
+        "message": if recovery_required { "确认式 Skill operation 的 durable authority 结果可能未完整持久化；必须以同一 operation_id reconcile 读取 ledger。" } else { "确认式 Skill operation 在副作用前被拒绝或没有可恢复 authority 状态；请按 status 修正后重新 plan。" },
+        "restart_required": false,
+    })
+}
+
+fn removal_operation_error(error: csswitch_skill_install_core::SkillOperationError) -> Value {
+    let recovery_required = error.recovery_required();
+    json!({
+        "status": error.code,
+        "phase": error.phase,
+        "detach_verified": if recovery_required { Value::Null } else { Value::Bool(false) },
+        "quarantine_commit": if recovery_required { Value::Null } else { Value::Bool(false) },
+        "recovery_required": recovery_required,
+        "message": if recovery_required { "确认式卸载的 durable authority 结果可能未完整持久化；必须以同一 operation_id reconcile 读取 ledger。" } else { "确认式卸载在副作用前被拒绝或没有可恢复 authority 状态；请按 status 修正后重新 plan。" },
+        "restart_required": false,
+    })
+}
+
+fn operation_roots(authority_root: &File) -> Result<(File, File), String> {
+    let staging = open_private_operation_child(authority_root, "skill-operation-staging")?;
+    let ledger = open_private_operation_child(authority_root, "skill-operation-ledger")?;
+    Ok((staging, ledger))
+}
+
+fn open_private_operation_child(bridge: &File, name: &str) -> Result<File, String> {
+    let name = std::ffi::CString::new(name).map_err(|_| "operation 根名称非法")?;
+    if unsafe { libc::mkdirat(bridge.as_raw_fd(), name.as_ptr(), 0o700) } != 0
+        && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists
+    {
+        return Err("无法建立确认式 Skill operation 私有根".into());
+    }
+    let fd = unsafe {
+        libc::openat(
+            bridge.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err("无法安全打开确认式 Skill operation 私有根".into());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    let metadata = file
+        .metadata()
+        .map_err(|_| "无法复核确认式 Skill operation 私有根")?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o7777 != 0o700
+    {
+        return Err("确认式 Skill operation 私有根属主或权限非法".into());
+    }
+    Ok(file)
+}
+
+fn target_binding(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+) -> Result<SkillOperationTargetBindingV1, String> {
+    if context.data_dir != data_dir {
+        return Err("Science host context data-dir 与 bridge target 不一致".into());
+    }
+    let metadata = fs::symlink_metadata(data_dir).map_err(|_| "无法检查当前 Science data-dir")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("当前 Science data-dir 类型非法".into());
+    }
+    let runtime = serde_json::to_vec(context).map_err(|_| "无法编码 Science runtime identity")?;
+    let data_identity = sha256_text(&format!(
+        "{}:{}:{}:{}",
+        metadata.dev(),
+        metadata.ino(),
+        metadata.uid(),
+        metadata.permissions().mode() & 0o7777,
+    ));
+    let org = active_org(data_dir).map_err(|_| "无法读取当前 Science active org")?;
+    let skills_root = install_operation_skills_root(data_dir, &org)?;
+    let skills_metadata = skills_root
+        .metadata()
+        .map_err(|_| "无法复核当前组织的 Skills 根")?;
+    Ok(SkillOperationTargetBindingV1 {
+        science_runtime_identity_sha256: sha256_bytes(&runtime),
+        data_dir_identity_sha256: data_identity.clone(),
+        active_org_identity_sha256: sha256_text(&format!("{data_identity}:{org}")),
+        active_org: org,
+        skills_root_device: skills_metadata.dev(),
+        skills_root_inode: skills_metadata.ino(),
+    })
+}
+
+fn sha256_text(value: &str) -> String {
+    sha256_bytes(value.as_bytes())
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn create_skill_operation_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+    source_url: &str,
+    progress: &mut dyn FnMut(&str, &str),
+) -> Value {
+    progress(
+        "preflight",
+        "正在确认 immutable plan 的 Science target binding",
+    );
+    if let Err(error) = verify_attach_control_ready_for_operation(context) {
+        return install_not_ready(None, &error.message);
+    }
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let (staging_root, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let expires_at_unix_seconds = unix_seconds().saturating_add(SKILL_OPERATION_PLAN_TTL_SECONDS);
+    // Reserve a worst-case archive before any remote transfer.  Remote HEAD
+    // metadata is mutable and therefore cannot establish lifecycle capacity.
+    if let Err(error) = reserve_install_plan_capacity(
+        &staging_root,
+        &ledger_root,
+        operation_id,
+        expires_at_unix_seconds,
+    ) {
+        return operation_error(error);
+    }
+    let archive = match resolve_exact_github_archive(source_url, progress) {
+        Ok(value) => value,
+        Err(error) => {
+            if let Err(release_error) =
+                release_unstaged_install_plan_reservation(&ledger_root, operation_id)
+            {
+                return operation_error(release_error);
+            }
+            return install_error_payload(None, error);
+        }
+    };
+    let request = SkillOperationPrepareRequestV1 {
+        operation_id: operation_id.to_string(),
+        source_request_sha256: sha256_text(source_url),
+        plan: ConfirmablePlanRequestV1 {
+            plan_id: operation_id.to_string(),
+            expires_at_unix_seconds,
+            target: ConfirmablePlanTargetV1 {
+                science_runtime_identity_sha256: target.science_runtime_identity_sha256.clone(),
+                data_dir_identity_sha256: target.data_dir_identity_sha256.clone(),
+                active_org_identity_sha256: target.active_org_identity_sha256.clone(),
+                skills_root_device: target.skills_root_device,
+                skills_root_inode: target.skills_root_inode,
+            },
+        },
+        target,
+    };
+    progress(
+        "plan",
+        "已固定 archive，正在生成不可变 effects 与确认 capability",
+    );
+    let prepared = match SkillOperationPrepared::prepare_reserved(
+        &staging_root,
+        &ledger_root,
+        archive.source,
+        &archive.bytes,
+        request,
+    ) {
+        Ok(value) => value,
+        Err(error) => return operation_error(error),
+    };
+    let plan = prepared.plan();
+    json!({
+        "status": "CONFIRMATION_REQUIRED",
+        "operation_id": prepared.ledger().operation_id,
+        "plan": plan,
+        "plan_digest": plan.plan_digest_sha256,
+        "capability": prepared.confirmation_capability().raw(),
+        "expires_at_unix_seconds": prepared.ledger().expires_at_unix_seconds,
+        "effects": plan.effects,
+        "directory_commit": false,
+        "attach_attempted": false,
+        "attach_verified": false,
+        "recovery_required": false,
+        "message": "请向用户展示 source、effects、expiry 和 degradation；只有用户明确确认完全相同 plan 后，才用原 plan_digest 与 capability 调用 apply。host access 批准不是该确认。",
+        "restart_required": false,
+    })
+}
+
+fn apply_skill_operation_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    source_url: &str,
+    operation_id: &str,
+    plan_digest: &str,
+    capability: &str,
+    progress: &mut dyn FnMut(&str, &str),
+) -> Value {
+    let (staging_root, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let prepared = match SkillOperationPrepared::resume(&staging_root, &ledger_root, operation_id) {
+        Ok(value) => value,
+        Err(error) => return operation_error(error),
+    };
+    if prepared.ledger().source_request_sha256.as_deref() != Some(sha256_text(source_url).as_str())
+        || prepared.ledger().plan_digest_sha256 != plan_digest
+    {
+        return skill_operation_error(
+            "SKILL_OPERATION_PLAN_MISMATCH",
+            "confirmation",
+            "source_url 或 plan_digest 与 durable operation 不匹配；必须重新建立并确认新计划。",
+        );
+    }
+    progress(
+        "preflight",
+        "正在复核确认后的 runtime、data-dir 与 active-org binding",
+    );
+    if let Err(error) = verify_attach_control_ready_for_operation(context) {
+        return install_not_ready(None, &error.message);
+    }
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let confirmation = SkillOperationConfirmationCapabilityV1::from_raw(
+        operation_id.to_string(),
+        capability.to_string(),
+    );
+    let skills_root = match install_operation_skills_root(data_dir, &target.active_org) {
+        Ok(root) => root,
+        Err(message) => {
+            return skill_operation_error(
+                "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+                "preflight",
+                &message,
+            )
+        }
+    };
+    let mut operon = GatewaySkillOperationOperonAdapter { context };
+    progress(
+        "apply",
+        "正在从同一 durable archive snapshot 提交并原生回读 OPERON",
+    );
+    match prepared.apply(data_dir, &skills_root, &confirmation, &target, &mut operon) {
+        Ok(receipt) => json!({
+            "status": receipt.final_response.status,
+            "operation_id": receipt.final_response.operation_id,
+            "directory_commit": receipt.final_response.directory_commit,
+            "attach_verified": receipt.final_response.attach_verified,
+            "recovery_required": receipt.final_response.recovery_required,
+            "post_effect_observation": receipt.final_response.post_effect_observation,
+            "plan_digest": receipt.ledger.plan_digest_sha256,
+            "message": "结果来自 durable operation ledger；attach 成功后仍需当前 Agent session 调用 skill(skill_name) 验证加载。",
+            "restart_required": false,
+        }),
+        Err(error) => operation_error(error),
+    }
+}
+
+fn reconcile_skill_operation_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+) -> Value {
+    // A reconcile is readback-only, but its reads are still target-bound: do
+    // not inspect a ledger created for a different runtime/data-dir/org.
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "recovery", &message)
+        }
+    };
+    let (staging_root, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let mut prepared =
+        match SkillOperationPrepared::resume(&staging_root, &ledger_root, operation_id) {
+            Ok(value) => value,
+            Err(error) => return operation_error(error),
+        };
+    let skills_root = match install_operation_skills_root(data_dir, &target.active_org) {
+        Ok(root) => root,
+        Err(message) => {
+            return skill_operation_error(
+                "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+                "recovery",
+                &message,
+            )
+        }
+    };
+    let mut operon = GatewaySkillOperationOperonAdapter { context };
+    let result = if prepared.ledger().effects.first().is_some_and(|effect| {
+        effect.intent == csswitch_skill_install_core::SkillOperationEffectIntentV1::InProgress
+    }) {
+        prepared.reconcile_package_readback(&skills_root, &target)
+    } else if prepared.ledger().effects.get(1).is_some_and(|effect| {
+        effect.intent == csswitch_skill_install_core::SkillOperationEffectIntentV1::InProgress
+    }) {
+        prepared.reconcile_attach_readback(&target, &mut operon)
+    } else {
+        return skill_operation_error(
+            "SKILL_OPERATION_RECONCILE_NOT_ADMITTED",
+            "recovery",
+            "该 operation 没有可读取恢复的 in-progress effect。",
+        );
+    };
+    match result {
+        Ok(response) => {
+            json!({"status":response.status,"operation_id":response.operation_id,"directory_commit":response.directory_commit,"attach_verified":response.attach_verified,"recovery_required":response.recovery_required,"post_effect_observation":response.post_effect_observation,"message":"reconcile 只做 durable snapshot 和 Science native GET readback，未重放副作用。","restart_required":false})
+        }
+        Err(error) => operation_error(error),
+    }
+}
+
+fn continue_skill_operation_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+) -> Value {
+    let (staging_root, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let prepared = match SkillOperationPrepared::resume(&staging_root, &ledger_root, operation_id) {
+        Ok(value) => value,
+        Err(error) => return operation_error(error),
+    };
+    let skills_root = match install_operation_skills_root(data_dir, &target.active_org) {
+        Ok(root) => root,
+        Err(message) => {
+            return skill_operation_error(
+                "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+                "preflight",
+                &message,
+            )
+        }
+    };
+    let mut operon = GatewaySkillOperationOperonAdapter { context };
+    match prepared.continue_apply(data_dir, &skills_root, &target, &mut operon) {
+        Ok(receipt) => json!({
+            "status": receipt.final_response.status,
+            "operation_id": receipt.final_response.operation_id,
+            "directory_commit": receipt.final_response.directory_commit,
+            "attach_verified": receipt.final_response.attach_verified,
+            "recovery_required": receipt.final_response.recovery_required,
+            "post_effect_observation": receipt.final_response.post_effect_observation,
+            "message": "continue 仅执行 verified 前缀后的一个尚未开始 effect；不会重放 package commit。",
+            "restart_required": false,
+        }),
+        Err(error) => operation_error(error),
+    }
+}
+
+fn removal_operation_roots(
+    data_dir: &Path,
+    active_org: &str,
+    authority_root: &File,
+) -> Result<SkillRemovalRoots, String> {
+    let skills_path = data_dir.join("orgs").join(active_org).join("skills");
+    ensure_safe_root(data_dir, &skills_path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let skills_root = options
+        .open(&skills_path)
+        .map_err(|_| "无法安全打开当前组织的 Skills 根".to_string())?;
+    let quarantine_root =
+        open_private_operation_child(authority_root, "skill-operation-quarantine")?;
+    Ok(SkillRemovalRoots {
+        skills_root,
+        quarantine_root,
+    })
+}
+
+fn install_operation_skills_root(data_dir: &Path, active_org: &str) -> Result<File, String> {
+    let path = data_dir.join("orgs").join(active_org).join("skills");
+    ensure_safe_root(data_dir, &path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let root = options
+        .open(&path)
+        .map_err(|_| "无法安全打开当前组织的 Skills 根".to_string())?;
+    let metadata = root
+        .metadata()
+        .map_err(|_| "无法复核当前组织的 Skills 根".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("当前组织的 Skills 根类型非法".into());
+    }
+    Ok(root)
+}
+
+fn create_skill_removal_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+    skill_name: &str,
+) -> Value {
+    if let Err(error) = verify_attach_control_ready_for_operation(context) {
+        return skill_operation_error(
+            "SKILL_OPERATION_CONTROL_NOT_READY",
+            "preflight",
+            &format!("确认式卸载前无法确认 Science 控制面：{}", error.message),
+        );
+    }
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let roots = match removal_operation_roots(data_dir, &target.active_org, authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "preflight", &message)
+        }
+    };
+    let (staging_root, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let prepared = match SkillOperationRemovalPrepared::prepare(
+        &staging_root,
+        &ledger_root,
+        data_dir,
+        &roots,
+        operation_id.to_string(),
+        unix_seconds().saturating_add(SKILL_OPERATION_PLAN_TTL_SECONDS),
+        target,
+        skill_name.to_string(),
+    ) {
+        Ok(value) => value,
+        Err(error) => return removal_operation_error(error),
+    };
+    let plan = prepared.ledger().plan.clone();
+    json!({
+        "status": "REMOVAL_CONFIRMATION_REQUIRED",
+        "operation_id": prepared.ledger().operation_id,
+        "plan": plan,
+        "plan_digest": prepared.ledger().plan_digest_sha256,
+        "capability": prepared.confirmation_capability().raw(),
+        "expires_at_unix_seconds": prepared.ledger().expires_at_unix_seconds,
+        "effects": prepared.ledger().plan.effects,
+        "detach_verified": false,
+        "quarantine_commit": false,
+        "recovery_required": false,
+        "message": "请向用户展示精确 target、detach 与 quarantine effects；只有明确确认同一 plan 后才可 apply。host access 批准不是该确认。",
+        "restart_required": false,
+    })
+}
+
+fn apply_skill_removal_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+    plan_digest: &str,
+    capability: &str,
+) -> Value {
+    if let Err(error) = verify_attach_control_ready_for_operation(context) {
+        return skill_operation_error(
+            "SKILL_OPERATION_CONTROL_NOT_READY",
+            "preflight",
+            &format!("确认式卸载前无法确认 Science 控制面：{}", error.message),
+        );
+    }
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let roots = match removal_operation_roots(data_dir, &target.active_org, authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "preflight", &message)
+        }
+    };
+    let (_, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let prepared = match SkillOperationRemovalPrepared::resume(&ledger_root, operation_id) {
+        Ok(value) => value,
+        Err(error) => return removal_operation_error(error),
+    };
+    if prepared.ledger().plan_digest_sha256 != plan_digest {
+        return skill_operation_error(
+            "SKILL_OPERATION_PLAN_MISMATCH",
+            "confirmation",
+            "plan_digest 与 durable removal operation 不匹配；必须重新建立并确认计划。",
+        );
+    }
+    let confirmation = SkillOperationConfirmationCapabilityV1::from_raw(
+        operation_id.to_string(),
+        capability.to_string(),
+    );
+    let mut operon = GatewaySkillOperationOperonAdapter { context };
+    match prepared.apply(data_dir, &roots, &confirmation, &target, &mut operon) {
+        Ok(receipt) => json!({
+            "status": receipt.final_response.status,
+            "operation_id": receipt.final_response.operation_id,
+            "detach_verified": receipt.final_response.detach_verified,
+            "quarantine_commit": receipt.final_response.quarantine_commit,
+            "recovery_required": receipt.final_response.recovery_required,
+            "post_effect_observation": receipt.final_response.post_effect_observation,
+            "plan_digest": receipt.ledger.plan_digest_sha256,
+            "message": "结果来自 durable removal ledger；不确定状态只能读取 reconcile，不能自动重试 detach 或 quarantine。",
+            "restart_required": false,
+        }),
+        Err(error) => removal_operation_error(error),
+    }
+}
+
+fn reconcile_skill_removal_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+) -> Value {
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let roots = match removal_operation_roots(data_dir, &target.active_org, authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "preflight", &message)
+        }
+    };
+    let (_, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let mut prepared = match SkillOperationRemovalPrepared::resume(&ledger_root, operation_id) {
+        Ok(value) => value,
+        Err(error) => return removal_operation_error(error),
+    };
+    let mut operon = GatewaySkillOperationOperonAdapter { context };
+    let result = if prepared.ledger().effects.first().is_some_and(|effect| {
+        effect.intent == csswitch_skill_install_core::SkillOperationEffectIntentV1::InProgress
+    }) {
+        prepared.reconcile_detach_readback(&target, &mut operon)
+    } else if prepared.ledger().effects.get(1).is_some_and(|effect| {
+        effect.intent == csswitch_skill_install_core::SkillOperationEffectIntentV1::InProgress
+    }) {
+        prepared.reconcile_quarantine_readback(&roots, &target)
+    } else {
+        return skill_operation_error(
+            "SKILL_OPERATION_RECONCILE_NOT_ADMITTED",
+            "recovery",
+            "该 removal operation 没有可读取恢复的 in-progress effect。",
+        );
+    };
+    match result {
+        Ok(response) => {
+            json!({"status":response.status,"operation_id":response.operation_id,"detach_verified":response.detach_verified,"quarantine_commit":response.quarantine_commit,"recovery_required":response.recovery_required,"post_effect_observation":response.post_effect_observation,"message":"reconcile 只做 native GET 和 fd-relative readback，未重放 detach 或 quarantine。","restart_required":false})
+        }
+        Err(error) => removal_operation_error(error),
+    }
+}
+
+fn continue_skill_removal_plan(
+    data_dir: &Path,
+    context: &ScienceHostContext,
+    authority_root: &File,
+    operation_id: &str,
+) -> Value {
+    let target = match target_binding(data_dir, context) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_TARGET_INVALID", "preflight", &message)
+        }
+    };
+    let roots = match removal_operation_roots(data_dir, &target.active_org, authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "preflight", &message)
+        }
+    };
+    let (_, ledger_root) = match operation_roots(authority_root) {
+        Ok(value) => value,
+        Err(message) => {
+            return skill_operation_error("SKILL_OPERATION_ROOT_UNAVAILABLE", "ledger", &message)
+        }
+    };
+    let prepared = match SkillOperationRemovalPrepared::resume(&ledger_root, operation_id) {
+        Ok(value) => value,
+        Err(error) => return removal_operation_error(error),
+    };
+    match prepared.continue_apply(data_dir, &roots, &target) {
+        Ok(receipt) => json!({
+            "status": receipt.final_response.status,
+            "operation_id": receipt.final_response.operation_id,
+            "detach_verified": receipt.final_response.detach_verified,
+            "quarantine_commit": receipt.final_response.quarantine_commit,
+            "recovery_required": receipt.final_response.recovery_required,
+            "post_effect_observation": receipt.final_response.post_effect_observation,
+            "message": "continue 仅执行 verified detach 后的 quarantine；不会重放 native detach。",
+            "restart_required": false,
+        }),
+        Err(error) => removal_operation_error(error),
+    }
+}
+
+struct GatewaySkillOperationOperonAdapter<'a> {
+    context: &'a ScienceHostContext,
+}
+
+impl SkillOperationOperonAdapter for GatewaySkillOperationOperonAdapter<'_> {
+    fn attach_and_readback(&mut self, skill: &str, org: &str) -> Result<(), AttachError> {
+        match attach_skill(self.context, skill, org)? {
+            AttachResult::Attached | AttachResult::AlreadyAttached => Ok(()),
+        }
+    }
+
+    fn detach_and_readback(&mut self, skill: &str, org: &str) -> Result<(), AttachError> {
+        update_agent_skills(self.context, &[], &[skill.to_string()], org).map(|_| ())
+    }
+
+    fn readback(&mut self, skill: &str, org: &str) -> Result<bool, AttachError> {
+        Ok(read_agent_skill_names(self.context, org)?.contains(skill))
     }
 }
 
@@ -1304,10 +2311,12 @@ fn requested_bundle_confirmation(arguments: &Value) -> Result<Option<String>, St
 
 fn validate_uninstall_arguments(arguments: &Value) -> Result<(String, Option<String>), String> {
     let object = arguments.as_object().ok_or("本地 Skill 卸载参数非法")?;
-    if object
-        .keys()
-        .any(|key| !matches!(key.as_str(), "skill_name" | "confirm_bundle_id"))
-    {
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "skill_name" | "confirm_bundle_id" | "confirmation"
+        )
+    }) {
         return Err("本地 Skill 卸载参数非法".into());
     }
     let skill_name = requested_skill_name(arguments)?;
@@ -1335,18 +2344,156 @@ fn uninstall_failure(message: String) -> Value {
 
 #[cfg(test)]
 pub(crate) fn uninstall_from_arguments(data_dir: &Path, arguments: &Value) -> Value {
-    uninstall_from_arguments_with_context(data_dir, None, arguments)
+    uninstall_from_arguments_with_context_and_bridge(data_dir, None, None, None, None, arguments)
 }
 
-fn uninstall_from_arguments_with_context(
+fn uninstall_from_arguments_with_context_and_bridge(
     data_dir: &Path,
     science_context: Option<&ScienceHostContext>,
+    bridge_dir: Option<&Path>,
+    authority_root: Option<&File>,
+    request_id: Option<&str>,
     arguments: &Value,
 ) -> Value {
+    if let Ok(Some(confirmation)) = confirmation_request(arguments) {
+        if matches!(
+            confirmation.action,
+            ConfirmationAction::Apply
+                | ConfirmationAction::Reconcile
+                | ConfirmationAction::Continue
+        ) {
+            let Some(object) = arguments.as_object() else {
+                return uninstall_failure("本地 Skill 卸载参数非法".into());
+            };
+            if object.keys().any(|key| key != "confirmation") {
+                return skill_operation_error(
+                    "SKILL_OPERATION_CONFIRMATION_INVALID",
+                    "confirmation",
+                    "removal apply/reconcile/continue 只能携带 operation authority，不能携带 skill_name 或其他解绑目标",
+                );
+            }
+            let Some(context) = science_context else {
+                return uninstall_failure(
+                    "确认式卸载需要 CSSwitch 已确认的 Science runtime；文件和绑定尚未改动".into(),
+                );
+            };
+            let Some(_bridge_dir) = bridge_dir else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_BRIDGE_UNAVAILABLE",
+                    "confirmation",
+                    "确认式卸载只能由已验证的 CSSwitch bridge 宿主执行",
+                );
+            };
+            let Some(authority_root) = authority_root else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_AUTHORITY_UNAVAILABLE",
+                    "confirmation",
+                    "确认式卸载必须持有已验证的 host-only authority root",
+                );
+            };
+            return match confirmation.action {
+                ConfirmationAction::Apply => apply_skill_removal_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                    confirmation.plan_digest.as_deref().unwrap_or_default(),
+                    confirmation.capability.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Reconcile => reconcile_skill_removal_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Continue => continue_skill_removal_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Plan => unreachable!(),
+            };
+        }
+    }
     let (skill_name, confirm_bundle_id) = match validate_uninstall_arguments(arguments) {
         Ok(values) => values,
         Err(message) => return uninstall_failure(message),
     };
+    match confirmation_request(arguments) {
+        Ok(Some(confirmation)) => {
+            let Some(context) = science_context else {
+                return uninstall_failure(
+                    "确认式卸载需要 CSSwitch 已确认的 Science runtime；文件和绑定尚未改动".into(),
+                );
+            };
+            let Some(_bridge_dir) = bridge_dir else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_BRIDGE_UNAVAILABLE",
+                    "confirmation",
+                    "确认式卸载只能由已验证的 CSSwitch bridge 宿主执行",
+                );
+            };
+            let Some(authority_root) = authority_root else {
+                return skill_operation_error(
+                    "SKILL_OPERATION_AUTHORITY_UNAVAILABLE",
+                    "confirmation",
+                    "确认式卸载必须持有已验证的 host-only authority root",
+                );
+            };
+            if confirm_bundle_id.is_some()
+                || find_bundle_for_skill(data_dir, &skill_name)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            {
+                return skill_operation_error(
+                    "SKILL_OPERATION_BUNDLE_UNSUPPORTED",
+                    "preflight",
+                    "bundle 只能使用原整包确认卸载合同，不进入单 Skill 精确计划。",
+                );
+            }
+            return match confirmation.action {
+                ConfirmationAction::Plan => match request_id {
+                    Some(operation_id) => create_skill_removal_plan(
+                        data_dir,
+                        context,
+                        authority_root,
+                        operation_id,
+                        &skill_name,
+                    ),
+                    None => skill_operation_error(
+                        "SKILL_OPERATION_REQUEST_ID_REQUIRED",
+                        "confirmation",
+                        "确认式卸载缺少宿主分配的 operation identity",
+                    ),
+                },
+                ConfirmationAction::Apply => apply_skill_removal_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                    confirmation.plan_digest.as_deref().unwrap_or_default(),
+                    confirmation.capability.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Reconcile => reconcile_skill_removal_plan(
+                    data_dir,
+                    context,
+                    authority_root,
+                    confirmation.operation_id.as_deref().unwrap_or_default(),
+                ),
+                ConfirmationAction::Continue => unreachable!(),
+            };
+        }
+        Ok(None) => {}
+        Err(message) => {
+            return skill_operation_error(
+                "SKILL_OPERATION_CONFIRMATION_INVALID",
+                "confirmation",
+                &message,
+            )
+        }
+    }
     match uninstall_external_skill(
         data_dir,
         science_context,
@@ -1785,9 +2932,11 @@ mod tests {
     use super::*;
     use std::os::unix::fs::OpenOptionsExt;
     use std::process::Stdio;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     const TEST_BRIDGE_TOKEN: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    static TEST_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn mcp_request(bridge: &Path, tool_mode: ToolMode, request: &Value) -> Option<Value> {
         handle_mcp_request(bridge, TEST_BRIDGE_TOKEN, tool_mode, request)
@@ -1797,7 +2946,11 @@ mod tests {
         let path = PathBuf::from("/private/tmp").join(format!(
             "csswitch-{label}-{}-{}",
             std::process::id(),
-            unique_suffix()
+            format!(
+                "{}-{}",
+                unique_suffix(),
+                TEST_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            )
         ));
         fs::create_dir_all(&path).unwrap();
         path
@@ -1809,6 +2962,66 @@ mod tests {
         fs::create_dir_all(data.join("orgs/org-test/skills")).unwrap();
         fs::write(data.join("active-org.json"), br#"{"org_uuid":"org-test"}"#).unwrap();
         (root, data)
+    }
+
+    #[test]
+    fn confirmation_schema_is_strict_and_apply_requires_returned_operation_identity() {
+        assert!(confirmation_request(&json!({
+            "confirmation": {"schema_version": 1, "action": "plan"}
+        }))
+        .unwrap()
+        .is_some());
+        assert!(confirmation_request(&json!({
+            "confirmation": {"schema_version": 1, "action": "plan", "capability": "x"}
+        }))
+        .is_err());
+        assert!(confirmation_request(&json!({
+            "confirmation": {"schema_version": 1, "action": "apply", "plan_digest": "a".repeat(64), "capability": "b".repeat(64)}
+        }))
+        .is_err());
+        let confirmed = confirmation_request(&json!({
+            "confirmation": {
+                "schema_version": 1,
+                "action": "apply",
+                "operation_id": "a1b2c3",
+                "plan_digest": "a".repeat(64),
+                "capability": "b".repeat(64)
+            }
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(confirmed.operation_id.as_deref(), Some("a1b2c3"));
+    }
+
+    #[test]
+    fn skill_operation_results_preserve_confirmation_as_normal_and_failures_as_errors() {
+        assert_eq!(
+            tool_result(json!({"status": "CONFIRMATION_REQUIRED"}))["isError"],
+            false
+        );
+        assert_eq!(
+            tool_result(json!({"status": "SKILL_OPERATION_PLAN_MISMATCH"}))["isError"],
+            true
+        );
+    }
+
+    #[test]
+    fn operation_roots_require_verified_authority_fd_and_are_fd_opened() {
+        let root = temp_dir("skill-operation-root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let authority = File::open(&root).unwrap();
+        let (staging, ledger) = operation_roots(&authority).unwrap();
+        assert!(staging.metadata().unwrap().is_dir());
+        assert!(ledger.metadata().unwrap().is_dir());
+        assert_eq!(
+            staging.metadata().unwrap().permissions().mode() & 0o7777,
+            0o700
+        );
+        assert_eq!(
+            ledger.metadata().unwrap().permissions().mode() & 0o7777,
+            0o700
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn test_authority_fence(root: &Path) -> (File, AuthorityFenceDescriptor) {
@@ -2396,6 +3609,8 @@ mod tests {
         let install = handle_bridge_request_with_progress(
             &data,
             Some(&context),
+            None,
+            None,
             &json!({
                 "operation":"install",
                 "arguments":{
@@ -2414,6 +3629,8 @@ mod tests {
         let removed = imported_skill(&data, "uninstall-quarantined");
         let uninstall = handle_bridge_request_with_progress(
             &data,
+            None,
+            None,
             None,
             &json!({
                 "operation":"uninstall",
@@ -2612,6 +3829,403 @@ mod tests {
     }
 
     #[test]
+    fn mcp_operation_only_reconcile_reaches_signed_host_request() {
+        let bridge = Path::new("/tmp/CSSwitch-Skill-Bridge-test");
+        let response = mcp_request(
+            bridge,
+            ToolMode::All,
+            &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+                "name": INSTALL_TOOL_NAME,
+                "arguments":{"confirmation":{"schema_version":1,"action":"reconcile","operation_id":"op-reconcile"}}
+            }}),
+        )
+        .unwrap();
+        let payload = &response["result"]["structuredContent"];
+        assert_eq!(payload["status"], "HOST_ACCESS_REQUIRED");
+        assert_eq!(payload["request"]["payload"]["operation"], "install");
+        assert_eq!(
+            payload["request"]["payload"]["arguments"]["confirmation"]["operation_id"],
+            "op-reconcile"
+        );
+    }
+
+    #[test]
+    fn install_mcp_confirmation_actions_preserve_apply_source_binding() {
+        let bridge = Path::new("/tmp/CSSwitch-Skill-Bridge-test");
+        let exact_source =
+            "https://github.com/example/skill-repo/tree/0123456789abcdef0123456789abcdef01234567/demo";
+        for (action, arguments) in [
+            (
+                "apply",
+                json!({
+                    "source_url": exact_source,
+                    "confirmation": {
+                        "schema_version": 1,
+                        "action": "apply",
+                        "operation_id": "op-install-apply",
+                        "plan_digest": "a".repeat(64),
+                        "capability": "capability"
+                    }
+                }),
+            ),
+            (
+                "reconcile",
+                json!({"confirmation": {
+                    "schema_version": 1,
+                    "action": "reconcile",
+                    "operation_id": "op-install-reconcile"
+                }}),
+            ),
+            (
+                "continue",
+                json!({"confirmation": {
+                    "schema_version": 1,
+                    "action": "continue",
+                    "operation_id": "op-install-continue"
+                }}),
+            ),
+        ] {
+            let response = mcp_request(
+                bridge,
+                ToolMode::All,
+                &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+                    "name": INSTALL_TOOL_NAME,
+                    "arguments": arguments
+                }}),
+            )
+            .unwrap();
+            let payload = &response["result"]["structuredContent"];
+            assert_eq!(
+                payload["status"], "HOST_ACCESS_REQUIRED",
+                "{action}: {payload}"
+            );
+            let request = &payload["request"]["payload"];
+            let request_id = payload["request_id"].as_str().unwrap();
+            validate_bridge_request(TEST_BRIDGE_TOKEN, request_id, request).unwrap();
+            assert_eq!(request["arguments"]["confirmation"]["action"], action);
+            assert_eq!(
+                request["arguments"].get("source_url").is_some(),
+                action == "apply",
+            );
+        }
+
+        // An apply without its source is still refused by signed-host
+        // validation, rather than falling back to legacy NEED_SOURCE_URL.
+        let response = mcp_request(
+            bridge,
+            ToolMode::All,
+            &json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{
+                "name": INSTALL_TOOL_NAME,
+                "arguments":{"confirmation":{
+                    "schema_version":1,
+                    "action":"apply",
+                    "operation_id":"op-install-missing-source",
+                    "plan_digest":"a".repeat(64),
+                    "capability":"capability"
+                }}
+            }}),
+        )
+        .unwrap();
+        let payload = &response["result"]["structuredContent"];
+        assert_eq!(payload["status"], "HOST_ACCESS_REQUIRED");
+        assert!(validate_bridge_request(
+            TEST_BRIDGE_TOKEN,
+            payload["request_id"].as_str().unwrap(),
+            &payload["request"]["payload"],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn install_confirmation_handler_dispatches_without_legacy_source_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (root, data) = standard_data_dir("install-operation-handler-dispatch");
+        let bridge = root.join("CSSwitch-Skill-Bridge-operation-handler");
+        fs::create_dir(&bridge).unwrap();
+        fs::set_permissions(&bridge, fs::Permissions::from_mode(0o700)).unwrap();
+        let context = ScienceHostContext {
+            binary: root.join("missing-science"),
+            version: "test-version".into(),
+            fingerprint: csswitch_skill_install_core::ScienceExecutableFingerprint {
+                device: 0,
+                inode: 0,
+                size: 0,
+                modified_seconds: 0,
+                modified_nanoseconds: 0,
+                mode: 0,
+                sha256: "0".repeat(64),
+            },
+            home: root.join("sandbox/home"),
+            data_dir: data.clone(),
+            sandbox_port: 19_941,
+        };
+        for (action, arguments) in [
+            (
+                "apply",
+                json!({
+                    "source_url":"https://github.com/example/skill-repo/tree/0123456789abcdef0123456789abcdef01234567/demo",
+                    "confirmation":{"schema_version":1,"action":"apply","operation_id":"op-dispatch-apply","plan_digest":"a".repeat(64),"capability":"capability"}
+                }),
+            ),
+            (
+                "reconcile",
+                json!({"confirmation":{"schema_version":1,"action":"reconcile","operation_id":"op-dispatch-reconcile"}}),
+            ),
+            (
+                "continue",
+                json!({"confirmation":{"schema_version":1,"action":"continue","operation_id":"op-dispatch-continue"}}),
+            ),
+        ] {
+            let response = handle_bridge_request_with_progress(
+                &data,
+                Some(&context),
+                Some(&bridge),
+                None,
+                &json!({"operation":"install","arguments":arguments}),
+                &mut |_, _| {},
+            );
+            assert_ne!(
+                response["status"], "NEED_SOURCE_URL",
+                "{action}: {response}"
+            );
+            assert_ne!(response["status"], "REQUEST_FAILED", "{action}: {response}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_handler_ignores_agent_writable_mailbox_operation_forgery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (root, data) = standard_data_dir("operation-mailbox-forgery");
+        let bridge = root.join("CSSwitch-Skill-Bridge-agent-mailbox");
+        let authority_path = root.join("host-only-operation-authority");
+        fs::create_dir(&bridge).unwrap();
+        fs::create_dir(&authority_path).unwrap();
+        fs::set_permissions(&bridge, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&authority_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let authority = File::open(&authority_path).unwrap();
+        let _real_roots = operation_roots(&authority).unwrap();
+        let operation_id = "a".repeat(32);
+        for name in [
+            "skill-operation-staging",
+            "skill-operation-ledger",
+            "skill-operation-quarantine",
+        ] {
+            fs::create_dir(bridge.join(name)).unwrap();
+        }
+        fs::write(
+            bridge
+                .join("skill-operation-ledger")
+                .join(format!("{operation_id}.skill-operation-ledger.json")),
+            br#"{"schema":"forged-agent-mailbox-ledger"}"#,
+        )
+        .unwrap();
+        let context = ScienceHostContext {
+            binary: root.join("missing-science"),
+            version: "test-version".into(),
+            fingerprint: csswitch_skill_install_core::ScienceExecutableFingerprint {
+                device: 0,
+                inode: 0,
+                size: 0,
+                modified_seconds: 0,
+                modified_nanoseconds: 0,
+                mode: 0,
+                sha256: "0".repeat(64),
+            },
+            home: root.join("sandbox/home"),
+            data_dir: data.clone(),
+            sandbox_port: 19_943,
+        };
+        for (action, arguments) in [
+            (
+                "apply",
+                json!({
+                    "source_url":"https://github.com/owner/repo/tree/0123456789abcdef0123456789abcdef01234567/skills/demo",
+                    "confirmation":{"schema_version":1,"action":"apply","operation_id":operation_id,"plan_digest":"a".repeat(64),"capability":"forged"}
+                }),
+            ),
+            (
+                "reconcile",
+                json!({"confirmation":{"schema_version":1,"action":"reconcile","operation_id":operation_id}}),
+            ),
+            (
+                "continue",
+                json!({"confirmation":{"schema_version":1,"action":"continue","operation_id":operation_id}}),
+            ),
+        ] {
+            let response = handle_bridge_request_with_progress(
+                &data,
+                Some(&context),
+                Some(&bridge),
+                Some(&authority),
+                &json!({"operation":"install","arguments":arguments}),
+                &mut |_, _| {},
+            );
+            assert_eq!(
+                response["status"], "SKILL_OPERATION_LEDGER_NOT_FOUND",
+                "{action} must use host-only authority roots, not mailbox: {response}"
+            );
+        }
+        assert!(bridge.join("skill-operation-staging").is_dir());
+        assert!(bridge
+            .join("skill-operation-ledger")
+            .join(format!("{operation_id}.skill-operation-ledger.json"))
+            .is_file());
+        assert!(
+            !authority_path
+                .join("skill-operation-ledger")
+                .join(format!("{operation_id}.skill-operation-ledger.json"))
+                .exists(),
+            "mailbox forgery must create no authority ledger or mutation"
+        );
+        assert!(data
+            .join("orgs/org-test/skills")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removal_confirmation_handler_dispatches_without_legacy_uninstall_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (root, data) = standard_data_dir("removal-operation-handler-dispatch");
+        let bridge = root.join("CSSwitch-Skill-Bridge-removal-handler");
+        fs::create_dir(&bridge).unwrap();
+        fs::set_permissions(&bridge, fs::Permissions::from_mode(0o700)).unwrap();
+        let context = ScienceHostContext {
+            binary: root.join("missing-science"),
+            version: "test-version".into(),
+            fingerprint: csswitch_skill_install_core::ScienceExecutableFingerprint {
+                device: 0,
+                inode: 0,
+                size: 0,
+                modified_seconds: 0,
+                modified_nanoseconds: 0,
+                mode: 0,
+                sha256: "0".repeat(64),
+            },
+            home: root.join("sandbox/home"),
+            data_dir: data.clone(),
+            sandbox_port: 19_942,
+        };
+        for (action, confirmation) in [
+            (
+                "apply",
+                json!({"schema_version":1,"action":"apply","operation_id":"op-removal-dispatch-apply","plan_digest":"a".repeat(64),"capability":"capability"}),
+            ),
+            (
+                "reconcile",
+                json!({"schema_version":1,"action":"reconcile","operation_id":"op-removal-dispatch-reconcile"}),
+            ),
+            (
+                "continue",
+                json!({"schema_version":1,"action":"continue","operation_id":"op-removal-dispatch-continue"}),
+            ),
+        ] {
+            let response = handle_bridge_request_with_progress(
+                &data,
+                Some(&context),
+                Some(&bridge),
+                None,
+                &json!({"operation":"uninstall","arguments":{"confirmation":confirmation}}),
+                &mut |_, _| {},
+            );
+            assert_ne!(
+                response["status"], "UNINSTALL_FAILED",
+                "{action}: {response}"
+            );
+            assert_ne!(response["status"], "REQUEST_FAILED", "{action}: {response}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uninstall_mcp_operation_authoritative_actions_reach_signed_host_request() {
+        let bridge = Path::new("/tmp/CSSwitch-Skill-Bridge-test");
+        let definition = uninstall_tool_definition();
+        assert!(
+            definition["inputSchema"].get("required").is_none(),
+            "reconcile/continue are operation-id-only at the MCP schema boundary"
+        );
+        for (action, extra) in [
+            (
+                "apply",
+                json!({"plan_digest":"a".repeat(64), "capability":"capability"}),
+            ),
+            ("reconcile", json!({})),
+            ("continue", json!({})),
+        ] {
+            let mut confirmation = json!({
+                "schema_version": 1,
+                "action": action,
+                "operation_id": "op-removal",
+            });
+            confirmation
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let response = mcp_request(
+                bridge,
+                ToolMode::All,
+                &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+                    "name": UNINSTALL_TOOL_NAME,
+                    "arguments":{"confirmation":confirmation}
+                }}),
+            )
+            .unwrap();
+            let payload = &response["result"]["structuredContent"];
+            assert_eq!(
+                payload["status"], "HOST_ACCESS_REQUIRED",
+                "{action}: {payload}"
+            );
+            assert_eq!(payload["request"]["payload"]["operation"], "uninstall");
+            assert_eq!(
+                payload["request"]["payload"]["arguments"]["confirmation"]["operation_id"],
+                "op-removal"
+            );
+            assert_eq!(
+                payload["request"]["payload"]["arguments"]["confirmation"]["action"],
+                action
+            );
+            let request = payload["request"]["payload"].clone();
+            let request_id = payload["request_id"].as_str().unwrap();
+            validate_bridge_request(TEST_BRIDGE_TOKEN, request_id, &request).unwrap();
+        }
+    }
+
+    #[test]
+    fn uninstall_operation_authoritative_request_rejects_outer_target_fields() {
+        let bridge = Path::new("/tmp/CSSwitch-Skill-Bridge-test");
+        let request = host_access_request(
+            bridge,
+            TEST_BRIDGE_TOKEN,
+            "uninstall",
+            &json!({
+                "skill_name":"must-not-be-forwarded",
+                "confirmation":{
+                    "schema_version":1,
+                    "action":"apply",
+                    "operation_id":"op-removal",
+                    "plan_digest":"a".repeat(64),
+                    "capability":"capability"
+                }
+            }),
+        );
+        let request_id = request["request_id"].as_str().unwrap();
+        assert!(validate_bridge_request(
+            TEST_BRIDGE_TOKEN,
+            request_id,
+            &request["request"]["payload"],
+        )
+        .is_err());
+    }
+
+    #[test]
     fn bridge_request_signature_rejects_tampering_expiry_and_wrong_filename() {
         let bridge = Path::new("/tmp/CSSwitch-Skill-Bridge-test");
         let result = host_access_request(
@@ -2736,5 +4350,45 @@ mod tests {
         drop(second);
         assert!(lock_path.is_file());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_error_projection_keeps_definite_rejections_out_of_reconcile() {
+        for code in [
+            "SKILL_OPERATION_LEDGER_NOT_FOUND",
+            "SKILL_OPERATION_CONFIRMATION_CAPABILITY_INVALID",
+            "SKILL_OPERATION_TARGET_BINDING_DRIFT",
+        ] {
+            let install = operation_error(csswitch_skill_install_core::SkillOperationError {
+                code: code.into(),
+                phase: "recovery".into(),
+            });
+            assert_eq!(install["recovery_required"], false, "{code}");
+            assert_eq!(install["directory_commit"], false, "{code}");
+            assert_eq!(install["attach_verified"], false, "{code}");
+        }
+
+        let removal = removal_operation_error(csswitch_skill_install_core::SkillOperationError {
+            code: "SKILL_OPERATION_CONFIRMATION_EXPIRED".into(),
+            phase: "confirmation".into(),
+        });
+        assert_eq!(removal["recovery_required"], false);
+        assert_eq!(removal["detach_verified"], false);
+        assert_eq!(removal["quarantine_commit"], false);
+
+        let removal_target =
+            removal_operation_error(csswitch_skill_install_core::SkillOperationError {
+                code: "SKILL_OPERATION_TARGET_BINDING_DRIFT".into(),
+                phase: "preflight".into(),
+            });
+        assert_eq!(removal_target["recovery_required"], false);
+        assert_eq!(removal_target["detach_verified"], false);
+
+        let durable = operation_error(csswitch_skill_install_core::SkillOperationError {
+            code: "SKILL_OPERATION_LEDGER_INVALID".into(),
+            phase: "recovery".into(),
+        });
+        assert_eq!(durable["recovery_required"], true);
+        assert!(durable["directory_commit"].is_null());
     }
 }

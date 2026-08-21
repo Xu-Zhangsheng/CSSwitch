@@ -403,10 +403,12 @@ pub(super) fn start_skill_install_bridge(cfg: &GatewayConfig) -> Result<(), Stri
                             bridge_request_failed()
                         } else {
                             match authority_fence.acquire_shared() {
-                                Ok(_guard) => {
+                                Ok(guard) => {
                                     crate::skill_install::handle_bridge_request_with_progress(
                                         &data_dir,
                                         science_host_context.as_ref(),
+                                        Some(&bridge),
+                                        Some(guard.authority_root()),
                                         &request,
                                         &mut report_progress,
                                     )

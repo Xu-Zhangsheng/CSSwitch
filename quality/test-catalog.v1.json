@@ -114,7 +114,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "QUALITY-METADATA"
       }
     },
@@ -198,7 +198,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "QUALITY-FOCUSED"
       }
     },
@@ -355,7 +355,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "RUN-EVIDENCE-CONTRACT"
       }
     },
@@ -562,7 +562,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "QUALITY-INVENTORY"
       }
     },
@@ -639,7 +639,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "PY-OFFLINE"
       }
     },
@@ -717,7 +717,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "PY-LOOPBACK"
       }
     },
@@ -784,7 +784,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "SHELL-SCRIPTS"
       }
     },
@@ -862,7 +862,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "RUST-DESKTOP"
       }
     },
@@ -935,7 +935,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "RUST-GATEWAY"
       }
     },
@@ -1005,7 +1005,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "RUST-CODEX-NETWORK"
       }
     },
@@ -1044,8 +1044,10 @@
         "desktop/skill-package/Cargo.toml",
         "desktop/skill-package/Cargo.lock",
         "desktop/skill-package/src/inspection.rs",
+        "desktop/skill-package/src/install.rs",
         "desktop/skill-package/src/lib.rs",
         "desktop/skill-package/src/plan.rs",
+        "desktop/skill-package/src/operation.rs",
         "desktop/skill-package/src/resolver.rs",
         "desktop/skill-package/tests/fixtures/inspection/",
         "test/run-rust.sh"
@@ -1085,7 +1087,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "RUST-SKILL-PACKAGE"
       }
     },
@@ -1165,7 +1167,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "MJS-FRONTEND"
       }
     },
@@ -1403,7 +1405,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "ORPHAN-SKILL-BRIDGE"
       }
     },
@@ -1473,7 +1475,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "ORPHAN-SKILL-BOUNDARY"
       }
     },
@@ -2091,7 +2093,7 @@
       "environment_allowlist": [],
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "f4fa10bc43928063a9efb89cda65787c133ef9aeef503e2d113910129ae272b8",
+        "sha256": "01c58a7509fcafdc242ca05316d7b95ddfcd72e1ec82f992acb7a03f6d308aac",
         "suite_key": "SOURCE-GATE-CONTRACT"
       },
       "status": "implemented",

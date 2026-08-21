@@ -4,6 +4,7 @@ mod github;
 mod inspection;
 mod install;
 mod listing;
+mod operation;
 mod plan;
 mod resolver;
 mod science;
@@ -18,7 +19,8 @@ pub use bundle::{
 };
 pub use github::{
     install_github_package, install_github_package_with_progress, install_github_skill,
-    parse_github_package_source, parse_github_source, GithubPackageSource, GithubSource,
+    parse_github_package_source, parse_github_source, resolve_exact_github_archive,
+    ExactGithubArchive, GithubPackageSource, GithubSource,
 };
 pub use inspection::{
     inspect_github_skill_archive, CompatibilityStatus, ComponentEdge, ComponentGraph,
@@ -34,14 +36,27 @@ pub use listing::{
     inspect_active_org_skills, InstalledSkillSource, InstalledSkillSummary,
     SkillFilesystemSnapshot, SkillListWarning, MAX_LISTED_SKILLS, MAX_SKILL_FRONTMATTER_BYTES,
 };
+pub use operation::{
+    quarantine_name_transitioned_at, quarantine_owned_skill_at,
+    release_unstaged_install_plan_reservation, reserve_install_plan_capacity,
+    skill_removal_destination, SkillOperationApplyReceiptV1,
+    SkillOperationConfirmationCapabilityV1, SkillOperationEffectIntentV1,
+    SkillOperationEffectReceiptV1, SkillOperationEffectStateV1, SkillOperationError,
+    SkillOperationFinalResponseV1, SkillOperationKindV1, SkillOperationLedgerV1,
+    SkillOperationObservedStateV1, SkillOperationOperonAdapter,
+    SkillOperationPostEffectObservationV1, SkillOperationPrepareRequestV1, SkillOperationPrepared,
+    SkillOperationRemovalPrepared, SkillOperationTargetBindingV1, SkillRemovalRootIdentityV1,
+    SkillRemovalRoots, SkillRemovalSnapshotV1, SKILL_OPERATION_LEDGER_SCHEMA,
+};
 pub use plan::{
-    build_skill_plan, validate_skill_plan, ComponentDegradationV1, ConfirmablePlanRequestV1,
-    ConfirmablePlanTargetV1, ConfirmationReasonV1, EffectApplyStateV1, EffectAuthorityV1,
-    EffectRollbackV1, EffectVerifierV1, ExpectedEffectV1, PlanComponentV1, PlanConfirmationState,
-    PlanEffectKindV1, PlanEffectSubjectV1, PlanEffectV1, PlanEligibility, PlanError, PlanExpiryV1,
-    PlanFindingV1, PlanIdentityV1, PlanSelectionV1, PlanSourceV1, PlanSummaryV1, PlanTargetV1,
-    ReentryPolicyV1, SkillPlanV1, SourceBindingV1, MAX_PLAN_COMPONENTS, MAX_PLAN_EFFECTS,
-    MAX_PLAN_FINDINGS, MAX_PLAN_FINDINGS_PER_COMPONENT, SKILL_PLAN_SCHEMA,
+    build_skill_plan, build_skill_removal_plan, validate_skill_plan, ComponentDegradationV1,
+    ConfirmablePlanRequestV1, ConfirmablePlanTargetV1, ConfirmationReasonV1, EffectApplyStateV1,
+    EffectAuthorityV1, EffectRollbackV1, EffectVerifierV1, ExpectedEffectV1, PlanComponentV1,
+    PlanConfirmationState, PlanEffectKindV1, PlanEffectSubjectV1, PlanEffectV1, PlanEligibility,
+    PlanError, PlanExpiryV1, PlanFindingV1, PlanIdentityV1, PlanSelectionV1, PlanSourceV1,
+    PlanSummaryV1, PlanTargetV1, ReentryPolicyV1, SkillPlanV1, SkillRemovalPlanRequestV1,
+    SourceBindingV1, MAX_PLAN_COMPONENTS, MAX_PLAN_EFFECTS, MAX_PLAN_FINDINGS,
+    MAX_PLAN_FINDINGS_PER_COMPONENT, SKILL_PLAN_SCHEMA,
 };
 pub use resolver::{
     ExactStagedArchiveIdentityV1, ExactStagedGithubArchive, ResolveError,

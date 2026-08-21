@@ -2,11 +2,16 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(test)]
+use std::cell::Cell;
 
 use regex::Regex;
 use serde_json::{json, Value};
@@ -22,6 +27,58 @@ use crate::{
     CATALOG_STAMP_FILE, CSSWITCH_MARKETPLACE, IMPORT_ORIGIN_FILE, MAX_FILES, MAX_FILE_BYTES,
     MAX_IMPORT_ORIGIN_BYTES, MAX_PATH_BYTES, MAX_PATH_DEPTH, MAX_TOTAL_BYTES,
 };
+
+#[cfg(test)]
+thread_local! {
+    // This seam is intentionally narrower than a generic fs failure: it
+    // represents only the uncertain durability window after renameatx_np has
+    // made the package visible but before the parent directory sync returns.
+    static FAIL_POST_RENAME_ROOT_SYNC_ONCE: Cell<bool> = const { Cell::new(false) };
+    // This is deliberately before the publication rename.  It models a
+    // nested staging-directory durability acknowledgement that fails after
+    // every file is fsync'd, but before a package can become visible.
+    static FAIL_NESTED_DIRECTORY_SYNC_ONCE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_post_rename_root_sync() {
+    FAIL_POST_RENAME_ROOT_SYNC_ONCE.with(|value| value.set(true));
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_nested_directory_sync() {
+    FAIL_NESTED_DIRECTORY_SYNC_ONCE.with(|value| value.set(true));
+}
+
+#[cfg(test)]
+fn sync_staging_directory(directory: &File) -> io::Result<()> {
+    if FAIL_NESTED_DIRECTORY_SYNC_ONCE.with(|value| value.replace(false)) {
+        return Err(io::Error::other(
+            "test nested staging directory sync failure",
+        ));
+    }
+    directory.sync_all()
+}
+
+#[cfg(not(test))]
+fn sync_staging_directory(directory: &File) -> io::Result<()> {
+    directory.sync_all()
+}
+
+#[cfg(test)]
+fn sync_committed_skills_root(root: &File) -> io::Result<()> {
+    if FAIL_POST_RENAME_ROOT_SYNC_ONCE.with(|value| value.replace(false)) {
+        return Err(io::Error::other(
+            "test post-rename skills root sync failure",
+        ));
+    }
+    root.sync_all()
+}
+
+#[cfg(not(test))]
+fn sync_committed_skills_root(root: &File) -> io::Result<()> {
+    root.sync_all()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallAction {
@@ -328,6 +385,281 @@ pub(crate) fn commit_package(
         InstallAction::Committed,
         true,
     ))
+}
+
+/// Exact-operation-only commit path.  Unlike the legacy bridge path this
+/// never reopens `data_dir/orgs/.../skills` by name and never performs an
+/// `AT_FDCWD` rename.  The Gateway has already opened and identity-bound this
+/// root under its authority fence; every child operation stays fd-relative and
+/// no-follow until the no-clobber publication.
+#[cfg(unix)]
+pub(crate) fn commit_package_at(
+    skills_root: &File,
+    package: ValidatedPackage,
+    descriptor: SourceDescriptor,
+    initial_org: &str,
+) -> Result<InstallCommit, InstallError> {
+    let root_meta = skills_root.metadata().map_err(|_| {
+        error(
+            "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+            "无法检查 Skills 根",
+            "commit",
+        )
+    })?;
+    if !root_meta.is_dir() || root_meta.file_type().is_symlink() {
+        return Err(error(
+            "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+            "Skills 根类型非法",
+            "commit",
+        ));
+    }
+    let skill = std::ffi::CString::new(package.skill_name.as_str())
+        .map_err(|_| error("UNSAFE_TARGET", "Skill 名称非法", "commit"))?;
+    let mut existing = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe {
+        libc::fstatat(
+            skills_root.as_raw_fd(),
+            skill.as_ptr(),
+            existing.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Err(error("SKILL_NAME_CONFLICT", "目标 Skill 已存在", "commit"));
+    }
+    if io::Error::last_os_error().kind() != io::ErrorKind::NotFound {
+        return Err(error(
+            "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+            "无法检查目标 Skill",
+            "commit",
+        ));
+    }
+    let temp_name = format!(
+        ".csswitch-operation-{}-{}-{}",
+        package.skill_name,
+        std::process::id(),
+        unique_suffix()
+    );
+    let temp = std::ffi::CString::new(temp_name.as_str())
+        .map_err(|_| error("UNSAFE_TARGET", "staging 名称非法", "commit"))?;
+    if unsafe { libc::mkdirat(skills_root.as_raw_fd(), temp.as_ptr(), 0o700) } != 0 {
+        return Err(error(
+            "STAGING_CREATE_FAILED",
+            "创建 operation staging 失败",
+            "commit",
+        ));
+    }
+    let temp_fd = unsafe {
+        libc::openat(
+            skills_root.as_raw_fd(),
+            temp.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if temp_fd < 0 {
+        return Err(error(
+            "STAGING_CREATE_FAILED",
+            "打开 operation staging 失败",
+            "commit",
+        ));
+    }
+    let staging = unsafe { File::from_raw_fd(temp_fd) };
+    let staged = (|| {
+        // Keep every opened nested directory descriptor alive until its
+        // metadata is durably ordered below its parent.  A file fsync and a
+        // top-level staging fsync alone do not make newly-created nested
+        // names crash-durable on all supported filesystems.
+        let mut nested_directories = Vec::new();
+        for file in &package.files {
+            write_package_file_at(
+                &staging,
+                &file.path,
+                &file.content,
+                file.executable,
+                &mut nested_directories,
+            )?;
+        }
+        let marker = marker_bytes(&package, &descriptor, None)?;
+        write_fd_file_at(&staging, IMPORT_ORIGIN_FILE, &marker, false)?;
+        // Reverse the acquisition order: children first, then their parents.
+        // Duplicate descriptors are harmless and intentionally retain every
+        // directory instance touched while staging this package.
+        for directory in nested_directories.iter().rev() {
+            sync_staging_directory(directory).map_err(|_| {
+                error(
+                    "DURABILITY_SYNC_FAILED",
+                    "同步 operation staging 子目录失败",
+                    "commit",
+                )
+            })?;
+        }
+        staging.sync_all().map_err(|_| {
+            error(
+                "DURABILITY_SYNC_FAILED",
+                "同步 operation staging 失败",
+                "commit",
+            )
+        })?;
+        let target = std::ffi::CString::new(package.skill_name.as_str())
+            .map_err(|_| error("UNSAFE_TARGET", "Skill 名称非法", "commit"))?;
+        #[cfg(target_os = "macos")]
+        let renamed = unsafe {
+            libc::renameatx_np(
+                skills_root.as_raw_fd(),
+                temp.as_ptr(),
+                skills_root.as_raw_fd(),
+                target.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        } == 0;
+        #[cfg(not(target_os = "macos"))]
+        let renamed = false;
+        if !renamed {
+            return Err(error(
+                "SKILL_NAME_CONFLICT",
+                "原子提交失败，目标可能已存在",
+                "commit",
+            ));
+        }
+        sync_committed_skills_root(skills_root).map_err(|_| {
+            // Publication already happened.  The caller must preserve the
+            // effect intent and enter readback-only recovery rather than
+            // classifying this as an uncommitted hard failure.
+            let mut failure = error("DURABILITY_SYNC_FAILED", "同步 Skills 根失败", "commit");
+            failure.directory_commit = true;
+            failure
+        })?;
+        Ok(())
+    })();
+    if staged.is_err() {
+        // The temporary child is operation-private; best-effort cleanup does
+        // not affect a published target and cannot turn a failure into success.
+        unsafe { libc::unlinkat(skills_root.as_raw_fd(), temp.as_ptr(), libc::AT_REMOVEDIR) };
+    }
+    staged?;
+    Ok(commit_result(
+        &package,
+        &descriptor,
+        initial_org.to_string(),
+        InstallAction::Committed,
+        true,
+    ))
+}
+
+#[cfg(unix)]
+fn marker_bytes(
+    package: &ValidatedPackage,
+    descriptor: &SourceDescriptor,
+    imported_at: Option<&Value>,
+) -> Result<Vec<u8>, InstallError> {
+    let mut marker = json!({
+        "version": 1, "repo": descriptor.repo, "sha": descriptor.sha,
+        "plugin": package.skill_name, "marketplace": CSSWITCH_MARKETPLACE,
+        "path": descriptor.path,
+        "importedAt": imported_at.and_then(Value::as_str).map(str::to_owned).unwrap_or_else(rfc3339_now),
+        "license": "NOASSERTION", "csswitch_revision": 2,
+        "source_kind": descriptor.kind.as_str(), "content_sha256": package.content_sha256,
+    });
+    if let Some(archive_sha256) = &descriptor.archive_sha256 {
+        marker["archive_sha256"] = Value::String(archive_sha256.clone());
+    }
+    let mut body = serde_json::to_vec(&marker)
+        .map_err(|_| error("MARKER_WRITE_FAILED", "编码 Skill marker 失败", "commit"))?;
+    body.push(b'\n');
+    if body.len() > MAX_IMPORT_ORIGIN_BYTES {
+        return Err(error(
+            "MARKER_WRITE_FAILED",
+            "Skill marker 超过大小限制",
+            "commit",
+        ));
+    }
+    Ok(body)
+}
+
+#[cfg(unix)]
+fn write_package_file_at(
+    root: &File,
+    path: &Path,
+    body: &[u8],
+    executable: bool,
+    nested_directories: &mut Vec<File>,
+) -> Result<(), InstallError> {
+    let mut directory = root
+        .try_clone()
+        .map_err(|_| error("STAGING_WRITE_FAILED", "克隆 staging 根失败", "commit"))?;
+    let components: Vec<_> = path.components().collect();
+    if components.is_empty()
+        || !components
+            .iter()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Err(error("UNSAFE_TARGET", "staging 文件路径非法", "commit"));
+    }
+    for component in &components[..components.len() - 1] {
+        let name = std::ffi::CString::new(component.as_os_str().as_bytes())
+            .map_err(|_| error("UNSAFE_TARGET", "staging 子目录非法", "commit"))?;
+        if unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) } != 0
+            && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists
+        {
+            return Err(error(
+                "STAGING_WRITE_FAILED",
+                "创建 staging 子目录失败",
+                "commit",
+            ));
+        }
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(error(
+                "STAGING_WRITE_FAILED",
+                "打开 staging 子目录失败",
+                "commit",
+            ));
+        }
+        directory = unsafe { File::from_raw_fd(fd) };
+        nested_directories.push(
+            directory
+                .try_clone()
+                .map_err(|_| error("STAGING_WRITE_FAILED", "保留 staging 子目录失败", "commit"))?,
+        );
+    }
+    let leaf = components.last().unwrap().as_os_str().to_string_lossy();
+    write_fd_file_at(&directory, &leaf, body, executable)
+}
+
+#[cfg(unix)]
+fn write_fd_file_at(
+    root: &File,
+    name: &str,
+    body: &[u8],
+    executable: bool,
+) -> Result<(), InstallError> {
+    let name = std::ffi::CString::new(name)
+        .map_err(|_| error("UNSAFE_TARGET", "staging 文件名非法", "commit"))?;
+    let fd = unsafe {
+        libc::openat(
+            root.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            if executable { 0o700 } else { 0o600 },
+        )
+    };
+    if fd < 0 {
+        return Err(error(
+            "STAGING_WRITE_FAILED",
+            "创建 Skill 文件失败",
+            "commit",
+        ));
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    file.write_all(body)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| error("STAGING_WRITE_FAILED", "写入 Skill 文件失败", "commit"))
 }
 
 fn active_org_changed() -> InstallError {
@@ -995,6 +1327,66 @@ pub(crate) fn acquire_install_lock(path: &Path) -> Result<InstallLock, InstallEr
     acquire_lock(path)
 }
 
+/// Acquire the per-Skill fence through an already verified, caller-owned
+/// Skills-root descriptor.  Exact operations must not reopen that root by
+/// pathname after binding its device/inode: this is deliberately the same
+/// persistent lock *name* as the legacy path so both protocols contend on the
+/// same inode.
+#[cfg(unix)]
+pub(crate) fn acquire_install_lock_at(
+    skills_root: &File,
+    skill_name: &str,
+) -> Result<InstallLock, InstallError> {
+    let root = skills_root.metadata().map_err(|_| {
+        error(
+            "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+            "无法检查 Skills 根",
+            "commit",
+        )
+    })?;
+    if !root.is_dir() || root.file_type().is_symlink() {
+        return Err(error(
+            "SKILL_OPERATION_SKILLS_ROOT_INVALID",
+            "Skills 根类型非法",
+            "commit",
+        ));
+    }
+    if skill_name.is_empty()
+        || !skill_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(error("UNSAFE_TARGET", "Skill 名称非法", "commit"));
+    }
+    let name = std::ffi::CString::new(format!(".csswitch-install-{skill_name}.lock"))
+        .map_err(|_| error("UNSAFE_TARGET", "锁文件名非法", "commit"))?;
+    let fd = unsafe {
+        libc::openat(
+            skills_root.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(error("INSTALL_BUSY", "同名 Skill 正在安装", "commit"));
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    let metadata = file
+        .metadata()
+        .map_err(|_| error("INSTALL_BUSY", "无法检查同名 Skill 锁", "commit"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(error("INSTALL_BUSY", "同名 Skill 锁类型非法", "commit"));
+    }
+    #[cfg(unix)]
+    if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+        return Err(error("INSTALL_BUSY", "无法收紧同名 Skill 锁权限", "commit"));
+    }
+    file.try_lock()
+        .map_err(|_| error("INSTALL_BUSY", "同名 Skill 正在安装", "commit"))?;
+    Ok(InstallLock { _file: file })
+}
+
 pub(crate) fn sync_tree(root: &Path) -> Result<(), InstallError> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -1114,6 +1506,101 @@ mod tests {
             writer.write_all(content).unwrap();
         }
         writer.finish().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fd_relative_lock_contends_with_legacy_lock_on_the_same_inode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = test_root("fd-relative-lock");
+        let root_fd = File::open(&root).unwrap();
+        let legacy_path = root.join(".csswitch-install-demo.lock");
+        let legacy = acquire_install_lock(&legacy_path).unwrap();
+        let busy = acquire_install_lock_at(&root_fd, "demo").err().unwrap();
+        assert_eq!(busy.code, "INSTALL_BUSY");
+        drop(legacy);
+
+        let exact = acquire_install_lock_at(&root_fd, "demo").unwrap();
+        assert_eq!(
+            fs::metadata(&legacy_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            acquire_install_lock(&legacy_path).err().unwrap().code,
+            "INSTALL_BUSY"
+        );
+        drop(exact);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn nested_exact_package() -> ValidatedPackage {
+        let files = vec![
+            PackageFile {
+                path: PathBuf::from("SKILL.md"),
+                content: b"---\nname: demo\ndescription: demo\n---\n".to_vec(),
+                executable: false,
+            },
+            PackageFile {
+                path: PathBuf::from("assets/nested/README.md"),
+                content: b"nested durable payload\n".to_vec(),
+                executable: false,
+            },
+        ];
+        ValidatedPackage {
+            skill_name: "demo".into(),
+            content_sha256: canonical_content_sha256(&files),
+            files,
+        }
+    }
+
+    fn nested_exact_descriptor() -> SourceDescriptor {
+        SourceDescriptor {
+            kind: SourceKind::Github,
+            repo: "owner/repo".into(),
+            sha: "0123456789abcdef0123456789abcdef01234567".into(),
+            path: "skills/demo".into(),
+            archive_sha256: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_commit_syncs_nested_directories_before_publication() {
+        let root = test_root("exact-nested-durability");
+        let skills = root.join("skills");
+        fs::create_dir(&skills).unwrap();
+        let commit = commit_package_at(
+            &File::open(&skills).unwrap(),
+            nested_exact_package(),
+            nested_exact_descriptor(),
+            "org-test",
+        )
+        .unwrap();
+        assert!(commit.directory_commit);
+        assert!(skills.join("demo/SKILL.md").is_file());
+        assert!(skills.join("demo/assets/nested/README.md").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_commit_nested_directory_sync_failure_never_publishes() {
+        let root = test_root("exact-nested-durability-fault");
+        let skills = root.join("skills");
+        fs::create_dir(&skills).unwrap();
+        fail_next_nested_directory_sync();
+        let error = commit_package_at(
+            &File::open(&skills).unwrap(),
+            nested_exact_package(),
+            nested_exact_descriptor(),
+            "org-test",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "DURABILITY_SYNC_FAILED");
+        assert!(!error.directory_commit);
+        assert!(!skills.join("demo").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Pure, deterministic plan-contract projection for package inspection.
 //!
-//! P3-A has no product caller, resolver, confirmation capability, or effect
+//! inspect-only plan has no product caller, resolver, confirmation capability, or effect
 //! owner. Its builder therefore emits only non-consumable inspect-only plans.
 //! The schema deliberately reserves typed exact-source, target, effect, expiry,
 //! and reentry fields for later slices without treating their presence as apply
@@ -65,13 +65,32 @@ pub enum PlanSourceV1 {
         resolved_commit_sha: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         path: String,
+        /// The exact staged archive accepted by CSSwitch.  Inspect-only plans
+        /// intentionally leave this empty because they have no staged object.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        archive_sha256: String,
+        /// Inspection and materialisation intentionally use different
+        /// canonical domains.  Exact plans bind both rather than pretending
+        /// either digest can verify the other boundary.
         content_sha256: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        materialized_content_sha256: String,
         binding: SourceBindingV1,
     },
     LocalOpenedArchive {
         archive_sha256: String,
         opened_object_identity_sha256: String,
         content_sha256: String,
+        binding: SourceBindingV1,
+    },
+    /// A removal target is an installed, CSSwitch-owned directory, not an
+    /// archive.  Keeping it distinct prevents a marker hash from being
+    /// misrepresented as either downloaded bytes or an opened archive object.
+    InstalledOwnedSkill {
+        skill_name: String,
+        marker_sha256: String,
+        content_sha256: String,
+        target_package_identity_sha256: String,
         binding: SourceBindingV1,
     },
 }
@@ -91,6 +110,8 @@ pub enum PlanTargetV1 {
         science_runtime_identity_sha256: String,
         data_dir_identity_sha256: String,
         active_org_identity_sha256: String,
+        skills_root_device: u64,
+        skills_root_inode: u64,
         operon: String,
     },
 }
@@ -283,6 +304,8 @@ pub struct ConfirmablePlanTargetV1 {
     pub science_runtime_identity_sha256: String,
     pub data_dir_identity_sha256: String,
     pub active_org_identity_sha256: String,
+    pub skills_root_device: u64,
+    pub skills_root_inode: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,6 +313,19 @@ pub struct ConfirmablePlanRequestV1 {
     pub plan_id: String,
     pub expires_at_unix_seconds: u64,
     pub target: ConfirmablePlanTargetV1,
+}
+
+/// Sealed input for the single-Skill removal protocol.  The marker identity
+/// is not treated as remote provenance; it is the exact ownership/content
+/// snapshot that must be re-read before either removal effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillRemovalPlanRequestV1 {
+    pub plan_id: String,
+    pub expires_at_unix_seconds: u64,
+    pub target: ConfirmablePlanTargetV1,
+    pub skill_name: String,
+    pub marker_sha256: String,
+    pub content_sha256: String,
 }
 
 impl PlanError {
@@ -306,7 +342,7 @@ impl fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-/// Builds the only P3-A output: a non-consumable content-addressed inspection
+/// Builds the only inspect-only plan output: a non-consumable content-addressed inspection
 /// plan. This function intentionally rejects any report provenance other than
 /// the current caller-asserted inspection contract.
 pub fn build_skill_plan(report: &InspectionReportV1) -> Result<SkillPlanV1, PlanError> {
@@ -328,7 +364,9 @@ pub fn build_skill_plan(report: &InspectionReportV1) -> Result<SkillPlanV1, Plan
         repo: report.source_claim.repo.clone(),
         resolved_commit_sha: report.source_claim.commit_sha.clone(),
         path: report.source_claim.path.clone(),
+        archive_sha256: String::new(),
         content_sha256: report.package.content_sha256.clone(),
+        materialized_content_sha256: String::new(),
         binding: SourceBindingV1::CallerAssertedUnverified,
     };
     let inspection_report_digest_sha256 = digest_json(&report)?;
@@ -387,6 +425,7 @@ pub(crate) fn build_confirmable_skill_plan(
     report: &InspectionReportV1,
     source: PlanSourceV1,
     request: &ConfirmablePlanRequestV1,
+    materialized_content_sha256: String,
 ) -> Result<SkillPlanV1, PlanError> {
     let mut plan = build_skill_plan(report)?;
     let source = match source {
@@ -395,20 +434,26 @@ pub(crate) fn build_confirmable_skill_plan(
             repo,
             resolved_commit_sha,
             path,
+            archive_sha256,
             content_sha256,
+            materialized_content_sha256: _,
             binding: SourceBindingV1::CsswitchExactContentBound,
         } if owner == report.source_claim.owner
             && repo == report.source_claim.repo
             && resolved_commit_sha == report.source_claim.commit_sha
             && path == report.source_claim.path
-            && content_sha256 == report.package.content_sha256 =>
+            && is_lower_sha256(&archive_sha256)
+            && content_sha256 == report.package.content_sha256
+            && is_lower_sha256(&materialized_content_sha256) =>
         {
             PlanSourceV1::GithubExact {
                 owner,
                 repo,
                 resolved_commit_sha,
                 path,
+                archive_sha256,
                 content_sha256,
+                materialized_content_sha256: materialized_content_sha256.clone(),
                 binding: SourceBindingV1::CsswitchExactContentBound,
             }
         }
@@ -422,6 +467,8 @@ pub(crate) fn build_confirmable_skill_plan(
         science_runtime_identity_sha256: request.target.science_runtime_identity_sha256.clone(),
         data_dir_identity_sha256: request.target.data_dir_identity_sha256.clone(),
         active_org_identity_sha256: request.target.active_org_identity_sha256.clone(),
+        skills_root_device: request.target.skills_root_device,
+        skills_root_inode: request.target.skills_root_inode,
         operon: "OPERON".into(),
     };
     validate_target(&target)?;
@@ -513,7 +560,7 @@ pub(crate) fn build_confirmable_skill_plan(
             authority: EffectAuthorityV1::CsswitchHost,
             verifier: EffectVerifierV1::PackageReadback,
             expected: ExpectedEffectV1::PackageContentBound {
-                content_sha256: report.package.content_sha256.clone(),
+                content_sha256: materialized_content_sha256.clone(),
             },
             rollback: EffectRollbackV1::CompensateByQuarantine,
             apply: EffectApplyStateV1::NotRun,
@@ -557,6 +604,140 @@ pub(crate) fn build_confirmable_skill_plan(
     Ok(plan)
 }
 
+/// Builds the exact two-effect removal plan.  It has no inspection report or
+/// archive claim to reuse: removal is bound to the already-installed,
+/// CSSwitch-owned directory marker and canonical payload hash.  The plan is
+/// still represented by the same SkillPlanV1 digest contract as install.
+pub fn build_skill_removal_plan(
+    request: &SkillRemovalPlanRequestV1,
+) -> Result<SkillPlanV1, PlanError> {
+    if request.expires_at_unix_seconds == 0
+        || !is_lower_sha256(&request.marker_sha256)
+        || !is_lower_sha256(&request.content_sha256)
+        || !safe_local_name(&request.skill_name)
+    {
+        return Err(PlanError::new("INVALID_REMOVAL_PLAN_INPUT"));
+    }
+    let identity = PlanIdentityV1::Invocation {
+        plan_id: request.plan_id.clone(),
+    };
+    validate_identity(&identity, &"0".repeat(SHA256_HEX_LENGTH))?;
+    let source = PlanSourceV1::InstalledOwnedSkill {
+        skill_name: request.skill_name.clone(),
+        marker_sha256: request.marker_sha256.clone(),
+        content_sha256: request.content_sha256.clone(),
+        target_package_identity_sha256: "0".repeat(SHA256_HEX_LENGTH),
+        binding: SourceBindingV1::CsswitchExactContentBound,
+    };
+    let target = PlanTargetV1::Bound {
+        science_runtime_identity_sha256: request.target.science_runtime_identity_sha256.clone(),
+        data_dir_identity_sha256: request.target.data_dir_identity_sha256.clone(),
+        active_org_identity_sha256: request.target.active_org_identity_sha256.clone(),
+        skills_root_device: request.target.skills_root_device,
+        skills_root_inode: request.target.skills_root_inode,
+        operon: "OPERON".into(),
+    };
+    validate_target(&target)?;
+    let component = PlanComponentV1 {
+        id: "installed-skill".into(),
+        kind: ComponentKind::Skill,
+        source_path: "installed-skill/SKILL.md".into(),
+        local_name: request.skill_name.clone(),
+        compatibility_status: CompatibilityStatus::Adapted,
+        degradation: ComponentDegradationV1::None,
+        confirmation_reasons: Vec::new(),
+        executable: false,
+        declared_preapproved_tools: Vec::new(),
+        findings: Vec::new(),
+    };
+    let package_identity = digest_json(&TargetPackageIdentityInputV1 {
+        schema: "csswitch.target-package-identity.v1",
+        data_dir_identity_sha256: &request.target.data_dir_identity_sha256,
+        active_org_identity_sha256: &request.target.active_org_identity_sha256,
+        component_id: &component.id,
+        local_name: &component.local_name,
+    })?;
+    let source = match source {
+        PlanSourceV1::InstalledOwnedSkill {
+            skill_name,
+            marker_sha256,
+            content_sha256,
+            binding,
+            ..
+        } => PlanSourceV1::InstalledOwnedSkill {
+            skill_name,
+            marker_sha256,
+            content_sha256,
+            target_package_identity_sha256: package_identity.clone(),
+            binding,
+        },
+        _ => unreachable!("removal source is fixed above"),
+    };
+    let reasons = vec![
+        ConfirmationReasonV1::ExactTargetBinding,
+        ConfirmationReasonV1::ExactEffectSet,
+    ];
+    let effects = vec![
+        PlanEffectV1 {
+            order: 1,
+            kind: PlanEffectKindV1::OperonDetach,
+            subject: PlanEffectSubjectV1::OperonSkill {
+                component_id: component.id.clone(),
+                skill_name: component.local_name.clone(),
+            },
+            authority: EffectAuthorityV1::CsswitchHost,
+            verifier: EffectVerifierV1::OperonReadback,
+            expected: ExpectedEffectV1::OperonMembershipAbsent {
+                skill_name: component.local_name.clone(),
+            },
+            rollback: EffectRollbackV1::NoInverse,
+            apply: EffectApplyStateV1::NotRun,
+            confirmation_reasons: reasons.clone(),
+        },
+        PlanEffectV1 {
+            order: 2,
+            kind: PlanEffectKindV1::PackageQuarantine,
+            subject: PlanEffectSubjectV1::Package {
+                component_id: component.id.clone(),
+                target_package_identity_sha256: package_identity.clone(),
+            },
+            authority: EffectAuthorityV1::CsswitchHost,
+            verifier: EffectVerifierV1::PackageReadback,
+            expected: ExpectedEffectV1::PackageAbsent {
+                target_package_identity_sha256: package_identity,
+            },
+            rollback: EffectRollbackV1::NoInverse,
+            apply: EffectApplyStateV1::NotRun,
+            confirmation_reasons: reasons,
+        },
+    ];
+    let components = vec![component];
+    let summary = summarize(&components, &effects);
+    let mut plan = SkillPlanV1 {
+        schema: SKILL_PLAN_SCHEMA.into(),
+        identity,
+        plan_digest_sha256: "0".repeat(SHA256_HEX_LENGTH),
+        inspection_report_digest_sha256: request.marker_sha256.clone(),
+        component_graph_digest_sha256: request.content_sha256.clone(),
+        inspection_outcome: InspectionOutcome::Complete,
+        source,
+        target,
+        eligibility: PlanEligibility::Confirmable,
+        confirmation: PlanConfirmationState::RequiresExactPlanCapability,
+        selection: PlanSelectionV1::Full,
+        expiry: PlanExpiryV1::ExpiresAtUnixSeconds {
+            unix_seconds: request.expires_at_unix_seconds,
+        },
+        reentry_policy: ReentryPolicyV1::ReadbackBeforeRetry,
+        components,
+        effects,
+        summary,
+    };
+    plan.plan_digest_sha256 = compute_plan_digest(&plan)?;
+    validate_skill_plan(&plan)?;
+    Ok(plan)
+}
+
 #[derive(Serialize)]
 struct TargetPackageIdentityInputV1<'a> {
     schema: &'static str,
@@ -568,7 +749,7 @@ struct TargetPackageIdentityInputV1<'a> {
 
 /// Validates a deserialized plan without opening files, resolving a source, or
 /// consuming confirmation. A confirmable plan is schema validation only here;
-/// P3-A provides no caller that can create or consume one.
+/// inspect-only plan provides no caller that can create or consume one.
 pub fn validate_skill_plan(plan: &SkillPlanV1) -> Result<(), PlanError> {
     if plan.schema != SKILL_PLAN_SCHEMA
         || !is_lower_sha256(&plan.plan_digest_sha256)
@@ -906,11 +1087,18 @@ fn validate_source(source: &PlanSourceV1) -> Result<(), PlanError> {
             repo,
             resolved_commit_sha,
             path,
+            archive_sha256,
             content_sha256,
-            ..
+            materialized_content_sha256,
+            binding,
         } => {
             validate_github_identity(owner, repo, resolved_commit_sha, path)?;
-            if !is_lower_sha256(content_sha256) {
+            if !is_lower_sha256(content_sha256)
+                || (!archive_sha256.is_empty() && !is_lower_sha256(archive_sha256))
+                || (*binding == SourceBindingV1::CsswitchExactContentBound
+                    && (!is_lower_sha256(archive_sha256)
+                        || !is_lower_sha256(materialized_content_sha256)))
+            {
                 return Err(PlanError::new("INVALID_PLAN_SOURCE"));
             }
         }
@@ -923,6 +1111,21 @@ fn validate_source(source: &PlanSourceV1) -> Result<(), PlanError> {
             if !is_lower_sha256(archive_sha256)
                 || !is_lower_sha256(opened_object_identity_sha256)
                 || !is_lower_sha256(content_sha256)
+            {
+                return Err(PlanError::new("INVALID_PLAN_SOURCE"));
+            }
+        }
+        PlanSourceV1::InstalledOwnedSkill {
+            skill_name,
+            marker_sha256,
+            content_sha256,
+            target_package_identity_sha256,
+            ..
+        } => {
+            if !safe_local_name(skill_name)
+                || !is_lower_sha256(marker_sha256)
+                || !is_lower_sha256(content_sha256)
+                || !is_lower_sha256(target_package_identity_sha256)
             {
                 return Err(PlanError::new("INVALID_PLAN_SOURCE"));
             }
@@ -960,10 +1163,14 @@ fn validate_target(target: &PlanTargetV1) -> Result<(), PlanError> {
             science_runtime_identity_sha256,
             data_dir_identity_sha256,
             active_org_identity_sha256,
+            skills_root_device,
+            skills_root_inode,
             operon,
         } if is_lower_sha256(science_runtime_identity_sha256)
             && is_lower_sha256(data_dir_identity_sha256)
             && is_lower_sha256(active_org_identity_sha256)
+            && *skills_root_device > 0
+            && *skills_root_inode > 0
             && operon == "OPERON" =>
         {
             Ok(())
@@ -1258,7 +1465,8 @@ impl SkillPlanV1 {
     fn source_binding(&self) -> &SourceBindingV1 {
         match &self.source {
             PlanSourceV1::GithubExact { binding, .. }
-            | PlanSourceV1::LocalOpenedArchive { binding, .. } => binding,
+            | PlanSourceV1::LocalOpenedArchive { binding, .. }
+            | PlanSourceV1::InstalledOwnedSkill { binding, .. } => binding,
         }
     }
 }
@@ -1511,7 +1719,7 @@ mod tests {
         let mut plan = build_skill_plan(&report()).unwrap();
         plan.eligibility = PlanEligibility::Confirmable;
         plan.identity = PlanIdentityV1::Invocation {
-            plan_id: "p3b-later-owner".into(),
+            plan_id: "future-operation-owner".into(),
         };
         plan.confirmation = PlanConfirmationState::RequiresExactPlanCapability;
         plan.source = PlanSourceV1::GithubExact {
@@ -1519,13 +1727,17 @@ mod tests {
             repo: "repo".into(),
             resolved_commit_sha: "0123456789abcdef0123456789abcdef01234567".into(),
             path: "skills/demo".into(),
+            archive_sha256: "b".repeat(64),
             content_sha256: "a".repeat(64),
+            materialized_content_sha256: "c".repeat(64),
             binding: SourceBindingV1::CsswitchExactContentBound,
         };
         plan.target = PlanTargetV1::Bound {
             science_runtime_identity_sha256: "b".repeat(64),
             data_dir_identity_sha256: "c".repeat(64),
             active_org_identity_sha256: "d".repeat(64),
+            skills_root_device: 1,
+            skills_root_inode: 2,
             operon: "OPERON".into(),
         };
         plan.expiry = PlanExpiryV1::ExpiresAtUnixSeconds { unix_seconds: 1 };
@@ -1745,6 +1957,57 @@ mod tests {
     }
 
     #[test]
+    fn confirmable_skills_root_identity_is_nonzero_and_digest_sealed() {
+        let plan = future_confirmable_shape();
+        validate_skill_plan(&plan).unwrap();
+
+        let mut zero_root = plan.clone();
+        let PlanTargetV1::Bound {
+            skills_root_device, ..
+        } = &mut zero_root.target
+        else {
+            panic!("future confirmable plans must bind a skills root");
+        };
+        *skills_root_device = 0;
+        zero_root.plan_digest_sha256 = compute_plan_digest(&zero_root).unwrap();
+        assert_eq!(
+            validate_skill_plan(&zero_root).unwrap_err().code,
+            "INVALID_PLAN_TARGET"
+        );
+
+        let mut zero_inode = plan.clone();
+        let PlanTargetV1::Bound {
+            skills_root_inode, ..
+        } = &mut zero_inode.target
+        else {
+            panic!("future confirmable plans must bind a skills root");
+        };
+        *skills_root_inode = 0;
+        zero_inode.plan_digest_sha256 = compute_plan_digest(&zero_inode).unwrap();
+        assert_eq!(
+            validate_skill_plan(&zero_inode).unwrap_err().code,
+            "INVALID_PLAN_TARGET"
+        );
+
+        let mut altered_root = plan.clone();
+        let PlanTargetV1::Bound {
+            skills_root_inode, ..
+        } = &mut altered_root.target
+        else {
+            panic!("future confirmable plans must bind a skills root");
+        };
+        *skills_root_inode += 1;
+        assert_ne!(
+            compute_plan_digest(&altered_root).unwrap(),
+            plan.plan_digest_sha256
+        );
+        assert_eq!(
+            validate_skill_plan(&altered_root).unwrap_err().code,
+            "PLAN_DIGEST_MISMATCH"
+        );
+    }
+
+    #[test]
     fn missing_contract_fields_and_incomplete_effects_fail_closed() {
         let plan = future_confirmable_shape();
         for field in ["target", "expiry", "reentry_policy"] {
@@ -1775,6 +2038,33 @@ mod tests {
             validate_skill_plan(&unordered).unwrap_err().code,
             "INVALID_PLAN_EFFECT"
         );
+    }
+
+    #[test]
+    fn removal_plan_is_exactly_detach_then_quarantine() {
+        let plan = build_skill_removal_plan(&SkillRemovalPlanRequestV1 {
+            plan_id: "remove-one".into(),
+            expires_at_unix_seconds: 123,
+            target: ConfirmablePlanTargetV1 {
+                science_runtime_identity_sha256: "1".repeat(64),
+                data_dir_identity_sha256: "2".repeat(64),
+                active_org_identity_sha256: "3".repeat(64),
+                skills_root_device: 1,
+                skills_root_inode: 2,
+            },
+            skill_name: "demo".into(),
+            marker_sha256: "4".repeat(64),
+            content_sha256: "5".repeat(64),
+        })
+        .unwrap();
+        assert_eq!(plan.effects.len(), 2);
+        assert!(matches!(
+            plan.source,
+            PlanSourceV1::InstalledOwnedSkill { .. }
+        ));
+        assert_eq!(plan.effects[0].kind, PlanEffectKindV1::OperonDetach);
+        assert_eq!(plan.effects[1].kind, PlanEffectKindV1::PackageQuarantine);
+        validate_skill_plan(&plan).unwrap();
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Science Skill / MCP / Plugin 扩展控制面
 
-状态：已接受目标设计；inspect-only adapter、P3-A plan schema 与 P3-B exact GitHub staging / confirmable-plan source contract 已存在但尚无产品 caller；confirmation consumption / apply、artifact 与 runtime 验证均为 `NOT-RUN`
+状态：已接受目标设计；窄范围单 Skill 的 Agent → Gateway confirmation coordinator、exact GitHub staging、immutable plan source 与 durable effect ledger 已实现于 source；artifact、installed/runtime、Plugin/MCP/local-install 与真实服务验证均为 `NOT-RUN`
 
 适用范围：CSSwitch 对 Agent Skills、OpenAI Plugin、Claude Plugin 与 local / remote MCP 输入的识别、规划、受控安装、Science 投影、验证、更新和卸载目标架构。
 
@@ -8,20 +8,62 @@
 
 失效条件：Agent Skills、OpenAI Plugin、Claude Plugin 或 MCP 的上游合同发生不兼容变化；Science 建立新的公开稳定扩展 API；CSSwitch 明确改变扩展控制面的 ownership、安全边界或兼容策略；或本文任一未实现部分开始实现、完成实现或推进证据层时，对应状态与段落立即失效，并须在同一候选中重新评审。
 
-本文冻结尚未实现的目标合同，不描述当前产品已经具备这些能力。源码当前另有一组仍无
-Gateway / Tauri / Agent caller 的 source-only 合同：inspect-only adapter 只产生 quarantine
-inspection report；P3-A 把 report 投影为不可消费的 inspect-only plan；P3-B 只接受已固定
-40 位 commit 的 GitHub archive bytes，在调用方已打开的当前用户 mode `0700` 私有根下以
-dir-fd relative、no-follow、no-clobber 方式 staging，持久化并复读同一 archive object 后，
-只对完整、单一 `SKILL.md`、无需 payload 子集投影的最小包生成 exact-content-bound、所有
-effect 均为 `NOT_RUN` 的 confirmable plan；只要含 asset、script、Plugin、MCP、未知或其他
-需排除组件，就返回 `CONFIRMABLE_PROJECTION_REQUIRED`，不得拿整包 digest 冒充安全子集
-digest。两个升级构造入口
-仍为 crate-private；调用方自报的 GitHub tuple 与 bytes 本身不构成远端 provenance 证明，后续
-可信 resolver / coordinator 必须先闭合该证明才能建立产品 caller。P3-B 不负责网络
-取得 archive，不支持 local archive 晋级，不提供 confirmation capability consumer，也不
-apply、安装、attach、启动进程或读取凭证；staged handle 的 crash recovery / durable cleanup
-ledger 仍未实现。
+本文同时记录已实现的窄范围 source 合同与尚未实现的目标设计。当前 product caller 是
+Agent route Skill → Gateway coordinator → shared Skill crate：只有已固定 40 位 commit 的公开
+GitHub 单 Skill 可进入 `plan → explicit apply → readback-only reconcile`；Gateway 在持有
+Desktop 继承的 authority fence 时才可创建 host-only staging、ledger 与 quarantine root，
+mailbox 只承载 request/status/response。apply 复用同一 archive snapshot、精确 target 与
+capability；legacy omission 仍走既有 bridge 合同。该 source 合同不证明 artifact、安装 App、
+runtime attach、启动进程、local archive、Plugin、MCP 或真实服务；这些范围均为 `NOT-RUN`，
+且不得由本协调器隐式晋级。
+在任何 remote archive 下载前，协调器在 authority-root 下以独立全局 lifecycle lock
+持久化保守的最大 archive reservation；install、removal 与 reservation 共用四项 active-entry
+上限，removal 不保留 archive bytes 但在 native effect 前同样受 admission 拒绝。FD-relative
+bounded admission 对 expired exact
+pre-effect install 采用 tombstone 过渡回收，其他 ledger 状态不进入 GC。过期尚未 receipt
+封存的 `Reserved` record 只可清理由协议创建的 deterministic staging child：held root/child
+descriptor 必须 no-follow、当前用户且 `0700`，完整 dirent 集只能是 `archive.zip` 和 receipt，
+二者如存在则必须是 `0600` 的有界 regular file；任何未知/替换/不匹配对象均原样保留。
+确定的 missing ledger、capability、expiry 或 target drift 是 pre-effect rejection，不被投影为 recovery。
+removal coordinator 也必须将 authority-root 打开的真实 operation staging descriptor 交给
+collector，不能以 quarantine root 代替；否则不得删除 archive-backed install ledger。
+单 Skill 的 explicit confirmation contract 使用同一 durable operation ledger：安装为
+`package_commit → operon_attach`；卸载为 `operon_detach → package_quarantine`。卸载在
+每个 effect 前持久化 intent；detach 不确定时只允许 native readback，绝不移动目录；
+quarantine restart reconciliation 只验证已持久化的相对 destination、owned marker、content 和
+caller-opened root identity，绝不重复 rename。bundle、Plugin、MCP 和 legacy omission 继续
+在该协议外 fail closed 或保持既有合同。
+ledger 以 operation kind 区分 archive-backed install 与 installed-owned-Skill removal：
+removal 的 archive request/archive/staging 字段必须缺席，且 snapshot marker/content、
+root identity、plan source/effect tuple 与 receipt tuple 必须彼此一致。reconcile 自身没有
+新的 mutation authority，只能读取并投影已有 durable intent。
+
+### 1.1 当前文件系统威胁边界（source contract）
+
+Agent mailbox 没有 Skills root 的 descriptor authority；exact 与 legacy 路径共用同一
+per-Skill lock。host 在该锁内以 caller-held、no-follow root/leaf FD 复核 named entry 的
+device/inode、CSSwitch ownership marker 与 canonical content，并用 fd-relative
+`renameatx_np(RENAME_EXCL)` 防止覆盖已存在的 quarantine destination。已观测到的 root、
+name、marker 或 content drift 一律在 preflight/reconcile fail closed。
+
+这不是 source-name inode 的原子 compare-and-rename 保证。当前 macOS
+`renameatx_np` API 只接受 `fromfd/from/tofd/to/flags`；`RENAME_EXCL` 只保证已存在的
+destination 返回 `EEXIST`，没有 expected source device/inode/generation 参数。因而一个
+不参与 CSSwitch lock、但以相同 UID 直接写 Science data-dir 的外部进程，仍可在最后一次
+name/FD revalidation 与 syscall 之间竞争 source name。它在 host capability/cooperative-lock
+边界之外；本协议不声称能回滚或原子阻止该微小窗口。可观察到的后续不一致只能保持为
+failed/uncertain recovery，而不能被重试 rename 掩盖。`RENAME_NOFOLLOW_ANY` 虽在当前 SDK
+声明，但此仓库未冻结其最低 macOS/目标文件系统兼容性，故未作为当前 source contract。
+
+archive-backed install 以同一 retained archive 同时绑定 inspection canonical digest 与
+materialized package canonical digest：前者只证明 inspection/plan source，后者只证明
+package commit、marker 与 fd-relative payload readback，二者不可互换。若外部 effect
+已返回成功但 verified/uncertain successor 均未能 durable persist，host 必须先作该 effect
+的即时可信 readback，并以 response-only `post_effect_observation`（true/false/unknown）
+加 `recovery_required=true` 投影；该 observation 不得伪装为 durable receipt，也不得授权重放。
+只有 `Verified` prefix 后紧接 `NotStarted` effect 的 consumed ledger 才有独立的
+operation-id-only `continue` route；它重新校验 target、sealed ownership 与 expiry，且仅能
+执行该一个未开始 effect。它不是 reconcile，也不允许重放已验证 effect。
 当前已实现的 GitHub / 本地包窄桥、状态码和用户行为只以
 [外部 Skill 安装桥](../features/external-skill-bridge.md)为准；逐能力当前 ownership / non-target / 证据层只以
 [产品与 Claude Science 能力地图](../features/product-science-capability-map.md)为准；
