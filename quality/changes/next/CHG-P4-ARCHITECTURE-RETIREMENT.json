@@ -1,0 +1,62 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-P4-ARCHITECTURE-RETIREMENT",
+    "version": "v0.8.4-dev",
+    "title": "Retire the accepted P4 temporary architecture document",
+    "summary": "Deletes the accepted P4 construction document after its durable provider-contract owner boundary was retained in Gateway routing, removes its architecture index entry, and records that the integrated S1-S4 local candidate still lacks an exact-candidate 16-suite GATE-SOURCE run and immutable record.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "docs/architecture/README.md",
+      "docs/architecture/p4-semantic-closure.md",
+      "quality/changes/next/CHG-P4-ARCHITECTURE-RETIREMENT.json"
+    ],
+    "requirement_ids": [
+      "REQ-083-SCHEMA",
+      "REQ-083-REGISTRY",
+      "REQ-083-VALIDATOR",
+      "REQ-083-PATHS"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "existing-sufficient",
+      "required_suite_ids": [
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "document-governance checks validate the removed temporary-document link and the nearest architecture index",
+        "quality metadata validation binds the four-path retirement record and its source-test-only evidence boundary",
+        "the unchanged Gateway routing document remains the single stable provider-contract owner boundary"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

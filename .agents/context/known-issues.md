@@ -126,11 +126,11 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 
 ### P4｜语义收尾
 
-- 对 test-only `runtime/transaction.rs`、operation vocabulary 和 dormant profile preset-sync 明确选择
-  “接通”或“删除”；不能无限期以 `allow(dead_code)` 保存模糊意图。
-- provider contract 适合抽共享 crate 或生成 schema；先定义单一解释 owner，再迁移两套 validator。
-- 已接受的最小施工顺序、允许路径与收口规则见 [P4 语义收敛](../../docs/architecture/p4-semantic-closure.md)；
-  它不是已实施或 source closure 结论。
+- S1–S4 source implementation 已集成本地候选；完整 exact-candidate 16-suite `GATE-SOURCE` 与 immutable record
+  仍为 `NOT-RUN`，不得称为 `SOURCE-GREEN`。
+- provider catalog 的稳定单一解释 owner 与 Desktop/Gateway projection 边界见
+  [Gateway 与 provider 路由](../../docs/architecture/gateway-provider-routing.md)。
+- 本条不建立 artifact、runtime、真实 Provider/Science/SSH、installed、signing 或 public release 结论。
 
 ### 下游产品证据
 
