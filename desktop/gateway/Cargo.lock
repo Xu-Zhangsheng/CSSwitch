@@ -199,6 +199,7 @@ version = "0.0.0"
 dependencies = [
  "base64",
  "csswitch-codex-network",
+ "csswitch-provider-contracts",
  "csswitch-skill-install-core",
  "getrandom 0.2.17",
  "hmac",
@@ -212,6 +213,15 @@ dependencies = [
  "tokio",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "csswitch-provider-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

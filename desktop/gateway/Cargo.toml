@@ -19,6 +19,7 @@ path = "src/lib.rs"
 [dependencies]
 base64 = "0.22"
 csswitch-codex-network = { path = "../codex-network" }
+csswitch-provider-contracts = { path = "../provider-contracts" }
 csswitch-skill-install-core = { path = "../skill-package" }
 getrandom = "0.2"
 hmac = "0.12"

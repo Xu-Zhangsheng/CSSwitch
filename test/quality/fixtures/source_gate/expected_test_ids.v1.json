@@ -1403,6 +1403,7 @@
         "desktop/provider-contracts/Cargo.toml::lib::tests::custom_api_format_selects_distinct_runtime_contract",
         "desktop/provider-contracts/Cargo.toml::lib::tests::duplicate_policy_entries_are_rejected",
         "desktop/provider-contracts/Cargo.toml::lib::tests::every_static_contract_has_the_same_digest_and_exact_selection",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::exact_contract_id_selection_returns_the_validated_contract",
         "desktop/provider-contracts/Cargo.toml::lib::tests::legacy_keychain_oauth_value_reads_but_serializes_as_csswitch_oauth",
         "desktop/provider-contracts/Cargo.toml::lib::tests::static_provider_contracts_load_and_are_unambiguous"
       ]
@@ -1636,9 +1637,12 @@
         "desktop/gateway/Cargo.toml::lib::policy::tests::clamps_deepseek_max_tokens",
         "desktop/gateway/Cargo.toml::lib::policy::tests::forced_tool_choice_disables_thinking",
         "desktop/gateway/Cargo.toml::lib::policy::tests::transform_maps_model_and_normalizes_thinking",
+        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::codex_projection_preserves_shared_runtime_values",
+        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::gateway_projection_matches_shared_catalog_selection",
+        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::managed_contract_rejects_cross_adapter_ids_and_incomplete_identity",
+        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::managed_contract_selects_the_exact_shared_id",
         "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::managed_identity_is_optional_for_standalone_but_fail_closed_when_present",
-        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::managed_identity_selects_exact_non_codex_contract_and_rejects_cross_adapter_ids",
-        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::static_codex_contract_drives_gateway_runtime_values",
+        "desktop/gateway/Cargo.toml::lib::provider_contracts::tests::standalone_adapter_selection_requires_one_shared_contract",
         "desktop/gateway/Cargo.toml::lib::science_control::tests::configures_third_party_skill_boundary_via_nonce_and_csrf_flow",
         "desktop/gateway/Cargo.toml::lib::science_control::tests::managed_prompt_preserves_user_text_and_replaces_only_its_marker_block",
         "desktop/gateway/Cargo.toml::lib::science_control::tests::managed_prompt_rejects_malformed_or_duplicate_markers",

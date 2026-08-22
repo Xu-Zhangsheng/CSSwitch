@@ -1,0 +1,75 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-P4-GATEWAY-PROVIDER-MIGRATION",
+    "version": "v0.8.4-dev",
+    "title": "Migrate Gateway to the shared provider-contract interpretation owner",
+    "summary": "Removes Gateway's raw catalog DTOs, parser, digest, shape validation, and selection rules. Gateway now consumes the shared validated typed contract and retains only its runtime projection, managed identity policy, Duration conversion, and Codex projection.",
+    "status": "active",
+    "owner": "gateway",
+    "changed_paths": [
+      "desktop/gateway/Cargo.lock",
+      "desktop/gateway/Cargo.toml",
+      "desktop/gateway/src/provider_contracts.rs",
+      "desktop/provider-contracts/src/lib.rs",
+      "docs/architecture/gateway-provider-routing.md",
+      "quality/changes/next/CHG-P4-GATEWAY-PROVIDER-CONTRACT-MIGRATION.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/test_gateway_rust.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-VALIDATOR",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-PROVIDER-CONTRACTS",
+        "SUITE-RUST-GATEWAY",
+        "SUITE-PY-LOOPBACK",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P1",
+        "migration",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "shared crate tests own raw schema parsing, semantic mutation rejection, digest, exact-id selection, and unique adapter selection",
+        "Gateway module tests cover managed exact identity, standalone adapter uniqueness, cross-adapter rejection, Codex projection, and projection parity with shared catalog selection",
+        "the rebuilt Gateway loopback test confirms the unchanged managed contract id and exact digest at the HTTP health boundary",
+        "quality metadata and source identity inventory bind the new focused test identities"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

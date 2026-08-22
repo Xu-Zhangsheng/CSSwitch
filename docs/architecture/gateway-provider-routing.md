@@ -36,6 +36,13 @@ Desktop build 会构建并打包同变体 Rust Gateway sidecar。当前生产运
 config 合同下管理受管 sidecar。legacy proxy 路径不能作为 Python fallback 或
 当前 provider implementation。
 
+provider catalog 的 raw JSON、schema parse、semantic validation、digest、exact-id 与
+unique-adapter selection 只属于 `desktop/provider-contracts` 的
+`csswitch-provider-contracts`。Desktop 将其投影为 profile/launch contract；Gateway
+将同一已验证 typed contract 投影为 `ProviderRuntimeContract` / `CodexRuntimeContract`，
+并继续独占 environment、managed identity、process 与 network policy。两个 projection
+都不得重新解释 raw catalog。
+
 ## 正式 Gateway
 
 Tauri 从 active profile 与 provider contract 解析 launch plan；saved-model profile

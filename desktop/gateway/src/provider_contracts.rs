@@ -1,59 +1,10 @@
-use std::collections::BTreeSet;
 use std::time::Duration;
 
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use csswitch_provider_contracts::{
+    contract_by_id, contract_for_adapter, static_catalog_digest, ProviderContract,
+};
 
-const STATIC_PROVIDER_CONTRACTS_JSON: &str =
-    include_str!("../../../catalog/provider-contracts.v1.json");
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TimeoutPolicy {
-    connect_ms: u64,
-    total_ms: u64,
-    read_idle_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CachePolicy {
-    normal_ttl_seconds: u64,
-    stale_ttl_seconds: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProviderContract {
-    id: String,
-    template_ids: Vec<String>,
-    api_formats: Vec<String>,
-    adapter: String,
-    auth_mode: String,
-    auth_scheme: String,
-    credential_sources: Vec<String>,
-    default_credential_source: String,
-    model_policies: Vec<String>,
-    default_model_policy: String,
-    model_discovery: String,
-    transport: String,
-    endpoint_policy: String,
-    endpoint_join: String,
-    api_key_env: Option<String>,
-    scratch_policy: String,
-    thinking_policy: String,
-    #[serde(default)]
-    upstream_client_version: Option<String>,
-    timeouts: TimeoutPolicy,
-    cache: CachePolicy,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProviderContractCatalog {
-    schema_version: u32,
-    contracts: Vec<ProviderContract>,
-}
+pub(crate) use csswitch_provider_contracts::{AuthScheme, EndpointJoin};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodexRuntimeContract {
@@ -65,46 +16,6 @@ pub struct CodexRuntimeContract {
     pub normal_ttl_seconds: u64,
     pub stale_ttl_seconds: u64,
     pub model_catalog_client_version: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EndpointJoin {
-    ManagedOfficial,
-    AnthropicV1,
-    OpenaiV1,
-    OpenaiPath,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthScheme {
-    AnthropicXApiKey,
-    AnthropicDual,
-    Bearer,
-    CsswitchOauth,
-}
-
-impl AuthScheme {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "anthropic_x_api_key" => Ok(Self::AnthropicXApiKey),
-            "anthropic_dual" => Ok(Self::AnthropicDual),
-            "bearer" => Ok(Self::Bearer),
-            "csswitch_oauth" => Ok(Self::CsswitchOauth),
-            _ => Err("provider contract auth scheme is unsupported".into()),
-        }
-    }
-}
-
-impl EndpointJoin {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "managed_official" => Ok(Self::ManagedOfficial),
-            "anthropic_v1" => Ok(Self::AnthropicV1),
-            "openai_v1" => Ok(Self::OpenaiV1),
-            "openai_path" => Ok(Self::OpenaiPath),
-            _ => Err("provider contract endpoint join is unsupported".into()),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,54 +36,43 @@ pub struct ProviderRuntimeContract {
     pub upstream_client_version: Option<String>,
 }
 
-fn catalog_digest() -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(STATIC_PROVIDER_CONTRACTS_JSON.as_bytes())
-    )
-}
-
-fn parse_catalog() -> Result<ProviderContractCatalog, String> {
-    let catalog: ProviderContractCatalog = serde_json::from_str(STATIC_PROVIDER_CONTRACTS_JSON)
-        .map_err(|error| format!("provider contract catalog parse failed: {error}"))?;
-    if catalog.schema_version != 1 || catalog.contracts.is_empty() {
-        return Err("provider contract catalog schema is unsupported".into());
+fn project_runtime_contract(contract: ProviderContract, digest: String) -> ProviderRuntimeContract {
+    ProviderRuntimeContract {
+        contract_id: contract.id,
+        catalog_digest: digest,
+        auth_mode: match contract.auth_mode {
+            csswitch_provider_contracts::AuthMode::ApiKey => "api_key".into(),
+            csswitch_provider_contracts::AuthMode::CsswitchOauth => "csswitch_oauth".into(),
+            csswitch_provider_contracts::AuthMode::None => "none".into(),
+        },
+        auth_scheme: contract.auth_scheme,
+        api_key_env: contract.api_key_env,
+        transport: match contract.transport {
+            csswitch_provider_contracts::Transport::AnthropicMessages => {
+                "anthropic_messages".into()
+            }
+            csswitch_provider_contracts::Transport::OpenaiChat => "openai_chat".into(),
+            csswitch_provider_contracts::Transport::OpenaiResponses => "openai_responses".into(),
+            csswitch_provider_contracts::Transport::CodexResponsesSse => {
+                "codex_responses_sse".into()
+            }
+        },
+        endpoint_policy: match contract.endpoint_policy {
+            csswitch_provider_contracts::EndpointPolicy::GatewayManagedOfficial => {
+                "gateway_managed_official".into()
+            }
+            csswitch_provider_contracts::EndpointPolicy::ProfileRequired => {
+                "profile_required".into()
+            }
+        },
+        endpoint_join: contract.endpoint_join,
+        connect_timeout: Duration::from_millis(contract.timeouts.connect_ms),
+        request_timeout: Duration::from_millis(contract.timeouts.total_ms),
+        read_idle_timeout: Duration::from_millis(contract.timeouts.read_idle_ms),
+        normal_ttl_seconds: contract.cache.normal_ttl_seconds,
+        stale_ttl_seconds: contract.cache.stale_ttl_seconds,
+        upstream_client_version: contract.upstream_client_version,
     }
-    let mut ids = BTreeSet::new();
-    for contract in &catalog.contracts {
-        if contract.id.trim().is_empty() || !ids.insert(contract.id.as_str()) {
-            return Err("provider contract catalog contains an invalid id".into());
-        }
-        if contract.timeouts.connect_ms == 0
-            || contract.timeouts.total_ms < contract.timeouts.connect_ms
-            || contract.timeouts.read_idle_ms == 0
-            || contract.cache.stale_ttl_seconds < contract.cache.normal_ttl_seconds
-        {
-            return Err("provider contract catalog contains invalid runtime bounds".into());
-        }
-        EndpointJoin::parse(&contract.endpoint_join)?;
-        AuthScheme::parse(&contract.auth_scheme)?;
-        if contract.template_ids.is_empty()
-            || contract.api_formats.is_empty()
-            || contract.credential_sources.is_empty()
-            || !contract
-                .credential_sources
-                .contains(&contract.default_credential_source)
-            || contract.model_policies.is_empty()
-            || !contract
-                .model_policies
-                .contains(&contract.default_model_policy)
-            || contract.model_discovery.is_empty()
-            || contract.scratch_policy.is_empty()
-            || !matches!(
-                contract.thinking_policy.as_str(),
-                "" | "adaptive" | "enabled"
-            )
-        {
-            return Err("provider contract catalog contains an invalid capability shape".into());
-        }
-    }
-    Ok(catalog)
 }
 
 pub(crate) fn load_runtime_contract(
@@ -180,61 +80,22 @@ pub(crate) fn load_runtime_contract(
     expected_id: Option<&str>,
     expected_digest: Option<&str>,
 ) -> Result<ProviderRuntimeContract, String> {
-    let catalog = parse_catalog()?;
-    let digest = catalog_digest();
+    let digest = static_catalog_digest();
     let contract = match (expected_id, expected_digest) {
         (Some(id), Some(expected)) => {
             if expected != digest {
                 return Err("managed provider contract identity mismatch".into());
             }
-            catalog
-                .contracts
-                .iter()
-                .find(|contract| contract.id == id)
-                .ok_or("managed provider contract is unavailable")?
+            contract_by_id(id).map_err(|_| "managed provider contract is unavailable")?
         }
-        (None, None) => {
-            let mut matches = catalog
-                .contracts
-                .iter()
-                .filter(|contract| contract.adapter == provider);
-            let first = matches.next().ok_or("provider contract is unavailable")?;
-            if matches.any(|other| {
-                other.auth_mode != first.auth_mode
-                    || other.auth_scheme != first.auth_scheme
-                    || other.api_key_env != first.api_key_env
-                    || other.transport != first.transport
-                    || other.endpoint_policy != first.endpoint_policy
-                    || other.endpoint_join != first.endpoint_join
-                    || other.timeouts.connect_ms != first.timeouts.connect_ms
-                    || other.timeouts.total_ms != first.timeouts.total_ms
-                    || other.timeouts.read_idle_ms != first.timeouts.read_idle_ms
-            }) {
-                return Err("provider contract identity is required for this adapter".into());
-            }
-            first
-        }
+        (None, None) => contract_for_adapter(provider)
+            .map_err(|_| "provider contract identity is required for this adapter")?,
         _ => return Err("managed provider contract identity is incomplete".into()),
     };
     if contract.adapter != provider {
         return Err("managed provider contract adapter mismatch".into());
     }
-    Ok(ProviderRuntimeContract {
-        contract_id: contract.id.clone(),
-        catalog_digest: digest,
-        auth_mode: contract.auth_mode.clone(),
-        auth_scheme: AuthScheme::parse(&contract.auth_scheme)?,
-        api_key_env: contract.api_key_env.clone(),
-        transport: contract.transport.clone(),
-        endpoint_policy: contract.endpoint_policy.clone(),
-        endpoint_join: EndpointJoin::parse(&contract.endpoint_join)?,
-        connect_timeout: Duration::from_millis(contract.timeouts.connect_ms),
-        request_timeout: Duration::from_millis(contract.timeouts.total_ms),
-        read_idle_timeout: Duration::from_millis(contract.timeouts.read_idle_ms),
-        normal_ttl_seconds: contract.cache.normal_ttl_seconds,
-        stale_ttl_seconds: contract.cache.stale_ttl_seconds,
-        upstream_client_version: contract.upstream_client_version.clone(),
-    })
+    Ok(project_runtime_contract(contract, digest))
 }
 
 pub(crate) fn codex_contract_from_runtime(
@@ -268,47 +129,11 @@ pub(crate) fn codex_contract_from_runtime(
 
 #[cfg(test)]
 pub(crate) fn load_codex_runtime_contract() -> Result<CodexRuntimeContract, String> {
-    let catalog = parse_catalog()?;
-    let mut codex = catalog.contracts.iter().filter(|contract| {
-        contract.id == "codex-oauth"
-            || contract.adapter == "codex"
-            || contract.auth_mode == "csswitch_oauth"
-            || contract.auth_scheme == "csswitch_oauth"
-            || contract.transport == "codex_responses_sse"
-    });
-    let contract = codex
-        .next()
-        .ok_or("Codex provider contract is unavailable")?;
-    if codex.next().is_some()
-        || contract.id != "codex-oauth"
-        || contract.template_ids != ["codex"]
-        || contract.api_formats != ["openai_responses"]
-        || contract.adapter != "codex"
-        || contract.auth_mode != "csswitch_oauth"
-        || contract.auth_scheme != "csswitch_oauth"
-        || contract.credential_sources != ["csswitch_oauth"]
-        || contract.default_credential_source != "csswitch_oauth"
-        || contract.model_policies != ["dynamic_catalog"]
-        || contract.default_model_policy != "dynamic_catalog"
-        || contract.model_discovery != "codex_account_catalog"
-        || contract.transport != "codex_responses_sse"
-        || contract.endpoint_policy != "gateway_managed_official"
-        || contract.endpoint_join != "managed_official"
-        || contract.api_key_env.is_some()
-        || contract.scratch_policy != "gateway_owned_auth"
-        || !contract.thinking_policy.is_empty()
-        || contract.upstream_client_version.as_deref() != Some("0.144.4")
-        || contract.timeouts.connect_ms == 0
-        || contract.timeouts.total_ms < contract.timeouts.connect_ms
-        || contract.timeouts.read_idle_ms == 0
-        || contract.cache.stale_ttl_seconds < contract.cache.normal_ttl_seconds
-    {
-        return Err("Codex provider contract is invalid".into());
-    }
+    let digest = static_catalog_digest();
     codex_contract_from_runtime(&load_runtime_contract(
         "codex",
-        Some(&contract.id),
-        Some(&catalog_digest()),
+        Some("codex-oauth"),
+        Some(&digest),
     )?)
 }
 
@@ -332,9 +157,10 @@ pub(crate) fn validate_managed_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use csswitch_provider_contracts::{contract_for, load_provider_contracts};
 
     #[test]
-    fn static_codex_contract_drives_gateway_runtime_values() {
+    fn codex_projection_preserves_shared_runtime_values() {
         let contract = load_codex_runtime_contract().unwrap();
         assert_eq!(contract.contract_id, "codex-oauth");
         assert_eq!(contract.catalog_digest.len(), 64);
@@ -364,25 +190,30 @@ mod tests {
     }
 
     #[test]
-    fn managed_identity_selects_exact_non_codex_contract_and_rejects_cross_adapter_ids() {
-        let digest = catalog_digest();
+    fn managed_contract_selects_the_exact_shared_id() {
+        let digest = static_catalog_digest();
         let kimi =
             load_runtime_contract("relay", Some("kimi-anthropic-relay"), Some(&digest)).unwrap();
         assert_eq!(kimi.contract_id, "kimi-anthropic-relay");
         assert_eq!(kimi.endpoint_join, EndpointJoin::AnthropicV1);
         assert_eq!(kimi.transport, "anthropic_messages");
+        assert_eq!(kimi.catalog_digest, digest);
+    }
 
-        let opencode =
-            load_runtime_contract("relay", Some("opencode-go-anthropic"), Some(&digest)).unwrap();
-        assert_eq!(opencode.auth_scheme, AuthScheme::Bearer);
-        assert_eq!(opencode.endpoint_join, EndpointJoin::AnthropicV1);
+    #[test]
+    fn standalone_adapter_selection_requires_one_shared_contract() {
+        assert_eq!(
+            load_runtime_contract("deepseek", None, None)
+                .unwrap()
+                .contract_id,
+            "deepseek-native"
+        );
+        assert!(load_runtime_contract("relay", None, None).is_err());
+    }
 
-        let gemini =
-            load_runtime_contract("openai-custom", Some("gemini-openai-chat"), Some(&digest))
-                .unwrap();
-        assert_eq!(gemini.auth_scheme, AuthScheme::Bearer);
-        assert_eq!(gemini.endpoint_join, EndpointJoin::OpenaiPath);
-
+    #[test]
+    fn managed_contract_rejects_cross_adapter_ids_and_incomplete_identity() {
+        let digest = static_catalog_digest();
         assert!(load_runtime_contract(
             "openai-custom",
             Some("kimi-anthropic-relay"),
@@ -396,5 +227,38 @@ mod tests {
             Some(&"0".repeat(64)),
         )
         .is_err());
+    }
+
+    #[test]
+    fn gateway_projection_matches_shared_catalog_selection() {
+        let digest = static_catalog_digest();
+        for contract in load_provider_contracts().unwrap().contracts {
+            for template_id in &contract.template_ids {
+                for api_format in &contract.api_formats {
+                    let desktop_contract = contract_for(template_id, api_format).unwrap();
+                    let gateway_contract = load_runtime_contract(
+                        &desktop_contract.adapter,
+                        Some(&desktop_contract.id),
+                        Some(&digest),
+                    )
+                    .unwrap();
+                    assert_eq!(gateway_contract.contract_id, desktop_contract.id);
+                    assert_eq!(gateway_contract.catalog_digest, digest);
+                    assert_eq!(gateway_contract.auth_scheme, desktop_contract.auth_scheme);
+                    assert_eq!(
+                        gateway_contract.endpoint_join,
+                        desktop_contract.endpoint_join
+                    );
+                    assert_eq!(
+                        gateway_contract.connect_timeout,
+                        Duration::from_millis(desktop_contract.timeouts.connect_ms)
+                    );
+                    assert_eq!(
+                        gateway_contract.request_timeout,
+                        Duration::from_millis(desktop_contract.timeouts.total_ms)
+                    );
+                }
+            }
+        }
     }
 }

@@ -642,6 +642,17 @@ pub fn contract_for(
     })
 }
 
+/// Returns one validated contract selected by its stable catalog identity.
+pub fn contract_by_id(id: &str) -> Result<ProviderContract, ProviderContractError> {
+    load_provider_contracts()?
+        .contracts
+        .into_iter()
+        .find(|contract| contract.id == id)
+        .ok_or_else(|| {
+            ProviderContractError::catalog(format!("没有匹配的 provider contract id：{id}"))
+        })
+}
+
 /// Returns an adapter's sole contract, rejecting every absent or ambiguous selector.
 pub fn contract_for_adapter(adapter: &str) -> Result<ProviderContract, ProviderContractError> {
     let matches: Vec<_> = load_provider_contracts()?
@@ -698,6 +709,13 @@ mod tests {
             contract_for("custom", "openai_responses").unwrap().adapter,
             "openai-responses"
         );
+    }
+
+    #[test]
+    fn exact_contract_id_selection_returns_the_validated_contract() {
+        let contract = contract_by_id("codex-oauth").unwrap();
+        assert_eq!(contract.adapter, "codex");
+        assert!(contract_by_id("missing-contract").is_err());
     }
 
     #[test]

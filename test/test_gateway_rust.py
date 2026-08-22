@@ -663,7 +663,7 @@ class RustGatewayLoopback(unittest.TestCase):
             self.assertEqual(body["intent"], "formal")
             self.assertRegex(body["catalog_fp"], r"^[0-9a-f]{64}$")
             self.assertEqual(body["provider_contract_id"], "deepseek-native")
-            self.assertRegex(body["provider_contract_digest"], r"^[0-9a-f]{64}$")
+            self.assertEqual(body["provider_contract_digest"], PROVIDER_CONTRACT_DIGEST)
         finally:
             self.stop_gateway(proc)
 
