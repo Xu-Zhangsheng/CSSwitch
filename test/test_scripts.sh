@@ -6,8 +6,10 @@ no() { echo "NOT ok - $1"; FAILS=$((FAILS+1)); }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # 7.6 停止脚本如实报告
-T="$(mktemp -d)"
+T="$(mktemp -d /private/tmp/csswitch-test-scripts.XXXXXX)"
 T="$(cd "$T" && pwd -P)"
+cleanup() { rm -rf "$T"; }
+trap cleanup EXIT
 OUTER_HOME="$T/outerhome"
 mkdir -p "$OUTER_HOME/.claude-science"
 mkdir -p "$T/home/.claude-science"           # DATA_DIR 存在，走到 stop 调用
@@ -78,17 +80,33 @@ if [ $rc -eq 126 ] && echo "$out" | grep -q "缺少有效"; then ok "SSH bridge 
 out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/arbitrary-linkhome" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9934 --dry-run 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && echo "$out" | grep -q "符号链接"; then ok "launch rejects arbitrary symlinked data-dir"; else no "launch followed arbitrary symlinked data-dir (rc=$rc): $out"; fi
 
-CAPTURE_FILE="$T/launch-args"
-CAPTURE_ENV="$T/launch-env"
+# Capture files live under isolated HOME so env -i Science still can write them.
+CAPTURE_SANDBOX="$T/vh-capture"
+mkdir -p "$CAPTURE_SANDBOX"
+CAPTURE_FILE="$CAPTURE_SANDBOX/launch-args"
+CAPTURE_ENV="$CAPTURE_SANDBOX/launch-env"
 FAKE_CAPTURE="$T/fake-capture"
 mkdir -p "$OUTER_HOME/.claude-science/runtime"
 mkdir -p "$OUTER_HOME/.ssh"
 printf 'must-not-copy\n' > "$OUTER_HOME/.claude-science/runtime/real-user-sentinel"
 printf 'Host test-only\n  HostName 127.0.0.1\n' > "$OUTER_HOME/.ssh/config"
-printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$CAPTURE_FILE"\nif [ -n "${CAPTURE_ENV:-}" ]; then printf "PATH=%%s\\nSSH_CONFIG=%%s\\nSSH_HOSTS=%%s\\nHOME=%%s\\n" "$PATH" "${CSSWITCH_SYSTEM_SSH_CONFIG:-}" "${CSSWITCH_SYSTEM_SSH_HOSTS:-}" "$HOME" > "$CAPTURE_ENV"; fi\nexit 0\n' > "$FAKE_CAPTURE"
+# Stub Science: under env -i only HOME and allowlisted vars exist. Write captures
+# into $HOME (sandbox home) instead of ambient CAPTURE_* paths.
+printf '%s\n' '#!/bin/sh' \
+  'printf "%s\n" "$@" > "$HOME/launch-args"' \
+  'printf "PATH=%s\nSSH_CONFIG=%s\nHOME=%s\n" "$PATH" "${CSSWITCH_SYSTEM_SSH_CONFIG:-}" "$HOME" > "$HOME/launch-env"' \
+  'exit 0' > "$FAKE_CAPTURE"
 chmod +x "$FAKE_CAPTURE"
-out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/vh-capture" SCIENCE_BIN="$FAKE_CAPTURE" CAPTURE_FILE="$CAPTURE_FILE" CAPTURE_ENV="$CAPTURE_ENV" CSSWITCH_REUSE_SYSTEM_SSH=1 CSSWITCH_SYSTEM_SSH_HOSTS="test-only second-alias" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9940 --skip-oauth-forge 2>&1)"; rc=$?
+out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$CAPTURE_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_REUSE_SYSTEM_SSH=1 CSSWITCH_SYSTEM_SSH_HOSTS="test-only second-alias" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9940 --skip-oauth-forge 2>&1)"; rc=$?
 if [ $rc -eq 0 ] && grep -qx -- '--host' "$CAPTURE_FILE" && grep -qx -- '127.0.0.1' "$CAPTURE_FILE" && grep -qx -- '--sandbox-port' "$CAPTURE_FILE" && grep -qx -- '9941' "$CAPTURE_FILE"; then ok "launch pins loopback host and explicit Science preview port"; else no "launch omitted explicit loopback/preview port (rc=$rc): $out"; fi
+ACCEPTANCE_SANDBOX="$T/vh-acceptance-outer-sandbox"
+mkdir -p "$ACCEPTANCE_SANDBOX"
+out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$ACCEPTANCE_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_ACCEPTANCE_OUTER_SANDBOX=1 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9948 --skip-oauth-forge 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && echo "$out" | grep -q "外层 sandbox"; then ok "acceptance inner-sandbox opt-out fails closed without an outer sandbox"; else no "acceptance inner-sandbox opt-out ran without an outer sandbox (rc=$rc): $out"; fi
+ACCEPTANCE_GUARDED_SANDBOX="$T/vh-acceptance-guarded"
+mkdir -p "$ACCEPTANCE_GUARDED_SANDBOX"
+out="$(/usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))' /usr/bin/env HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$ACCEPTANCE_GUARDED_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_ACCEPTANCE_OUTER_SANDBOX=1 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9948 --skip-oauth-forge 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && grep -Fxq -- '--dangerously-no-sandbox' "$ACCEPTANCE_GUARDED_SANDBOX/launch-args"; then ok "acceptance outer sandbox explicitly replaces the incompatible inner Science sandbox"; else no "acceptance outer sandbox did not inject the exact Science opt-out (rc=$rc): $out"; fi
 OPAQUE_SANDBOX="$T/vh-opaque-binding"
 mkdir -p "$OPAQUE_SANDBOX/.claude-science/conda"
 OPAQUE_CONDA_BINDING="$(stat -f '%d:%i' "$OPAQUE_SANDBOX/.claude-science/conda")"
@@ -99,17 +117,19 @@ mv "$OPAQUE_SANDBOX/.claude-science/conda" "$OPAQUE_SANDBOX/.claude-science/cond
 mkdir "$OPAQUE_SANDBOX/.claude-science/conda"
 out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$OPAQUE_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CAPTURE_FILE="$CAPTURE_FILE" CSSWITCH_RUNTIME_VERSION_PRECHECKED=1 CSSWITCH_SCIENCE_OPAQUE_BINDINGS="$OPAQUE_BINDINGS" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9946 --skip-oauth-forge 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && echo "$out" | grep -q "opaque root 启动绑定已变化"; then ok "launch rejects opaque-root rebind immediately before Science serve"; else no "launch accepted rebound opaque root (rc=$rc): $out"; fi
-if grep -Fq "PATH=$ROOT/scripts/ssh-bridge:" "$CAPTURE_ENV" && grep -Fxq "SSH_CONFIG=$OUTER_HOME/.ssh/config" "$CAPTURE_ENV" && grep -Fxq "SSH_HOSTS=test-only second-alias" "$CAPTURE_ENV" && grep -Fxq "HOME=$T/vh-capture" "$CAPTURE_ENV"; then ok "launch scopes SSH bridge to the isolated Science environment"; else no "launch omitted isolated SSH bridge environment"; fi
-SANDBOX_SSH_CONFIG="$T/vh-capture/.ssh/config"
+if grep -Fq "PATH=$CAPTURE_SANDBOX/.csswitch-ssh-bridge:" "$CAPTURE_ENV" && grep -Fxq "SSH_CONFIG=$OUTER_HOME/.ssh/config" "$CAPTURE_ENV" && grep -Fxq "HOME=$CAPTURE_SANDBOX" "$CAPTURE_ENV" && ! grep -q 'SSH_HOSTS=' "$CAPTURE_ENV"; then ok "launch scopes SSH bridge snapshot to the isolated Science environment"; else no "launch omitted isolated SSH bridge snapshot environment"; fi
+SSH_SNAPSHOT="$CAPTURE_SANDBOX/.csswitch-ssh-bridge/ssh"
+if [ -f "$SSH_SNAPSHOT" ] && [ ! -L "$SSH_SNAPSHOT" ] && [ "$(stat -f '%Lp' "$SSH_SNAPSHOT")" = "500" ] && [ "$(stat -f '%Lp' "$(dirname "$SSH_SNAPSHOT")")" = "700" ] && [ "$(shasum -a 256 "$SSH_SNAPSHOT" | awk '{print $1}')" = "0828acbda9f296983c127149879526e92a3eb915cbc9874747e8cecbeab87c5c" ]; then ok "launch pins SSH wrapper to a private content snapshot"; else no "launch did not pin the SSH wrapper snapshot identity"; fi
+SANDBOX_SSH_CONFIG="$CAPTURE_SANDBOX/.ssh/config"
 SANDBOX_SSH_MODE="$(stat -f '%Lp' "$SANDBOX_SSH_CONFIG" 2>/dev/null || true)"
 if [ -f "$SANDBOX_SSH_CONFIG" ] && [ ! -L "$SANDBOX_SSH_CONFIG" ] && [ "$SANDBOX_SSH_MODE" = "600" ]; then ok "opt-in creates a narrow regular 0600 sandbox SSH config"; else no "opt-in did not create a safe sandbox SSH config"; fi
 if grep -Fxq 'Host test-only second-alias' "$SANDBOX_SSH_CONFIG" && grep -Fxq "Include \"$OUTER_HOME/.ssh/config\"" "$SANDBOX_SSH_CONFIG" && ! grep -q 'HostName\|IdentityFile\|ProxyCommand' "$SANDBOX_SSH_CONFIG"; then ok "sandbox SSH config materializes only concrete Host aliases before Include"; else no "sandbox SSH config did not materialize the Science preflight alias boundary"; fi
 out_ssh="$(/usr/bin/ssh -F "$SANDBOX_SSH_CONFIG" -G test-only 2>/dev/null)"; rc_ssh=$?
 if [ $rc_ssh -eq 0 ] && echo "$out_ssh" | grep -qx 'hostname 127.0.0.1'; then ok "sandbox SSH config Include resolves Host with system OpenSSH"; else no "sandbox SSH config did not resolve included Host (rc=$rc_ssh)"; fi
 if [ ! -e "$T/vh-capture/.claude-science/runtime/real-user-sentinel" ]; then ok "launch never copies real Science runtime data"; else no "launch copied real Science data into sandbox"; fi
-if ! echo "$out" | grep -Fq "$T/vh-capture" && ! echo "$out" | grep -Fq "$FAKE_CAPTURE"; then ok "launch log redacts sandbox and binary paths"; else no "launch log exposed sensitive paths: $out"; fi
+if ! echo "$out" | grep -Fq "$CAPTURE_SANDBOX" && ! echo "$out" | grep -Fq "$FAKE_CAPTURE"; then ok "launch log redacts sandbox and binary paths"; else no "launch log exposed sensitive paths: $out"; fi
 
-out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/vh-capture" SCIENCE_BIN="$FAKE_CAPTURE" CAPTURE_FILE="$CAPTURE_FILE" CAPTURE_ENV="$CAPTURE_ENV" CSSWITCH_REUSE_SYSTEM_SSH=0 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9940 --skip-oauth-forge 2>&1)"; rc=$?
+out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$CAPTURE_SANDBOX" SCIENCE_BIN="$FAKE_CAPTURE" CSSWITCH_REUSE_SYSTEM_SSH=0 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9940 --skip-oauth-forge 2>&1)"; rc=$?
 if [ $rc -eq 0 ] && [ ! -e "$SANDBOX_SSH_CONFIG" ] && [ ! -L "$SANDBOX_SSH_CONFIG" ]; then ok "disabling SSH removes only the managed sandbox config"; else no "disabling SSH left the managed sandbox config or failed (rc=$rc): $out"; fi
 
 FOREIGN_SANDBOX="$T/vh-foreign-ssh"
@@ -143,6 +163,29 @@ if [ $rc -ne 0 ] && echo "$out" | grep -q "符号链接"; then ok "launch reject
 
 out="$(HOME="$OUTER_HOME" SANDBOX_HOME="$T/vh-parent-link" SCIENCE_BIN="$PARENT_LINK_BIN" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9933 --skip-oauth-forge 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && echo "$out" | grep -q "符号链接"; then ok "launch rejects symlinked Science parent"; else no "launch accepted symlinked Science parent (rc=$rc): $out"; fi
+
+# Ambient env must not enter Science (env -i allowlist).
+ALLOW_SANDBOX="$T/vh-allowlist"
+mkdir -p "$ALLOW_SANDBOX"
+ALLOW_STUB="$T/fake-allowlist"
+printf '%s\n' '#!/bin/sh' 'env | sort > "$HOME/allowlist-env.txt"' 'exit 0' > "$ALLOW_STUB"
+chmod +x "$ALLOW_STUB"
+out="$(HOME="$OUTER_HOME" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$ALLOW_SANDBOX" SCIENCE_BIN="$ALLOW_STUB" CSSWITCH_TEST_SENTINEL_SECRET=parent-sentinel-must-not-leak OPENAI_API_KEY=sk-parent-must-not-leak CSSWITCH_REUSE_SYSTEM_SSH=0 "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9950 --skip-oauth-forge 2>&1)"; rc=$?
+ALLOW_ENV="$ALLOW_SANDBOX/allowlist-env.txt"
+if [ $rc -eq 0 ] && [ -f "$ALLOW_ENV" ] && ! grep -q 'CSSWITCH_TEST_SENTINEL_SECRET\|parent-sentinel-must-not-leak\|OPENAI_API_KEY\|sk-parent-must-not-leak' "$ALLOW_ENV" && grep -q "^HOME=$ALLOW_SANDBOX$" "$ALLOW_ENV" && grep -q '^ANTHROPIC_BASE_URL=' "$ALLOW_ENV"; then ok "launch env -i drops ambient secrets and keeps required Science vars"; else no "launch env allowlist failed (rc=$rc): $out"; fi
+
+# Stop script must work under Desktop allowlist using CSSWITCH_HOST_HOME.
+STOP_SANDBOX="$T/vh-stop-allowlist"
+mkdir -p "$STOP_SANDBOX/.claude-science"
+STOP_STUB="$T/fake-stop-science"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$STOP_STUB"
+chmod +x "$STOP_STUB"
+# Prefer CSSWITCH_HOST_HOME; polluted HOME must not become REAL_HOME for guards.
+out="$(env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="/nonexistent-polluted-home-$$" CSSWITCH_HOST_HOME="$OUTER_HOME" SANDBOX_HOME="$STOP_SANDBOX" SCIENCE_BIN="$STOP_STUB" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && echo "$out" | grep -q "沙箱已停"; then ok "stop prefers CSSWITCH_HOST_HOME over polluted HOME"; else no "stop failed with CSSWITCH_HOST_HOME (rc=$rc): $out"; fi
+# Collision guard uses host home: sandbox home == host home must fail closed.
+out="$(env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" CSSWITCH_HOST_HOME="$STOP_SANDBOX" SANDBOX_HOME="$STOP_SANDBOX" SCIENCE_BIN="$STOP_STUB" "$ROOT/scripts/stop-science-sandbox.sh" 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && echo "$out" | grep -q "真实目录"; then ok "stop collision guard uses CSSWITCH_HOST_HOME"; else no "stop collision guard missed CSSWITCH_HOST_HOME (rc=$rc): $out"; fi
 
 # 7.7 review: 畸形端口必须失败关闭（fail-closed），而不是绕过算术守卫
 out="$(SANDBOX_HOME="$T/vh2" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 8765x --dry-run 2>&1)"; rc=$?

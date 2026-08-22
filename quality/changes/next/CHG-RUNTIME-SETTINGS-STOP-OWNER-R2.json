@@ -1,0 +1,78 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-SETTINGS-STOP-OWNER-R2",
+    "version": "v0.8.4-dev",
+    "title": "Move set_settings Science wait outside AppState with owner CAS",
+    "summary": "Extends the existing process-local Science stop owner boundary to set_settings. A teardown claims the exact owner and typed stop request under AppState, executes the existing stop policy without AppState, and publishes only after generation and complete owner CAS. A stale result preserves replacement Science state, the tracked Gateway, and the prior durable settings.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/commands/runtime/lifecycle.rs",
+      "desktop/src-tauri/src/commands/runtime/tests.rs",
+      "docs/architecture/runtime-state-transactions.md",
+      "docs/audits/2026-08-06-r2-set-settings-stop-owner.md",
+      "docs/audits/README.md",
+      "docs/README.md",
+      "quality/changes/next/CHG-RUNTIME-SETTINGS-STOP-OWNER-R2.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/test_run_evidence_attempt0_runner.py",
+      "test/quality/test_source_gate_runtime.py",
+      "test/test_skill_runtime_boundary.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "set_mode, set_settings, and stop_all share one process-local owner claim and publication implementation while retaining their distinct Gateway, generation, cleanup, and error semantics",
+        "the R2 regression covers generation-only and identity-only drift, proves AppState remains readable during stop, and rejects stale publication before settings, generation, or Gateway changes",
+        "the existing R0 set_settings characterizations continue to freeze journal preflight, stop failure, SSH cleanup failure, and config-commit failure ordering",
+        "the static Science runtime boundary binds claim-execute-relock-publish-bump-stop-revoke-commit ordering in set_settings",
+        "downgrade cleanup and every other remaining Science stop owner stay outside this bounded slice"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

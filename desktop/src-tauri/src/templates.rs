@@ -167,7 +167,7 @@ static TEMPLATES: &[Template] = &[
         website_url: "https://opencode.ai/docs/zh-cn/go/",
         icon: "custom",
         icon_color: "#111827",
-        compatibility_notice: Some("0.8.1 limited：文本、多轮、tools/tool_choice 与模型发现；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
+        compatibility_notice: Some("兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
     },
     Template {
         id: "opencode-go-anthropic",
@@ -181,7 +181,7 @@ static TEMPLATES: &[Template] = &[
         website_url: "https://opencode.ai/docs/zh-cn/go/",
         icon: "custom",
         icon_color: "#111827",
-        compatibility_notice: Some("0.8.1 limited：文本、多轮、tools/tool_choice 与模型发现；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
+        compatibility_notice: Some("兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
     },
     Template {
         id: "grok",
@@ -195,7 +195,7 @@ static TEMPLATES: &[Template] = &[
         website_url: "https://docs.x.ai/developers/rest-api-reference/inference",
         icon: "custom",
         icon_color: "#111827",
-        compatibility_notice: Some("0.8.1 limited：文本、多轮、tools/tool_choice 与模型发现；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
+        compatibility_notice: Some("兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
     },
     Template {
         id: "gemini",
@@ -209,7 +209,7 @@ static TEMPLATES: &[Template] = &[
         website_url: "https://ai.google.dev/gemini-api/docs/openai",
         icon: "custom",
         icon_color: "#4285F4",
-        compatibility_notice: Some("0.8.1 limited：仅实现官方 OpenAI compatibility；文本、多轮、tools/tool_choice 与模型发现已纳入门禁，图片、厂商 reasoning、原生流式和结构化输出尚未通过。"),
+        compatibility_notice: Some("兼容范围：仅按官方 OpenAI compatibility 接入；文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"),
     },
     Template {
         id: "codex",

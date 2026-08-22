@@ -35,7 +35,6 @@ pub(crate) enum OperationKind {
     UpdateActiveConnection,
     ValidateConnection,
     FetchModels,
-    StartProxy,
     OneClickLogin,
 }
 
@@ -46,7 +45,6 @@ impl OperationKind {
             OperationKind::UpdateActiveConnection => "update_active_connection",
             OperationKind::ValidateConnection => "validate_connection",
             OperationKind::FetchModels => "fetch_models",
-            OperationKind::StartProxy => "start_proxy",
             OperationKind::OneClickLogin => "one_click_login",
         }
     }

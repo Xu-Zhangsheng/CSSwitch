@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://csswitch.local/schema/source-candidate-record.v1.schema.json",
+  "title": "Source candidate record v1",
+  "$defs": {
+    "Sha": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])", "minLength": 64, "maxLength": 64},
+    "GitSha": {"type": "string", "pattern": "^[0-9a-f]{40}(?![\\s\\S])", "minLength": 40, "maxLength": 40},
+    "RunId": {"type": "string", "pattern": "^[0-9a-f]{32}(?![\\s\\S])", "minLength": 32, "maxLength": 32},
+    "Path": {"type": "string", "pattern": "^(?!/)(?!.*[\\u0000-\\u001f\\u007f])(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*(?:^|/)(?:/|$)).{1,240}$(?![\\s\\S])", "minLength": 1, "maxLength": 240},
+    "ArtifactRef": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"$ref": "#/$defs/Path"}, "sha256": {"$ref": "#/$defs/Sha"}}},
+    "ReleaseIdentity": {"type": "object", "additionalProperties": false, "required": ["tag", "tag_object_sha", "peeled_sha"], "properties": {"tag": {"type": "string", "pattern": "^v[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$(?![\\s\\S])", "maxLength": 32}, "tag_object_sha": {"$ref": "#/$defs/GitSha"}, "peeled_sha": {"$ref": "#/$defs/GitSha"}}},
+    "ChangeEntry": {"type": "object", "additionalProperties": false, "required": ["status", "paths"], "properties": {"status": {"type": "string", "pattern": "^(?:A|M|D|T|U|X|B|R[0-9]{1,3}|C[0-9]{1,3})$(?![\\s\\S])", "maxLength": 4}, "paths": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"$ref": "#/$defs/Path"}}}}
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "development_line", "comparison_base", "candidate_head_sha", "change_set_sha256", "change_set", "change_ids", "run_id", "run_manifest", "completion_seal", "source_snapshot_manifest", "evidence_manifest", "created_at"],
+  "properties": {
+    "schema": {"const": "source-candidate-record.v1"},
+    "development_line": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$(?![\\s\\S])", "maxLength": 64},
+    "comparison_base": {"$ref": "#/$defs/ReleaseIdentity"},
+    "candidate_head_sha": {"$ref": "#/$defs/GitSha"},
+    "change_set_sha256": {"$ref": "#/$defs/Sha"},
+    "change_set": {"type": "array", "minItems": 1, "maxItems": 4096, "items": {"$ref": "#/$defs/ChangeEntry"}},
+    "change_ids": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"type": "string", "pattern": "^CHG-[A-Z0-9][A-Z0-9-]{0,31}(?![\\s\\S])", "maxLength": 36}},
+    "run_id": {"$ref": "#/$defs/RunId"},
+    "run_manifest": {"allOf": [{"$ref": "#/$defs/ArtifactRef"}, {"properties": {"path": {"const": "source/run-manifest.json"}}}]},
+    "completion_seal": {"allOf": [{"$ref": "#/$defs/ArtifactRef"}, {"properties": {"path": {"const": "source/completion-seal.json"}}}]},
+    "source_snapshot_manifest": {"allOf": [{"$ref": "#/$defs/ArtifactRef"}, {"properties": {"path": {"const": "source/snapshot/source-snapshot-manifest.json"}}}]},
+    "evidence_manifest": {"allOf": [{"$ref": "#/$defs/ArtifactRef"}, {"properties": {"path": {"const": "source/evidence-manifest.json"}}}]},
+    "created_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z(?![\\s\\S])", "maxLength": 30}
+  }
+}

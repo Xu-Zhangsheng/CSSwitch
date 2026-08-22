@@ -109,30 +109,34 @@ socket 经过同一个进程就把所有 Science 出站统一归为 model Gatewa
 - 对 Science-owned opaque roots 的递归复制、恢复、清理或权限接管；
 - 没有 owner、清理规则和故障边界的环境变量、路径或进程投影。
 
-#### 当前 ambient environment 缺口
+#### Ambient environment allowlist（已闭合）
 
-上面的“禁止隐式 ingress”是目标合同，不是当前源码已经满足的事实。当前
-Tauri → launch script 的 process spawn 没有清空父环境，脚本最终又使用不带
-`-i` 的 `/usr/bin/env` 启动 Science；因此父进程导出的 API key、云/GitHub
-credential、`SSH_AUTH_SOCK` 或其他变量可能进入受管 Science，即使对应 bridge
-没有启用。
+“禁止隐式 ingress”已由两层 allowlist 落实为当前源码合同：
 
-该 `SOURCE-GAP` 是生产机械拆分的前置阻断项。进入 typed failure、
-`sandbox_session` 或 Gateway 模块移动前，必须先以独立行为修复闭合：
+1. Tauri → launch / stop script：`runtime/launch_env.rs` 对 child 执行
+   `env_clear` 后只注入控制面 allowlist（隔离 `SANDBOX_HOME`、runtime path、
+   `CSSWITCH_PROXY_URL`、显式 `CSSWITCH_HOST_HOME` 供主机侧路径护栏、SSH 开关
+   与 hosts、opaque bindings、固定安全 PATH/locale/temp）；stop 脚本不得依赖
+   ambient `HOME`；
+2. launch script → Science：`scripts/launch-virtual-sandbox.sh` 使用
+   `/usr/bin/env -i` 再次从空环境建立 allowlist（隔离 HOME、
+   `ANTHROPIC_BASE_URL`、受限 proxy/`NO_PROXY`、固定 PATH、locale/temp、
+   以及 SSH bridge 显式启用时的最小集合）；
+3. Gateway：`configure_managed_proxy_command` 同样 `env_clear` + base
+   allowlist（含绝对 host `HOME`，供 Codex `$HOME/.csswitch` 等主机态路径），再由
+   formal/scratch plan 显式注入 provider secret 与合同变量；
+4. provider credential 只进入 Gateway process，不进入 Science 或 launch script；
+5. SSH / Skill host 等 bridge 变量仅在对应 bridge 启用路径注入。
 
-1. Tauri → launch script 使用显式环境 allowlist，而不是继承 ambient environment；
-2. launch script → Science 再次从空环境建立 allowlist；
-3. 只重新加入隔离 HOME、Gateway/proxy、runtime identity、固定安全 PATH、必要
-   locale/temp，以及当前 opt-in bridge 明确授权的变量；
-4. provider credential 只进入对应 Gateway process，不进入 Science 或 bridge；
-5. SSH、Codex、Skill/MCP 等 bridge 变量仅在该 bridge 显式启用时注入，关闭后
-   restart 不得残留；
-6. 使用假 secret/sentinel 覆盖 cold start、stopped-to-started 和
-   CSSwitch restart/recovery 后的新 process，证明任意未列入 allowlist 的父环境
-   不可在 script 或 Science 中观察。
+验收：
 
-修复前不得把“未显式投影真实凭证”写成 current source PASS，也不得在机械拆分中
-顺手改变环境继承后只靠既有测试推断行为等价。
+- `runtime::launch_env` 与 `proxy_lifecycle` 的 sentinel / parent-secret 单测；
+- `test/test_launch_science_env_allowlist.sh`（stub Science + 污染父环境）证明
+  Science serve 子进程看不到 ambient secrets。
+
+typed failure 投影已在 source 层建立（`runtime/failure.rs`）。后续
+`sandbox_session` 与 Gateway 机械拆分不得扩大上述 allowlist；helper 移动时保持
+退出条件不变，且须继续通过 typed kind 投影失败，不得恢复文案反推 stage。
 
 egress 先按语义责任分为四类：
 
@@ -148,9 +152,10 @@ egress 先按语义责任分为四类：
 因此非 loopback HTTPS 即使属于 `SCIENCE-EXTERNAL`，当前也可能先以 raw
 `CONNECT` 穿过 Gateway：
 
-- Gateway 只拥有 CONNECT target parsing、Anthropic/Claude hostname denylist、
-  当前无独立 deadline 的 DNS resolution、解析返回后共享剩余十秒预算的 dial、
-  tunnel lifecycle 与 transport status；
+- Gateway 只拥有 CONNECT target parsing、Anthropic/Claude hostname denylist、DNS resolution、
+  dial、tunnel lifecycle 与 transport status。DNS 与所有地址的 dial 共享同一个十秒 absolute
+  deadline；标准 resolver 无取消 API，超时后仍停留在 libc 的 resolver thread 由全局最多 8 个
+  permit 限制，预算耗尽即 fail closed，解析完成后的每次 dial 只消费剩余时间；
 - path secret、provider model routing、HTTP MCP/OAuth/tool discovery/tool call
   不属于这条 raw CONNECT 合同；
 - 非 HTTPS、显式 bypass 或不遵循进程 proxy environment 的 client 可能使用不同
@@ -261,7 +266,9 @@ CSSwitch 不托管：
 - analytics/Admin API、offboarding、compliance 和组织策略；
 - 用户 SSH key、远端 server、scheduler 或主机安全状态。
 
-这些项目的 `UNKNOWN` 用来限制结论，不构成 CSSwitch 的默认 backlog。
+这些项目的 `UNKNOWN` 用来限制结论，不构成 CSSwitch 的默认 backlog。未来受管的
+Skill / MCP / Plugin 子集已在[扩展控制面目标合同](skill-mcp-plugin-control-plane.md)
+中冻结；在各组件实现与证据建立前，上述 current-production non-target 不变。
 
 ## 6. 故障归属
 
@@ -280,10 +287,9 @@ CSSwitch 不托管：
 | Python/R/Conda/GPU 异常 | Science environment/kernel；GPU 另查主机与安全模式 | CSSwitch 将 opaque roots 当缓存管理 |
 | 更新后行为变化 | 先确定实际 runtime identity，再对照能力 owner 和依赖面 | seed App 版本或静态字符串单独定性 |
 
-## 7. 拆分前冻结与拆分后验证
+## 7. 维护不变量与验证
 
-本边界是生产拆分的输入，不是拆分完成后的说明。进入 typed failure、runtime
-事务或 Gateway 模块拆分前，必须冻结：
+任何实现变更都必须保持以下稳定边界：
 
 1. 每个状态和语义的唯一 owner；
 2. `CSSWITCH-RUNTIME`、`MODEL-GATEWAY`、`SCIENCE-NATIVE`、
@@ -293,21 +299,15 @@ CSSwitch 不托管：
 4. bridge 准入、关闭、重启、补偿与局部降级规则；
 5. 现有 Tauri command/event/DTO、Gateway wire behavior、锁序、journal、
    receipt 和 recovery 的行为特征测试；
-6. Desktop、transaction、Gateway/provider、runtime adapter、bridge、
-   Science-native 与 external service 的 typed failure domain；
-7. 上述 ambient environment `SOURCE-GAP` 已由两层 allowlist 与 sentinel-secret
-   regressions 闭合；未闭合时不得开始机械拆分。
+6. Desktop、transaction、Gateway/provider、runtime adapter 的一键 typed failure
+   domain 已由 `runtime/failure.rs` 建立；bridge / Science-native / external
+   service 的局部 typed error 保持各自所有权，不并入全局 mega-enum；
+7. ambient environment 两层 allowlist 与 sentinel-secret regressions 已闭合
+   （见上文与 `runtime/launch_env`）；后续变更不得扩大该 allowlist。
 
-这一步不要求先证明每项 Science 能力 current live，也不要求解决所有
-`UNKNOWN`。拆分前需要的是 owner、路径和不变量无歧义；具体版本/provider 的
-兼容结果可以继续是 `UNKNOWN`。
-
-拆分按这些边界机械进行：先建立 typed failure projection，再拆 runtime
-transaction/recovery，随后拆 Gateway HTTP/inference/bridge，最后处理 frontend、
-config 与其他高 fan-in 模块。拆分期间不得顺手改变协议、权限、凭证来源、状态
-提交顺序或 feature ownership。
-
-拆分后再绑定 exact Science artifact、CSSwitch artifact、provider/model 和环境，
+维护这些边界不要求先证明每项 Science 能力 current live，也不要求解决所有
+`UNKNOWN`。owner、路径和不变量必须无歧义；具体版本/provider 的兼容结果可以继续是
+`UNKNOWN`。实现变化后再绑定 exact Science artifact、CSSwitch artifact、provider/model 和环境，
 验证 stream、tools、`tool_choice`、reasoning、structured output、vision、错误
 映射、停止/流终止语义、Science-native 状态保全、bridge restart 与独立外部
 流量；每项按 provider capability 记录支持或可定位降级。动态结果用于修复

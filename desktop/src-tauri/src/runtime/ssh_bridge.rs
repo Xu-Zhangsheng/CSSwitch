@@ -372,12 +372,73 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         fs::rename(&tmp, path).map_err(|_| "无法原子提交隔离状态文件")?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .map_err(|_| "无法收紧隔离状态文件权限")?;
+        file.sync_all().map_err(|_| "无法同步隔离状态文件元数据")?;
+        sync_directory(parent)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+fn sync_directory(path: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    if test_take_directory_sync_fault() {
+        return Err("test-only SSH bridge directory sync failure".into());
+    }
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| format!("无法打开隔离状态父目录进行同步：{error}"))?;
+    let metadata = directory
+        .metadata()
+        .map_err(|error| format!("无法检查隔离状态父目录：{error}"))?;
+    // SAFETY: geteuid has no preconditions and does not dereference pointers.
+    let uid = unsafe { libc::geteuid() };
+    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o022 != 0 {
+        return Err("隔离状态父目录不安全，拒绝同步".into());
+    }
+    directory
+        .sync_all()
+        .map_err(|error| format!("无法同步隔离状态父目录：{error}"))
+}
+
+#[cfg(test)]
+fn test_directory_sync_fault() -> &'static std::sync::Mutex<Option<(std::thread::ThreadId, usize)>>
+{
+    static FAULT: std::sync::OnceLock<std::sync::Mutex<Option<(std::thread::ThreadId, usize)>>> =
+        std::sync::OnceLock::new();
+    FAULT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+fn test_arm_directory_sync_failure_after(successful_syncs: usize) {
+    *test_directory_sync_fault()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some((std::thread::current().id(), successful_syncs));
+}
+
+#[cfg(test)]
+fn test_take_directory_sync_fault() -> bool {
+    let mut fault = test_directory_sync_fault()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some((thread, remaining)) = fault.as_mut() else {
+        return false;
+    };
+    if *thread != std::thread::current().id() {
+        return false;
+    }
+    if *remaining == 0 {
+        *fault = None;
+        true
+    } else {
+        *remaining -= 1;
+        false
+    }
 }
 
 fn read_state(path: &Path) -> Result<Option<BridgeState>, String> {
@@ -464,6 +525,8 @@ pub(crate) fn prepare_science_ssh_bridge_for(
 }
 
 pub(crate) fn prepare_science_ssh_bridge(sandbox_home: &Path) -> Result<Vec<String>, String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("无法确认系统 HOME，不能启用系统 SSH 配置。")?;
@@ -525,29 +588,110 @@ pub(crate) fn prevalidate_science_ssh_bridge(
     system_ssh_hosts_for_home(&home)
 }
 
+/// Read-only admission for the P2-B settings receipt.  `true` means the
+/// bridge sidecar and its Config leaf are an exact CSSwitch-owned pair and
+/// may be removed by the operation; `false` means both are safely absent.
+/// Any unowned ssh_hosts or mismatched sidecar is foreign/unknown and fails
+/// closed before the receipt or an effect is published.
+pub(crate) fn preflight_science_ssh_bridge_cleanup(sandbox_home: &Path) -> Result<bool, String> {
+    reject_symlink_components(sandbox_home)?;
+    let data_dir = sandbox_home.join(".claude-science");
+    let config_path = data_dir.join("config.toml");
+    let state_path = data_dir.join(STATE_FILE);
+    reject_symlink_components(&config_path)?;
+    reject_symlink_components(&state_path)?;
+    let current = read_ssh_hosts(&read_document(&config_path)?)?;
+    let prior = read_state(&state_path)?;
+    match prior {
+        Some(state) if current_matches_owned_state(current.as_deref(), &state) => Ok(true),
+        Some(_) => Err("隔离 Science SSH bridge 状态与当前 config 不一致，拒绝猜测撤销".into()),
+        None if current.is_none() => Ok(false),
+        None => Err("隔离 Science config 含无 sidecar 证明的 ssh_hosts，拒绝猜测撤销".into()),
+    }
+}
+
 pub(crate) fn revoke_science_ssh_bridge(sandbox_home: &Path) -> Result<(), String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    revoke_science_ssh_bridge_unfenced(sandbox_home, None).map(|_| ())
+}
+
+pub(crate) fn science_ssh_bridge_asset_paths(sandbox_home: &Path) -> (PathBuf, PathBuf) {
+    let data_dir = sandbox_home.join(".claude-science");
+    (data_dir.join("config.toml"), data_dir.join(STATE_FILE))
+}
+
+pub(crate) fn revoke_science_ssh_bridge_exact(
+    sandbox_home: &Path,
+    expected_config: &crate::commands::runtime::config_mutation::AssetIdentity,
+    expected_sidecar: &crate::commands::runtime::config_mutation::AssetIdentity,
+) -> Result<crate::commands::runtime::config_mutation::AssetIdentity, String> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    revoke_science_ssh_bridge_unfenced(sandbox_home, Some((expected_config, expected_sidecar)))
+        .and_then(|identity| {
+            identity.ok_or_else(|| "SSH bridge exact 撤销未产生 config after-image".into())
+        })
+}
+
+fn revoke_science_ssh_bridge_unfenced(
+    sandbox_home: &Path,
+    expected: Option<(
+        &crate::commands::runtime::config_mutation::AssetIdentity,
+        &crate::commands::runtime::config_mutation::AssetIdentity,
+    )>,
+) -> Result<Option<crate::commands::runtime::config_mutation::AssetIdentity>, String> {
     reject_symlink_components(sandbox_home)?;
     let data_dir = sandbox_home.join(".claude-science");
     let state_path = data_dir.join(STATE_FILE);
     let config_path = data_dir.join("config.toml");
     reject_symlink_components(&config_path)?;
     reject_symlink_components(&state_path)?;
+    if let Some((expected_config, expected_sidecar)) = expected {
+        if crate::commands::runtime::config_mutation::capture_asset_identity(&config_path)?.as_ref()
+            != Some(expected_config)
+            || crate::commands::runtime::config_mutation::capture_asset_identity(&state_path)?
+                .as_ref()
+                != Some(expected_sidecar)
+        {
+            return Err("SSH bridge leaf identity 在撤销前变化".into());
+        }
+    }
     let Some(state) = read_state(&state_path)? else {
-        return Ok(());
+        return Ok(None);
     };
     let mut document = read_document(&config_path)?;
     let current = read_ssh_hosts(&document)?;
     if !current_matches_owned_state(current.as_deref(), &state) {
         return Err("隔离 Science ssh_hosts 在授权期间被外部修改；已保持原样，拒绝猜测撤销".into());
     }
+    if let Some((expected_config, _)) = expected {
+        if crate::commands::runtime::config_mutation::capture_asset_identity(&config_path)?.as_ref()
+            != Some(expected_config)
+        {
+            return Err("SSH bridge config identity 在 rename 前变化".into());
+        }
+    }
     set_ssh_hosts(&mut document, state.original_ssh_hosts.as_deref());
     atomic_write(&config_path, document.to_string().as_bytes())?;
+    let after_config =
+        crate::commands::runtime::config_mutation::capture_asset_identity(&config_path)?
+            .ok_or("SSH bridge config 提交后缺失")?;
     let metadata = fs::symlink_metadata(&state_path).map_err(|_| "无法检查 SSH bridge sidecar")?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
         return Err("SSH bridge sidecar 不是安全普通文件".into());
     }
+    if let Some((_, expected_sidecar)) = expected {
+        if crate::commands::runtime::config_mutation::capture_asset_identity(&state_path)?.as_ref()
+            != Some(expected_sidecar)
+        {
+            return Err("SSH bridge sidecar identity 在 unlink 前变化".into());
+        }
+    }
     fs::remove_file(&state_path).map_err(|_| "无法删除 SSH bridge sidecar")?;
-    Ok(())
+    sync_directory(&data_dir)?;
+    crate::commands::runtime::config_mutation::require_asset_absent(&state_path)?;
+    Ok(Some(after_config))
 }
 
 fn validate_science_ssh_bridge_for(
@@ -596,6 +740,49 @@ mod tests {
     fn write_private(path: &Path, value: impl AsRef<[u8]>) {
         fs::write(path, value).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn p2b_exact_bridge_revoke_propagates_each_directory_sync_boundary() {
+        for successful_syncs in [0usize, 1usize] {
+            let root = tmpdir(&format!("p2b-sync-{successful_syncs}"));
+            let home = root.join("outer");
+            let sandbox = root.join("sandbox");
+            fs::create_dir_all(home.join(".ssh")).unwrap();
+            fs::create_dir_all(sandbox.join(".claude-science")).unwrap();
+            fs::write(home.join(".ssh/config"), "Host managed\n").unwrap();
+            let (config_path, state_path) = science_ssh_bridge_asset_paths(&sandbox);
+            write_private(&config_path, "quiet_logs = true\n");
+            prepare_science_ssh_bridge_for(&sandbox, &home).unwrap();
+            let config_identity =
+                crate::commands::runtime::config_mutation::capture_asset_identity(&config_path)
+                    .unwrap()
+                    .unwrap();
+            let state_identity =
+                crate::commands::runtime::config_mutation::capture_asset_identity(&state_path)
+                    .unwrap()
+                    .unwrap();
+            test_arm_directory_sync_failure_after(successful_syncs);
+            let result = revoke_science_ssh_bridge_unfenced(
+                &sandbox,
+                Some((&config_identity, &state_identity)),
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("test-only SSH bridge directory sync failure"),
+                "boundary={successful_syncs}"
+            );
+            if successful_syncs == 0 {
+                assert!(state_path.exists(), "config rename barrier failed first");
+            } else {
+                assert!(
+                    !state_path.exists(),
+                    "sidecar unlink occurred before its barrier"
+                );
+            }
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]

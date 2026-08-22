@@ -18,7 +18,8 @@ try:
     from run_evidence.manifest_contracts import (
         canonical_json_bytes, load_canonical_json, validate_change_set,
         validate_complete_run, validate_completion_seal, validate_evidence_manifest,
-        validate_release_candidate, validate_run_manifest, validate_source_snapshot,
+        validate_release_candidate, validate_release_evidence, validate_run_manifest,
+        validate_source_candidate_record, validate_source_snapshot,
         validate_terminal_set,
     )
 except ModuleNotFoundError:
@@ -26,7 +27,8 @@ except ModuleNotFoundError:
     from test.quality.run_evidence.manifest_contracts import (
         canonical_json_bytes, load_canonical_json, validate_change_set,
         validate_complete_run, validate_completion_seal, validate_evidence_manifest,
-        validate_release_candidate, validate_run_manifest, validate_source_snapshot,
+        validate_release_candidate, validate_release_evidence, validate_run_manifest,
+        validate_source_candidate_record, validate_source_snapshot,
         validate_terminal_set,
     )
 
@@ -47,6 +49,8 @@ SCHEMA_FILES = {
     "completion-seal.v1": "completion-seal.v1.schema.json",
     "run-failure.v1": "run-failure.v1.schema.json",
     "release-candidate.v1": "release-candidate.v1.schema.json",
+    "source-candidate-record.v1": "source-candidate-record.v1.schema.json",
+    "release-evidence.v1": "release-evidence.v1.schema.json",
     "test-result.v1": "test-result.v1.schema.json",
 }
 
@@ -125,10 +129,70 @@ class RUE02Manifests(unittest.TestCase):
             "aggregate_decision": "PASS", "runner_exit": 0, "completed_at": "2026-07-24T00:00:01Z",
         }
         seal_raw = canonical_json_bytes(seal)
+        source_run = copy.deepcopy(run)
+        source_run["profile"] = "source"
+        source_run["comparison_base"] = {"policy": "merge-base-origin-main", "sha": HEAD}
+        source_run_raw = canonical_json_bytes(source_run)
+        source_evidence = copy.deepcopy(evidence)
+        source_evidence["run_manifest"] = ref("run-manifest.json", source_run_raw)
+        source_observation = {
+            "schema": "source-observation.v1", "run_id": RUN,
+            "suite_id": SUITE, "entrypoint_id": ENTRY, "attempt_index": 0,
+            "command_argv_sha256": SHA, "environment_sha256": SHA,
+            "tool_identity_sha256": SHA,
+            "raw_process": {"state": "EXITED", "process_exit": 0},
+            "adapter_exit": 0, "executed": 1, "passed": 1, "failed": 0,
+            "skipped": 0, "ignored": 0, "todo": 0, "not_run": 0,
+            "discovered_test_ids": ["test.case"],
+            "executed_test_ids": ["test.case"], "failed_test_ids": [],
+            "skipped_test_ids": [], "ignored_test_ids": [],
+            "todo_test_ids": [], "not_run_test_ids": [],
+            "stdout": {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "truncated": False},
+            "stderr": {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "truncated": False},
+            "derived_tool": None, "outcome_hint": "PASS",
+            "classification_hint": "NONE", "reason_code": "NONE",
+        }
+        source_observation_raw = canonical_json_bytes(source_observation)
+        source_evidence["source_observations"] = [{
+            "suite_id": SUITE, "entrypoint_id": ENTRY,
+            "path": "results/{}.observation.json".format(SUITE),
+            "sha256": digest(source_observation_raw),
+        }]
+        source_evidence_raw = canonical_json_bytes(source_evidence)
+        source_seal = copy.deepcopy(seal)
+        source_seal["run_manifest"] = ref("run-manifest.json", source_run_raw)
+        source_seal["evidence_manifest"] = ref("evidence-manifest.json", source_evidence_raw)
+        source_seal_raw = canonical_json_bytes(source_seal)
+        change_set = [{"status": "M", "paths": ["test/a.py"]}]
+        source_candidate = {
+            "schema": "source-candidate-record.v1", "development_line": "next",
+            "comparison_base": {"tag": "v0.8.2", "tag_object_sha": HEAD, "peeled_sha": HEAD},
+            "candidate_head_sha": HEAD,
+            "change_set_sha256": digest(canonical_json_bytes(change_set)),
+            "change_set": change_set, "change_ids": ["CHG-ONE"], "run_id": RUN,
+            "run_manifest": ref("source/run-manifest.json", source_run_raw),
+            "completion_seal": ref("source/completion-seal.json", source_seal_raw),
+            "source_snapshot_manifest": ref("source/snapshot/source-snapshot-manifest.json", snapshot_raw),
+            "evidence_manifest": ref("source/evidence-manifest.json", source_evidence_raw),
+            "created_at": "2026-07-24T00:00:02Z",
+        }
+        source_candidate_raw = canonical_json_bytes(source_candidate)
         candidate = {
             "schema": "release-candidate.v1", "version": "v0.8.3", "candidate_head_sha": HEAD,
             "previous_release": {"tag": "v0.8.2", "tag_object_sha": HEAD, "peeled_sha": HEAD},
+            "source_candidate": ref("source-candidate.json", source_candidate_raw),
             "gate_ids": ["GATE-ONE"], "completion_seal": ref("completion-seal.json", seal_raw),
+        }
+        candidate_raw = canonical_json_bytes(candidate)
+        artifact_manifest = {"schema": "artifact-manifest.v1", "version": "v0.8.3", "candidate_head_sha": HEAD}
+        public_receipt = {"schema": "public-release-receipt.v1", "version": "v0.8.3", "tag": "v0.8.3", "tag_object_sha": OTHER_HEAD, "peeled_sha": HEAD}
+        artifact_raw = canonical_json_bytes(artifact_manifest)
+        receipt_raw = canonical_json_bytes(public_receipt)
+        release_evidence = {
+            "schema": "release-evidence.v1", "version": "v0.8.3", "candidate_head_sha": HEAD,
+            "release_candidate": ref("release-candidate.json", candidate_raw),
+            "artifact_manifest": ref("artifact-manifest.json", artifact_raw),
+            "public_release_receipt": ref("public-release-receipt.json", receipt_raw),
         }
         failure = {
             "schema": "run-failure.v1", "run_id": RUN, "stage": "INTERRUPT",
@@ -141,9 +205,21 @@ class RUE02Manifests(unittest.TestCase):
             "results/{}.json".format(SUITE): result_raw,
             "evidence-manifest.json": evidence_raw,
             "completion-seal.json": seal_raw,
+            "source/run-manifest.json": source_run_raw,
+            "source/completion-seal.json": source_seal_raw,
+            "source/snapshot/source-snapshot-manifest.json": snapshot_raw,
+            "source/evidence-manifest.json": source_evidence_raw,
+            "source/results/{}.json".format(SUITE): result_raw,
+            "source/results/{}.observation.json".format(SUITE): source_observation_raw,
+            "source-candidate.json": source_candidate_raw,
+            "release-candidate.json": candidate_raw,
+            "artifact-manifest.json": artifact_raw,
+            "public-release-receipt.json": receipt_raw,
         }
         return {"snapshot": snapshot, "change": change, "run": run, "evidence": evidence,
-                "seal": seal, "candidate": candidate, "failure": failure, "artifacts": artifacts,
+                "seal": seal, "source_candidate": source_candidate, "candidate": candidate,
+                "source_observation": source_observation,
+                "release_evidence": release_evidence, "failure": failure, "artifacts": artifacts,
                 "gates_raw": gates_raw, "catalog_raw": catalog_raw}
 
     def semantic_cases(self, data: dict[str, Any]) -> dict[str, Callable[[Any], None]]:
@@ -155,6 +231,8 @@ class RUE02Manifests(unittest.TestCase):
             "completion-seal.v1": lambda value: validate_completion_seal(value, data["run"], data["snapshot"], data["evidence"], data["artifacts"]),
             "run-failure.v1": lambda value: validate_terminal_set(None, value, run_manifest=data["run"], artifacts=data["artifacts"]),
             "release-candidate.v1": lambda value: validate_release_candidate(value, data["artifacts"], data["gates_raw"], data["catalog_raw"]),
+            "source-candidate-record.v1": lambda value: validate_source_candidate_record(value, data["artifacts"]),
+            "release-evidence.v1": lambda value: validate_release_evidence(value, data["artifacts"], data["gates_raw"], data["catalog_raw"]),
         }
 
     def assert_dual_reject(self, schema_name: str, value: Any, semantic: Callable[[Any], None]) -> None:
@@ -170,6 +248,8 @@ class RUE02Manifests(unittest.TestCase):
             "run-manifest.v1": data["run"], "evidence-manifest.v1": data["evidence"],
             "completion-seal.v1": data["seal"], "run-failure.v1": data["failure"],
             "release-candidate.v1": data["candidate"],
+            "source-candidate-record.v1": data["source_candidate"],
+            "release-evidence.v1": data["release_evidence"],
         }
         semantic = self.semantic_cases(data)
         for name, value in values.items():
@@ -195,6 +275,8 @@ class RUE02Manifests(unittest.TestCase):
             ("completion-seal.v1", lambda value: value["run_manifest"].update(path="../unsafe")),
             ("run-failure.v1", lambda value: value.update(run_manifest={"path": "../unsafe", "sha256": SHA})),
             ("release-candidate.v1", lambda value: value["completion_seal"].update(path="../unsafe")),
+            ("source-candidate-record.v1", lambda value: value["run_manifest"].update(path="../unsafe")),
+            ("release-evidence.v1", lambda value: value["release_candidate"].update(path="../unsafe")),
             ("source-snapshot-manifest.v1", lambda value: value.update(total_bytes=1073741825)),
             ("change-set.v1", lambda value: value["entries"][0].update(size=67108865)),
             ("run-manifest.v1", lambda value: value.update(invocation_argv=["x"] * 65)),
@@ -202,8 +284,10 @@ class RUE02Manifests(unittest.TestCase):
             ("completion-seal.v1", lambda value: value.update(runner_exit=256)),
             ("run-failure.v1", lambda value: value.update(run_id="x" * 31)),
             ("release-candidate.v1", lambda value: value.update(version="v0.8.3\n")),
+            ("source-candidate-record.v1", lambda value: value.update(change_set=[])),
+            ("release-evidence.v1", lambda value: value.update(version="v0.8.3\n")),
         ]
-        values = {"source-snapshot-manifest.v1": data["snapshot"], "change-set.v1": data["change"], "run-manifest.v1": data["run"], "evidence-manifest.v1": data["evidence"], "completion-seal.v1": data["seal"], "run-failure.v1": data["failure"], "release-candidate.v1": data["candidate"]}
+        values = {"source-snapshot-manifest.v1": data["snapshot"], "change-set.v1": data["change"], "run-manifest.v1": data["run"], "evidence-manifest.v1": data["evidence"], "completion-seal.v1": data["seal"], "run-failure.v1": data["failure"], "release-candidate.v1": data["candidate"], "source-candidate-record.v1": data["source_candidate"], "release-evidence.v1": data["release_evidence"]}
         for schema_name, mutate in cases:
             with self.subTest(schema=schema_name, mutate=mutate):
                 invalid = copy.deepcopy(values[schema_name])
@@ -242,10 +326,69 @@ class RUE02Manifests(unittest.TestCase):
             (data["candidate"], canonical_json_bytes({"schema": "release-gates.v1", "version": "v0.8.3", "gates": [{"id": "GATE-ONE", "status": "active", "candidate_policy": "required", "required_suite_ids": [SUITE]}]}), canonical_json_bytes({"schema": "test-catalog.v1", "catalog_id": "SUITE-CATALOG-V1", "version": "v0.8.3", "discovery_paths": [], "selection_rules": [], "suites": [{"id": SUITE, "entrypoint_id": "ENTRY-SPOOFED"}]})),
             (dict(data["candidate"], gate_ids=[]), data["gates_raw"], data["catalog_raw"]),
             (dict(data["candidate"], completion_seal={"path": "completion-seal.json", "sha256": SHA}), data["gates_raw"], data["catalog_raw"]),
+            (dict(data["candidate"], version="v0.8.2"), data["gates_raw"], data["catalog_raw"]),
         ]
         for candidate, gates_raw, catalog_raw in candidate_cases:
             with self.assertRaises(ContractViolation):
                 validate_release_candidate(candidate, data["artifacts"], gates_raw, catalog_raw)
+        source_cases = [
+            dict(data["source_candidate"], candidate_head_sha=OTHER_HEAD),
+            dict(data["source_candidate"], change_set_sha256=SHA),
+            dict(data["source_candidate"], change_ids=["CHG-OLD", "CHG-OLD"]),
+            dict(data["source_candidate"], completion_seal={"path": "source/completion-seal.json", "sha256": SHA}),
+        ]
+        for source_candidate in source_cases:
+            with self.assertRaises(ContractViolation):
+                validate_source_candidate_record(source_candidate, data["artifacts"])
+
+        def assert_rebound_source_chain_rejected(path, raw):
+            artifacts = copy.deepcopy(data["artifacts"])
+            artifacts[path] = raw
+            evidence = json.loads(artifacts["source/evidence-manifest.json"])
+            refs = (
+                evidence["source_observations"]
+                if path.endswith(".observation.json")
+                else evidence["test_results"]
+            )
+            refs[0]["sha256"] = digest(raw)
+            evidence_raw = canonical_json_bytes(evidence)
+            artifacts["source/evidence-manifest.json"] = evidence_raw
+            seal = json.loads(artifacts["source/completion-seal.json"])
+            seal["evidence_manifest"]["sha256"] = digest(evidence_raw)
+            seal_raw = canonical_json_bytes(seal)
+            artifacts["source/completion-seal.json"] = seal_raw
+            source_candidate = copy.deepcopy(data["source_candidate"])
+            source_candidate["evidence_manifest"]["sha256"] = digest(evidence_raw)
+            source_candidate["completion_seal"]["sha256"] = digest(seal_raw)
+            with self.assertRaises(ContractViolation):
+                validate_source_candidate_record(source_candidate, artifacts)
+
+        failed_result = make_result("TEST_FAIL", RUN, SUITE, ENTRY)
+        assert_rebound_source_chain_rejected(
+            "source/results/{}.json".format(SUITE),
+            canonical_json_bytes(failed_result),
+        )
+        failed_observation = copy.deepcopy(data["source_observation"])
+        failed_observation.update(
+            raw_process={"state": "EXITED", "process_exit": 1},
+            adapter_exit=10,
+            passed=0,
+            failed=1,
+            failed_test_ids=["test.case"],
+            outcome_hint="FAIL",
+            reason_code="ASSERTION_FAILED",
+        )
+        assert_rebound_source_chain_rejected(
+            "source/results/{}.observation.json".format(SUITE),
+            canonical_json_bytes(failed_observation),
+        )
+        release_cases = [
+            dict(data["release_evidence"], candidate_head_sha=OTHER_HEAD),
+            dict(data["release_evidence"], release_candidate={"path": "release-candidate.json", "sha256": SHA}),
+        ]
+        for release_evidence in release_cases:
+            with self.assertRaises(ContractViolation):
+                validate_release_evidence(release_evidence, data["artifacts"], data["gates_raw"], data["catalog_raw"])
         failure_cases = [
             dict(data["failure"], reason_code="NOPE"), dict(data["failure"], stage="NOPE"),
             dict(data["failure"], run_id="f" * 32),

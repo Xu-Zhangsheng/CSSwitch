@@ -133,6 +133,6 @@ Audit / Evidence 可以因调查范围、时间线或证据链较长而较长；
 
 当前骨架的收口边界：
 
-- 架构索引已按总览、Desktop 控制面、状态事务、Gateway/provider 路由、Science runtime 与 Science 能力依赖 6 个稳定问题完成路由；后续机器地图属于独立任务，不在本合同预建正文。
+- 架构索引已按总览、Desktop 控制面、状态事务、Gateway/provider 路由、Science runtime、Science 能力依赖与 Skill/MCP/Plugin 扩展控制面 7 个稳定问题完成路由；后续机器地图属于独立任务，不在本合同预建正文。
 - 现有一个旧 Codex implementation-plan 路径只保留兼容指针，不作为 Plan 或权威正文。
 - Decision / ADR、可版本化 Draft Spec 尚无真实实例，因此本期不创建目录。

@@ -1392,7 +1392,7 @@ mod tests {
 
     use super::{
         parse_official_models, science_model_alias, CatalogSource, CodexModelCatalog,
-        CodexModelResolutionError, ModelsCacheFile, CACHE_EPOCH_FILE, CACHE_FILE,
+        CodexModelResolutionError, ModelsCacheEpoch, ModelsCacheFile, CACHE_EPOCH_FILE, CACHE_FILE,
     };
     use crate::codex_auth::InferenceSecrets;
 
@@ -1622,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_refresh_replaces_shared_snapshot_and_failures_keep_last_generation() {
+    fn r0_codex_fetch_models_mutates_shared_catalog_cache() {
         let root = private_root();
         let (endpoint, _count, _requests, server) =
             serve_responses(vec![response("200 OK", &model_body(&["gpt-old"]), "")]);
@@ -1672,6 +1672,59 @@ mod tests {
         let still_unchanged = formal.published_snapshot(&secrets()).unwrap();
         assert!(still_unchanged.contains_raw("gpt-new"));
         assert_eq!(published_generation(&still_unchanged), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn r0_cache_epoch_precedes_cache_and_invalidation_removes_cache() {
+        let root = private_root();
+        let listener = bind_loopback();
+        let endpoint = format!("http://{}/models", listener.local_addr().unwrap());
+        let root_for_server = root.clone();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream);
+            fs::create_dir(root_for_server.join(CACHE_FILE)).unwrap();
+            stream
+                .write_all(&response("200 OK", &model_body(&["gpt-first"]), ""))
+                .unwrap();
+            stream.flush().unwrap();
+        });
+        let catalog = CodexModelCatalog::for_test(endpoint, root.clone()).unwrap();
+        let error = catalog.list_at(&secrets(), 70_000).unwrap_err();
+        assert_eq!(error.error_kind, "cache");
+        server.join().unwrap();
+
+        let published_epoch: ModelsCacheEpoch =
+            serde_json::from_slice(&fs::read(root.join(CACHE_EPOCH_FILE)).unwrap()).unwrap();
+        assert!(!published_epoch.invalidated);
+        assert!(root.join(CACHE_FILE).is_dir());
+
+        fs::remove_dir(root.join(CACHE_FILE)).unwrap();
+        let (endpoint, _count, _requests, server) =
+            serve_responses(vec![response("200 OK", &model_body(&["gpt-current"]), "")]);
+        let catalog = CodexModelCatalog::for_test(endpoint, root.clone()).unwrap();
+        let snapshot = catalog.list_at(&secrets(), 70_001).unwrap();
+        assert!(snapshot.contains_raw("gpt-current"));
+        assert!(root.join(CACHE_FILE).is_file());
+        server.join().unwrap();
+
+        let identity = secrets();
+        catalog.invalidate_identity(
+            identity.auth_epoch(),
+            identity.auth_generation(),
+            identity.account_hash(),
+        );
+        assert!(!root.join(CACHE_FILE).exists());
+        let invalidated_epoch: ModelsCacheEpoch =
+            serde_json::from_slice(&fs::read(root.join(CACHE_EPOCH_FILE)).unwrap()).unwrap();
+        assert!(invalidated_epoch.invalidated);
+        assert_eq!(invalidated_epoch.auth_epoch, identity.auth_epoch());
+        assert_eq!(
+            invalidated_epoch.auth_generation,
+            identity.auth_generation()
+        );
+        assert_eq!(invalidated_epoch.account_hash, identity.account_hash());
         let _ = fs::remove_dir_all(root);
     }
 

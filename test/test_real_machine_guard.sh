@@ -126,7 +126,9 @@ fi
 if grep -q -- '--features acceptance-build' \
      "$ROOT/docs/operations/real-machine-acceptance.md" && \
    grep -q '^acceptance-build = \[\]$' "$ROOT/desktop/src-tauri/Cargo.toml" && \
-   grep -q '^acceptance-build = \[\]$' "$ROOT/desktop/gateway/Cargo.toml" && \
+   grep -q '^acceptance-build = \["csswitch-skill-install-core/acceptance-build"\]$' \
+     "$ROOT/desktop/gateway/Cargo.toml" && \
+   grep -q '^acceptance-build = \[\]$' "$ROOT/desktop/skill-package/Cargo.toml" && \
    grep -q 'CARGO_FEATURE_ACCEPTANCE_BUILD' "$ROOT/desktop/src-tauri/build.rs" && \
    ! grep -q 'CSSWITCH_SIGNING_TEAM_ID' "$ROOT/desktop/src-tauri/build.rs" && \
    [ ! -e "$ROOT/desktop/src-tauri/src/code_identity.rs" ] && \

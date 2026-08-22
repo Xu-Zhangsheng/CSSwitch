@@ -1207,6 +1207,7 @@ class SourceGateContracts(unittest.TestCase):
                     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
                     "AWS_ACCESS_KEY_ID", "SSH_AUTH_SOCK",
                     "CSSWITCH_LOOPBACK_TEST_CMD",
+                    "CSSWITCH_LOOPBACK_TEST_FIXTURE",
                 }
                 & set(plan.environment)
             )

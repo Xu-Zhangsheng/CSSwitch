@@ -217,15 +217,44 @@ fn is_symlink(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn assert_not_symlink(p: &Path) -> Result<(), String> {
-    if is_symlink(p) {
-        return Err(format!("拒绝：{} 是符号链接，绝不跟随写入。", p.display()));
+fn assert_not_symlink(path: &Path) -> Result<(), String> {
+    if is_symlink(path) {
+        return Err("拒绝写入符号链接。".into());
     }
     Ok(())
 }
 
-/// 安全写：拒符号链接 + O_EXCL 临时文件 + rename + chmod，避免跟随/竞态写到非预期目标。
+fn sync_directory(path: &Path) -> Result<(), String> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| format!("打开目录做 durable sync 失败：{e}"))?
+        .sync_all()
+        .map_err(|e| format!("durable sync 目录失败：{e}"))
+}
+
+/// 安全写：拒符号链接 + O_EXCL 临时文件 + file fsync + rename + parent fsync，
+/// 避免跟随/竞态写到非预期目标，并确保调用方可把返回成功当作 durable publication barrier。
 fn safe_write(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
+    safe_write_with_durability_fault(path, data, mode, SafeWriteDurabilityFault::None)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SafeWriteDurabilityFault {
+    None,
+    #[cfg(test)]
+    BeforeFileSync,
+    #[cfg(test)]
+    BeforeParentSync,
+}
+
+fn safe_write_with_durability_fault(
+    path: &Path,
+    data: &[u8],
+    mode: u32,
+    _fault: SafeWriteDurabilityFault,
+) -> Result<(), String> {
     assert_not_symlink(path)?;
     let parent = path.parent().ok_or("目标无父目录")?;
     let suffix = hex(&rand_bytes(6).map_err(|e| e.to_string())?);
@@ -239,10 +268,21 @@ fn safe_write(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
             .map_err(|e| format!("建临时文件失败：{e}"))?;
         f.write_all(data)
             .map_err(|e| format!("写临时文件失败：{e}"))?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| format!("chmod 临时文件失败：{e}"))?;
+        #[cfg(test)]
+        if _fault == SafeWriteDurabilityFault::BeforeFileSync {
+            return Err("test-only file durability barrier failure".into());
+        }
+        f.sync_all()
+            .map_err(|e| format!("durable sync 临时文件失败：{e}"))?;
         drop(f);
         std::fs::rename(&tmp, path).map_err(|e| format!("rename 失败：{e}"))?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-            .map_err(|e| format!("chmod 失败：{e}"))?;
+        #[cfg(test)]
+        if _fault == SafeWriteDurabilityFault::BeforeParentSync {
+            return Err("test-only parent durability barrier failure".into());
+        }
+        sync_directory(parent)?;
         Ok(())
     })();
     if result.is_err() {
@@ -260,7 +300,7 @@ fn current_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-fn marker_path(sandbox_root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn marker_path(sandbox_root: &Path) -> Result<PathBuf, String> {
     #[cfg(test)]
     if sandbox_root.file_name().and_then(|name| name.to_str()) != Some("home") {
         return Ok(sandbox_root
@@ -336,6 +376,12 @@ fn ensure_marker_parent(path: &Path, sandbox_root: &Path) -> Result<(), String> 
     }
     std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| format!("收紧 CSSwitch 私有状态目录权限失败：{e}"))?;
+    sync_directory(parent)?;
+    sync_directory(
+        parent
+            .parent()
+            .ok_or("CSSwitch 私有状态目录无父目录，无法完成 durable sync")?,
+    )?;
     validate_marker_location(path, sandbox_root)?;
     Ok(())
 }
@@ -816,6 +862,16 @@ pub fn ensure_virtual_login(
     email: &str,
     sandbox_root: &Path,
 ) -> Result<(ForgeResult, LoginAction), EnsureVirtualLoginError> {
+    let _authority_guard = crate::config::acquire_authority_writer_guard()
+        .map_err(|error| format!("authority writer fence failed: {error}"))?;
+    ensure_virtual_login_unfenced(auth_dir, email, sandbox_root)
+}
+
+fn ensure_virtual_login_unfenced(
+    auth_dir: &Path,
+    email: &str,
+    sandbox_root: &Path,
+) -> Result<(ForgeResult, LoginAction), EnsureVirtualLoginError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("无 HOME 环境变量")?;
@@ -886,7 +942,18 @@ fn ensure_virtual_login_guarded(
 /// Complete an explicit legacy-history choice. The candidate is a backend-only
 /// inode snapshot created by `ensure_virtual_login`; it is revalidated before
 /// any credential file is written.
-pub(crate) fn restore_history_choice(
+pub(crate) fn restore_history_choice_with_authority_bypass(
+    auth_dir: &Path,
+    email: &str,
+    sandbox_root: &Path,
+    candidate: &HistoryOrgCandidate,
+    bypass: &crate::config::AuthorityWriterBypass<'_>,
+) -> Result<(ForgeResult, LoginAction), String> {
+    let _authority_guard = crate::config::authority_writer_guard_from_bypass(bypass);
+    restore_history_choice_unfenced(auth_dir, email, sandbox_root, candidate)
+}
+
+fn restore_history_choice_unfenced(
     auth_dir: &Path,
     email: &str,
     sandbox_root: &Path,
@@ -1012,6 +1079,24 @@ mod tests {
         let blocked_target = dir.join("blocked-target");
         std::fs::create_dir(&blocked_target).unwrap();
         assert!(safe_write(&blocked_target, b"must-fail", 0o600).is_err());
+        let file_sync_target = dir.join("file-sync-failure");
+        assert!(safe_write_with_durability_fault(
+            &file_sync_target,
+            b"must-not-publish",
+            0o600,
+            SafeWriteDurabilityFault::BeforeFileSync,
+        )
+        .is_err());
+        assert!(!file_sync_target.exists());
+        let parent_sync_target = dir.join("parent-sync-failure");
+        assert!(safe_write_with_durability_fault(
+            &parent_sync_target,
+            b"published-but-not-durable",
+            0o600,
+            SafeWriteDurabilityFault::BeforeParentSync,
+        )
+        .is_err());
+        assert!(parent_sync_target.is_file());
         assert!(
             std::fs::read_dir(&dir)
                 .unwrap()
@@ -1447,7 +1532,7 @@ mod tests {
             .unwrap();
         std::fs::remove_dir(dir.join("orgs").join(&first)).unwrap();
         std::fs::create_dir(dir.join("orgs").join(&first)).unwrap();
-        assert!(restore_history_choice(&dir, email, &dir, &chosen).is_err());
+        assert!(restore_history_choice_unfenced(&dir, email, &dir, &chosen).is_err());
         assert!(!dir.join("active-org.json").exists());
         for d in [dir, fake_real] {
             let _ = std::fs::remove_dir_all(&d);

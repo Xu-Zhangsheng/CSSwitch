@@ -1,0 +1,120 @@
+{
+  "schema": "csswitch.package-inspection.v1",
+  "source_claim": {
+    "owner": "example",
+    "repo": "skills",
+    "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+    "path": "skills/demo",
+    "verification": "caller_asserted_unverified"
+  },
+  "outcome": "complete",
+  "disposition": "quarantined_inspect_only",
+  "package": {
+    "kind": "github_skill_package",
+    "content_sha256": "5c77a3597568798d4f8461bad4aa79d2696a72ee2f28eb0cebf1e9e864792dcc",
+    "file_count": 3,
+    "total_bytes": 249,
+    "executable_file_count": 1
+  },
+  "graph": {
+    "schema": "csswitch.component-graph.v1",
+    "sha256": "3f32b5f8e0aa0880add7db360caf605d5e1adac65184347bfc11903e22b911cd",
+    "nodes": [
+      {
+        "id": "cmp_77d15068a7c5ab6f5b4f21f527229251232affa2623df7fc105c99a34cae5552",
+        "kind": "asset",
+        "source_path": "scripts/run.sh",
+        "local_name": "run.sh",
+        "compatibility_status": "UNSUPPORTED",
+        "confirmation_required": false,
+        "executable": true
+      },
+      {
+        "id": "cmp_b3e4035161a0a893e36af2068f7273d31b1f09414f69f6d733f56fdd7b3b2276",
+        "kind": "skill",
+        "source_path": "SKILL.md",
+        "local_name": "demo",
+        "compatibility_status": "ADAPTED",
+        "confirmation_required": false,
+        "executable": false,
+        "declared_preapproved_tools": ["Read", "Search"]
+      },
+      {
+        "id": "cmp_b8cb73d347d3ea6010c4a29cfb31e6043f54724bd471f26b1ab6c0a27bbe8282",
+        "kind": "executable",
+        "source_path": "scripts/run.sh",
+        "local_name": "run.sh",
+        "compatibility_status": "UNSUPPORTED",
+        "confirmation_required": true,
+        "executable": true
+      },
+      {
+        "id": "cmp_e2da83882fb287f599a297dbc8ab970a31d3aab31b021b554b320bf9f2225776",
+        "kind": "asset",
+        "source_path": "assets/note.txt",
+        "local_name": "note.txt",
+        "compatibility_status": "UNSUPPORTED",
+        "confirmation_required": false,
+        "executable": false
+      },
+      {
+        "id": "cmp_e74c850058231a9906363798860c29b180fd2aed7f97ff1e3f9820f12041a9c6",
+        "kind": "package",
+        "source_path": "",
+        "local_name": "package",
+        "compatibility_status": "UNSUPPORTED",
+        "confirmation_required": false,
+        "executable": false
+      }
+    ],
+    "edges": [
+      {
+        "from": "cmp_e74c850058231a9906363798860c29b180fd2aed7f97ff1e3f9820f12041a9c6",
+        "relation": "contains",
+        "to": "cmp_77d15068a7c5ab6f5b4f21f527229251232affa2623df7fc105c99a34cae5552"
+      },
+      {
+        "from": "cmp_e74c850058231a9906363798860c29b180fd2aed7f97ff1e3f9820f12041a9c6",
+        "relation": "contains",
+        "to": "cmp_b3e4035161a0a893e36af2068f7273d31b1f09414f69f6d733f56fdd7b3b2276"
+      },
+      {
+        "from": "cmp_e74c850058231a9906363798860c29b180fd2aed7f97ff1e3f9820f12041a9c6",
+        "relation": "contains",
+        "to": "cmp_b8cb73d347d3ea6010c4a29cfb31e6043f54724bd471f26b1ab6c0a27bbe8282"
+      },
+      {
+        "from": "cmp_e74c850058231a9906363798860c29b180fd2aed7f97ff1e3f9820f12041a9c6",
+        "relation": "contains",
+        "to": "cmp_e2da83882fb287f599a297dbc8ab970a31d3aab31b021b554b320bf9f2225776"
+      }
+    ]
+  },
+  "findings": [],
+  "limits": {
+    "profile": "github_skill_archive_inspect_v1",
+    "raw_archive_bytes": 134217728,
+    "archive_entries": 10000,
+    "files": 2000,
+    "single_file_bytes": 4194304,
+    "expanded_total_bytes": 67108864,
+    "path_bytes": 1024,
+    "path_depth": 32,
+    "compression_ratio": 200,
+    "manifest_bytes": 65536,
+    "mcp_manifests": 128,
+    "declared_tools_per_skill": 128,
+    "graph_nodes": 4096,
+    "graph_edges": 8192,
+    "findings": 1024
+  },
+  "effects": {
+    "network_access": "not_performed",
+    "filesystem_mutation": "not_performed",
+    "apply": "not_run",
+    "install": "not_run",
+    "science_attach": "not_run",
+    "mcp_launch": "not_run",
+    "credential_access": "not_performed"
+  }
+}

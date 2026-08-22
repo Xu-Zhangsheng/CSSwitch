@@ -57,6 +57,8 @@ Codex 区块内部再分为：
 
 关闭 Codex 实验入口和退出 Codex 登录必须保持两个独立动作；网络路线也不能混入通用 Proxy 端口设置。
 
+诊断与支持入口保持用户主动：只读自检与显式修复分开；“打开日志”只打开本地日志目录；“反馈 / 报 bug”只用系统浏览器打开公开 issue 表单。CSSwitch 不在后台自动上传日志、crash、诊断或反馈内容，用户附加材料前必须能够自行检查并脱敏。
+
 ## Skill & MCP 页面
 
 扩展是一级页面，不再作为设置页中的低频附属入口。页面内部保留 Skills / MCP 两个标签，但当前只有 Skills 接入真实列表：
@@ -71,8 +73,15 @@ Codex 区块内部再分为：
 ## 状态与文案
 
 - “配置已保存”“已设为当前”“Gateway 已就绪”“Science 已打开”是不同状态，不合并成一个成功提示。
+- “当前选择”不等于“已应用”。只有 backend 对本次 operation 的 journal cleared、exact active
+  binding 和 selection non-pending 完成只读回读后才能显示 applied；attention、manual 或回读失败
+  必须显示 applied unknown 并保持 pending，不能沿用旧 binding 或当前选择制造成功状态。
 - Codex 模型目录区分 live、stale cache、网络失败和未登录；不把缓存目录写成实时目录。
 - Skill 的“已发现”“已绑定”和“当前会话已加载”是三件事；本页只证明前两者，不显示“可用”。
+- “运行只读自检”与“修复 Skill 路由”是两个独立动作。只读自检不迁移配置、不修改 Skill/MCP
+  或 route marker，也不读取真实 Science HOME、继承父进程的 Doctor 覆盖变量或启动 Science/Gateway；显式修复会同步 CSSwitch 管理的第三方 Skill
+  route，并可能失效 marker、修改 connector 或 managed prompt。frontend 每次只提交一个 intent，
+  按 typed result 展示完成、延后、需重启或警告，不按诊断文案推断控制流。
 - 浏览器视觉预览、源码测试、Tauri App 和发布 artifact 的验证结论分开记录。
 
 ## 响应式与验收门

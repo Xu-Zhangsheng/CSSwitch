@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "runtime-mutation-inventory.v1.schema.json",
+  "title": "CSSwitch runtime mutation inventory v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scope",
+    "state_owners",
+    "durable_records",
+    "operations",
+    "registered_surface",
+    "native_hooks"
+  ],
+  "properties": {
+    "schema": { "const": "runtime-mutation-inventory.v1" },
+    "scope": { "$ref": "#/$defs/Scope" },
+    "state_owners": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/StateOwner" }
+    },
+    "durable_records": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/DurableRecord" }
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/Operation" }
+    },
+    "registered_surface": {
+      "type": "array",
+      "minItems": 40,
+      "maxItems": 44,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/SurfaceEntry" }
+    },
+    "native_hooks": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 9,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/NativeHook" }
+    }
+  },
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "Identifier": {
+      "type": "string",
+      "pattern": "[a-z][a-z0-9_.-]{1,95}"
+    },
+    "StringList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/NonEmptyString" },
+      "uniqueItems": true
+    },
+    "NonEmptyStringList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/NonEmptyString" },
+      "uniqueItems": true
+    },
+    "SourceAnchorList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/SourceAnchor" },
+      "uniqueItems": true
+    },
+    "Scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "production_registration", "bundled_callers", "exclusions", "test_identity_semantics", "characterization_status", "completion_review_status"],
+      "properties": {
+        "authority": { "$ref": "#/$defs/NonEmptyString" },
+        "production_registration": { "$ref": "#/$defs/NonEmptyString" },
+        "bundled_callers": { "$ref": "#/$defs/NonEmptyStringList" },
+        "exclusions": { "$ref": "#/$defs/NonEmptyStringList" },
+        "test_identity_semantics": { "$ref": "#/$defs/NonEmptyString" },
+        "characterization_status": { "enum": ["requirements-open", "complete"] },
+        "completion_review_status": { "enum": ["pending", "complete"] }
+      }
+    },
+    "SourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "symbol"],
+      "properties": {
+        "path": { "$ref": "#/$defs/NonEmptyString" },
+        "symbol": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "StateOwner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "durability", "authority", "fields", "source_anchor"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "kind": {
+          "enum": ["process-local", "durable-config", "durable-private-files", "managed-process", "external-host-state"]
+        },
+        "durability": { "enum": ["process", "app-restart", "filesystem", "external"] },
+        "authority": { "$ref": "#/$defs/NonEmptyString" },
+        "fields": { "$ref": "#/$defs/NonEmptyStringList" },
+        "source_anchor": { "$ref": "#/$defs/SourceAnchor" }
+      }
+    },
+    "DurableRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "format", "authority_owner", "fields", "writers", "readers", "source_anchor", "known_gap"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "format": { "$ref": "#/$defs/NonEmptyString" },
+        "authority_owner": { "$ref": "#/$defs/Identifier" },
+        "fields": { "$ref": "#/$defs/NonEmptyStringList" },
+        "writers": { "$ref": "#/$defs/SourceAnchorList" },
+        "readers": { "$ref": "#/$defs/SourceAnchorList" },
+        "source_anchor": { "$ref": "#/$defs/SourceAnchor" },
+        "known_gap": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "Entrypoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "source_anchor", "bundled_callers"],
+      "properties": {
+        "kind": { "enum": ["tauri-command", "native-hook", "startup-hook", "internal-recovery"] },
+        "name": { "$ref": "#/$defs/Identifier" },
+        "source_anchor": { "$ref": "#/$defs/SourceAnchor" },
+        "bundled_callers": { "$ref": "#/$defs/StringList" }
+      }
+    },
+    "RecordAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reads", "writes", "clears"],
+      "properties": {
+        "reads": { "$ref": "#/$defs/StringList" },
+        "writes": { "$ref": "#/$defs/StringList" },
+        "clears": { "$ref": "#/$defs/StringList" }
+      }
+    },
+    "FailurePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "after_effects", "observed_outcome", "compensation"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "after_effects": { "$ref": "#/$defs/NonEmptyStringList" },
+        "observed_outcome": { "$ref": "#/$defs/NonEmptyString" },
+        "compensation": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "Compensation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_anchor", "contract"],
+      "properties": {
+        "kind": {
+          "enum": ["none", "partial", "dedicated-rollback", "authority-snapshot", "prior-runtime-restart", "best-effort-terminal"]
+        },
+        "source_anchor": { "$ref": "#/$defs/SourceAnchor" },
+        "contract": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "Operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "mutation_kind",
+        "serialization",
+        "entrypoints",
+        "state_owners",
+        "durable_records",
+        "ordered_effects",
+        "failure_points",
+        "compensation",
+        "characterization_tests",
+        "known_gaps"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "mutation_kind": { "enum": ["runtime", "intent", "terminal", "startup", "host-bridge", "config"] },
+        "serialization": { "enum": ["lifecycle", "lifecycle-observation-only", "lifecycle-plus-domain-lease", "lifecycle-plus-domain-lease-plus-cross-process-effect-fence", "app-state-only", "auth-storage-lock", "none", "terminal-best-effort"] },
+        "implicit_operation_ids": { "$ref": "#/$defs/StringList" },
+        "entrypoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Entrypoint" }
+        },
+        "state_owners": { "$ref": "#/$defs/NonEmptyStringList" },
+        "durable_records": { "$ref": "#/$defs/RecordAccess" },
+        "ordered_effects": { "$ref": "#/$defs/NonEmptyStringList" },
+        "failure_points": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/FailurePoint" }
+        },
+        "compensation": { "$ref": "#/$defs/Compensation" },
+        "characterization_tests": { "$ref": "#/$defs/NonEmptyStringList" },
+        "known_gaps": { "$ref": "#/$defs/NonEmptyStringList" }
+      }
+    },
+    "SurfaceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "classification", "operation_id", "source_anchor", "bundled_callers", "reason"],
+      "properties": {
+        "name": { "$ref": "#/$defs/Identifier" },
+        "classification": {
+          "enum": ["runtime-mutation", "intent-mutation", "terminal-mutation", "host-bridge-mutation", "config-mutation", "config-nonruntime", "ui-one-shot", "transient-probe", "read-only", "external-side-effect"]
+        },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "implicit_operation_ids": { "$ref": "#/$defs/StringList" },
+        "source_anchor": { "$ref": "#/$defs/SourceAnchor" },
+        "bundled_callers": { "$ref": "#/$defs/StringList" },
+        "reason": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "NativeHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "classification", "operation_id", "source_anchor", "reason"],
+      "properties": {
+        "name": { "$ref": "#/$defs/Identifier" },
+        "classification": { "enum": ["runtime-mutation", "terminal-mutation", "startup-mutation", "ui-only"] },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "source_anchor": { "$ref": "#/$defs/SourceAnchor" },
+        "reason": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    }
+  }
+}

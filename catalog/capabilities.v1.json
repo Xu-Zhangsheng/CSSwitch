@@ -12,10 +12,10 @@
       "action": "normalize",
       "reason": "DeepSeek uses the native Anthropic path; CSSwitch maps Science shell model ids, clamps known token caps, and normalizes thinking/tool_choice quirks.",
       "evidence": [
-        "desktop/gateway/src/server.rs",
+        "desktop/gateway/src/server/inference_dispatch.rs",
         "desktop/gateway/src/policy.rs",
         "desktop/gateway/src/policy.rs",
-        "desktop/gateway/src/server.rs"
+        "desktop/gateway/src/server/inference_dispatch.rs"
       ],
       "tests": [
         "desktop/gateway/src/policy.rs::tests::resolves_deepseek_shell_models",
@@ -35,7 +35,7 @@
       "action": "normalize",
       "reason": "Formal relay/custom proxies return one Science-visible claude-opus shell model with the real model name in display_name; outbound requests are force-overridden to the selected real model.",
       "evidence": [
-        "desktop/gateway/src/server.rs",
+        "desktop/gateway/src/server/inference_dispatch.rs",
         "desktop/gateway/src/models.rs",
         "desktop/gateway/src/anthropic_compat.rs",
         "desktop/gateway/src/models.rs"
@@ -65,9 +65,9 @@
         "test/golden/relay_anthropic.json"
       ],
       "tests": [
-        "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_removed_tool_choice_degrades_to_auto_without_enabled_thinking",
+        "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_server_web_search_passthrough",
         "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_thinking_and_tool_quirks_match_python_fixture",
-        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_filters_server_tool_blocks"
+        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_preserves_server_tool_blocks"
       ]
     },
     {
@@ -106,9 +106,9 @@
         "model_contains": "kimi",
         "tool_name": "web_search"
       },
-      "status": "limited",
-      "action": "drop",
-      "reason": "Kimi treats web_search as a provider server tool and may stream server_tool_use/web_search_tool_result blocks; CSSwitch keeps local known_tools but does not advertise web_search upstream and filters server-tool blocks.",
+      "status": "supported",
+      "action": "none",
+      "reason": "CSSwitch preserves Science's Kimi web_search server declaration and the provider's server_tool_use/web_search_tool_result response blocks while filtering unrelated unsupported server tools and invalid unsigned thinking blocks.",
       "evidence": [
         "desktop/gateway/src/anthropic_compat.rs",
         "desktop/gateway/src/anthropic_compat.rs",
@@ -116,9 +116,9 @@
       ],
       "tests": [
         "desktop/gateway/src/anthropic_compat.rs::tests::relay_kimi_thinking_and_tool_quirks_match_python_fixture",
-        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_drops_server_tool_blocks_and_compacts_indexes",
-        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_drops_server_tool_blocks_and_compacts_indexes",
-        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_filters_server_tool_blocks"
+        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_preserves_server_tool_blocks_and_compacts_indexes",
+        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_stream_filter_preserves_server_tool_blocks_and_compacts_indexes",
+        "test.test_gateway_rust.RustGatewayLoopback.test_relay_kimi_stream_preserves_server_tool_blocks"
       ]
     },
     {
@@ -231,7 +231,7 @@
       "evidence": [
         "desktop/gateway/src/dsml_shim.rs",
         "desktop/gateway/src/dsml_shim.rs",
-        "desktop/gateway/src/server.rs"
+        "desktop/gateway/src/server/inference_dispatch.rs"
       ],
       "tests": [
         "desktop/gateway/src/dsml_shim.rs::tests::stream_dsml_becomes_tool_use_across_chunk_sizes",
@@ -246,6 +246,24 @@
   "skills": [],
   "science_versions": [],
   "transport_rules": [
+    {
+      "id": "transport.kimi.document-text-normalize",
+      "scope": "transport",
+      "match": {
+        "provider": "relay",
+        "model_contains": "kimi",
+        "content_type": "document"
+      },
+      "status": "limited",
+      "action": "degrade",
+      "reason": "Kimi does not accept Anthropic document blocks, so CSSwitch lowers locally extracted text or image content and rejects raw PDF blocks before upstream submission.",
+      "evidence": [
+        "desktop/gateway/src/anthropic_compat.rs"
+      ],
+      "tests": [
+        "desktop/gateway/src/anthropic_compat.rs::tests::kimi_request_compat_normalizes_server_tools_and_documents"
+      ]
+    },
     {
       "id": "transport.connect.anthropic-fastfail-401",
       "scope": "transport",

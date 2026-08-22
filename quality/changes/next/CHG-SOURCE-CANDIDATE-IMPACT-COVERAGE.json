@@ -1,0 +1,85 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-SOURCE-CANDIDATE-IMPACT-COVERAGE",
+    "version": "v0.8.4-dev",
+    "title": "Bind uncovered post-v0.8.4 production paths to the next source candidate",
+    "summary": "Repairs the current-diff ChangeRecord coverage gap for eleven production paths already committed after v0.8.4 across provider compatibility, isolated acceptance seams, authority-writer fencing, and loopback retry hardening. This metadata-only carry-forward is introduced on a new candidate commit, does not backdate or publish a record for 112d4a99b6c68b2f3706a75b7567551fae5dc5eb, and changes no product behavior.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      "catalog/provider-contracts.v1.json",
+      "desktop/gateway/Cargo.toml",
+      "desktop/gateway/src/anthropic_compat.rs",
+      "desktop/gateway/src/config.rs",
+      "desktop/gateway/src/messages.rs",
+      "desktop/src-tauri/src/provider_contracts.rs",
+      "desktop/src-tauri/src/runtime/ssh_bridge.rs",
+      "quality/changes/next/CHG-SOURCE-CANDIDATE-IMPACT-COVERAGE.json",
+      "test/installed_provider_matrix.py",
+      "test/run-loopback.sh",
+      "test/test_real_machine_guard.sh",
+      "test/test_run_loopback_retry.sh"
+    ],
+    "requirement_ids": [
+      "REQ-083-LINEAGE",
+      "REQ-083-SCHEMA",
+      "REQ-083-REGISTRY",
+      "REQ-083-VALIDATOR",
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-INVENTORY",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-IMPACT",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-PY-LOOPBACK",
+        "SUITE-PY-OFFLINE",
+        "SUITE-RUST-DESKTOP",
+        "SUITE-RUST-GATEWAY",
+        "SUITE-SHELL-SCRIPTS"
+      ],
+      "required_gate_ids": [
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE",
+        "GATE-SOURCE"
+      ],
+      "risk_classes": [
+        "P0",
+        "release-gate",
+        "migration",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "the v0.8.4 peeled-base-to-candidate Git change set contains the eleven listed production paths",
+        "current-diff ChangeRecord coverage requires a current active record for each listed production path",
+        "this new record is metadata-only carry-forward for a new exact source candidate and does not claim that the eleven historical source changes were introduced by this commit",
+        "artifact, installed runtime, live provider or Science or SSH, credentials, signing, notarization, and public release validation remain NOT-RUN"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

@@ -1,53 +1,30 @@
 # CSSwitch 文档总入口
 
-当前主干及 Git、Release、源码、测试、artifact 与 runtime 的分层定位见[主干基线审计](audits/2026-07-29-v084-main-baseline.md)。公开产品概览从根目录 [README 中文版](../README.md) / [English](../README.en.md) 进入；本目录按内容寿命和证据类型分类。
+公开产品概览从根目录 [README 中文版](../README.md) / [English](../README.en.md) 进入。本页只路由当前权威正文、当前状态和日期化证据，不展开历史审计结论。
 
-## 架构
+## 当前权威入口
 
-- [架构索引](architecture/README.md)：按稳定问题选择当前架构正文。
-- [架构总览](architecture/overview.md)：边界、所有权、数据流和失败边界。
-- [Science runtime](architecture/science-runtime.md)：稳定的 binary、data-dir、身份和网络合同。
-- [Desktop 控制面](architecture/desktop-control-plane.md)：回答 Tauri command/event/DTO 与 frontend caller 如何连接。
-- [运行时状态与事务](architecture/runtime-state-transactions.md)：回答状态所有权、锁序、journal/snapshot/receipt 与补偿链。
-- [Gateway 与 provider 路由](architecture/gateway-provider-routing.md)：回答正式/scratch Gateway、Codex、Skill stdio 与 Science control 怎样分界。
-- [Claude Science 能力依赖](architecture/science-capability-dependencies.md)：解释稳定的跨 owner 依赖、第三方最小托管责任、窄 bridge、non-target 类别和故障归因。
+- [当前重构路线与证据缺口](../.agents/context/known-issues.md)：唯一当前 NEXT、阶段完成条件、仍有效的问题和证据边界；使用前先复核实时 Git / artifact / runtime。
+- [架构索引](architecture/README.md)：稳定边界、所有权、状态、数据流和失败链路。
+- [功能合同索引](features/README.md)：用户可见行为、能力边界、信任边界和非目标。
+- [运维索引](operations/README.md)：开发、测试、质量、生产链路验收、发布、升级回滚和文档治理。
+- [证据索引](evidence/README.md)：按 release 或日期化调查查找明确受限的证据。
+- [外部参考索引](references/README.md)：固定 reviewed commit 的外部项目参考，不作为 CSSwitch 当前事实或代码来源。
 
-## 运维
+Agent 强制行为从 [AGENTS.md](../AGENTS.md) 和 [`.agents/rules/`](../.agents/rules/) 进入；索引和兼容指针不复制正文。
 
-- [运维索引](operations/README.md)：按开发、测试、质量、验收、发布或文档治理问题选择执行合同。
-- [文档治理合同](operations/document-lifecycle.md)：回答文档类型、阅读预算、临时内容生命周期和权威正文如何收敛。
-- [开发](operations/development.md)
-- [自动测试](operations/testing.md)
-- [真机验收](operations/real-machine-acceptance.md)
-- [Claude Science 0.1.25 探针规格](operations/science-probe-spec.md)：只冻结 A/B/C 探针的执行与判定合同，不记录运行结果。
-- [发布](operations/release.md)
-- [升级与回滚](operations/upgrade-and-rollback.md)
-- [Quality kernel](operations/quality-kernel.md)：机器事实源、变化登记、source-green 与证据层边界。
+## 当前验收入口
 
-## 功能合同
+- [生产链路验收](operations/real-machine-acceptance.md)：唯一维护“重要重构决策 → production source → exact artifact → isolated-live → authorized live”的映射、进入条件、授权和故障 fixture 边界。
+- [Science 探针合同](operations/science-probe-spec.md)：在生产链路映射下维护 Science 的 source、exact artifact、isolated-live 与逐项 authorized-live probe card，不记录 actual result。
+- [v0.8.4 发布证据](evidence/releases/v0.8.4.md)：只记录该 release 绑定的 source、artifact、installed identity、signing 与 public 层；未列层不得补写为 PASS。
 
-- [功能合同索引](features/README.md)：按用户入口或功能边界选择当前合同。
-- [产品 / Claude Science 能力地图](features/product-science-capability-map.md)：维护唯一的逐能力决策表，包括 Science 官方 owner、第三方模式处理、non-target、当前证据层与 `UNKNOWN`。
-- [外部 Skill bridge](features/external-skill-bridge.md)
-- [系统 SSH 配置复用](features/system-ssh.md)
-- [UI 信息架构](features/ui-information-architecture.md)：模型连接、Codex 设置和扩展能力的页面职责。
+旧 R3–R11、R4/R5、S7 与 Post-D0/Post-Q0 路线已全部退役，只能从历史审计查证当时的决定和证据。后来 audit/evidence 中的 Phase 1/2/5、O1、F1 等编号只标识其绑定 slice，不是当前 NEXT、实施授权或验收顺序。
 
-## 证据
+## 历史审计
 
-- [证据索引](evidence/README.md)：按发布证据或日期化调查进入对应二级索引。
-- [2026-07-30 文档结构与拆分审计](audits/2026-07-30-v084-document-structure.md)：记录全库 Markdown 的 keep / shrink / split / delete-pointer 结论及本期验证。
-- [2026-07-30 架构与 Science 边界调研](audits/2026-07-30-v084-architecture-reconnaissance.md)：固定 exact HEAD、源码/官方资料、架构 findings、UNKNOWN 与 A/B/C 探针队列。
-- [v0.8.3 测试系统审计](audits/v083-test-system-audit.md)：记录当时的 BLOCK、入口清单与证据分层，不代表当前 gate 结果。
-- [v0.8.2 变更审计](audits/v082-change-audit.md)、[v0.8.1](audits/v081-change-audit.md)、[v0.8.0](audits/v080-change-audit.md)：回答各版本候选的日期化变更审查。
-- [发布证据](evidence/releases/README.md)：按版本记录最终 artifact 与分发结果。
-- [日期化调查](evidence/investigations/README.md)：只证明特定日期、runtime 和环境。
-
-## 外部参考
-
-- [外部参考索引](references/README.md)：区分当前外部参考与兼容路径。
-- [外部项目参考](references/external/README.md)：记录 reviewed commit 与可借鉴边界，不作为代码来源。
+- [审计索引](audits/README.md)：日期化基线、source closure、旧阶段路线、文档治理和旧版本 change audit。原文保留其绑定日期、SHA、环境和证据边界，不作为当前真相或后续授权。
 
 ## 维护约定
 
-- 文档类型、最小元数据、临时内容删除条件与默认阅读预算以[文档治理合同](operations/document-lifecycle.md)为准。
-- Agent 强制行为从 [`.agents/rules/`](../.agents/rules/) 进入；索引和兼容指针不复制正文。
+文档类型、权威位置、临时内容删除条件和阅读预算以[文档治理合同](operations/document-lifecycle.md)为准。一个事实只维护一份当前权威正文；Git 保存被删除临时文档的历史，不新建 `archive/` 或 `old-docs/`。

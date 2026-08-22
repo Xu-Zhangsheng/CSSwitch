@@ -3,12 +3,24 @@
   "$id": "https://csswitch.local/schema/run-failure.v1.schema.json",
   "type": "object",
   "additionalProperties": false,
+  "dependentRequired": {
+    "suite_id": ["checkpoint", "detail_code"],
+    "checkpoint": ["suite_id", "detail_code"],
+    "detail_code": ["suite_id", "checkpoint"]
+  },
+  "allOf": [{
+    "if": {"anyOf": [{"required": ["suite_id"]}, {"required": ["checkpoint"]}, {"required": ["detail_code"]}]},
+    "then": {"properties": {"reason_code": {"const": "INPUT_DRIFT"}}}
+  }],
   "required": ["schema", "run_id", "stage", "reason_code", "run_manifest", "created_at", "terminal"],
   "properties": {
     "schema": {"const": "run-failure.v1"},
     "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}(?![\\s\\S])", "minLength": 32, "maxLength": 32},
     "stage": {"enum": ["RUN_ROOT", "SNAPSHOT", "CHANGE_SET", "PLAN", "EXECUTE", "AGGREGATE", "SEAL", "INTERRUPT", "INTERNAL"]},
     "reason_code": {"enum": ["RUN_ROOT_UNSAFE", "SNAPSHOT_FAILED", "CHANGE_SET_MISMATCH", "INPUT_DRIFT", "TOOL_DRIFT", "PARTIAL_RESULTS", "DUPLICATE_RESULTS", "REPLAYED_RESULT", "RESULT_BINDING_MISMATCH", "INTERRUPTED", "INTERNAL_ERROR"]},
+    "suite_id": {"anyOf": [{"type": "null"}, {"type": "string", "pattern": "^SUITE-[A-Z0-9][A-Z0-9-]{0,31}(?![\\s\\S])", "minLength": 7, "maxLength": 38}]},
+    "checkpoint": {"enum": ["after-snapshot", "after-plan", "suite-before", "suite-after", "before-evidence", "before-seal"]},
+    "detail_code": {"enum": ["GIT_BINDING_CHANGED", "SOURCE_METADATA_CHANGED", "PYTHON_AUTHORITY_CHANGED", "OFFLINE_ROOT_IDENTITY_CHANGED", "CARGO_DEPENDENCY_DIGEST_CHANGED", "CARGO_CONFIG_CHANGED", "GATEWAY_TARGET_CHANGED", "TOOL_IDENTITY_CHANGED", "PYTHON_DEPENDENCY_CHANGED", "UNKNOWN_INPUT_DRIFT"]},
     "run_manifest": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "pattern": "^(?!/)(?!.*[\\u0000-\\u001f\\u007f])(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*(?:^|/)(?:/|$)).{1,240}$(?![\\s\\S])", "minLength": 1, "maxLength": 240}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])", "minLength": 64, "maxLength": 64}}}]},
     "created_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z(?![\\s\\S])"},
     "terminal": {"const": true}

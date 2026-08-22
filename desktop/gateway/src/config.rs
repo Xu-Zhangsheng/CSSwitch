@@ -30,6 +30,9 @@ pub struct GatewayConfig {
     /// It is supplied only through the child environment and is never returned
     /// from Gateway health or inference responses.
     pub skill_bridge_token: Option<String>,
+    /// Inherited, nonce-bound identity of Desktop's compensation authority
+    /// fence.  It is intentionally a descriptor identity, never a path.
+    pub(crate) skill_authority_fence: Option<crate::skill_install::AuthorityFenceDescriptor>,
     /// Verified Science runtime identity used by the local Skill attach control
     /// plane. A gateway without this context still serves inference traffic but
     /// does not install Skills.
@@ -150,6 +153,22 @@ pub fn openai_endpoint(base: &str, suffix: &str) -> String {
     }
     root.push_str(suffix);
     root
+}
+
+fn kimi_models_endpoint(base: &str) -> String {
+    let mut root = base.trim().trim_end_matches('/').to_string();
+    for suffix in [
+        "/anthropic/v1/messages",
+        "/anthropic/v1/models",
+        "/anthropic/v1",
+        "/anthropic",
+    ] {
+        if root.ends_with(suffix) {
+            root.truncate(root.len() - suffix.len());
+            break;
+        }
+    }
+    openai_endpoint(&root, "/models")
 }
 
 fn normalize_anthropic_v1_base(base: &str) -> String {
@@ -308,11 +327,14 @@ impl GatewayConfig {
                     !v.is_empty() && (v.starts_with("http://") || v.starts_with("https://"))
                 })
                 .ok_or_else(|| format!("{provider} 需要 {base_env}=http(s)://..."))?;
-            let (inference, discovered_models) = joined_endpoints(
+            let (inference, mut discovered_models) = joined_endpoints(
                 provider_contract.endpoint_join,
                 &provider_contract.transport,
                 &base,
             )?;
+            if provider_contract.contract_id == "kimi-anthropic-relay" {
+                discovered_models = Some(kimi_models_endpoint(&base));
+            }
             models_url = discovered_models;
             if provider_contract.transport == "anthropic_messages" {
                 relay_thinking = std::env::var("CSSWITCH_RELAY_THINKING")
@@ -377,6 +399,19 @@ impl GatewayConfig {
                     value.len() == 64
                         && value.chars().all(|character| character.is_ascii_hexdigit())
                 });
+        let skill_surface_present =
+            skill_data_dir.is_some() || skill_bridge_dir.is_some() || skill_bridge_token.is_some();
+        let skill_authority_fence =
+            match skill_bridge_token.as_deref() {
+                Some(token) => Some(crate::skill_install::AuthorityFenceDescriptor::from_env(
+                    token,
+                )?),
+                None if skill_surface_present => return Err(
+                    "Skill bridge capability 不完整，拒绝启动未受 authority fence 保护的写入宿主"
+                        .into(),
+                ),
+                None => None,
+            };
         let science_host_context = std::env::var("CSSWITCH_SCIENCE_HOST_CONTEXT")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -436,6 +471,7 @@ impl GatewayConfig {
             skill_data_dir,
             skill_bridge_dir,
             skill_bridge_token,
+            skill_authority_fence,
             science_host_context,
         })
     }
@@ -444,8 +480,8 @@ impl GatewayConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_shim_mode, joined_endpoints, normalize_openai_base, openai_endpoint,
-        provider_supported, shim_mode, upstream_url_for,
+        canonical_shim_mode, joined_endpoints, kimi_models_endpoint, normalize_openai_base,
+        openai_endpoint, provider_supported, shim_mode, upstream_url_for,
     };
     use crate::provider_contracts::EndpointJoin;
 
@@ -577,6 +613,18 @@ mod tests {
                 "https://relay.example.test/anthropic/v1/messages".into(),
                 Some("https://relay.example.test/anthropic/v1/models".into())
             )
+        );
+        assert_eq!(
+            kimi_models_endpoint("https://api.moonshot.cn/anthropic"),
+            "https://api.moonshot.cn/v1/models"
+        );
+        assert_eq!(
+            kimi_models_endpoint("https://api.moonshot.cn/anthropic/v1/messages"),
+            "https://api.moonshot.cn/v1/models"
+        );
+        assert_eq!(
+            kimi_models_endpoint("http://127.0.0.1:1234/relay"),
+            "http://127.0.0.1:1234/relay/v1/models"
         );
     }
 

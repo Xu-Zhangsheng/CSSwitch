@@ -1,6 +1,11 @@
 # 外部 Skill 安装桥
 
-公开 GitHub URL 路线自 v0.5.0 起提供，v0.6.0 扩展本地包、bundle 与恢复语义；当前 v0.7.0 继续使用本合同。
+公开 GitHub URL 路线自 v0.5.0 起提供，v0.6.0 扩展本地包、bundle 与恢复语义；当前 v0.8.4 继续使用本合同。
+
+多平台 Plugin / Agent Skills / generic MCP 的未来兼容边界已经在
+[Science Skill / MCP / Plugin 扩展控制面](../architecture/skill-mcp-plugin-control-plane.md)
+冻结；除本文随后定义的 fixed-commit 单 Skill 可选确认路径外，其余目标设计尚未
+实现，不改变本文的当前入口、状态码、支持范围或证据层。
 
 CSSwitch 只提供两个窄入口，不启用 Skill Manager：
 
@@ -8,6 +13,112 @@ CSSwitch 只提供两个窄入口，不启用 Skill Manager：
 2. CSSwitch 主面板通过系统文件选择器导入本地 `.zip` 或 `.skill`。
 
 两条路线都由 CSSwitch 宿主执行下载或读取、包校验、原子提交和 `OPERON` 绑定。它们不调用 Anthropic Skill catalog，不读取 Science/GitHub credential，不写 SQLite、inventory、store 或 catalog。
+
+### 可选的精确计划确认：固定 commit 的单 Skill
+
+`install_external_skill` 在省略 `confirmation` 时保持本章既有 GitHub
+安装输入、响应和副作用不变。可选的 `confirmation` 只接受下列严格形态：
+
+```json
+{"schema_version":1,"action":"plan"}
+```
+
+它只适用于已带 40 位 commit SHA 的公开 GitHub URL，并且只在完整 archive
+可投影为一个无额外 payload 的 Skill 时返回 `CONFIRMATION_REQUIRED`。宿主从
+固定 commit 下载、在 Desktop 继承并由 Gateway shared authority fence 持有的 host-only
+mode `0700` 私有根中 staging、持久化
+operation ledger，并返回精确 `source`、完整 `effects`、`operation_id`、
+`plan_digest`、短期单次 `capability` 和 expiry；此步不提交 package、不修改
+OPERON。capability 只出现在 mode `0600` 的最终 bridge response，不写入
+status/progress、日志或 ledger。
+
+下载 mutable remote bytes 前，host-only lifecycle 会先持久保留一个最大 archive slot；
+install、removal 与 reservation 共用四项 lifecycle entry hard cap；removal 不增加 archive
+bytes，但同样在任何 native effect 前被拒绝。容量满时返回 typed admission failure，不下载。
+只有过期、未消费、所有 effects 仍为
+`NotStarted` 且没有 intent 的 exact install plan 可经 tombstone 回收 staging 与 ledger；
+consumed、in-progress、uncertain、removal 或任一 identity drift 均保留并 fail closed。
+过期的 pre-receipt `Reserved` record 则只可回收其确定性 `exact-<operation_id>` child：
+先以 held root/child FD 的 no-follow 打开，验证当前用户、`0700` root/child、`0600`
+regular-file 白名单（`archive.zip` / receipt）与各自大小，再删除。child 缺失、mkdir 后
+尚未写入或仅有已知 partial archive 都可回收；额外条目、类型/权限/owner/size 不匹配或
+任一读取错误均保留整个 child 与 reservation，绝不猜测删除。
+removal admission 把同一 authority-root 的真实 operation staging descriptor 传入 collector；
+它绝不把 quarantine root 当作 install staging，因此由 removal 触发的 terminal install GC
+仍会在删除 ledger 前回收对应 exact staging child。
+
+用户看过并明确确认完全相同 plan 后，Agent 才能以同一 `source_url` 调用：
+
+```json
+{
+  "schema_version":1,
+  "action":"apply",
+  "operation_id":"<plan returned verbatim>",
+  "plan_digest":"<plan returned verbatim>",
+  "capability":"<plan returned verbatim>"
+}
+```
+
+apply 仅重开该 `operation_id` 的 durable snapshot，重新验证 capability hash、
+expiry、原 source request digest、runtime/data-dir/active-org binding 和 archive
+identity；它不会重新读取 mutable source URL。任一不匹配、过期、已消费或
+in-progress effect 都会 fail closed 并要求新的 plan 或明确 reconcile。host
+access 批准绝不等同于对 plan effects 的用户确认。
+
+固定 GitHub plan 另外同时封存两个不可互换的内容摘要：inspection canonical
+digest 用于报告/plan source，materialized package canonical digest 用于 package
+commit、marker 与 fd-relative readback。两者必须各自匹配同一 retained archive；
+CSSwitch 不会把不同 domain 的摘要相互比较或以其中一个替代另一个。
+
+若进程在已持久化 effect intent 后退出，调用方只能发送
+`{"schema_version":1,"action":"reconcile","operation_id":"<original>"}`。该形态
+不得带 `source_url`、`plan_digest` 或 capability；Gateway 只按 ledger kind 做原生
+GET / fd-relative marker-content readback，绝不重放 attach、detach 或 rename。bridge
+mailbox 只保存 request/status/response；它不是 staging、ledger 或 quarantine authority。
+
+若 durable ledger 恰好是已验证首 effect、后续 effect 尚未开始的精确前缀，调用方可使用
+`{"schema_version":1,"action":"continue","operation_id":"<original>"}`。它不得带
+source、digest 或 capability；host 会重新绑定 target 并读取已安装 ownership 后只执行一个
+剩余 effect。过期、replacement 或任意 ledger drift 只返回
+`SKILL_OPERATION_NEW_PLAN_REQUIRED`，不重放已验证 effect。
+
+确认式**安装**当前仅覆盖一个 GitHub single Skill 的 package commit 和原生
+OPERON attach/readback；不支持 local/package/bundle/Plugin/MCP 安装计划。确认式**卸载**则接纳
+任一非 bundle、带精确 CSSwitch ownership marker 的已安装单 Skill（包括 `local_zip`）：plan 固定
+`operon_detach` 后 `package_quarantine` 两项
+effect、runtime/data-dir/org/root identity、canonical marker 和 content digest。确认 apply
+在每项 effect 前写 durable intent；detach transport 不确定时只做 native GET readback，绝不
+quarantine；quarantine recovery 只核验已持久化相对 destination，绝不再次 rename。bundle、
+Plugin、MCP 与 local package **安装**不进入该 mode，保持原有 fail-closed 边界；
+已安装且由 CSSwitch ownership marker 证明的 `local_zip` 单 Skill 则如上可进入
+确认式卸载。
+
+确认式卸载的 apply 由返回的 `operation_id`、`plan_digest` 与 capability 唯一确定；它不携带
+`skill_name`、bundle id 或任何其他外层目标字段。plan 才必须携带精确已安装 Skill 名称。
+卸载最终响应使用 `detach_verified`、`quarantine_commit` 与
+`recovery_required`；不会借用安装的 `attach_verified` 或 `directory_commit` 语义。
+若 effect 已执行而 successor ledger 未能确认持久化，Gateway 不会把结果硬编码为
+`false`；`recovery_required=true`，对应 effect 字段只反映即时可信读回的
+`true` / `false` / unknown 快照，仍只能以同一 `operation_id` reconcile 读取
+authority-root 的 durable projection。
+
+该情形还返回 response-only `post_effect_observation`，其中的 effect 与
+`observed_true` / `observed_false` / `unknown` 来自立即可信读回；它不是 durable
+receipt，也不授权重放副作用。仅后续 reconcile 成功写入 ledger 后才可报告 durable
+verified 结果。
+
+确认计划还封存当前 org Skills root 的 device/inode identity。apply、continue 与
+reconcile 每次都重新 no-follow 打开该 root 并拒绝 identity drift；移除流程从 preflight
+开始持有同一已验证 source leaf FD，直至 WAL intent 后的最终 no-clobber rename 前再次把
+named entry、marker 和 content 与该 FD 比较。因此 bridge mailbox 中的同名 staging、ledger
+或 quarantine 条目没有 operation authority。
+
+这是 CSSwitch host capability 与合作方 shared per-Skill lock 的边界，不是对任意同 UID
+进程的 source-name CAS 承诺：macOS 的 `renameatx_np(RENAME_EXCL)` 仅防止 destination
+覆盖，并没有 expected source inode/generation 参数。若外部进程绕过 lock 直接改写 Science
+data-dir，host 会对 revalidation 时已观察到的 drift fail closed；若竞争发生在最后一次检查后，
+本协议不声称原子阻止或回滚。任何可观察到的不一致保留为 failed/uncertain recovery，绝不
+以重复 rename 伪装恢复。
 
 ## 正式数据流
 

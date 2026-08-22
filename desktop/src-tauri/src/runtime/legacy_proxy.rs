@@ -9,6 +9,7 @@ struct ListenerProcess {
     command_name: String,
     uid: u32,
     command: String,
+    start_token: String,
 }
 
 fn system_tool<'a>(absolute: &'a str, fallback: &'a str) -> &'a str {
@@ -22,6 +23,7 @@ fn system_tool<'a>(absolute: &'a str, fallback: &'a str) -> &'a str {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LegacyProxyCleanup {
     NotLegacy,
+    IdentityChanged(u32),
     Stopped(u32),
     StopFailed(u32),
 }
@@ -30,7 +32,16 @@ pub(crate) enum LegacyProxyCleanup {
 pub(crate) enum ManagedGatewayCleanup {
     NotManaged,
     Stopped(u32),
-    StopFailed(u32),
+    StopUnknown {
+        pid: u32,
+        kind: ManagedGatewayStopUnknownKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManagedGatewayStopUnknownKind {
+    SignalFailed,
+    ExitUnconfirmed,
 }
 
 fn parse_lsof_records(output: &str) -> Vec<(u32, String)> {
@@ -90,11 +101,25 @@ fn process_snapshot(pid: u32, command_name: String) -> Option<ListenerProcess> {
         return None;
     }
     let (uid, command) = parse_ps_record(&String::from_utf8_lossy(&output.stdout))?;
+    let start_output = Command::new(system_tool("/bin/ps", "ps"))
+        .args(["-ww", "-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    if !start_output.status.success() {
+        return None;
+    }
+    let start_token = String::from_utf8_lossy(&start_output.stdout)
+        .trim()
+        .to_string();
+    if start_token.is_empty() {
+        return None;
+    }
     Some(ListenerProcess {
         pid,
         command_name,
         uid,
         command,
+        start_token,
     })
 }
 
@@ -186,17 +211,40 @@ pub(crate) fn stop_legacy_csswitch_python_on_port(
     let Some(process) = exact_legacy_listener(port, expected_script) else {
         return LegacyProxyCleanup::NotLegacy;
     };
-    let status = Command::new(system_tool("/bin/kill", "kill"))
-        .args(["-TERM", &process.pid.to_string()])
-        .status();
-    if !matches!(status, Ok(status) if status.success()) {
+    stop_claimed_legacy_process_with(
+        process,
+        |expected| exact_legacy_listener(port, expected_script).as_ref() == Some(expected),
+        |pid| {
+            let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            (result == 0).then_some(()).ok_or(())
+        },
+        |pid| {
+            listener_records(port)
+                .iter()
+                .any(|(listener_pid, _)| *listener_pid == pid)
+        },
+    )
+}
+
+fn stop_claimed_legacy_process_with<Recheck, Signal, StillListening>(
+    process: ListenerProcess,
+    recheck: Recheck,
+    signal_term: Signal,
+    still_listening: StillListening,
+) -> LegacyProxyCleanup
+where
+    Recheck: FnOnce(&ListenerProcess) -> bool,
+    Signal: FnOnce(u32) -> Result<(), ()>,
+    StillListening: Fn(u32) -> bool,
+{
+    if !recheck(&process) {
+        return LegacyProxyCleanup::IdentityChanged(process.pid);
+    }
+    if signal_term(process.pid).is_err() {
         return LegacyProxyCleanup::StopFailed(process.pid);
     }
     for _ in 0..30 {
-        if !listener_records(port)
-            .iter()
-            .any(|(pid, _)| *pid == process.pid)
-        {
+        if !still_listening(process.pid) {
             return LegacyProxyCleanup::Stopped(process.pid);
         }
         thread::sleep(Duration::from_millis(50));
@@ -216,6 +264,26 @@ pub(crate) fn stop_managed_gateway_on_port<F>(
 ) -> ManagedGatewayCleanup
 where
     F: Fn() -> bool,
+{
+    stop_managed_gateway_on_port_with(port, expected_binary, health_still_matches, |pid| {
+        let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+}
+
+pub(crate) fn stop_managed_gateway_on_port_with<F, Signal>(
+    port: u16,
+    expected_binary: &Path,
+    health_still_matches: F,
+    signal_term: Signal,
+) -> ManagedGatewayCleanup
+where
+    F: Fn() -> bool,
+    Signal: FnOnce(u32) -> Result<(), ()>,
 {
     let Some(uid) = current_uid() else {
         return ManagedGatewayCleanup::NotManaged;
@@ -244,11 +312,11 @@ where
     {
         return ManagedGatewayCleanup::NotManaged;
     }
-    let status = Command::new(system_tool("/bin/kill", "kill"))
-        .args(["-TERM", &pid.to_string()])
-        .status();
-    if !matches!(status, Ok(status) if status.success()) {
-        return ManagedGatewayCleanup::StopFailed(pid);
+    if signal_term(pid).is_err() {
+        return ManagedGatewayCleanup::StopUnknown {
+            pid,
+            kind: ManagedGatewayStopUnknownKind::SignalFailed,
+        };
     }
     for _ in 0..40 {
         if !listener_records(port)
@@ -259,14 +327,18 @@ where
         }
         thread::sleep(Duration::from_millis(50));
     }
-    ManagedGatewayCleanup::StopFailed(pid)
+    ManagedGatewayCleanup::StopUnknown {
+        pid,
+        kind: ManagedGatewayStopUnknownKind::ExitUnconfirmed,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         is_legacy_csswitch_python, parse_lsof_records, parse_ps_record,
-        stop_legacy_csswitch_python_on_port, LegacyProxyCleanup, ListenerProcess,
+        stop_claimed_legacy_process_with, stop_legacy_csswitch_python_on_port, LegacyProxyCleanup,
+        ListenerProcess,
     };
 
     fn process(command_name: &str, uid: u32, command: &str) -> ListenerProcess {
@@ -275,6 +347,7 @@ mod tests {
             command_name: command_name.to_string(),
             uid,
             command: command.to_string(),
+            start_token: "Sun Aug  9 12:00:00 2026".into(),
         }
     }
 
@@ -368,6 +441,34 @@ mod tests {
             501,
             expected
         ));
+    }
+
+    #[test]
+    fn legacy_cleanup_rechecks_full_identity_before_signal() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let owner = process(
+            "Python",
+            501,
+            "/usr/bin/python3 /Applications/CSSwitch.app/Contents/Resources/proxy/csswitch_proxy.py --provider relay --port 18991",
+        );
+        let signal_called = AtomicBool::new(false);
+        let outcome = stop_claimed_legacy_process_with(
+            owner.clone(),
+            |expected| {
+                let mut replacement = owner.clone();
+                replacement.start_token = "Sun Aug  9 12:00:01 2026".into();
+                &replacement == expected
+            },
+            |_| {
+                signal_called.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            |_| true,
+        );
+
+        assert_eq!(outcome, LegacyProxyCleanup::IdentityChanged(owner.pid));
+        assert!(!signal_called.load(Ordering::SeqCst));
     }
 
     #[cfg(target_os = "macos")]

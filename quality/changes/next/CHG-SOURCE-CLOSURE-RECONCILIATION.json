@@ -1,0 +1,112 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-SOURCE-CLOSURE-RECONCILIATION",
+    "version": "v0.8.4-dev",
+    "title": "Reconcile source-closure metadata, documentation, and compatibility claims",
+    "summary": "Reconciles the current repository audit and route documents with live source ownership, aligns the R0 mutation-inventory closure state with its ChangeRecord, migrates repaired trusted-source-gate bugs to the source-fixed state, replaces stale bug paths, makes built-in provider compatibility notices version-neutral and capability-bounded, and prevents a fake process fixture from signaling an unrelated host PID during teardown. Product runtime behavior and downstream evidence are unchanged.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/README.md",
+      ".agents/context/branch-lines.md",
+      ".agents/context/known-issues.md",
+      ".agents/context/verified-state.md",
+      "README.en.md",
+      "README.md",
+      "desktop/src-tauri/src/runtime/profile.rs",
+      "desktop/src-tauri/src/templates.rs",
+      "desktop/src/preview-adapter.js",
+      "docs/README.md",
+      "docs/architecture/overview.md",
+      "docs/architecture/runtime-state-transactions.md",
+      "docs/architecture/science-capability-dependencies.md",
+      "docs/architecture/science-runtime.md",
+      "docs/audits/2026-08-14-next-repository-docs-architecture-review.md",
+      "docs/audits/README.md",
+      "docs/features/product-science-capability-map.md",
+      "docs/features/system-ssh.md",
+      "docs/operations/real-machine-acceptance.md",
+      "docs/operations/science-probe-spec.md",
+      "quality/bugs/BUG-083-GATEWAY-RECOVERY.json",
+      "quality/bugs/BUG-083-ORPHANS.json",
+      "quality/bugs/BUG-083-RC.json",
+      "quality/bugs/BUG-083-RETRY.json",
+      "quality/bugs/BUG-083-RUST-COVERAGE.json",
+      "quality/bugs/BUG-083-SCIENCE-REATTACH.json",
+      "quality/bugs/BUG-083-TOOL-ARG-EXCLUSIVITY.json",
+      "quality/changes/next/CHG-RUNTIME-MUTATION-R0-H.json",
+      "quality/changes/next/CHG-SOURCE-CLOSURE-RECONCILIATION.json",
+      "test/profile_preview_mock.test.mjs",
+      "test/quality/test_quality_kernel.py",
+      "test/test_installed_provider_matrix.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-REGISTRY",
+      "REQ-083-VALIDATOR",
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [
+      "BUG-083-GATEWAY-RECOVERY",
+      "BUG-083-ORPHANS",
+      "BUG-083-RC",
+      "BUG-083-RETRY",
+      "BUG-083-RUST-COVERAGE",
+      "BUG-083-SCIENCE-REATTACH",
+      "BUG-083-TOOL-ARG-EXCLUSIVITY"
+    ],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-MJS-FRONTEND",
+        "SUITE-PY-OFFLINE",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-SOURCE-GATE-CONTRACT"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "release-gate",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "machine validation proves all 96 required R0 characterization identities are executable and none is ignored or skipped",
+        "focused metadata tests bind repaired source-gate lifecycle states and require every affected source path in the three corrected bug records to exist",
+        "Rust and frontend source tests bind the same version-neutral capability notices for OpenCode Go, Grok, and Gemini",
+        "the installed-provider fixture routes fake sidecar termination through a bounded mock and asserts the exact fake PID and signal instead of signaling the host process table",
+        "the frozen f7594c61f9922f3430675f36abfadea9b3a3fda0 predecessor has a PASS exact-SHA fifteen-suite GATE-SOURCE completion seal from run a5ab0c9f478a4fa1fad19036660be2a8, but its clean-context completion review was FAIL",
+        "exact-SHA fifteen-suite GATE-SOURCE run cdb5aea62b19f8e8768de42058a01eee passed with runner exit 0 on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb",
+        "a fresh clean-context independent completion review passed on 50820da2fabed1b75f7dd7e5cf9bb910f02d0bbb with no BLOCK, HIGH, MEDIUM, or LOW findings",
+        "no artifact, installed App, live provider, live Science, credentials, signing, notarization, or public release evidence is claimed"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

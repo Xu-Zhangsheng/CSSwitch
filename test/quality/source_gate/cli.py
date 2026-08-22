@@ -16,10 +16,37 @@ _USAGE = (
     "run",
     "--output-root",
 )
+_SAFE_ERROR_CODES = {
+    "unsafe output root": "output-root-unsafe",
+    "output root must be empty euid-owned 0700 directory": (
+        "output-root-not-empty-owned-0700"
+    ),
+    "output root binding lost": "output-root-binding-lost",
+    "source temp socket capacity": "output-root-path-too-long",
+}
 
 
 class SourceCliPreflightError(RuntimeError):
     pass
+
+
+def _emit_error(code: str, runner_exit: int) -> None:
+    try:
+        sys.stderr.write(
+            _canonical({
+                "error": "source-gate",
+                "reason": code,
+                "runner_exit": runner_exit,
+            }).decode("utf-8")
+        )
+        sys.stderr.flush()
+    except BaseException:
+        # Diagnostics must never alter the fail-closed exit path.
+        pass
+
+
+def _safe_error_code(exc: BaseException) -> str:
+    return _SAFE_ERROR_CODES.get(str(exc), "internal-failure")
 
 
 def _canonical(value: Any) -> bytes:
@@ -137,19 +164,24 @@ def _main(
     try:
         requested = _parse(argv)
     except ValueError:
+        _emit_error("usage", 64)
         return 64
     try:
         root, root_fd = _validate_output_root(requested)
-    except SourceCliPreflightError:
+    except SourceCliPreflightError as exc:
+        _emit_error(_safe_error_code(exc), 2)
         return 2
     try:
         rc, line = executor(root, root_fd)
         _assert_output_root_binding(root, root_fd)
     except KeyboardInterrupt:
+        _emit_error("interrupted", 130)
         return 130
-    except SourceCliPreflightError:
+    except SourceCliPreflightError as exc:
+        _emit_error(_safe_error_code(exc), 12)
         return 12
-    except BaseException:
+    except BaseException as exc:
+        _emit_error(_safe_error_code(exc), 12)
         return 12
     finally:
         try:
@@ -164,16 +196,19 @@ def _main(
 
 def main() -> int:
     if sys.flags.isolated != 1:
+        _emit_error("isolated-python-required", 2)
         return 2
     try:
         _parse(sys.argv[1:])
     except ValueError:
+        _emit_error("usage", 64)
         return 64
     if str(_REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPO_ROOT))
     try:
         from test.quality.source_gate.runtime import execute_source_gate
     except BaseException:
+        _emit_error("runtime-import-failed", 2)
         return 2
     return _main(sys.argv[1:], execute_source_gate)
 

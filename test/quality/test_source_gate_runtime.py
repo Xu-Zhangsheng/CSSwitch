@@ -22,6 +22,7 @@ from test.quality.source_gate.runtime import (
     SourceRuntimeInputs,
     _dependency_inventory,
     _materialize_bound_dependency_view,
+    _recheck_shared_offline_root,
     execute_source_gate_with_dependencies,
 )
 
@@ -365,7 +366,7 @@ class SourceGateRuntime(unittest.TestCase):
             if plan.suite["id"] == "SUITE-RUST-DESKTOP"
         )
         bound = source_runtime._source_observation_size_bound(desktop)
-        self.assertEqual(len(desktop.expected_test_ids), 443)
+        self.assertEqual(len(desktop.expected_test_ids), 666)
         self.assertGreater(bound, 64 * 1024)
         self.assertLessEqual(
             bound,
@@ -569,7 +570,11 @@ class SourceGateRuntime(unittest.TestCase):
                     "registry/src": str(cargo_home / "registry/src"),
                 }
                 _, actual = _dependency_inventory(roots)
-                return actual == bound_digest
+                return (
+                    True
+                    if actual == bound_digest
+                    else "CARGO_DEPENDENCY_DIGEST_CHANGED"
+                )
             return True
 
         dependencies = SourceRuntimeDependencies(
@@ -603,7 +608,41 @@ class SourceGateRuntime(unittest.TestCase):
         failure = json.loads(failure_path.read_text("utf-8"))
         self.assertEqual(failure["stage"], "AGGREGATE")
         self.assertEqual(failure["reason_code"], "INPUT_DRIFT")
+        self.assertIsNone(failure["suite_id"])
+        self.assertEqual(failure["checkpoint"], "before-seal")
+        self.assertEqual(
+            failure["detail_code"],
+            "CARGO_DEPENDENCY_DIGEST_CHANGED",
+        )
         self.assertIsNone(failure["run_manifest"])
+
+    def test_suite_drift_failure_records_suite_checkpoint_and_closed_detail(self):
+        def recheck(stage, index, plan):
+            if stage == "suite-before":
+                return "SOURCE_METADATA_CHANGED"
+            return True
+
+        dependencies = SourceRuntimeDependencies(
+            preflight=self._inputs,
+            capture_snapshot=self._capture,
+            run_one=self._run_one,
+            recheck=recheck,
+        )
+        with self.assertRaises(source_runtime.SourceInputDrift):
+            execute_source_gate_with_dependencies(
+                str(self.root),
+                self.root_fd,
+                dependencies,
+            )
+        failure_path = next(
+            self.root.glob("evidence/runs/*/run-failure.json"),
+        )
+        failure = json.loads(failure_path.read_text("utf-8"))
+        self.assertEqual(failure["stage"], "EXECUTE")
+        self.assertEqual(failure["reason_code"], "INPUT_DRIFT")
+        self.assertTrue(failure["suite_id"].startswith("SUITE-"))
+        self.assertEqual(failure["checkpoint"], "suite-before")
+        self.assertEqual(failure["detail_code"], "SOURCE_METADATA_CHANGED")
         with tempfile.TemporaryDirectory(
             dir=os.path.realpath(tempfile.gettempdir()),
         ) as temp:
@@ -844,6 +883,16 @@ class SourceGateRuntime(unittest.TestCase):
 
 
 class ProductionInputAuthority(unittest.TestCase):
+    def test_private_cargo_view_releases_shared_registry_metadata_authority(self):
+        state = {
+            "cargo_registry_root": "/controlled/.cargo/registry",
+            "private_cargo_view_ready": False,
+        }
+        self.assertTrue(_recheck_shared_offline_root(state["cargo_registry_root"], state))
+        state["private_cargo_view_ready"] = True
+        self.assertFalse(_recheck_shared_offline_root(state["cargo_registry_root"], state))
+        self.assertTrue(_recheck_shared_offline_root("/controlled/.rustup", state))
+
     def _controlled_production_input_digests(
         self,
         root: Path,

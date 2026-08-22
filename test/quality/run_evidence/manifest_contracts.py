@@ -27,7 +27,29 @@ EVIDENCE_FIELDS = frozenset(("schema", "run_id", "run_manifest", "test_results")
 SOURCE_EVIDENCE_FIELDS = EVIDENCE_FIELDS | frozenset(("source_observations",))
 SEAL_FIELDS = frozenset(("schema", "run_id", "run_manifest", "source_snapshot_manifest", "evidence_manifest", "input_digest_set_sha256", "aggregate_decision", "runner_exit", "completed_at"))
 FAILURE_FIELDS = frozenset(("schema", "run_id", "stage", "reason_code", "run_manifest", "created_at", "terminal"))
-CANDIDATE_FIELDS = frozenset(("schema", "version", "candidate_head_sha", "previous_release", "gate_ids", "completion_seal"))
+FAILURE_DIAGNOSTIC_FIELDS = frozenset(("suite_id", "checkpoint", "detail_code"))
+FAILURE_CHECKPOINTS = frozenset((
+    "after-snapshot", "after-plan", "suite-before", "suite-after",
+    "before-evidence", "before-seal",
+))
+FAILURE_DETAIL_CODES = frozenset((
+    "GIT_BINDING_CHANGED", "SOURCE_METADATA_CHANGED",
+    "PYTHON_AUTHORITY_CHANGED", "OFFLINE_ROOT_IDENTITY_CHANGED",
+    "CARGO_DEPENDENCY_DIGEST_CHANGED", "CARGO_CONFIG_CHANGED",
+    "GATEWAY_TARGET_CHANGED", "TOOL_IDENTITY_CHANGED",
+    "PYTHON_DEPENDENCY_CHANGED", "UNKNOWN_INPUT_DRIFT",
+))
+CANDIDATE_FIELDS = frozenset(("schema", "version", "candidate_head_sha", "previous_release", "source_candidate", "gate_ids", "completion_seal"))
+SOURCE_CANDIDATE_FIELDS = frozenset((
+    "schema", "development_line", "comparison_base", "candidate_head_sha",
+    "change_set_sha256", "change_set", "change_ids", "run_id",
+    "run_manifest", "completion_seal", "source_snapshot_manifest",
+    "evidence_manifest", "created_at",
+))
+RELEASE_EVIDENCE_FIELDS = frozenset((
+    "schema", "version", "candidate_head_sha", "release_candidate",
+    "artifact_manifest", "public_release_receipt",
+))
 
 PROFILES = {
     "focused": "merge-base-origin-main",
@@ -579,10 +601,25 @@ def validate_terminal_set(seal: Any | None, failure: Any | None, *, run_manifest
         _fail("terminal outcome is required")
     if failure is None:
         return
-    failure = _keys(failure, FAILURE_FIELDS, "run failure")
+    if not isinstance(failure, Mapping) or set(failure) not in {
+        FAILURE_FIELDS,
+        FAILURE_FIELDS | FAILURE_DIAGNOSTIC_FIELDS,
+    }:
+        _fail("run failure")
     if failure["schema"] != "run-failure.v1" or not _sha(failure["run_id"], 32) or failure["stage"] not in FAILURE_STAGES or failure["reason_code"] not in FAILURE_REASONS or failure["terminal"] is not True:
         _fail("run failure")
     _time(failure["created_at"])
+    if FAILURE_DIAGNOSTIC_FIELDS.issubset(failure):
+        if (
+            failure["reason_code"] != "INPUT_DRIFT"
+            or failure["checkpoint"] not in FAILURE_CHECKPOINTS
+            or failure["detail_code"] not in FAILURE_DETAIL_CODES
+            or (
+                failure["suite_id"] is not None
+                and not _matches(SUITE_RE, failure["suite_id"])
+            )
+        ):
+            _fail("run failure diagnostic")
     ref = failure["run_manifest"]
     if ref is not None:
         if artifacts is None:
@@ -614,6 +651,136 @@ def _catalog_pairs(catalog_suites: Any) -> dict[str, str]:
     return pairs
 
 
+def _validate_complete_source_pass(
+    evidence: Mapping[str, Any],
+    artifacts: Mapping[str, bytes],
+) -> None:
+    observations = evidence.get("source_observations")
+    if not isinstance(observations, list) or not observations:
+        _fail("source candidate requires source observations")
+    for ref in evidence["test_results"]:
+        result = _ref(
+            {"path": ref["path"], "sha256": ref["sha256"]},
+            artifacts,
+        )
+        if (
+            result.get("kind"),
+            result.get("outcome"),
+            result.get("classification"),
+            result.get("gate_decision"),
+            result.get("reason_code"),
+            result.get("runner_exit"),
+        ) != ("PASS", "PASS", "NONE", "PASS", "NONE", 0):
+            _fail("source candidate result is not PASS")
+    for ref in observations:
+        observation = _ref(
+            {"path": ref["path"], "sha256": ref["sha256"]},
+            artifacts,
+        )
+        if (
+            observation.get("outcome_hint"),
+            observation.get("classification_hint"),
+            observation.get("reason_code"),
+            observation.get("adapter_exit"),
+            observation.get("raw_process"),
+            observation.get("failed"),
+            observation.get("skipped"),
+            observation.get("todo"),
+            observation.get("not_run"),
+        ) != (
+            "PASS",
+            "NONE",
+            "NONE",
+            0,
+            {"state": "EXITED", "process_exit": 0},
+            0,
+            0,
+            0,
+            0,
+        ):
+            _fail("source candidate observation is not PASS")
+
+
+def validate_source_candidate_record(record: Any, artifacts: Mapping[str, bytes]) -> None:
+    """Bind one immutable source candidate to an exact PASS source run."""
+    record = _keys(record, SOURCE_CANDIDATE_FIELDS, "source candidate record")
+    if (
+        record["schema"] != "source-candidate-record.v1"
+        or not isinstance(record["development_line"], str)
+        or not record["development_line"]
+        or not _sha(record["candidate_head_sha"], 40)
+        or not _sha(record["run_id"], 32)
+        or not _sha(record["change_set_sha256"])
+    ):
+        _fail("source candidate identity")
+    _time(record["created_at"])
+    previous = _keys(
+        record["comparison_base"],
+        frozenset(("tag", "tag_object_sha", "peeled_sha")),
+        "source candidate comparison base",
+    )
+    if (
+        not _matches(SEMVER_RE, previous["tag"])
+        or not _sha(previous["tag_object_sha"], 40)
+        or not _sha(previous["peeled_sha"], 40)
+    ):
+        _fail("source candidate comparison base")
+    change_set = record["change_set"]
+    if not isinstance(change_set, list) or not change_set or len(change_set) > 4096:
+        _fail("source candidate change set")
+    normalized_entries: list[tuple[str, tuple[str, ...]]] = []
+    for item in change_set:
+        item = _keys(item, frozenset(("status", "paths")), "source candidate change entry")
+        if not isinstance(item["status"], str) or re.fullmatch(r"(?:A|M|D|T|U|X|B|R[0-9]{1,3}|C[0-9]{1,3})", item["status"]) is None:
+            _fail("source candidate change status")
+        paths = item["paths"]
+        expected_paths = 2 if item["status"].startswith(("R", "C")) else 1
+        if not isinstance(paths, list) or len(paths) != expected_paths:
+            _fail("source candidate change paths")
+        for path in paths:
+            _path(path)
+        normalized_entries.append((item["status"], tuple(paths)))
+    if normalized_entries != sorted(normalized_entries, key=lambda item: (item[1], item[0])) or len(set(normalized_entries)) != len(normalized_entries):
+        _fail("source candidate change set must be sorted and unique")
+    if sha256_hex(canonical_json_bytes(change_set)) != record["change_set_sha256"]:
+        _fail("source candidate change set digest")
+    change_ids = record["change_ids"]
+    if (
+        not isinstance(change_ids, list)
+        or not change_ids
+        or change_ids != sorted(change_ids)
+        or len(set(change_ids)) != len(change_ids)
+        or any(re.fullmatch(r"CHG-[A-Z0-9][A-Z0-9-]{0,31}", item or "") is None for item in change_ids)
+    ):
+        _fail("source candidate change ids")
+
+    run = _fixed_ref(record["run_manifest"], artifacts, "source/run-manifest.json")
+    seal = _fixed_ref(record["completion_seal"], artifacts, "source/completion-seal.json")
+    snapshot = _fixed_ref(record["source_snapshot_manifest"], artifacts, "source/snapshot/source-snapshot-manifest.json")
+    evidence = _fixed_ref(record["evidence_manifest"], artifacts, "source/evidence-manifest.json")
+    source_artifacts = {
+        path[len("source/"):]: raw
+        for path, raw in artifacts.items()
+        if path.startswith("source/")
+    }
+    validate_run_manifest(run, source_artifacts)
+    validate_evidence_manifest(evidence, run, source_artifacts)
+    validate_completion_seal(seal, run, snapshot, evidence, source_artifacts)
+    _validate_complete_source_pass(evidence, source_artifacts)
+    if (
+        run["profile"] != "source"
+        or run["head_sha"] != record["candidate_head_sha"]
+        or run["run_id"] != record["run_id"]
+        or seal["run_id"] != record["run_id"]
+        or (seal["aggregate_decision"], seal["runner_exit"]) != ("PASS", 0)
+        or run["source_snapshot_manifest"]["sha256"] != record["source_snapshot_manifest"]["sha256"]
+        or seal["evidence_manifest"]["sha256"] != record["evidence_manifest"]["sha256"]
+        or seal["run_manifest"]["sha256"] != record["run_manifest"]["sha256"]
+        or seal["source_snapshot_manifest"]["sha256"] != record["source_snapshot_manifest"]["sha256"]
+    ):
+        _fail("source candidate source-run binding")
+
+
 def _release_inputs(release_gates_raw: bytes, test_catalog_raw: bytes) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     gates_doc = _keys(load_canonical_json(release_gates_raw), frozenset(("schema", "version", "gates")), "release gates document")
     catalog_doc = _keys(load_canonical_json(test_catalog_raw), frozenset(("schema", "catalog_id", "version", "discovery_paths", "selection_rules", "suites")), "test catalog document")
@@ -632,7 +799,18 @@ def validate_release_candidate(candidate: Any, artifacts: Mapping[str, bytes], r
     previous = _keys(candidate["previous_release"], frozenset(("tag", "tag_object_sha", "peeled_sha")), "previous release")
     if not _matches(SEMVER_RE, previous["tag"]) or not _sha(previous["tag_object_sha"], 40) or not _sha(previous["peeled_sha"], 40):
         _fail("previous release")
+    candidate_version = tuple(int(item) for item in candidate["version"][1:].split("."))
+    previous_version = tuple(int(item) for item in previous["tag"][1:].split("."))
+    if candidate_version <= previous_version:
+        _fail("candidate version must advance previous release")
     gates_doc, catalog_doc = _release_inputs(release_gates_raw, test_catalog_raw)
+    source_candidate = _fixed_ref(candidate["source_candidate"], artifacts, "source-candidate.json")
+    validate_source_candidate_record(source_candidate, artifacts)
+    if (
+        source_candidate["candidate_head_sha"] != candidate["candidate_head_sha"]
+        or source_candidate["comparison_base"] != previous
+    ):
+        _fail("candidate source promotion binding")
     seal = _fixed_ref(candidate["completion_seal"], artifacts, "completion-seal.json")
     if not isinstance(seal, Mapping) or seal.get("schema") != "completion-seal.v1":
         _fail("candidate seal")
@@ -671,6 +849,44 @@ def validate_release_candidate(candidate: Any, artifacts: Mapping[str, bytes], r
         _fail("catalog entrypoint binding")
     if not covered.issubset({suite_id for suite_id, _ in expected_pairs}):
         _fail("candidate required suites are not evidenced")
+
+
+def validate_release_evidence(evidence: Any, artifacts: Mapping[str, bytes], release_gates_raw: bytes, test_catalog_raw: bytes) -> None:
+    """Require the public-evidence layer to promote one validated release candidate."""
+    evidence = _keys(evidence, RELEASE_EVIDENCE_FIELDS, "release evidence")
+    if (
+        evidence["schema"] != "release-evidence.v1"
+        or not _matches(SEMVER_RE, evidence["version"])
+        or not _sha(evidence["candidate_head_sha"], 40)
+    ):
+        _fail("release evidence identity")
+    candidate = _fixed_ref(evidence["release_candidate"], artifacts, "release-candidate.json")
+    validate_release_candidate(candidate, artifacts, release_gates_raw, test_catalog_raw)
+    artifact = _fixed_ref(evidence["artifact_manifest"], artifacts, "artifact-manifest.json")
+    receipt = _fixed_ref(evidence["public_release_receipt"], artifacts, "public-release-receipt.json")
+    if (
+        not isinstance(artifact, Mapping)
+        or set(artifact) != {"schema", "version", "candidate_head_sha"}
+        or artifact.get("schema") != "artifact-manifest.v1"
+        or artifact.get("version") != evidence["version"]
+        or artifact.get("candidate_head_sha") != evidence["candidate_head_sha"]
+    ):
+        _fail("release evidence artifact binding")
+    if (
+        not isinstance(receipt, Mapping)
+        or set(receipt) != {"schema", "version", "tag", "tag_object_sha", "peeled_sha"}
+        or receipt.get("schema") != "public-release-receipt.v1"
+        or receipt.get("version") != evidence["version"]
+        or receipt.get("tag") != evidence["version"]
+        or not _sha(receipt.get("tag_object_sha"), 40)
+        or receipt.get("peeled_sha") != evidence["candidate_head_sha"]
+    ):
+        _fail("release evidence public binding")
+    if (
+        candidate["version"] != evidence["version"]
+        or candidate["candidate_head_sha"] != evidence["candidate_head_sha"]
+    ):
+        _fail("release evidence candidate promotion binding")
 
 
 def _schema_validate(schema_validator: Callable[[str, Any], None] | None, schema: str, instance: Any) -> None:

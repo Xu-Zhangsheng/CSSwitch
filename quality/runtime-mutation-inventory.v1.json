@@ -1,0 +1,1032 @@
+{
+  "schema": "runtime-mutation-inventory.v1",
+  "scope": {
+    "authority": "Current production registration and source behavior on the next integration line. This inventory freezes observed behavior; it does not authorize R1-R11 implementation or claim artifact/live evidence.",
+    "production_registration": "desktop/src-tauri/src/lib.rs::run generate_handler plus setup, boot, run-event, and Drop hooks, including durable Gateway services and scratch paths reached from those registered surfaces",
+    "bundled_callers": [
+      "desktop/src/main.js",
+      "desktop/src/codex-controller.js",
+      "desktop/src/profile-controller.js",
+      "desktop/src/runtime-controller.js",
+      "desktop/src/skill-page.js"
+    ],
+    "exclusions": [
+      "Legacy commands/skills.rs and skill_manager/** are absent; no general Skill Manager command set is compiled or registered as production surface.",
+      "Scratch probes without durable side effects remain transient; Codex scratch model discovery is a durable mutation because it publishes shared catalog cache/invalidation state and may refresh OAuth after upstream 401.",
+      "Explicit pending_notice acknowledgement is a narrow config mutation; boot snapshot/event consumption is read-only and excluded from runtime operation plans.",
+      "Migration backups, rolling config backups, and user-selected downgrade exports are frozen as ordered effects and failure outcomes where R0 requires them; they are not generalized into a repository-wide artifact ontology.",
+      "Browser/Finder open actions are classified as external side effects, not managed runtime mutations.",
+      "Artifact, installed app, live provider, live Science, SSH server, signing, notarization, and public release behavior are NOT-RUN."
+    ],
+    "test_identity_semantics": "characterization_tests lists the stable identities required for the current source inventory. P2-A and P2-B add dedicated receipt, fence, recovery, and typed-surface identities; acceptance is bound only by the exact source-candidate record and verified-state entry, and no prior seal is inherited. This remains source-only behavior characterization and does not promote artifact/live evidence.",
+    "characterization_status": "requirements-open",
+    "completion_review_status": "pending"
+  },
+  "state_owners": [
+    {
+      "id": "config.desired",
+      "kind": "durable-config",
+      "durability": "filesystem",
+      "authority": "Desired mode, ports, selected profile, profiles, Codex feature/network settings, and path secret.",
+      "fields": ["active_id", "codex_disable_operation", "codex_network", "config_mutation_operation", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"}
+    },
+    {
+      "id": "config.binding",
+      "kind": "durable-config",
+      "durability": "filesystem",
+      "authority": "Last committed applied runtime profile and route/catalog/binding fingerprints.",
+      "fields": ["runtime_binding"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeBindingCommit"}
+    },
+    {
+      "id": "config.transaction",
+      "kind": "durable-config",
+      "durability": "filesystem",
+      "authority": "Open versioned one-click or HistoryRecovery transaction with typed stage, durable prior-stop outcome, success-finalize action, or compatibility state; retained legacy profile-switch journals stay readable only for interrupted-Gateway recovery. An open HistoryRecovery record centrally fences journal-external Config writes and downgrade.",
+      "fields": ["runtime_transaction"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"}
+    },
+    {
+      "id": "config.codex-disable-receipt",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Dedicated credential-free op.codex-enable disable plan, exact before/after Config references, component identities, restore ids, and replay phase; it is not a one-click or HistoryRecovery journal.",
+      "fields": ["config_reference", "operation_id", "phase", "plan", "schema_version"],
+      "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "CodexDisableOperationReceipt"}
+    },
+    {
+      "id": "config.mutation-operation",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Credential-free non-one-click mutation receipt, exact Config fence, bounded effect checkpoints, terminal image, and fail-closed boot recovery for the seven destructive P2-B operations.",
+      "fields": ["after_config_fingerprint", "auth_identity", "before_config_fingerprint", "clearing_marker", "config_mutation_operation", "effects", "intent_digest", "operation_id", "phase", "receipt", "runtime_plan", "schema_version", "terminal_receipt_digest"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "ConfigMutationOperationFence"}
+    },
+    {
+      "id": "config.rolling-backup",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Single rolling config.json.bak copy. Credential/profile revocation completion requires proven unlink, directory fsync, and exact absence.",
+      "fields": ["config.json.bak"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "drop_rolling_backup"}
+    },
+    {
+      "id": "app.gateway",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "Tracked active Gateway child, independent rejected or cleanup-in-flight child owners, public launch identity, and secret-bearing in-memory launch recipe.",
+      "fields": ["gateway_kind", "gateway_launch_context", "key_fp", "launch_id", "provider", "proxy", "proxy_port", "rejected_gateway_candidates", "secret", "shim_mode"],
+      "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "AppState"}
+    },
+    {
+      "id": "app.science",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "Tracked managed Science child, URL, runtime identity, fast stopped token, and version cache.",
+      "fields": ["sandbox", "sandbox_port", "sandbox_url", "science_confirmed_stopped", "science_runtime", "science_version_cache"],
+      "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "AppState"}
+    },
+    {
+      "id": "app.boot",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "Monotonic boot publication shared by the frontend snapshot and event paths.",
+      "fields": ["boot.sequence", "boot.state", "boot.payload"],
+      "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "BootPublication"}
+    },
+    {
+      "id": "app.history",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "One-shot opaque history-choice references and backend-only candidate/path mapping.",
+      "fields": ["history_recovery"],
+      "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "HistoryRecoverySession"}
+    },
+    {
+      "id": "app.cleanup",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "Retry mirror for exact private authority cleanup roots; durable manifest remains authoritative.",
+      "fields": ["pending_authority_cleanup"],
+      "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "AppState"}
+    },
+    {
+      "id": "lifecycle.global",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "App-wide serializer and monotonically increasing stale-start generation.",
+      "fields": ["generation", "lock"],
+      "source_anchor": {"path": "desktop/src-tauri/src/lifecycle.rs", "symbol": "Lifecycle"}
+    },
+    {
+      "id": "codex.supervisor",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "Codex auth operation snapshot, child registration, mutation/use leases, cancellation, and last safe status.",
+      "fields": ["active_operation", "child", "last_auth_status", "mutation_lease", "use_lease"],
+      "source_anchor": {"path": "desktop/src-tauri/src/codex_auth_supervisor.rs", "symbol": "CodexAuthSupervisor"}
+    },
+    {
+      "id": "process.gateway",
+      "kind": "managed-process",
+      "durability": "process",
+      "authority": "Formal Rust Gateway listener authenticated by path secret and launch/binary/process identity.",
+      "fields": ["child", "listener", "public_health_identity"],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/controller.rs", "symbol": "GatewayController"}
+    },
+    {
+      "id": "process.science",
+      "kind": "managed-process",
+      "durability": "process",
+      "authority": "Managed Claude Science listener/process identity for the isolated data directory; stop callers use a typed request, optional exact ownership receipt, and classified verified/failure outcome. Idempotent closed-port success without ownership proof cannot publish confirmed-stopped authority or satisfy exact recovery cleanup.",
+      "fields": ["child", "listener", "runtime_identity", "stop_request", "stop_ownership_receipt", "stop_outcome"],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/lifecycle.rs", "symbol": "stop_sandbox"}
+    },
+    {
+      "id": "authority.private",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "CSSwitch-owned authority snapshot, Science active/pending runtime selection, adoption ledger/runtime snapshot, history marker, pending-cleanup manifest, managed launch receipt, SSH bridge/stub, and isolated Science credential/config files.",
+      "fields": ["authority_snapshot", "history_marker", "managed_launch_receipt", "pending_cleanup_manifest", "science_adoption_ledger", "science_credential", "science_runtime_selection", "science_runtime_snapshot", "ssh_bridge", "ssh_stub"],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs", "symbol": "OneClickAuthoritySnapshot"}
+    },
+    {
+      "id": "skill.host",
+      "kind": "external-host-state",
+      "durability": "external",
+      "authority": "Committed local or GitHub Skill/bundle files, CSSwitch quarantine, and OPERON attachment state inside the exact healthy Science host context.",
+      "fields": ["active_org", "installed_package", "operon_attachment", "quarantined_package"],
+      "source_anchor": {"path": "desktop/skill-package/src/install.rs", "symbol": "pub struct InstallCommit"}
+    },
+    {
+      "id": "science.route",
+      "kind": "external-host-state",
+      "durability": "external",
+      "authority": "CSSwitch-owned route marker plus Science third-party connector, disabled-Skill, managed prompt, and OPERON attachment projection for the exact host context.",
+      "fields": ["connector_projection", "disabled_skill_projection", "managed_prompt_projection", "operon_attachment", "route_marker"],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "force_third_party_reconcile"}
+    },
+    {
+      "id": "gateway.bridge-key",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Current private token file used to authenticate the local Gateway Skill-install bridge, published only by the launch candidate that still owns the AppState reservation.",
+      "fields": ["skill_install_bridge_key"],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "struct PreparedSkillInstallBridgeKey"}
+    },
+    {
+      "id": "codex.auth",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Gateway-owned Codex authentication state, OAuth record, thinking-key record, and mutation lock under the configured private state root.",
+      "fields": ["auth_epoch", "auth_generation", "auth_state", "mutation_lock", "oauth_record", "thinking_record"],
+      "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "pub struct AuthRepository<"}
+    },
+    {
+      "id": "codex.catalog-cache",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Gateway-owned Codex model catalog cache and invalidation epoch shared by formal and scratch-models Gateway processes under the configured private auth state root.",
+      "fields": ["account_hash", "auth_epoch", "auth_generation", "cache", "etag", "fetched_at", "invalidated", "nonce"],
+      "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "pub(crate) struct CodexModelCatalog"}
+    },
+    {
+      "id": "skill.bridge-mailbox",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Authenticated per-Gateway Skill bridge mailbox and host lock that claim requests, publish progress/final responses, and recover interrupted processing.",
+      "fields": ["host_lock", "processing", "request", "response", "status"],
+      "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("}
+    },
+    {
+      "id": "config.migration-backups",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Immutable non-overwriting v1/v2/v3 migration source backups and collision-safe alternate publications beside config.json.",
+      "fields": ["source_bytes", "source_schema_version", "target_identity"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "fn write_versioned_backup_bytes_in("}
+    },
+    {
+      "id": "config.access-gate",
+      "kind": "process-local",
+      "durability": "process",
+      "authority": "Process-global config access gate whose downgrade_terminal latch permanently rejects subsequent config reads and writes after committed or uncertain downgrade publication.",
+      "fields": ["downgrade_terminal"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "struct ConfigAccessState"}
+    },
+    {
+      "id": "config.writer-fence",
+      "kind": "durable-private-files",
+      "durability": "filesystem",
+      "authority": "Persistent credential-free single-link lock inode that serializes cooperating canonical config writers across CSSwitch processes after the process-local config access gate.",
+      "fields": ["lock_inode", "lock_mode", "writer_lease"],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "struct ConfigWriterFence"}
+    }
+  ],
+  "durable_records": [
+    {
+      "id": "record.config-v4",
+      "format": "config schema v4 JSON",
+      "authority_owner": "config.desired",
+      "fields": ["active_id", "codex_disable_operation", "codex_network", "config_mutation_operation", "experimental_codex_enabled", "mode", "pending_notice", "profiles", "proxy_port", "reuse_system_ssh", "sandbox_port", "secret"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "fn commit_migrated_config("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn save_to("}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update<"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn update_result<"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "Config"},
+      "known_gap": "Several non-one-click commands stop managed runtime before committing config and do not retain a durable prior-restart receipt."
+    },
+    {
+      "id": "record.codex-disable-operation-v1",
+      "format": "Dedicated credential-free codex-disable-operation.v1.json sidecar with exact-byte CAS phases",
+      "authority_owner": "config.codex-disable-receipt",
+      "fields": ["after_config_fingerprint", "before_config_fingerprint", "config_reference", "operation", "operation_id", "phase", "plan", "schema_version"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "begin_codex_disable_operation"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "write_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "clear_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "clear_codex_disable_operation_fence"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "impl OpenCodexDisableReceipt"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "read_codex_disable_operation_receipt"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "read_codex_disable_receipt_at"}, {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "replay_interrupted_codex_disable"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "CodexDisableOperationReceipt"},
+      "known_gap": "This narrow receipt covers only experimental Codex disable; enable has no runtime effect, and network/mode/settings/profile/one-click remain separate operations."
+    },
+    {
+      "id": "record.config-mutation-operation-v1",
+      "format": "Credential-free config-mutation-operation.v1.json sidecar plus clearing tombstone and Config extra fence with exact-byte CAS",
+      "authority_owner": "config.mutation-operation",
+      "fields": ["after_config_fingerprint", "auth_identity", "before_config_fingerprint", "clearing_marker", "config_fence", "effects", "intent_digest", "operation_id", "receipt", "runtime_plan", "schema_version", "terminal"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "begin_config_mutation_operation"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "write_config_mutation_operation"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "publish_config_mutation_terminal_fence"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "clear_config_mutation_operation"}, {"path": "desktop/src-tauri/src/commands/runtime/config_mutation.rs", "symbol": "pub(crate) fn begin("}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "read_config_mutation_operation_receipt"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "recover_orphan_config_mutation_operation_fence"}, {"path": "desktop/src-tauri/src/commands/runtime/config_mutation.rs", "symbol": "pub(crate) fn boot_recover("}],
+      "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/config_mutation.rs", "symbol": "ConfigMutationReceipt"},
+      "known_gap": "The receipt preserves exact effect and terminal attention state but does not restart previously stopped provider runtimes; artifact, installed-app, live-provider, credential, and release evidence remain outside this source slice."
+    },
+    {
+      "id": "record.config-migration-backups-v1",
+      "format": "Immutable config.json.v1/v2/v3.bak or collision-safe alternate backup bytes",
+      "authority_owner": "config.migration-backups",
+      "fields": ["backup_path", "source_bytes", "source_schema_version"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "fn write_versioned_backup_bytes_in("}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "fn write_versioned_backup_bytes_in("}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "fn write_versioned_backup_bytes_in("},
+      "known_gap": "Migration never consumes these backups automatically; collisions preserve existing bytes and publish a new alternate rather than selecting a restore candidate."
+    },
+    {
+      "id": "record.runtime-binding-v1",
+      "format": "RuntimeBindingCommit embedded in config v4",
+      "authority_owner": "config.binding",
+      "fields": ["binding_fp", "catalog_fp", "profile_id", "route_fp", "science_adoption_attempt_id"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "pub(in super::super) fn commit_healthy_reopen_binding("}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "pub(in super::super) fn complete_one_click_finalize("}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "pub(crate) fn replay_interrupted_one_click_finalize("}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "build_get_config"}, {"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "clear_profile_key_inner"}, {"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "delete_profile_inner"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeBindingCommit"},
+      "known_gap": "It is an applied-state commit, not a general operation journal."
+    },
+    {
+      "id": "record.runtime-transaction-v1",
+      "format": "RuntimeTransactionJournal embedded in config v4",
+      "authority_owner": "config.transaction",
+      "fields": ["previous_binding", "previous_gateway", "stage", "target_profile_id", "transaction_id"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "impl Serialize for RuntimeTransactionRecord"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "downgrade_to_v2_unlocked"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "impl<'de> Deserialize<'de> for RuntimeTransactionRecord"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "v1_environment_state"}, {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "project_one_click_failure"}, {"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "selection_pending_from_config"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_with_options"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "write_one_click_checkpoint"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "healthy_reopen_transaction_matches"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionJournal"},
+      "known_gap": "Compatibility parsing and unchanged-wire serialization remain, but no runtime operation originates or advances a V1 record after R2-D; the record does not cover mode/settings/Codex/downgrade/profile revocation."
+    },
+    {
+      "id": "record.runtime-transaction-v2",
+      "format": "RuntimeTransactionV2 embedded in config v4",
+      "authority_owner": "config.transaction",
+      "fields": ["compensation", "environment_exposure", "finalize", "gateway_stop_outcome", "operation", "phase", "previous_binding", "previous_gateway", "prior_stop", "runtime_fingerprint", "schema_version", "snapshot_ticket", "target_profile_id", "transaction_id"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "downgrade_to_v2_unlocked"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "publish_interrupted_gateway_recovery_record"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "begin_history_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "update_history_record"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "complete_history_finalize"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "clear_history_record"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "clear_history_record_with_authority"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_after_history_handoff"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "begin_prior_stop_intent"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "publish_prior_stop_outcome"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "write_one_click_checkpoint"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "begin_one_click_finalize"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "complete_one_click_finalize"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "replay_interrupted_one_click_finalize"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "clear_one_click_transaction"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "commit_runtime_binding"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "begin_healthy_reopen_gateway_intent"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "commit_healthy_reopen_binding"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs", "symbol": "RuntimeTransactionRestoreExpectation::Exact(expected) =>"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "impl<'de> Deserialize<'de> for RuntimeTransactionRecord"}, {"path": "desktop/src-tauri/src/config.rs", "symbol": "require_no_runtime_transaction"}, {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "project_one_click_failure"}, {"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "selection_pending_from_config"}, {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "history_config_authority_matches"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "replay_interrupted_history_recovery"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "history_resume_handoff"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_after_history_handoff"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "one_click_journal_matches"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "write_one_click_checkpoint"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "replay_interrupted_one_click_finalize"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "commit_healthy_reopen_binding"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeTransactionV2"},
+      "known_gap": "HistoryRecovery binds sibling Config authority through its operation-scoped fingerprint. Normal mode/settings/profile/Codex/downgrade owners reject either an open business transaction or compensation marker, while one-click compensation separately restores the exact pre-operation transaction without erasing its path-free crash marker."
+    },
+    {
+      "id": "record.runtime-compensation-v1",
+      "format": "Path-free RuntimeCompensationJournal V1 embedded separately in config v4",
+      "authority_owner": "config.transaction",
+      "fields": ["compensation_id", "runtime_fingerprint", "schema_version", "snapshot_ticket", "state", "target_profile_id"],
+      "writers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn save_to"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "has_open_runtime_journal"}, {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "project_one_click_failure"}, {"path": "desktop/src-tauri/src/runtime/finalize_consumer.rs", "symbol": "read_model"}, {"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "selection_pending_from_config"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "pub(crate) fn capture(state: &SharedAppState)"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_with_options"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub runtime_compensation"},
+      "known_gap": "Compatibility parsing remains so an interrupted V1 marker still blocks mutation and preserves manual recovery; no production operation originates, advances, clears, or upgrades a V1 record after O1-E2."
+    },
+    {
+      "id": "record.runtime-compensation-v2",
+      "format": "Path-free RuntimeCompensationJournal V2 embedded separately in config v4",
+      "authority_owner": "config.transaction",
+      "fields": ["compensation_id", "runtime_fingerprint", "schema_version", "science_adoption_attempt_ids", "snapshot_ticket", "state", "steps", "target_profile_id"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "begin_one_click_compensation"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "begin_one_click_compensation_step"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "finish_one_click_compensation_step"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "finish_one_click_authority_restore_step"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/transaction.rs", "symbol": "finish_one_click_compensation"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/compensation_replay.rs", "symbol": "replay_interrupted_one_click_compensation"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs", "symbol": "RuntimeTransactionRestoreExpectation::ExactPreservingCompensation"}],
+      "readers": [{"path": "desktop/src-tauri/src/config.rs", "symbol": "has_open_runtime_journal"}, {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "project_one_click_failure"}, {"path": "desktop/src-tauri/src/runtime/finalize_consumer.rs", "symbol": "read_model"}, {"path": "desktop/src-tauri/src/runtime/profile.rs", "symbol": "selection_pending_from_config"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "pub(crate) fn capture(state: &SharedAppState)"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs", "symbol": "one_click_login_with_options"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/compensation_replay.rs", "symbol": "decide_compensation_replay"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "RuntimeCompensationJournal"},
+      "known_gap": "Fresh entry replays V2 pending or in_progress steps from the exact private manifest and registered snapshot before provider auth; its bounded attempt-id index retains the exact candidate/prior Science adoption records referenced by that manifest. Legacy V1 and typed incomplete outcomes remain manual and are never guessed or upgraded."
+    },
+    {
+      "id": "record.authority-snapshot-v1",
+      "format": "Private authority snapshot plus identity-bound manifest",
+      "authority_owner": "authority.private",
+      "fields": ["captured_entries", "compensation_replay_identity", "durable_restore_plan", "identity", "opaque_roots", "prior_restart_launch_id", "restore_budget", "ssh_stub_before_candidate_transaction", "history_recovery_entry_identities"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs", "symbol": "pub(super) fn capture("}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/compensation_replay.rs", "symbol": "persist_compensation_replay_manifest"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "persist_history_authority_manifest"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs", "symbol": "load_durable"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs", "symbol": "pub(super) fn restore("}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "restore_history_authority_from_manifest"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/authority_snapshot/contracts.rs", "symbol": "AuthorityTreeSnapshot"},
+      "known_gap": "It starts after some prior-runtime stop paths and intentionally excludes Science-owned environment trees."
+    },
+    {
+      "id": "record.pending-cleanup-v1",
+      "format": "Exact private cleanup manifest",
+      "authority_owner": "authority.private",
+      "fields": ["owned_roots", "transaction_identity"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "register_authority_cleanup"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "prepare_history_snapshot_cleanup_only"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "retry_pending_authority_cleanup"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "registered_authority_snapshot_for_ticket"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "open_history_snapshot_root"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "prepare_history_snapshot_cleanup_only"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/pending_cleanup.rs", "symbol": "PendingCleanupManifest"},
+      "known_gap": "AppState holds only a retry mirror; the manifest is authoritative after restart."
+    },
+    {
+      "id": "record.science-adoption-v1",
+      "format": "Private bounded Science Runtime Adoption Ledger V1",
+      "authority_owner": "authority.private",
+      "fields": ["attempt_id", "attempts", "candidate", "decision", "embedded_identity", "milestone", "normalized_diff", "observed_at_ms", "predecessor", "rejected_source", "rejection_code", "schema_version", "sha256", "size", "snapshot_id", "source", "version"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "bind_selected_science_runtime_attempt"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "ensure_selected_science_runtime_attempt"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "record_rejected_science_runtime_attempt"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "record_deferred_science_runtime_observation"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "mark_science_runtime_adoption_launch_committed"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "mark_science_runtime_adoption_finalized"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "reconcile_current_science_runtime_adoption"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "bind_selected_science_runtime_attempt"}, {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "reconcile_current_science_runtime_adoption"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/adoption.rs", "symbol": "ScienceAdoptionLedger"},
+      "known_gap": "The source-only ledger records validated executable identity and adoption milestones without executable paths, user data, credentials, artifact/runtime, signing, installed-App, or live-provider evidence."
+    },
+    {
+      "id": "record.science-receipt-v1",
+      "format": "Stable-path managed Science launch receipt with V1 read compatibility and V2 adoption provenance",
+      "authority_owner": "authority.private",
+      "fields": ["adoption_attempt_id", "binary_identity", "data_dir", "listener_identity", "pid", "runtime_source", "runtime_token", "runtime_version", "schema_version", "start_time"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/science/managed_launch.rs", "symbol": "write_managed_launch_record"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/science/lifecycle.rs", "symbol": "probe_known_runtime"}, {"path": "desktop/src-tauri/src/runtime/science/lifecycle.rs", "symbol": "stop_sandbox"}, {"path": "desktop/src-tauri/src/runtime/science/host_adapter.rs", "symbol": "pub(crate) fn prove_managed_healthy("}, {"path": "desktop/src-tauri/src/runtime/science/host_adapter.rs", "symbol": "pub(crate) fn revalidate_managed_healthy("}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/contracts.rs", "symbol": "ScienceManagedLaunchRecord"},
+      "known_gap": "V1 remains read-compatible but has unknown adoption provenance; V2 binds the selected adoption attempt and runtime source/version, while neither schema describes the full cross-owner one-click transaction."
+    },
+    {
+      "id": "record.science-runtime-selection-v1",
+      "format": "Private 0600 fixed active runtime plus optional pending update and durable daily-check claim",
+      "authority_owner": "authority.private",
+      "fields": ["active", "dismissed_sha256s", "last_checked_at_ms", "pending", "schema_version", "sha256", "size", "source", "update_check_id", "version"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "mutate_science_runtime_selection"}, {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "resolve_active_or_bootstrap_science_runtime"}, {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "science_runtime_update_action"}, {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "check_science_runtime_update"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "active_science_runtime"}, {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "resolve_active_or_bootstrap_science_runtime"}, {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "science_runtime_update_status"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "ScienceRuntimeSelection"},
+      "known_gap": "Content-addressed snapshots are retained; automatic retirement remains out of scope. The bounded dismissed set fails closed when full instead of forgetting an older rejection. Accepting a pending update changes only the next cold-start active selection and never restarts a healthy daemon."
+    },
+    {
+      "id": "record.science-runtime-snapshot-v1",
+      "format": "Private 0500 content-addressed Science updater or installed-App executable snapshot",
+      "authority_owner": "authority.private",
+      "fields": ["content_sha256", "executable_bytes", "executable_mode"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/science/executable.rs", "symbol": "fn snapshot_science_executable("}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/science/executable.rs", "symbol": "fn official_updated_snapshot_for_home("}, {"path": "desktop/src-tauri/src/runtime/science/executable.rs", "symbol": "fn official_updated_snapshot_from_process_paths("}, {"path": "desktop/src-tauri/src/runtime/science/executable.rs", "symbol": "fn runtime_identity("}, {"path": "desktop/src-tauri/src/runtime/science/executable.rs", "symbol": "pub(crate) fn runtime_identity_from_durable_parts("}, {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "runtime_from_pinned_selection"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/contracts.rs", "symbol": "const OFFICIAL_UPDATED_SNAPSHOT_DIR"},
+      "known_gap": "Committed content-addressed snapshots are retained for running-runtime recovery and adoption provenance; this slice does not introduce automatic snapshot retirement."
+    },
+    {
+      "id": "record.history-marker-v1",
+      "format": "CSSwitch-owned virtual-login history marker",
+      "authority_owner": "authority.private",
+      "fields": ["history_identity", "schema_version"],
+      "writers": [{"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "bootstrap_marker_for_intact_login"}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "ensure_virtual_login"}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "restore_history_choice"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "bootstrap_marker_for_intact_login"}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "scan_org_dirs"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "bootstrap_marker_for_intact_login"},
+      "known_gap": "Healthy reopen deliberately leaves a newly created marker in place if later Gateway/catalog/config work fails."
+    },
+    {
+      "id": "record.skill-package-v1",
+      "format": "Atomic installed or quarantined Skill/bundle plus import origin",
+      "authority_owner": "skill.host",
+      "fields": ["content_sha256", "directory_commit", "import_origin", "quarantine_commit", "source_digest_sha256"],
+      "writers": [{"path": "desktop/skill-package/src/install.rs", "symbol": "pub fn install_local_package("}, {"path": "desktop/skill-package/src/github.rs", "symbol": "pub fn install_github_package_with_progress("}, {"path": "desktop/skill-package/src/bundle.rs", "symbol": "pub(crate) fn install_validated_bundle("}, {"path": "desktop/skill-package/src/bundle.rs", "symbol": "pub fn quarantine_bundle("}, {"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn uninstall_external_skill("}],
+      "readers": [{"path": "desktop/skill-package/src/install.rs", "symbol": "pub(crate) fn commit_package("}, {"path": "desktop/skill-package/src/install.rs", "symbol": "fn read_and_validate_marker("}, {"path": "desktop/skill-package/src/install.rs", "symbol": "fn scan_installed_payload("}, {"path": "desktop/skill-package/src/listing.rs", "symbol": "pub fn inspect_active_org_skills("}, {"path": "desktop/src-tauri/src/commands/skill_listing.rs", "symbol": "list_installed_skills"}, {"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn uninstall_external_skill("}],
+      "source_anchor": {"path": "desktop/skill-package/src/install.rs", "symbol": "pub struct InstallCommit"},
+      "known_gap": "File/quarantine commit and OPERON attachment or detachment are separate outcomes; attachment failure retains committed files and some single-Skill quarantine outcomes require later detach verification."
+    },
+    {
+      "id": "record.skill-bridge-mailbox-v1",
+      "format": "0600 bridge request claim, progress status, final response, and host lock files",
+      "authority_owner": "skill.bridge-mailbox",
+      "fields": ["host_lock", "processing_request", "progress_status", "terminal_response"],
+      "writers": [{"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn host_access_request("}, {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("}, {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn write_bridge_status("}, {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn finalize_bridge_processing("}],
+      "readers": [{"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("}, {"path": "desktop/gateway/src/skill_install.rs", "symbol": "fn poll_bridge_request("}],
+      "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn start_skill_install_bridge("},
+      "known_gap": "Status writes are best effort; final-response failure deliberately retains .processing for startup recovery, while a completed response outlives processing/status cleanup."
+    },
+    {
+      "id": "record.operon-skill-attachment-v1",
+      "format": "Durable OPERON Skill attachment set for the exact active Science organization",
+      "authority_owner": "skill.host",
+      "fields": ["active_org", "agent_name", "attached_skill_names"],
+      "writers": [{"path": "desktop/skill-package/src/science.rs", "symbol": "pub fn attach_skill("}, {"path": "desktop/skill-package/src/science.rs", "symbol": "pub fn update_agent_skills("}],
+      "readers": [{"path": "desktop/skill-package/src/science.rs", "symbol": "pub fn read_agent_skill_names("}, {"path": "desktop/skill-package/src/science.rs", "symbol": "fn agent_has_skill("}],
+      "source_anchor": {"path": "desktop/skill-package/src/science.rs", "symbol": "pub fn update_agent_skills("},
+      "known_gap": "Attachment/detachment is an external host commit separate from package publication or quarantine; transport failure can leave state uncertain until readback."
+    },
+    {
+      "id": "record.route-configuration-v1",
+      "format": "CSSwitch route marker plus Science host connector/disabled-Skill/managed-prompt/OPERON projection",
+      "authority_owner": "science.route",
+      "fields": ["connector_projection", "disabled_skill_projection", "managed_prompt_projection", "operon_attachment", "route_marker"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "configure_third_party_best_effort"}, {"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "force_third_party_reconcile"}, {"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "invalidate_route_configuration"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "inspect_while_science_running"}, {"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "route_configuration_is_current"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/skill_install_bridge.rs", "symbol": "invalidate_route_configuration"},
+      "known_gap": "Explicit Skill route repair, one-click, and healthy reopen share this host mutation without a uniform typed receipt or inverse; partial host changes are reported as warning/restart-required."
+    },
+    {
+      "id": "record.gateway-bridge-key-v1",
+      "format": "0600 newline-terminated Skill bridge token file at runtime/skill-install-bridge.key",
+      "authority_owner": "gateway.bridge-key",
+      "fields": ["bridge_token"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "fn publish_canonical_key(&mut self) -> Result<PathBuf, String>"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "pub(crate) fn current_skill_install_bridge_key("}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/skill_bridge.rs", "symbol": "fn skill_install_bridge_key_path()"},
+      "known_gap": "The candidate stages a private temporary key before spawn and publishes the canonical key only while it still owns the AppState reservation; stale candidates discard the staged file, while an ordinary current-owner launch failure preserves the existing diagnostic and optional-bridge publication behavior."
+    },
+    {
+      "id": "record.codex-auth-state-v1",
+      "format": "0600 codex-auth-state.v1.json",
+      "authority_owner": "codex.auth",
+      "fields": ["auth_epoch", "auth_generation", "committed", "version"],
+      "writers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_login_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_refresh_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_logout_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "load_or_initialize_state"}],
+      "readers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "inference_snapshot"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "refresh_snapshot_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "pub fn status("}],
+      "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "const AUTH_STATE_FILE: &str = \"codex-auth-state.v1.json\";"},
+      "known_gap": "This is the authoritative enable/disable generation marker; stale secret files can remain after a delete failure but are rejected while committed=false."
+    },
+    {
+      "id": "record.codex-oauth-v1",
+      "format": "0600 codex-oauth.v1.json private OAuth record",
+      "authority_owner": "codex.auth",
+      "fields": ["access_token", "account_id", "auth_epoch", "auth_generation", "expires_at", "id_token", "refresh_token", "version"],
+      "writers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_login_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_refresh_guarded"}],
+      "readers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "inference_snapshot"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "refresh_snapshot_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "revoke_token_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "pub fn status("}],
+      "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "const OAUTH_SECRET_FILE: &str = \"codex-oauth.v1.json\";"},
+      "known_gap": "Login and refresh compensate partial publication by restoring the prior record; rollback failure is surfaced as RollbackFailed rather than claiming restoration."
+    },
+    {
+      "id": "record.codex-thinking-v1",
+      "format": "0600 codex-thinking.v1.json private thinking-key record",
+      "authority_owner": "codex.auth",
+      "fields": ["auth_epoch", "auth_generation", "key_b64", "version"],
+      "writers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_login_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "commit_refresh_guarded"}],
+      "readers": [{"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "inference_snapshot"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "refresh_snapshot_guarded"}, {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "pub fn status("}],
+      "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "const THINKING_SECRET_FILE: &str = \"codex-thinking.v1.json\";"},
+      "known_gap": "Logout commits the disabled auth state before attempting both secret deletions, so a delete failure may retain a disabled stale record."
+    },
+    {
+      "id": "record.codex-model-cache-v3",
+      "format": "0600 codex-models-cache.v3.json plus codex-models-cache-epoch.v3.json",
+      "authority_owner": "codex.catalog-cache",
+      "fields": ["account_hash", "auth_epoch", "auth_generation", "etag", "fetched_at", "invalidated", "models", "nonce"],
+      "writers": [{"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn commit_cache("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn commit_cache_epoch("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn persist_invalidation("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn remove_cache("}],
+      "readers": [{"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn load_cache("}, {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn load_cache_epoch("}],
+      "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "const CACHE_FILE: &str = \"codex-models-cache.v3.json\";"},
+      "known_gap": "Epoch publication precedes cache publication; a later cache write failure retains the new epoch and may leave prior cache bytes, which subsequent identity/epoch checks must reject or refresh."
+    },
+    {
+      "id": "record.science-credential-v1",
+      "format": "Private Science encryption.key, encrypted OAuth token, and active-org.json credential bundle",
+      "authority_owner": "authority.private",
+      "fields": ["active_org", "encryption_key", "encrypted_oauth_token"],
+      "writers": [{"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "ensure_virtual_login"}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "restore_history_choice"}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "fn write_login("}],
+      "readers": [{"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "login_intact_guarded"}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "fn read_active_org("}, {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "scan_org_dirs"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/oauth_forge.rs", "symbol": "fn write_login("},
+      "known_gap": "The credential files and history marker remain separate durable publications. History restore now brackets them with an identity-bound before-image journal and rollback/replay, but unrelated credential writers do not share that transaction."
+    },
+    {
+      "id": "record.science-ssh-bridge-v1",
+      "format": "Science config.toml ssh_hosts projection plus csswitch-ssh-bridge.v1.json ownership sidecar",
+      "authority_owner": "authority.private",
+      "fields": ["effective_ssh_hosts", "managed_hosts", "original_ssh_hosts", "previous_effective_ssh_hosts", "schema_version"],
+      "writers": [{"path": "desktop/src-tauri/src/runtime/ssh_bridge.rs", "symbol": "prepare_science_ssh_bridge_for"}, {"path": "desktop/src-tauri/src/runtime/ssh_bridge.rs", "symbol": "revoke_science_ssh_bridge"}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/ssh_bridge.rs", "symbol": "prevalidate_science_ssh_bridge"}, {"path": "desktop/src-tauri/src/runtime/ssh_bridge.rs", "symbol": "validate_science_ssh_bridge"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/ssh_bridge.rs", "symbol": "struct BridgeState"},
+      "known_gap": "Preparation uses a transitional sidecar around config publication; revoke fails closed on external drift and has no broader operation journal."
+    },
+    {
+      "id": "record.sandbox-ssh-stub-v2",
+      "format": "CSSwitch-managed isolated ~/.ssh/config v2 stub",
+      "authority_owner": "authority.private",
+      "fields": ["device", "expected_hosts", "expected_system_config", "inode", "marker", "stub_bytes"],
+      "writers": [{"path": "scripts/launch-virtual-sandbox.sh", "symbol": "prepare_sandbox_ssh_config()"}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn compensate_with_authority_bypass("}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn compensate_durable_with_authority_bypass("}],
+      "readers": [{"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) fn capture("}, {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "validate_managed_sandbox_ssh_stub"}],
+      "source_anchor": {"path": "desktop/src-tauri/src/runtime/settings.rs", "symbol": "pub(crate) struct ManagedSshStubTransaction"},
+      "known_gap": "Science creates the candidate stub out of process; compensation deletes or restores only when exact captured identity/content still matches."
+    }
+  ],
+  "operations": [
+    {
+      "id": "op.one-click",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [
+        {"kind": "tauri-command", "name": "one_click_login", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "one_click_login_command"}, "bundled_callers": ["desktop/src/runtime-controller.js::runOneClick"]},
+        {"kind": "startup-hook", "name": "boot_science", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "run_boot_coordinator"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::run_boot_coordinator", "desktop/src-tauri/src/lib.rs::tauri_plugin_single_instance"]},
+        {"kind": "internal-recovery", "name": "cold_one_click", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs", "symbol": "run_cold_one_click"}, "bundled_callers": ["desktop/src-tauri/src/runtime/sandbox_session/one_click.rs::one_click_login_with_options"]},
+        {"kind": "internal-recovery", "name": "managed_science_launch", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/science_phase.rs", "symbol": "run_managed_science_launch_phase"}, "bundled_callers": ["desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs::run_cold_one_click"]},
+        {"kind": "internal-recovery", "name": "aggregate_one_click_compensation", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/cold/compensation.rs", "symbol": "compensate_one_click_failure"}, "bundled_callers": ["desktop/src-tauri/src/runtime/sandbox_session/one_click/cold.rs::run_cold_one_click"]},
+        {"kind": "internal-recovery", "name": "fresh_process_compensation_replay", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/compensation_replay.rs", "symbol": "replay_interrupted_one_click_compensation"}, "bundled_callers": ["desktop/src-tauri/src/commands/runtime/one_click.rs::one_click_login_cmd", "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs::one_click_login_entry"]}
+      ],
+      "state_owners": ["app.boot", "app.cleanup", "app.gateway", "app.history", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.binding", "config.desired", "config.transaction", "gateway.bridge-key", "lifecycle.global", "process.gateway", "process.science", "science.route"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4", "record.gateway-bridge-key-v1", "record.pending-cleanup-v1", "record.route-configuration-v1", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-adoption-v1", "record.science-credential-v1", "record.science-receipt-v1", "record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1", "record.science-ssh-bridge-v1"], "writes": ["record.authority-snapshot-v1", "record.gateway-bridge-key-v1", "record.history-marker-v1", "record.pending-cleanup-v1", "record.route-configuration-v1", "record.runtime-binding-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-adoption-v1", "record.science-credential-v1", "record.science-receipt-v1", "record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1", "record.science-ssh-bridge-v1"], "clears": ["record.pending-cleanup-v1", "record.route-configuration-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"]},
+      "ordered_effects": ["before provider auth, replay one exact V2 compensation step from the registered private manifest and recapture until convergence", "runtime-owned immutable config/Gateway preflight for lock-free provider auth", "serialize and recheck preflight snapshots", "recapture entry facts, resolve only the fixed active Science snapshot or perform one initial bootstrap when selection is absent, and purely decide one recovery step", "replay success finalize or recover interrupted Gateway, then recapture before the next decision", "classify and dispatch healthy reopen versus mutating cold/recovery before branch-specific effects", "for mutating entry only, retry exact pending cleanup and recapture if cleanup changed authority", "enter the dedicated cold coordinator, prevalidate SSH, and capture managed-stub intent", "persist prior Science stop intent", "claim the exact prior Science generation and full process-local owner under AppState, execute the existing stop/TERM/KILL/wait policy outside AppState, publish only by generation plus full-owner CAS, and persist the typed outcome", "capture authority snapshot and attach its ticket", "prepare virtual login and system SSH bridge", "for a matching Gateway freeze generation and the full process-local owner under AppState, run reuse health outside AppState, and accept only by generation plus full-owner CAS; otherwise claim the tracked child under AppState, stop/wait and identify or stop an exact legacy listener outside AppState, then reserve generation, an empty slot, the full candidate owner, and the secret-bearing launch recipe under AppState; open the candidate log, construct command/env, stage Skill bridge config, spawn, and health-check outside AppState; accept only by generation plus full candidate-owner CAS, while stale or replaced candidates never publish canonical log/key and transfer any unconfirmed child to the independent process-local cleanup registry", "verify model catalog", "dispatch the dedicated managed Science launch phase", "best-effort register the Skill-install bridge before Science launch", "start/reuse Science and persist receipt", "reverify Science DB and, when required, exact-stop then perform one bounded restart with a fresh receipt", "best-effort reconcile the third-party Science route", "persist finalize intent", "convert authority manifest to cleanup-only", "atomically commit binding and clear journal", "project typed success or dispatch the dedicated aggregate compensation phase", "before the public compensation intent persist its exact private replay manifest inside the registered snapshot", "before the first compensation effect publish the separate V2 journal with five pending steps by complete-record CAS", "before and after each science cleanup, SSH cleanup, authority restore, prior Science restart, and snapshot cleanup effect publish exact typed step intent/outcome", "restore the exact pre-operation runtime transaction while preserving the latest compensation step state", "clear the compensation journal after complete compensation or persist failed steps derived from typed step outcomes"],
+      "failure_points": [
+        {"id": "one-click.runtime-snapshot", "after_effects": ["a verified content-addressed updater runtime snapshot may already be durable", "no Science process mutation is implied by snapshot publication"], "observed_outcome": "Source drift or snapshot validation/publication failure blocks selection; a committed immutable snapshot is retained for later exact selection or running-runtime recovery.", "compensation": "remove only any private temporary name; never delete a verified content-addressed snapshot as transaction rollback"},
+        {"id": "one-click.prior-stop-error", "after_effects": ["durable prior-stop intent exists", "managed Science stop may have attempted TERM/KILL/receipt cleanup"], "observed_outcome": "Typed ExactStopped, NotStopped, or Unknown is published before returning; outcome publication drift preserves the intent and requires manual recovery.", "compensation": "only an exact typed stop proof permits the existing prior-runtime restart path"},
+        {"id": "one-click.prior-stop-owner-cas", "after_effects": ["durable prior-stop intent exists", "exact prior Science stop was executed outside AppState", "generation or full process-local owner changed before publication"], "observed_outcome": "Reject stale publication, preserve replacement Science ownership, persist Unknown, and fail before authority snapshot.", "compensation": "manual recovery from the retained durable intent; stale publication cannot clear or restart replacement Science"},
+        {"id": "one-click.post-stop-pre-snapshot", "after_effects": ["prior managed Science exact stop is durably recorded"], "observed_outcome": "A crash retains the credential-free restart recipe and typed stop outcome without claiming an authority snapshot.", "compensation": "fresh recovery remains fail-closed until a bounded prior-runtime resume policy consumes the durable outcome"},
+        {"id": "one-click.post-snapshot-pre-journal", "after_effects": ["authority snapshot captured", "snapshot ticket not yet attached to the V2 record"], "observed_outcome": "When a prior-stop record exists the first post-snapshot checkpoint CAS-attaches the ticket; without prior Science, same-process PreJournalAbort freezes the exact prior business record. Drift preserves both journal and ActiveRecovery.", "compensation": "before any same-process effect, publish the path-free marker by exact business-record CAS; publication failure preserves ActiveRecovery with zero compensation effects"},
+        {"id": "one-click.post-journal", "after_effects": ["authority snapshot and V2 journal exist", "zero or more Gateway/Science/private mutations"], "observed_outcome": "All checkpoints CAS the complete last V2 record and preserve fingerprint, ticket, prior outcome, binding, compensation, Gateway outcome, phase, and exposure; same-id drift fails closed.", "compensation": "authority snapshot plus exact receipts and prior runtime restart"},
+        {"id": "one-click.success-finalize", "after_effects": ["typed finalize intent exists", "authority cleanup conversion may be pending or complete"], "observed_outcome": "ActiveRecovery conversion or final config commit failure preserves the old binding and exact journal; replay requires matching active-profile and old-binding authority plus a matching entry or empty cleanup-only manifest before atomically committing binding and clearing the journal.", "compensation": "finalize replay never restores cleanup-only authority; it rejects a missing manifest and never clears a drifted journal or companion config authority"},
+        {"id": "one-click.compensation-journal", "after_effects": ["separate V2 compensation record is durable", "zero or more top-level compensation steps may be pending, in_progress, or terminal"], "observed_outcome": "Each effect begins only after exact step intent publication. A fresh process verifies the public record against the 0600 private replay manifest and registered snapshot, then replays or observes one canonical step at a time before provider auth. Authority restore reconstructs the frozen tree plan and exact pre-operation config without restoring stale process-local AppState. Complete compensation clears only the exact record; any failed step persists an incomplete record whose failed_steps are derived from typed step outcomes. Drift preserves both records and the recovery snapshot.", "compensation": "V2 pending and in_progress effects converge under the sole entry owner; legacy V1, retargeted identity, unsafe snapshot state, and typed incomplete outcomes remain fail-closed/manual"}
+      ],
+      "compensation": {"kind": "authority-snapshot", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/compensation_replay.rs", "symbol": "replay_interrupted_one_click_compensation"}, "contract": "Persist the private replay inputs inside the exact registered snapshot before publishing the independent path-free V2 record. Hold one crash-releasing cross-process replay lease across canonical recapture, typed decision, effect, and outcome CAS; the live compensation funnel joins the same lease before its first step intent/effect. Advance the fixed top-level steps only by pending-to-in_progress-to-terminal complete-record CAS in-process or after restart, preserving the latest record through authority restore. Clear it only after complete compensation or persist failed steps derived from terminal step outcomes. Verified content-addressed Science runtime snapshots are immutable selection evidence outside rollback and are retained."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::h3_finalize_failures_preserve_replayable_intent", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::o0_gateway_terminal_handoff_reaches_production_one_click", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_cold_start_commits_runtime_and_receipts", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_history_attention_commits_choice_session_without_starting_science", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_prior_stop_failure_has_no_pre_snapshot_restart", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_to_journal_boundary_is_frozen", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_snapshot_capture_failure_restarts_prior_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r2_b_one_click_pre_journal_abort_uses_registered_ticket_compensation", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_db_restart_unproven_candidate_blocks_restore", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_post_receipt_failure_restores_prior_runtime", "desktop/src-tauri/Cargo.toml::lib::tests::r0_second_instance_callback_boot_state_matrix_reuses_one_click_login_cmd", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_old_cleanup_releases_app_state_restores_failure_and_rejects_replacement", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::gateway_reuse_health_releases_app_state_and_rejects_stale_owner_result", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::one_click::cold::tests::cold_prior_science_stop_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::cleanup_recovery::success_finalize_replays_both_active_recovery_and_cleanup_only_crash_windows", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::runtime_journal::gateway_terminal_handoff_prior_stop_and_finalize_are_exact_replayable_transitions", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::runtime_journal::o1_e3_fresh_process_replays_durable_compensation_to_convergence", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::runtime_journal::one_click_compensation_journal_begin_and_finish_use_complete_record_cas", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::one_click_snapshot_has_one_commit_and_one_failure_compensation_funnel", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::runtime_journal::one_click_v2_checkpoints_freeze_candidate_identity_and_ticket", "test.test_skill_runtime_boundary.SkillRuntimeBoundary.test_gateway_starts_only_after_config_and_science_state_prechecks"],
+      "known_gaps": ["Legacy V1 compensation and typed incomplete V2 outcomes remain manual by design.", "The extracted cold coordinator still sequences prior-stop, authority, Gateway, managed Science and aggregate compensation phase dispatch, route, and finalization authorities."]
+    },
+    {
+      "id": "op.healthy-reopen",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "internal-recovery", "name": "healthy_reopen", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, "bundled_callers": ["desktop/src-tauri/src/runtime/sandbox_session/one_click.rs::one_click_login_with_options"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "config.binding", "config.desired", "config.transaction", "gateway.bridge-key", "process.gateway", "process.science", "science.route"],
+      "durable_records": {"reads": ["record.config-v4", "record.history-marker-v1", "record.route-configuration-v1", "record.runtime-binding-v1", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-adoption-v1", "record.science-receipt-v1", "record.science-ssh-bridge-v1"], "writes": ["record.gateway-bridge-key-v1", "record.history-marker-v1", "record.route-configuration-v1", "record.runtime-binding-v1", "record.runtime-transaction-v2", "record.science-adoption-v1"], "clears": ["record.route-configuration-v1", "record.runtime-transaction-v1", "record.runtime-transaction-v2"]},
+      "ordered_effects": ["under the final Config writer admission, reject P2-A/P2-B state and publish a typed StartFormalGateway intent", "capture Config and AppState snapshots", "best-effort reconcile the exact managed Science adoption ledger from its launch receipt and committed binding", "validate the running system SSH bridge when enabled", "bootstrap missing history marker if needed", "ensure Gateway", "verify catalog", "commit runtime binding and clear the exact intent", "best-effort third-party configuration", "retain Science and publish reopened result"],
+      "failure_points": [
+        {"id": "healthy-reopen.adoption-reconcile", "after_effects": ["the exact managed Science adoption ledger may have advanced to launch-committed or finalized"], "observed_outcome": "Reconciliation is best-effort and does not replace or restart the healthy Science runtime; a later failure retains the monotonic milestone.", "compensation": "monotonic adoption milestones have no inverse"},
+        {"id": "healthy-reopen.marker-bootstrap", "after_effects": ["history marker may be newly committed"], "observed_outcome": "Later reopen failure leaves the new marker in place.", "compensation": "marker has no inverse"},
+        {"id": "healthy-reopen.post-gateway", "after_effects": ["Gateway may have changed", "config may have changed"], "observed_outcome": "Restore prior config and AppState/Gateway snapshot; Science remains running.", "compensation": "dedicated config and Gateway rollback"}
+      ],
+      "compensation": {"kind": "dedicated-rollback", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/one_click/healthy_reopen.rs", "symbol": "healthy_reopen_with_gateway_rollback"}, "contract": "Hold the exact intent while restoring AppState/Gateway, then exact-CAS the prior Config and clear the intent; retain the intent on rollback failure. Do not delete a marker created before the attempt and do not restart Science."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_existing_marker_is_read_only", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_marker_bootstrap_failure_preserves_credentials", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_bootstrap_marker_survives_gateway_rollback", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_healthy_reopen_missing_marker_bootstraps_without_credential_mutation", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::runtime_journal::p2b_healthy_reopen_intent_closes_verify_to_gateway_effect_race", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::mismatched_recovery_target_preserves_listener_and_journal"],
+      "known_gaps": ["Marker creation is a non-compensated durable upgrade; a crash before Gateway listener creation terminalizes the typed intent as absent for one-click handoff."]
+    },
+    {
+      "id": "op.history-restore",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.one-click", "op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "restore_history_choice", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/one_click.rs", "symbol": "restore_history_choice_command"}, "bundled_callers": ["desktop/src/runtime-controller.js::restoreHistoryChoice"]}],
+      "state_owners": ["app.boot", "app.cleanup", "app.gateway", "app.history", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.binding", "config.desired", "config.transaction", "gateway.bridge-key", "lifecycle.global", "process.gateway", "process.science", "science.route"],
+      "durable_records": {"reads": ["record.config-v4", "record.pending-cleanup-v1", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-credential-v1", "record.science-receipt-v1"], "writes": ["record.runtime-transaction-v2", "record.authority-snapshot-v1", "record.history-marker-v1", "record.pending-cleanup-v1", "record.science-credential-v1"], "clears": ["record.runtime-transaction-v2", "record.authority-snapshot-v1", "record.pending-cleanup-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["before provider auth, loop over entry capture and pending-history replay; a journal racing with auth is replayed before auth failure returns or before business entry", "validate opaque reference, current config, and optional resume auth preflight", "freeze the complete Config authority without its journal into the operation-scoped runtime_fingerprint", "publish typed history stop intent, then exact-stop managed Science or prove typed quiescence", "publish exact stop outcome and re-read config/transaction", "capture and register protected authority snapshot", "complete-record plus frozen-config-authority CAS the snapshot ticket", "fsync the private credential before-image identity manifest", "complete-record plus frozen-config-authority CAS HistoryCredentialWritePending", "acquire the shared crash-releasing cross-process exclusive history effect fence; after any wait, reload canonical Config and revalidate the exact complete history record before touching credentials", "write each selected history credential/marker through file-fsync, atomic rename, and parent-directory-fsync barriers", "complete-record plus frozen-config-authority CAS credential publication together with restore-only or resume finalize intent", "on interrupted or failed publication, complete-record plus frozen-config-authority CAS HistoryCredentialWritePending to HistoryAuthorityRestorePending while retaining the effect fence", "idempotently restore the complete history authority manifest, then complete-record plus frozen-config-authority CAS HistoryAuthorityRestorePending to HistoryAuthorityRestoreSucceeded", "only HistoryAuthorityRestoreSucceeded may enter cleanup-only preparation, clear the exact journal, and retry cleanup without repeating credential effects", "rotate every in-memory reference", "prepare snapshot cleanup without projecting private paths", "complete-record plus frozen-config-authority CAS clear-journal or terminal resume handoff", "for explicit resume only, consume the exact handoff under the same frozen Config authority and enter conditional op.one-click"],
+      "failure_points": [
+        {"id": "history-restore.stop", "after_effects": ["typed stop intent may exist", "no credential write"], "observed_outcome": "Request rejection clears the exact intent; unknown stop outcome remains durable and requires manual recovery; references remain reusable.", "compensation": "complete-record CAS clear only when no runtime mutation occurred"},
+        {"id": "history-restore.post-stop-recheck", "after_effects": ["managed Science verified stopped", "typed exact stop outcome published"], "observed_outcome": "Config drift returns error, clears only the exact owned record when safe, and leaves Science stopped.", "compensation": "safe-stopped boundary; no prior restart"},
+        {"id": "history-restore.snapshot-ticket", "after_effects": ["managed Science stopped", "protected snapshot registered"], "observed_outcome": "Ticket publication failure restores the captured authority/config by exact journal expectation and cleans the registered snapshot, or preserves explicit recovery evidence.", "compensation": "full protected-authority snapshot restore"},
+        {"id": "history-restore.credential-write", "after_effects": ["managed Science stopped", "snapshot ticket and private before-image identities journaled", "HistoryCredentialWritePending published", "shared cross-process history effect fence acquired and exact record revalidated"], "observed_outcome": "Each credential/marker write returns success only after its file and parent directory durability barriers. Live failure and restart replay join the same crash-releasing exclusive effect fence; a waiter reloads canonical Config and the exact complete record before any credential effect. Compensation first durably advances HistoryCredentialWritePending to HistoryAuthorityRestorePending, then idempotently restores the complete history authority manifest. A crash after any restored entry remains restore-pending and replays the whole manifest. Only a durable HistoryAuthorityRestoreSucceeded outcome permits cleanup-only preparation, exact journal clearing, and cleanup retry. Config, record, quiescence, snapshot, or manifest drift fails closed with recovery evidence preserved. This local replay runs before Codex/provider auth preflight.", "compensation": "one shared durable full-history-authority restore owner with exact Config and complete-record guards"},
+        {"id": "history-restore.finalize", "after_effects": ["credentials published", "references rotated", "cleanup may be prepared"], "observed_outcome": "Cleanup preparation or finalize CAS failure returns a degraded DTO with the current rotated references and preserves the exact snapshot/journal for replay; it never publishes applied-profile readiness.", "compensation": "durable cleanup/finalize replay"},
+        {"id": "history-restore.resume", "after_effects": ["history commit finalized", "terminal resume handoff published"], "observed_outcome": "Only an exact terminal handoff can re-enter one-click; one-click failure uses its existing typed compensation/readback contract.", "compensation": "existing one-click transaction compensation"}
+      ],
+      "compensation": {"kind": "authority-snapshot", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/history_recovery.rs", "symbol": "compensate_history_failure"}, "contract": "After HistoryCredentialWritePending, live failure and restart replay must acquire one shared crash-releasing cross-process exclusive effect fence, reload and revalidate canonical Config plus the exact complete record, publish HistoryAuthorityRestorePending, idempotently restore the complete history authority manifest, and publish HistoryAuthorityRestoreSucceeded before cleanup-only preparation or exact journal clear. Restore interruption repeats the full manifest; drift fails closed. After credential publication, replay cleanup/finalize rather than reverting the chosen history."},
+      "characterization_tests": ["config::tests::o1_e4_history_effect_owner_joins_cross_process_replay_fence", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::o1_e4_history_full_snapshot_replay_resumes_from_durable_restore_intent", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_pre_stop_rejection_preserves_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_config_drift_leaves_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_post_stop_candidate_and_credential_failures_leave_science_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_history_restore_rotates_all_references_only_after_success", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::f1_a_history_crash_and_concurrent_config_recovery_is_owned", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::f1_a_history_restore_and_resume_is_one_backend_operation", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::history_recovery::tests::history_resume_handoff_advances_only_by_complete_record_cas", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::transaction_tests::transaction_contract::o1_e4_history_full_snapshot_restore_has_one_durable_effect_owner", "test/runtime_controller_history_restore.test.mjs::explicit restore-and-resume remains one backend operation", "test/runtime_controller_history_restore.test.mjs::failed history restore never invokes one_click_login", "test/runtime_controller_history_restore.test.mjs::successful history restore stays stopped until an explicit one-click"],
+      "known_gaps": ["The safe-stopped boundary remains intentional: once history credentials are durably committed, later one-click failure does not roll back the user's selected history."]
+    },
+    {
+      "id": "op.interrupted-gateway-recovery",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "internal-recovery", "name": "recover_interrupted_gateway", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "bundled_callers": ["desktop/src-tauri/src/runtime/sandbox_session/one_click.rs::one_click_login_entry"]}],
+      "state_owners": ["app.gateway", "config.desired", "config.transaction", "process.gateway"],
+      "durable_records": {"reads": ["record.config-v4", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.runtime-transaction-v2"], "clears": []},
+      "ordered_effects": ["validate complete profile-switch journal identity, target, and canonical NotStarted compensation", "refuse listener probing after Stopped or AbsentAfterAttempt", "reject snapshot-bearing, compensation-drifted, or unsupported journals, same-process ownership, and unknown listeners", "authenticate path secret and initial public health/contract identity; resolve the packaged binary", "complete-record CAS typed recover_interrupted_gateway/Pending intent", "recheck exact binary/uid/PID and final listener identity; attempt exact managed Gateway stop", "complete-record CAS typed terminal stop outcome"],
+      "failure_points": [
+        {"id": "interrupted-recovery.pre-stage", "after_effects": ["no durable change"], "observed_outcome": "Identity or complete-record mismatch preserves listener and original journal.", "compensation": "none"},
+        {"id": "interrupted-recovery.stop-failed", "after_effects": ["typed Pending intent published", "TERM/KILL may have been attempted"], "observed_outcome": "Persist NotManaged, SignalFailed, or ExitUnconfirmed when the complete Pending record still matches; no stage rollback or prior Gateway restart; later retry rechecks identity.", "compensation": "none"},
+        {"id": "interrupted-recovery.outcome-publication", "after_effects": ["typed Pending intent published", "exact stop result observed"], "observed_outcome": "A write failure or record drift preserves the current record and returns typed failure; process effects are not reversed. A compensation-drifted record remains ineligible after restart and cannot drive another listener probe or stop.", "compensation": "none"}
+      ],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/proxy_lifecycle/recovery.rs", "symbol": "recover_interrupted_gateway_from_dir"}, "contract": "Preserve current post-stage StopFailed behavior: no rollback, late-exit wait policy, or prior restart."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_freezes_post_stage_stop_outcomes", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::interrupted_gateway_accepts_only_committed_target_or_exact_previous_identity", "desktop/src-tauri/Cargo.toml::lib::runtime::proxy_lifecycle::tests::r0_interrupted_recovery_executes_signal_wait_late_exit_and_retry_identity_matrix"],
+      "known_gaps": ["The durable Pending intent still precedes process stop; a terminal-outcome CAS or write failure can leave Pending after the process result occurred."]
+    },
+    {
+      "id": "op.set-mode",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "set_mode", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "bundled_callers": ["desktop/src/profile-controller.js::switchMode"]}],
+      "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["validate mode", "reject any open runtime journal or P2-A/P2-B receipt/fence before effects", "publish the credential-free receipt and exact Config fence", "durably mark each present Science/Gateway stop InProgress with a fresh attempt id", "for official: bump generation, claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity; on current success stop the tracked Gateway and durably terminalize both stop attempts", "durably mark ConfigCommit InProgress, commit mode against the exact before-image, and terminalize the same attempt", "publish terminal fence, clear receipt through the clearing tombstone, and clear only the exact Config fence", "clear history recovery and boot attention"],
+      "failure_points": [
+        {"id": "set-mode.stop-science", "after_effects": ["generation bumped", "exact Science stop claimed and may have been attempted"], "observed_outcome": "Failure prevents mode commit and Gateway stop.", "compensation": "no generation rollback or Science restart"},
+        {"id": "set-mode.owner-cas", "after_effects": ["generation bumped", "exact Science stop attempted", "process-local owner changed before publication"], "observed_outcome": "Reject stale publication, preserve the replacement Science read model and tracked Gateway, and leave mode unchanged.", "compensation": "none; a stale stop result cannot clear replacement runtime ownership or continue the mode transition"},
+        {"id": "set-mode.config-commit", "after_effects": ["Science and Gateway stopped"], "observed_outcome": "Commit failure leaves prior mode durable but runtime stopped.", "compensation": "no prior runtime restart"}
+      ],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_mode_inner"}, "contract": "Stop-before-commit ordering is preserved; terminal uncertainty retains the credential-free receipt and exact fence for fresh boot attention, without restart compensation."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_mode_config_failure_leaves_runtime_stopped", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r1_set_mode_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::config_mutation::tests::p2b_set_mode_crash_recovery_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::config_mutation::tests::p2b_set_mode_generation_effect_is_after_durable_attempts", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2b_fence_first_orphan_and_receipt_only_corruption_matrix"],
+      "known_gaps": ["P2-B records exact effect progress and terminal attention but deliberately does not restart previously stopped runtimes."]
+    },
+    {
+      "id": "op.set-settings",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "set_settings", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "bundled_callers": ["desktop/src/profile-controller.js::persistRuntimeSettings"]}],
+      "state_owners": ["app.boot", "app.gateway", "app.history", "app.science", "authority.private", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.sandbox-ssh-stub-v2", "record.science-receipt-v1", "record.science-ssh-bridge-v1"]},
+      "ordered_effects": ["validate ports/SSH inputs", "reject any open runtime journal or P2-A/P2-B receipt/fence before effects", "preflight SSH ownership, capture each exact bridge config/sidecar/stub leaf identity, and publish them in the credential-free receipt with the exact Config fence", "durably mark each present Science/Gateway stop InProgress with a fresh attempt id", "if teardown: claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity; on current success bump generation, stop the tracked Gateway, and terminalize the stop attempts", "if SSH disabled: mark each owned bridge/stub effect InProgress, revalidate exact before identities, perform config rename or unlink, fsync every affected parent directory, and prove the declared after-image or exact absence before terminalizing the same attempt", "mark ConfigCommit InProgress, commit settings against the exact before-image, and terminalize the same attempt", "publish terminal fence, clear receipt through the clearing tombstone, and clear only the exact Config fence", "clear history recovery and boot attention"],
+      "failure_points": [
+        {"id": "set-settings.stop", "after_effects": ["exact Science stop claimed and may have been attempted"], "observed_outcome": "Failure prevents generation bump, Gateway stop, settings commit, and later teardown effects.", "compensation": "none"},
+        {"id": "set-settings.owner-cas", "after_effects": ["exact Science stop attempted", "process-local owner changed before publication"], "observed_outcome": "Reject stale publication, preserve the replacement Science read model and tracked Gateway, and leave settings unchanged.", "compensation": "none; a stale stop result cannot clear replacement runtime ownership or continue the settings transition"},
+        {"id": "set-settings.ssh-revoke", "after_effects": ["runtime stopped", "one or more SSH artifacts may be removed"], "observed_outcome": "Failure prevents config commit and leaves runtime stopped.", "compensation": "no bridge/stub inverse or runtime restart"},
+        {"id": "set-settings.config-commit", "after_effects": ["runtime stopped", "SSH bridge/stub may be removed"], "observed_outcome": "Prior settings remain durable but runtime stays stopped.", "compensation": "none"}
+      ],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "set_settings_inner"}, "contract": "Stop/revoke/remove-before-commit behavior is preserved; terminal uncertainty retains the exact receipt and fence for fresh attention, without bridge inverse or runtime restart."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_failure_points_preserve_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_set_settings_stub_remove_failure_preserves_stop_before_commit", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r2_set_settings_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::config_mutation::tests::p2b_set_settings_ssh_false_to_false_owned_absent_foreign_matrix", "desktop/src-tauri/Cargo.toml::lib::runtime::ssh_bridge::tests::p2b_exact_bridge_revoke_propagates_each_directory_sync_boundary", "desktop/src-tauri/Cargo.toml::lib::runtime::settings::tests::p2b_exact_stub_revoke_propagates_directory_sync_failure", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2b_open_fence_blocks_all_ordinary_config_writers_cross_process"],
+      "known_gaps": ["P2-B does not reconstruct or restart removed SSH artifacts; foreign or ambiguous ownership remains fail-closed attention."]
+    },
+    {
+      "id": "op.stop-all",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease",
+      "entrypoints": [{"kind": "tauri-command", "name": "stop_all", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "stop_all_inner_cmd"}, "bundled_callers": ["desktop/src/runtime-controller.js::stopAll"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
+      "ordered_effects": ["remain available while either runtime journal is open because this terminal cleanup only reduces runtime exposure and does not write config or credentials", "bump generation", "claim exact process-local Science owner and stop request under AppState lock", "release AppState while executing the existing Science stop policy", "CAS the result against generation and exact process-local identity", "always stop tracked Gateway", "return Science stop result"],
+      "failure_points": [{"id": "stop-all.science", "after_effects": ["generation bumped", "Science stop attempted", "Gateway stopped"], "observed_outcome": "Return error stating Gateway stopped while Science stop failed.", "compensation": "none; explicit stop intentionally retains stopped components"}, {"id": "stop-all.owner-cas", "after_effects": ["generation bumped", "exact Science stop attempted", "process-local owner changed before publication", "Gateway stopped"], "observed_outcome": "Reject stale publication and preserve the replacement Science read model.", "compensation": "none; stale stop results cannot clear replacement runtime ownership"}],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "stop_all_inner_cmd"}, "contract": "Gateway is stopped even when Science stop fails; no restart is attempted. The command intentionally neither clears nor writes either runtime journal, config, or credentials."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_stop_all_stops_gateway_even_when_science_stop_fails", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::s2_stop_all_wait_releases_read_model_and_stale_result_preserves_replacement"],
+      "known_gaps": ["set_mode, set_settings, stop_all, native exit, and downgrade cleanup share the process-local owner claim/publication boundary; remaining transaction-scoped Science stop callers retain their existing operation-specific lock and recovery timing pending separate review."]
+    },
+    {
+      "id": "op.quit-command",
+      "mutation_kind": "terminal",
+      "serialization": "lifecycle-plus-domain-lease",
+      "entrypoints": [{"kind": "tauri-command", "name": "quit_app", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "quit_app_command"}, "bundled_callers": ["desktop/src/main.js::wire"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
+      "ordered_effects": ["remain available while either runtime journal is open under the terminal-cleanup exception", "run stop_all contract without config or credential writes", "exit app with code zero only after success"],
+      "failure_points": [{"id": "quit-command.stop", "after_effects": ["Gateway stopped", "Science stop may have failed"], "observed_outcome": "Return error and do not request app exit.", "compensation": "none"}],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime/lifecycle.rs", "symbol": "quit_app_command"}, "contract": "Unlike native exit, a Science stop failure prevents the explicit command from exiting. The command intentionally leaves both runtime journals and all config/credential state untouched."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_quit_command_does_not_exit_after_science_stop_error"],
+      "known_gaps": ["Semantics differ intentionally from native exit cleanup."]
+    },
+    {
+      "id": "op.native-exit",
+      "mutation_kind": "terminal",
+      "serialization": "lifecycle-plus-domain-lease",
+      "entrypoints": [
+        {"kind": "native-hook", "name": "exit_requested", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::ExitRequested"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::RunEvent::ExitRequested"]},
+        {"kind": "native-hook", "name": "exit", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::Exit"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::RunEvent::Exit"]},
+        {"kind": "native-hook", "name": "app_state_drop", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "Drop for AppState"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::Drop for AppState"]}
+      ],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.science-receipt-v1"], "writes": [], "clears": ["record.science-receipt-v1"]},
+      "ordered_effects": ["remain available while either runtime journal is open because native terminal cleanup only reduces runtime exposure", "cancel/wait/TERM/KILL registered Codex auth child", "acquire the Terminal mutation lease", "if Science is tracked, claim its exact process-local owner and stop request under AppState", "release AppState while executing bounded Science stop/TERM/KILL/wait", "publish only when generation and the full process-local owner still match; ignore Science stop or stale-publication error", "stop tracked Gateway", "allow native exit", "Drop repeats Gateway safety stop"],
+      "failure_points": [
+        {"id": "native-exit.science", "after_effects": ["Science stop attempted outside AppState", "Science stop failed", "Gateway stopped"], "observed_outcome": "Ignore the Science failure so native termination continues while preserving the tracked Science read model for a repeat attempt.", "compensation": "the second Tauri event can retry; no generation bump or restart"},
+        {"id": "native-exit.owner-cas", "after_effects": ["exact Science stop attempted outside AppState", "generation or process-local owner changed before publication", "Gateway stopped"], "observed_outcome": "Reject stale publication, preserve replacement Science ownership, and continue native termination.", "compensation": "none; stale stop results cannot clear replacement runtime ownership"},
+        {"id": "native-exit.cleanup", "after_effects": ["one or both Tauri exit events may already have run cleanup", "Science stop may have failed"], "observed_outcome": "Cleanup remains repeatable best effort and cannot prevent native exit.", "compensation": "second event can retry; no generation bump or restart"}
+      ],
+      "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "cleanup_for_exit"}, "contract": "Both ExitRequested and Exit call cleanup; Science stop shares the lifecycle process-local owner/CAS publication boundary, but errors do not block native termination and Gateway stop still runs. AppState Drop stops any still-tracked Gateway. Cleanup intentionally does not clear or write either runtime journal, config, or credentials."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_events_share_repeatable_best_effort_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_native_exit_requested_and_exit_repeat_full_terminal_cleanup", "desktop/src-tauri/Cargo.toml::lib::tests::r1_native_exit_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::tests::r0_app_state_drop_stops_tracked_gateway"],
+      "known_gaps": ["Two Tauri events can repeat terminal side effects.", "No generation bump."]
+    },
+    {
+      "id": "op.select-profile",
+      "mutation_kind": "intent",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "set_active_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "pin_active_profile_in_dir"}, "bundled_callers": ["desktop/src/profile-controller.js::activate"]}],
+      "state_owners": ["app.science", "config.binding", "config.desired", "config.transaction", "lifecycle.global"],
+      "durable_records": {"reads": ["record.config-v4", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-v4"], "clears": []},
+      "ordered_effects": ["reject either open runtime journal", "validate profile/template/launch plan locally", "commit active_id", "report selected/applied divergence and Science-running hint without runtime mutation"],
+      "failure_points": [{"id": "select-profile.commit", "after_effects": ["no runtime mutation"], "observed_outcome": "Validation or atomic config failure leaves selected/applied/live state unchanged.", "compensation": "config update is atomic"}],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "pin_active_profile_in_dir"}, "contract": "Intent-only commit never stops or starts Gateway/Science and never changes runtime_binding."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::pin_rejects_transaction_unknown_disabled_and_invalid_without_writes", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_select_profile_role_matrix_preserves_applied_and_live_state"],
+      "known_gaps": ["Intent mutations share the broad lifecycle serializer but have no typed operation plan."]
+    },
+    {
+      "id": "op.update-connection",
+      "mutation_kind": "intent",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "update_profile_connection", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "update_profile_connection_inner_cmd"}, "bundled_callers": ["desktop/src/profile-controller.js::connSave"]}],
+      "state_owners": ["codex.auth", "codex.supervisor", "config.binding", "config.desired", "config.transaction", "lifecycle.global"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-v4"], "clears": []},
+      "ordered_effects": ["build candidate and obtain auth proof outside lifecycle", "serialize and reject either open runtime journal while rechecking proof/config", "validate candidate/endpoint/model", "run isolated scratch tri-state validation", "recheck both journals and commit profile candidate", "leave selected/applied/live state untouched"],
+      "failure_points": [
+        {"id": "update-connection.rejected", "after_effects": ["scratch may have run"], "observed_outcome": "Explicit auth/model reject or validation error does not commit.", "compensation": "scratch is isolated"},
+        {"id": "update-connection.inconclusive", "after_effects": ["scratch returned 405, 429, 5xx, or no response"], "observed_outcome": "Commit with validated=false; applied/live state remains unchanged.", "compensation": "none needed for accepted intent"}
+      ],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "update_profile_connection_inner_cmd"}, "contract": "Only profile intent commits; scratch process is isolated and the command never applies the candidate."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_update_connection_rechecks_auth_and_config_inside_lifecycle", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_update_connection_validation_tristate_preserves_applied_runtime"],
+      "known_gaps": ["Outcome is projected as boolean validated plus error rather than a typed intent result."]
+    },
+    {
+      "id": "op.revoke-profile",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [
+        {"kind": "tauri-command", "name": "clear_profile_key", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "bundled_callers": ["desktop/src/profile-controller.js::doClearKey"]},
+        {"kind": "tauri-command", "name": "delete_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile"}, "bundled_callers": ["desktop/src/profile-controller.js::doDelete"]}
+      ],
+      "state_owners": ["app.gateway", "app.science", "config.binding", "config.desired", "config.mutation-operation", "config.rolling-backup", "config.transaction", "lifecycle.global", "process.gateway"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-binding-v1", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.runtime-binding-v1"]},
+      "ordered_effects": ["reject any open runtime journal or P2-A/P2-B receipt/fence", "derive applied role from runtime_binding", "for selected-only intent, return a typed no-runtime-effect outcome", "for applied revoke, publish the credential-free receipt and exact Config fence", "mark StopGateway InProgress with a fresh attempt id before bumping generation or stopping the tracked Gateway", "terminalize the stop attempt, then mark ConfigCommit InProgress before key clear/profile delete against the exact before-image", "terminalize ConfigCommit, then mark DeleteRollingBackup InProgress before unlinking config.json.bak", "prove backup unlink plus directory fsync plus exact absence before terminalizing DeleteRollingBackup", "publish terminal fence and clear receipt/fence only after ConfigCommit and DeleteRollingBackup are both proven", "always retain Science"],
+      "failure_points": [{"id": "revoke-profile.config", "after_effects": ["no runtime stop yet"], "observed_outcome": "Atomic config failure leaves Gateway unchanged.", "compensation": "none"}, {"id": "revoke-profile.rolling-backup", "after_effects": ["Gateway stopped", "Config revocation committed", "rolling backup unlink or directory fsync may be uncertain"], "observed_outcome": "DeleteRollingBackup is marked Uncertain and the exact receipt/fence remain in typed attention; completion is forbidden until backup absence is proven.", "compensation": "none"}],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "contract": "Config-first revocation uses runtime_binding truth; selected-only returns intent-only typed state, while applied revocation retains receipt attention on stop or commit uncertainty and Science remains."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::delete_selected_and_applied_profiles_use_runtime_binding_truth", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_profile_revocation_selected_applied_role_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_applied_profile_revoke_crash_matrix", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_applied_profile_backup_scrub_is_an_exact_durable_effect", "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::p2b_intent_only_outcomes_have_zero_runtime_effect"],
+      "known_gaps": ["P2-B retains the applied revoke receipt on uncertainty but deliberately provides no runtime restart or credential rollback."]
+    },
+    {
+      "id": "op.codex-auth-start",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "codex_auth_start", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_start"}, "bundled_callers": ["desktop/src/codex-controller.js::startCodexLogin"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["reject any open runtime journal or P2-A/P2-B receipt/fence", "reserve auth operation and publish the credential-free receipt plus exact Config fence", "mark both bounded runtime stop observations InProgress before lifecycle effects", "under lifecycle stop only confirmed Codex runtime and terminalize each exact stop/skip attempt", "mark AuthSidecar InProgress, spawn it inert, and durably register exact child plus process-start/executable/process-group identity", "mark AuthGenerationCommit InProgress and persist the bounded start authorization digest", "send exact start control; Gateway flushes matching start_ack before authorizing OAuth/network work", "release lifecycle while OAuth waits; terminalize sidecar/auth generation from the exact terminal", "mark ProfileEnsure InProgress before canonical profile ensure, bind the dynamic after-image, then terminalize and publish terminal receipt/fence plus operation snapshot"],
+      "failure_points": [
+        {"id": "codex-login.prepare", "after_effects": ["operation reserved", "confirmed Codex runtime may be stopped"], "observed_outcome": "Failure aborts the reserved operation and clears its starting snapshot; the command returns a safe error and no other provider runtime is stopped.", "compensation": "no prior Codex runtime restart"},
+        {"id": "codex-login.storage-commit", "after_effects": ["one or both new secret records may have been written", "auth-state generation is not yet committed"], "observed_outcome": "Restore both prior secret records; if either restore fails return RollbackFailed and make no restoration claim.", "compensation": "AuthRepository rollback_or restores both old secret records or reports rollback failure"},
+        {"id": "codex-login.profile-ensure", "after_effects": ["OAuth, thinking key, and committed auth generation may be safely committed"], "observed_outcome": "Terminal profile_ensure_failed; committed auth records are retained for idempotent repair.", "compensation": "do not roll back committed authentication"}
+      ],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_start"}, "contract": "Supervisor reaps/cancels exact sidecar and preserves safely committed OAuth; stopped Codex runtime is not restarted."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::login_finalization_requires_profile_ready_before_succeeded", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_login_prepare_failure_preserves_other_provider_and_stopped_codex_state"],
+      "known_gaps": ["P2-B persists auth identity and generation references without credentials; it does not restart a stopped Codex runtime or claim provider/live evidence."]
+    },
+    {
+      "id": "op.codex-auth-cancel",
+      "mutation_kind": "runtime",
+      "serialization": "app-state-only",
+      "entrypoints": [{"kind": "tauri-command", "name": "codex_auth_cancel", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_cancel"}, "bundled_callers": ["desktop/src/codex-controller.js::cancelCodexLogin"]}],
+      "state_owners": ["codex.supervisor"],
+      "durable_records": {"reads": [], "writes": [], "clears": []},
+      "ordered_effects": ["validate operation id", "send one-line cancel to exact registered sidecar", "update process-local operation snapshot when acknowledgement/terminal arrives"],
+      "failure_points": [{"id": "codex-cancel.write", "after_effects": ["operation remains active"], "observed_outcome": "Return safe error or current snapshot; no credential/config mutation is inferred.", "compensation": "supervisor exit cleanup still owns exact child"}],
+      "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/codex_auth_supervisor.rs", "symbol": "pub(crate) fn cancel(&self"}, "contract": "Cancellation is process-local and idempotent for the exact operation; app exit performs bounded child cleanup."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::codex_auth_supervisor::tests::r0_cancel_is_operation_id_bound_and_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_cancel_writes_exact_ndjson_and_write_failure_is_safely_terminalized"],
+      "known_gaps": ["Does not participate in lifecycle serializer by design."]
+    },
+    {
+      "id": "op.codex-ensure-profile",
+      "mutation_kind": "intent",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "codex_ensure_profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_ensure_profile"}, "bundled_callers": ["desktop/src/codex-controller.js::repairCodexProfile"]}],
+      "state_owners": ["codex.auth", "codex.supervisor", "config.desired", "config.transaction", "lifecycle.global"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2"], "writes": ["record.config-v4"], "clears": []},
+      "ordered_effects": ["require authenticated status through sidecar proof", "serialize and reject either open runtime journal while verifying proof unchanged", "recheck both journals and idempotently create canonical profile only when none exists"],
+      "failure_points": [{"id": "codex-ensure-profile.commit", "after_effects": ["authentication proof obtained"], "observed_outcome": "Config failure reports safe profile_ensure failure and leaves OAuth untouched.", "compensation": "atomic config write"}],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "ensure_codex_profile_authenticated"}, "contract": "Intent repair never changes active_id and never starts/stops managed runtime."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_requires_authentication_and_is_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::profile_repair_exposes_only_safe_failure_when_config_is_unwritable", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_ensure_profile_rechecks_auth_inside_lifecycle"],
+      "known_gaps": ["Authentication status is external to config and validated through a lease/proof."]
+    },
+    {
+      "id": "op.codex-logout",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "codex_auth_logout", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_logout"}, "bundled_callers": ["desktop/src/codex-controller.js::doLogoutCodex"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.auth", "codex.supervisor", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-auth-state-v1", "record.config-mutation-operation-v1"], "clears": ["record.config-mutation-operation-v1", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["reject any open runtime journal or P2-A/P2-B receipt/fence, then begin Codex mutation lease and publish the credential-free receipt/fence", "mark both bounded runtime stop observations InProgress before stopping only confirmed Codex runtime under lifecycle", "terminalize each exact stop/skip attempt", "mark AuthSidecar, AuthGenerationCommit, and AuthSecretCleanupObservation InProgress before spawning logout", "spawn logout inert, durably register exact process identity, and send start control; Gateway flushes matching start_ack before logout/revoke work", "best-effort remote revoke, commit a new logged-out auth generation, and attempt deletion of both secret records", "accept success only for an exact unauthenticated state_uncommitted generation with no account/expiry reference", "checkpoint the terminal auth references and terminalize the three matching attempts", "publish terminal fence and clear only the exact receipt/fence", "record safe auth status"],
+      "failure_points": [
+        {"id": "codex-logout.state-commit", "after_effects": ["confirmed Codex runtime stopped", "remote revoke may have been attempted"], "observed_outcome": "Auth-state commit failure leaves the previous committed credential generation active and returns error.", "compensation": "no secret deletion and no prior Codex restart"},
+        {"id": "codex-logout.secret-delete", "after_effects": ["logged-out generation committed", "both secret deletions attempted"], "observed_outcome": "Return error with stale secret file possible, but committed=false prevents authentication use.", "compensation": "no rollback to the active generation and no prior Codex restart"}
+      ],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_logout"}, "contract": "Stop-before-credential revoke behavior is preserved; no runtime journal or restart."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::runtime_decision_stops_only_confirmed_codex_and_fails_closed_on_unknown_live_child", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_logout_failure_leaves_confirmed_codex_runtime_stopped"],
+      "known_gaps": ["Remote revoke remains best effort and P2-B does not restore a stopped Codex runtime; stale secret files remain unusable after the new logged-out generation commits."]
+    },
+    {
+      "id": "op.codex-auth-refresh",
+      "mutation_kind": "runtime",
+      "serialization": "auth-storage-lock",
+      "entrypoints": [{"kind": "internal-recovery", "name": "codex_auth_refresh", "source_anchor": {"path": "desktop/gateway/src/codex_auth/mod.rs", "symbol": "refresh_production_for_generation"}, "bundled_callers": []}, {"kind": "internal-recovery", "name": "expired_token_auth_refresh", "source_anchor": {"path": "desktop/gateway/src/server/inference_dispatch.rs", "symbol": ".is_some_and(|expires_at| expires_at <= unix_time_seconds())"}, "bundled_callers": ["desktop/gateway/src/server/inference_dispatch.rs::refresh_production_for_generation"]}, {"kind": "internal-recovery", "name": "models_401_auth_refresh", "source_anchor": {"path": "desktop/gateway/src/server/inference_dispatch.rs", "symbol": "if error.upstream_status == Some(401) {"}, "bundled_callers": ["desktop/gateway/src/server/inference_dispatch.rs::refresh_production_for_generation"]}, {"kind": "internal-recovery", "name": "inference_401_auth_refresh", "source_anchor": {"path": "desktop/gateway/src/server/inference_dispatch.rs", "symbol": "if status == 401 {"}, "bundled_callers": ["desktop/gateway/src/server/inference_dispatch.rs::refresh_production_for_generation"]}],
+      "state_owners": ["codex.auth"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1"], "writes": ["record.codex-auth-state-v1", "record.codex-oauth-v1", "record.codex-thinking-v1"], "clears": []},
+      "ordered_effects": ["acquire private auth mutation lock", "capture committed generation and refresh-token digest", "skip network commit if requested generation is already stale", "fetch refreshed OAuth values", "recheck epoch, generation, record alignment, token digest, and account", "write OAuth and generation-aligned thinking records", "commit the next authenticated generation"],
+      "failure_points": [
+        {"id": "codex-refresh.precommit", "after_effects": ["refresh network request may have run", "no durable write"], "observed_outcome": "Transport, stale-generation, account, or validation failure preserves the prior committed generation and records.", "compensation": "none needed before publication"},
+        {"id": "codex-refresh.storage-commit", "after_effects": ["one or both refreshed secret records may have been written", "auth-state generation is not yet committed"], "observed_outcome": "Restore both prior secret records; return RollbackFailed if either restoration cannot be proven.", "compensation": "AuthRepository rollback_or restores the exact prior OAuth and thinking records"}
+      ],
+      "compensation": {"kind": "dedicated-rollback", "source_anchor": {"path": "desktop/gateway/src/codex_auth/storage.rs", "symbol": "fn rollback_or("}, "contract": "Secret records are restored as a pair on failed refresh publication; the prior committed state generation remains authoritative, and rollback uncertainty is explicit."},
+      "characterization_tests": ["desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::concurrent_refresh_for_same_generation_has_one_network_writer", "desktop/gateway/Cargo.toml::lib::codex_auth::storage::tests::refresh_thinking_failure_restores_both_records", "desktop/gateway/Cargo.toml::lib::codex_auth::storage::tests::refresh_state_failure_restores_both_records"],
+      "known_gaps": ["Refresh is serialized by the private auth file lock rather than the desktop Lifecycle lock."]
+    },
+    {
+      "id": "op.codex-catalog-mutation",
+      "mutation_kind": "runtime",
+      "serialization": "none",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "fetch_models", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "pub(crate) async fn fetch_models("}, "bundled_callers": ["desktop/src/profile-controller.js"]}, {"kind": "internal-recovery", "name": "formal_gateway_models_route", "source_anchor": {"path": "desktop/gateway/src/server/inference_dispatch.rs", "symbol": "\"/v1/models\" if cfg.provider == \"codex\" =>"}, "bundled_callers": ["desktop/gateway/src/server/inference_dispatch.rs::catalog.published_snapshot(&secrets)"]}, {"kind": "internal-recovery", "name": "formal_inference_catalog_invalidation", "source_anchor": {"path": "desktop/gateway/src/server/inference_dispatch.rs", "symbol": "catalog.invalidate_identity(&auth_epoch, auth_generation, &account_hash);"}, "bundled_callers": ["desktop/gateway/src/server/inference_dispatch.rs::handle_codex_messages_with_catalog"]}],
+      "state_owners": ["codex.auth", "codex.catalog-cache", "config.desired", "process.gateway"],
+      "durable_records": {"reads": ["record.codex-auth-state-v1", "record.codex-model-cache-v3", "record.codex-oauth-v1", "record.codex-thinking-v1", "record.config-v4"], "writes": ["record.codex-auth-state-v1", "record.codex-model-cache-v3", "record.codex-oauth-v1", "record.codex-thinking-v1"], "clears": []},
+      "ordered_effects": ["enter through scratch fetch_models, formal Codex /v1/models, or formal inference rejection", "load the exact committed Codex auth generation and perform guarded expiry refresh when required", "scratch model discovery forces refresh while formal /v1/models may accept a current cache", "fetch and validate the upstream model catalog when no acceptable cache exists", "for live or 304 success atomically publish cache epoch before cache bytes", "for model 401/403 or inference rejection atomically publish an invalidation epoch then remove prior cache bytes", "after upstream 401 attempt guarded OAuth refresh only for the observed auth generation", "stop and reap only a scratch Gateway; formal Gateway continues serving"],
+      "failure_points": [
+        {"id": "codex-catalog.pre-cache", "after_effects": ["Gateway may have contacted upstream", "no catalog publication is required"], "observed_outcome": "Scratch spawn, transport, protocol, or formal lookup failure returns/falls back without claiming a cache commit.", "compensation": "scratch child is stopped and reaped; formal Gateway remains live"},
+        {"id": "codex-catalog.cache-publication", "after_effects": ["new cache epoch may be committed", "matching cache bytes may not be committed"], "observed_outcome": "Return a cache error; retained prior bytes remain subject to epoch/identity validation rather than being claimed current.", "compensation": "no epoch rollback"},
+        {"id": "codex-catalog.auth-invalidation", "after_effects": ["invalidated epoch committed", "old cache deletion attempted", "guarded OAuth refresh may have run after upstream 401"], "observed_outcome": "Cache deletion failure or OAuth refresh failure is retained as separate state; the previous OAuth generation remains authoritative unless guarded refresh fully commits.", "compensation": "AuthRepository restores partial refresh publication; catalog invalidation has no rollback"}
+      ],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/gateway/src/codex_models.rs", "symbol": "fn persist_invalidation("}, "contract": "Gateway process lifecycle is independent from shared catalog/auth publications; auth refresh has record rollback, while cache epoch/invalidation effects are retained."},
+      "characterization_tests": ["desktop/gateway/Cargo.toml::lib::codex_models::tests::r0_codex_fetch_models_mutates_shared_catalog_cache", "desktop/gateway/Cargo.toml::lib::codex_models::tests::r0_cache_epoch_precedes_cache_and_invalidation_removes_cache", "desktop/gateway/Cargo.toml::lib::codex_auth::lifecycle_tests::r0_scratch_401_refresh_is_generation_guarded", "desktop/gateway/Cargo.toml::lib::server::tests::r0_scratch_models_401_wires_observed_generation_to_guarded_refresh", "desktop/src-tauri/Cargo.toml::lib::scratch::tests::r0_scratch_guard_stops_and_reaps_exact_child"],
+      "known_gaps": ["Scratch and formal Gateway processes intentionally share durable catalog/auth state under the same private HOME.", "Cache and auth mutations use separate domain locks with no cross-record operation receipt."]
+    },
+    {
+      "id": "op.codex-enable",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "set_experimental_codex_enabled", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_experimental_codex_enabled"}, "bundled_callers": ["desktop/src/codex-controller.js::toggleCodexFeature"]}, {"kind": "internal-recovery", "name": "codex_disable_replay", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "replay_interrupted_codex_disable"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::run_boot_decision"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "config.codex-disable-receipt", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.codex-disable-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.codex-disable-operation-v1", "record.config-v4", "record.science-receipt-v1"], "clears": ["record.codex-disable-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["enable and disabled no-op only commit the flag and never create a receipt or touch runtime", "when disabling begin the Codex supervisor mutation lease and reject either open runtime journal or open Codex-disable receipt", "freeze exact Config before/after fingerprints plus managed Science receipt and Gateway full-owner public identity", "durably publish the minimal Config authority fence and then durably publish intent before the first destructive effect", "publish a typed stopping component phase and revalidate Config fence, before-image, owner generation, and managed identity immediately before each exact stop", "stop only the exact CSSwitch-owned Codex Science and Gateway and durably CAS post-stop per-component progress", "treat stopping as pre-effect WAL only: fresh original proves no effect, while absent/restored/replacement is uncertainty and never grants inverse authority", "commit experimental_codex_enabled=false only against the exact fenced Config before-image", "durably publish config_committed, clear only the exact receipt, then release only the exact Config fence", "on precommit failure restore only components whose post-stop progress this operation durably recorded while Config and identity proofs still match", "preserve replayable inverse progress across typed attention so each fresh process adopts exact deterministic restores and continues inverse without duplicating managed children", "fresh boot replays intent/stopping/effects/restoring/restored/config_committed phases idempotently and fails closed on replacement, drift, terminal-stop ambiguity, or start-stop ABA", "do not delete credentials or profiles and never stop or restart another provider"],
+      "failure_points": [{"id": "codex-enable.intent", "after_effects": ["credential-free exact plan frozen", "minimal Config authority fence may be durable", "no runtime stopped", "desired Config before-image unchanged"], "observed_outcome": "Intent publication failure returns before destructive effects; a receipt-free fence is recovered only when the current Config still matches its exact before/after image, while drift or an unreadable/conflicting durable record becomes typed attention.", "compensation": "clear only the exact orphan fence; preserve runtime and desired config"}, {"id": "codex-enable.stop", "after_effects": ["durable intent published", "zero or more exact managed components may have a confirmed stop"], "observed_outcome": "Confirmed untouched components remain original; an exact-before-image phase-publication failure clears safely, while Config drift, uncertain absence, replacement, or owner drift retains the receipt and typed attention.", "compensation": "restore only durable progress proven to be this operation's exact stop while preserving every replacement"}, {"id": "codex-enable.commit", "after_effects": ["durable receipt proves exact managed components stopped", "config before-image remains authoritative"], "observed_outcome": "Config failure keeps the old enabled flag and runs exact prior Science/Gateway inverse; failed or uncertain inverse retains typed attention and the replayable phase. An unproven after-spawn Science candidate is preserved as replacement until absent, while deterministic partial restores are adopted by the next fresh replay.", "compensation": "deterministic managed Science/Gateway restore using prior receipt/config references without credentials in the operation record"}, {"id": "codex-enable.post-commit-clear", "after_effects": ["experimental flag durably disabled", "managed Codex runtime stopped", "receipt may remain at effects_applied or config_committed", "exact Config authority fence may remain until sidecar absence is proven"], "observed_outcome": "ConfigCommitted publication, receipt unlink, and fence release each require the exact after-image; restored/no-effect cleanup requires the exact before-image. Drift retains the receipt or the self-describing before/after fence across the unlink window and projects typed config_drift attention instead of success.", "compensation": "no inverse after config commit"}, {"id": "codex-enable.replay-drift", "after_effects": ["open durable receipt or receipt-free terminal fence", "fresh process has observed current Config and managed identities"], "observed_outcome": "Config/owner/generation identity drift or any replacement is preserved and projected as typed boot attention; replay never guesses recovery or clears replacement authority.", "compensation": "manual attention with durable recovery record retained"}],
+      "compensation": {"kind": "prior-runtime-restart", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "restore_stopped_codex_components"}, "contract": "Only a component whose exact CSSwitch-owned stop has post-stop progress durably recorded by this operation may be restored, and only while the complete Config fence/before-image plus managed identities still match. Stopping is pre-effect WAL only: fresh absence/restoration is uncertain and never grants inverse authority, so terminal stop and start-stop ABA retain attention. Recovery attention never erases durable inverse progress; each fresh replay adopts exact deterministic Science/Gateway restores and continues without duplicating or orphaning managed children. Intent, Noop, and PreserveOtherProvider never restart anything."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_managed_runtime_contract", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_receipt_phase_matrix_is_validated", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_codex_disable_config_commit_is_exact_before_image", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_open_receipt_blocks_conflicting_toggle", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::p2a_replay_decision_preserves_replacement_and_is_idempotent", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::p2a_codex_disable_fence_blocks_mode_and_settings_before_effects", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2a_codex_disable_config_fence_blocks_siblings_and_recovers_orphans", "desktop/src-tauri/Cargo.toml::lib::config::tests::p2a_codex_disable_receipt_cas_clear_preserves_replacement", "test/codex_disable_ui.test.mjs::accepts stable disable failure and attention projections", "test/codex_disable_ui.test.mjs::rejects leaked, unknown, or contradictory disable errors"],
+      "known_gaps": ["The dedicated receipt deliberately does not cover op.codex-network, mode/settings/profile mutations, one-click/history, artifact, live provider, installed runtime, or release behavior."]
+    },
+    {
+      "id": "op.codex-network",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-plus-domain-lease-plus-cross-process-effect-fence",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "set_codex_network", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_codex_network"}, "bundled_callers": ["desktop/src/codex-controller.js::saveCodexNetwork"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "codex.supervisor", "config.desired", "config.mutation-operation", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-mutation-operation-v1", "record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-mutation-operation-v1", "record.config-v4"], "clears": ["record.config-mutation-operation-v1", "record.science-receipt-v1"]},
+      "ordered_effects": ["validate network settings", "reject any open runtime journal or P2-A/P2-B receipt/fence, then begin mutation lease and publish the credential-free receipt/fence", "mark each present runtime stop InProgress with a fresh attempt id", "stop only confirmed Codex runtime or preserve an unaffected provider path, then terminalize the exact stop/skip attempts", "mark ConfigCommit InProgress before committing the network setting against the exact before-image", "terminalize ConfigCommit, publish terminal fence, and clear receipt/fence only after cleanup", "return restarted=false"],
+      "failure_points": [{"id": "codex-network.commit", "after_effects": ["confirmed Codex runtime stopped"], "observed_outcome": "Commit failure leaves previous network setting and stopped Codex runtime; other providers preserved.", "compensation": "no prior restart"}],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_codex_network"}, "contract": "Stop-before-config behavior is preserved and never auto-restarts."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_codex_network_commit_failure_leaves_codex_stopped_and_other_provider_untouched"],
+      "known_gaps": ["P2-B does not auto-restart Codex after a committed network change and preserves other-provider runtime ownership."]
+    },
+    {
+      "id": "op.codex-downgrade",
+      "mutation_kind": "terminal",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "codex_downgrade_export_all", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_downgrade_export_all"}, "bundled_callers": ["desktop/src/codex-controller.js::doCodexDowngrade"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "config.access-gate", "config.binding", "config.desired", "config.transaction", "lifecycle.global", "process.gateway", "process.science"],
+      "durable_records": {"reads": ["record.config-v4", "record.runtime-compensation-v1", "record.runtime-compensation-v2", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"], "writes": ["record.config-v4"], "clears": ["record.runtime-binding-v1", "record.runtime-transaction-v1", "record.runtime-transaction-v2", "record.science-receipt-v1"]},
+      "ordered_effects": ["picker before mutation", "recheck expected profile ids and preview fingerprint", "reject either open runtime journal before stopping runtime", "bump generation and claim the exact process-local Science owner and typed stop request under AppState", "release AppState while executing the existing Science stop policy", "CAS the Science result against generation and complete owner identity, then always stop the tracked Gateway", "only a current confirmed stop proceeds to the secure writer, which rechecks both journals", "atomically publish the user-selected export", "write the rolling config backup", "attempt v2 config publication and latch committed or uncertain outcomes", "exit zero on committed downgrade or exit one on post-publish uncertainty"],
+      "failure_points": [
+        {"id": "codex-downgrade.owner-cas", "after_effects": ["generation bumped", "exact Science stop attempted outside AppState", "process-local owner changed before publication", "tracked Gateway stopped"], "observed_outcome": "Reject stale publication, preserve replacement Science ownership, and return before export, backup, or v2 publication.", "compensation": "no runtime restart; stale Science ownership cannot be cleared and downgrade effects do not begin"},
+        {"id": "codex-downgrade.safe-pre-export", "after_effects": ["managed runtime stopped", "export not committed", "v2 config not committed"], "observed_outcome": "Validation, serialization, destination, or export-publication failure returns without exit.", "compensation": "no runtime restart"},
+        {"id": "codex-downgrade.post-export-pre-v2", "after_effects": ["managed runtime stopped", "user-selected export committed", "v2 config not committed", "rolling backup may or may not exist"], "observed_outcome": "Rolling-backup failure or another safe pre-v2 failure returns without exit; the committed export is retained and current v4 config remains authoritative.", "compensation": "no export rollback and no runtime restart"},
+        {"id": "codex-downgrade.post-publish", "after_effects": ["v2 publication may have occurred", "process latch active", "runtime stopped"], "observed_outcome": "Force terminal exit one and forbid further config reads.", "compensation": "terminal fail-closed, no rollback claim"}
+      ],
+      "compensation": {"kind": "best-effort-terminal", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_downgrade_export_all"}, "contract": "Safe precommit errors return with stopped runtime; committed or uncertain publication is terminal and exits directly."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::config::tests::completed_export_survives_later_config_precommit_failure", "commands::codex::tests::downgrade_cleanup_wait_releases_read_model_and_stale_result_preserves_replacement", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_downgrade_safe_failure_retains_stopped_runtime", "desktop/src-tauri/Cargo.toml::lib::commands::codex::tests::r0_downgrade_post_publish_uncertainty_is_terminal"],
+      "known_gaps": ["No prior runtime restart on safe failure."]
+    },
+    {
+      "id": "op.install-local-skill",
+      "mutation_kind": "host-bridge",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "install_local_skill_package", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "install_local_skill_package"}, "bundled_callers": ["desktop/src/runtime-controller.js::importLocalSkill"]}],
+      "state_owners": ["app.science", "authority.private", "config.desired", "process.science", "skill.host"],
+      "durable_records": {"reads": ["record.config-v4", "record.operon-skill-attachment-v1", "record.science-receipt-v1", "record.skill-package-v1"], "writes": ["record.operon-skill-attachment-v1", "record.skill-package-v1"], "clears": []},
+      "ordered_effects": ["capture exact healthy Science host context", "wait for local picker outside global lifecycle", "acquire short typed host-bridge mutation lease", "claim matching healthy typed host receipt", "atomically install package files", "attempt OPERON attach/readback under the same lease", "report file commit separately from attachment/load verification"],
+      "failure_points": [
+        {"id": "skill-install.context-race", "after_effects": ["user selected a path", "no package commit"], "observed_outcome": "Changed runtime context returns NOT_READY without reading/installing the selected package.", "compensation": "none needed"},
+        {"id": "skill-install.attach", "after_effects": ["package directory and import origin committed"], "observed_outcome": "Attach failure/uncertainty retains committed files and returns ATTACH_REQUIRED or UNCERTAIN.", "compensation": "retry same package; no automatic file rollback"}
+      ],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "attach_result_payload"}, "contract": "A short host-bridge lease binds the final typed host receipt through package commit and attach/readback; committed package files still survive attachment failure."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_picker_context_change_prevents_package_commit", "desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::r0_attach_failure_retains_committed_files_and_reports_separate_outcomes", "desktop/src-tauri/Cargo.toml::lib::commands::skill_install::tests::s3_host_bridge_lease_blocks_package_commit_behind_destructive_mutation"],
+      "known_gaps": ["The process-local Desktop lease does not serialize the Gateway-side external bridge process or provide a cross-process durable transaction."]
+    },
+    {
+      "id": "op.gateway-skill-bridge",
+      "mutation_kind": "host-bridge",
+      "serialization": "none",
+      "entrypoints": [{"kind": "startup-hook", "name": "gateway_skill_bridge_host", "source_anchor": {"path": "desktop/gateway/src/server.rs", "symbol": "start_skill_install_bridge(&cfg)"}, "bundled_callers": ["desktop/gateway/src/server.rs::start_skill_install_bridge(&cfg)"]}, {"kind": "internal-recovery", "name": "skill_bridge_mcp_tool", "source_anchor": {"path": "desktop/gateway/src/skill_install.rs", "symbol": "pub fn run_mcp("}, "bundled_callers": ["desktop/gateway/src/skill_install.rs::fn handle_mcp_request("]}],
+      "state_owners": ["process.gateway", "skill.bridge-mailbox", "skill.host"],
+      "durable_records": {"reads": ["record.operon-skill-attachment-v1", "record.skill-bridge-mailbox-v1", "record.skill-package-v1"], "writes": ["record.operon-skill-attachment-v1", "record.skill-bridge-mailbox-v1", "record.skill-package-v1"], "clears": ["record.skill-bridge-mailbox-v1"]},
+      "ordered_effects": ["MCP tool returns an authenticated host-access request contract for one external request.json publication", "during Gateway startup validate the private bridge directory/token/context and acquire the nonblocking host lock", "recover every valid orphan .processing file into a terminal interrupted response", "atomically claim one authenticated non-replayed request by renaming request.json to .processing", "publish best-effort accepted and heartbeat status", "for install atomically commit GitHub Skill or bundle files then attempt OPERON attachment", "for uninstall confirm bundle scope or detach then quarantine the exact CSSwitch-owned package", "publish one immutable final response then clear processing and transient status"],
+      "failure_points": [
+        {"id": "gateway-skill-bridge.startup", "after_effects": ["Gateway listener is bound", "bridge host may not be available"], "observed_outcome": "Unsafe path, lock, or recovery failure is logged and Gateway continues serving without the Skill host.", "compensation": "none"},
+        {"id": "gateway-skill-bridge.package-commit", "after_effects": ["package files or quarantine may be committed", "OPERON attach/detach may be incomplete or uncertain"], "observed_outcome": "Return the exact separate directory/quarantine and attachment outcome; committed files are not silently rolled back.", "compensation": "bundle quarantine failure attempts binding restoration; other committed package outcomes are retained"},
+        {"id": "gateway-skill-bridge.finalize", "after_effects": ["request claimed and host mutation may have completed", "final response not proven"], "observed_outcome": "Retain .processing and publish best-effort finalization_failed status so the next Gateway startup converts it to REQUEST_INTERRUPTED.", "compensation": "startup recovery publishes a terminal response without replaying the host mutation"}
+      ],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/gateway/src/server/skill_bridge_host.rs", "symbol": "pub(super) fn recover_orphaned_bridge_processing("}, "contract": "Mailbox recovery never replays an uncertain request; package/attachment compensation is operation-specific and final responses preserve separate outcomes."},
+      "characterization_tests": ["desktop/gateway/Cargo.toml::lib::server::skill_bridge_host::tests::r0_interrupted_processing_publishes_terminal_response", "desktop/gateway/Cargo.toml::lib::server::skill_bridge_host::tests::r0_finalization_failure_retains_processing_for_recovery", "desktop/gateway/Cargo.toml::lib::skill_install::tests::r0_bridge_install_and_uninstall_freeze_file_and_attachment_outcomes"],
+      "known_gaps": ["Bridge status is advisory and best effort.", "No shared transaction spans mailbox claim, package commit/quarantine, OPERON mutation, and final-response publication."]
+    },
+    {
+      "id": "op.skill-route-repair",
+      "mutation_kind": "host-bridge",
+      "serialization": "lifecycle-plus-domain-lease",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "repair_skill_route", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "repair_skill_route"}, "bundled_callers": ["desktop/src/runtime-controller.js::repairSkillRoute"]}],
+      "state_owners": ["app.gateway", "app.science", "authority.private", "config.desired", "gateway.bridge-key", "lifecycle.global", "process.science", "science.route"],
+      "durable_records": {"reads": ["record.config-v4", "record.gateway-bridge-key-v1", "record.route-configuration-v1", "record.science-receipt-v1"], "writes": ["record.route-configuration-v1"], "clears": ["record.route-configuration-v1"]},
+      "ordered_effects": ["only after the explicit repair intent, acquire the HostBridge mutation lease", "load current config and force-refresh Science identity/version", "invalidate route marker when runtime/context cannot be trusted", "for healthy third-party Science inspect and configure connector/disabled-Skill/managed-prompt/OPERON route", "update process-local Science identity and return a typed repair outcome"],
+      "failure_points": [
+        {"id": "skill-route-repair.invalidate", "after_effects": ["route marker may be removed"], "observed_outcome": "Stopped, unknown, or changed Science returns a typed deferred or warning result after invalidation.", "compensation": "no marker inverse"},
+        {"id": "skill-route-repair.configure", "after_effects": ["one or more Science host route components may be changed"], "observed_outcome": "Best-effort completion returns synchronized, restart-required, or warning as a typed result.", "compensation": "no uniform host-state rollback"}
+      ],
+      "compensation": {"kind": "none", "source_anchor": {"path": "desktop/src-tauri/src/runtime/sandbox_session/route_reconcile.rs", "symbol": "force_third_party_reconcile"}, "contract": "Explicit Skill route repair is a real host reconcile mutation: marker invalidation and healthy-host configuration are retained, reported, and not rolled back as a unit."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::diagnostics::tests::r0_doctor_diagnostic_failure_skips_reconcile", "desktop/src-tauri/Cargo.toml::lib::runtime::sandbox_session::route_reconcile::tests::r0_doctor_reconcile_freezes_marker_and_host_mutation_outcomes"],
+      "known_gaps": ["Host route mutations return a typed command outcome but still lack a durable receipt and uniform inverse."]
+    },
+    {
+      "id": "op.science-runtime-preflight",
+      "mutation_kind": "runtime",
+      "serialization": "none",
+      "implicit_operation_ids": ["op.startup-config-migration"],
+      "entrypoints": [{"kind": "tauri-command", "name": "science_runtime_preflight", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "science_runtime_preflight"}, "bundled_callers": ["desktop/src/runtime-controller.js"]}],
+      "state_owners": ["app.science", "authority.private", "config.binding", "config.desired", "process.science"],
+      "durable_records": {"reads": ["record.config-v4", "record.runtime-binding-v1", "record.science-adoption-v1", "record.science-receipt-v1", "record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1"], "writes": ["record.science-adoption-v1", "record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1"], "clears": []},
+      "ordered_effects": ["load current config and probe the current managed Science runtime", "for a healthy runtime validate only its exact managed identity and reconcile receipt/binding adoption milestones without probing update sources", "for stopped startup resolve and validate only the fixed active content-addressed snapshot", "only when no selection exists, perform one bootstrap discovery, content-address the updater or installed-App executable, and atomically publish active selection", "return only source/version/status projection and never runtime paths or Science user data"],
+      "failure_points": [{"id": "science-runtime-preflight.runtime-snapshot", "after_effects": ["during initial bootstrap a private temporary snapshot may have been created and fsynced", "the content-addressed snapshot may already have been hard-linked"], "observed_outcome": "Bootstrap source drift or validation/publication failure blocks startup and removes the temporary name best effort; an already committed content-addressed snapshot remains immutable and reusable.", "compensation": "Remove only the private temporary name; retain any verified content-addressed snapshot and never alter a running Science process."}, {"id": "science-runtime-preflight.adoption-record", "after_effects": ["a healthy exact receipt milestone may already have converged", "an initial active selection may already be durable"], "observed_outcome": "A healthy runtime remains available but reports degraded adoption bookkeeping; fixed-active validation failure blocks fallback to unrelated sources.", "compensation": "No runtime effect is reversed; each private publication is independently atomic."}],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/executable.rs", "symbol": "science_runtime_preflight"}, "contract": "The command never starts, stops, or replaces Science. Normal startup validates only fixed active state; one-time bootstrap temporary names are removed best effort, verified snapshots are retained, and selection/adoption writes share the private cross-process writer lock."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_cold_start_commits_runtime_and_receipts", "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::fixed_active_runtime_and_pending_actions_are_durable_and_probe_free", "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::science_runtime_adoption_recovery_is_exact_and_retains_compensation_references"],
+      "known_gaps": ["The command is not lifecycle-serialized because it has no process mutation; selection and adoption publications share a private cross-process writer lock and identity/bytes CAS."]
+    },
+    {
+      "id": "op.science-runtime-update-check",
+      "mutation_kind": "runtime",
+      "serialization": "lifecycle-observation-only",
+      "entrypoints": [{"kind": "native-hook", "name": "science_runtime_update_scheduler", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "start_science_runtime_update_scheduler"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::setup"]}],
+      "state_owners": ["app.science", "authority.private", "lifecycle.global", "process.science"],
+      "durable_records": {"reads": ["record.science-adoption-v1", "record.science-receipt-v1", "record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1"], "writes": ["record.science-adoption-v1", "record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1"], "clears": []},
+      "ordered_effects": ["wake hourly but return without source probing while uninitialized, while an exact pending choice waits, or until the durable 24-hour interval is due", "under the private writer lock claim the due interval by atomically publishing last-check time and a random check id before any source probe", "outside AppState and lifecycle serialization probe the fixed updater source then permitted installed App fallback, content-addressing the validated candidate and requiring installed-App snapshot bytes to match the exact version-probed source fingerprint", "under the private writer lock require the exact claimed selection, preserve any pending choice, compare candidate priority/content with active and dismissed identities, then clear the claim and atomically publish optional pending state", "discard a stale discovery result rather than overwriting a concurrent user choice", "only after pending publication, enter lifecycle observed-context, freeze generation plus the full process-local Science owner, obtain an exact managed receipt/status/HTTP/listener health proof outside AppState, require generation plus full-owner CAS, and revalidate that same proof", "under the adoption writer lock require the same exact pending choice, then revalidate and consume the typed managed-health proof before recording a deferred observation; user choice or proof failure never rolls back pending or restarts Science", "emit source/version/hash status only on the transition that creates a new pending choice; retain an existing pending choice for passive startup/status display without hourly repeat events"],
+      "failure_points": [{"id": "science-runtime-update-check.probe-or-publication", "after_effects": ["the due interval was durably claimed before probing", "a verified immutable snapshot may already exist", "no active selection or process has been changed"], "observed_outcome": "A failed or crashed due check retains active/pending state; its pre-probe durable timestamp prevents another source probe until the next daily interval.", "compensation": "Clear the matching check id when execution returns, remove only temporary snapshot names, and retain verified content-addressed snapshots."}, {"id": "science-runtime-update-check.managed-observation", "after_effects": ["an exact pending choice may already be durable", "the running Science owner may have stopped or changed", "no deferred observation has been committed"], "observed_outcome": "Missing health, receipt drift, generation drift, full-owner drift, or final proof failure reports degraded adoption bookkeeping while preserving pending and the replacement owner.", "compensation": "Do not synthesize a predecessor, roll back pending, signal a listener, stop, restart, or replace Science; a later cold start uses only explicit active selection."}],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "check_science_runtime_update"}, "contract": "A check never changes active selection or restarts Science. Source selection and pending publication remain outside lifecycle serialization; only the final process observation uses lifecycle observed-context plus generation/full-owner CAS and a typed exact managed-health proof. Pending/check metadata and adoption observations remain independent atomic publications."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::background_science_update_check_is_due_once_per_day", "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::fixed_active_runtime_and_pending_actions_are_durable_and_probe_free", "desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::fresh_restart_rejects_listener_without_managed_launch_identity", "desktop/src-tauri/Cargo.toml::lib::commands::runtime::tests::r0_one_click_cold_start_commits_runtime_and_receipts"],
+      "known_gaps": ["Verified content-addressed snapshots are retained and not automatically retired.", "Managed health is a point-in-time observation; later daemon failure is handled by normal lifecycle/status paths and cannot retroactively invalidate an already committed exact observation."]
+    },
+    {
+      "id": "op.science-runtime-update-action",
+      "mutation_kind": "intent",
+      "serialization": "none",
+      "entrypoints": [{"kind": "tauri-command", "name": "science_runtime_update_action", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "science_runtime_update_action"}, "bundled_callers": ["desktop/src/runtime-controller.js::applyScienceRuntimeUpdate"]}],
+      "state_owners": ["authority.private"],
+      "durable_records": {"reads": ["record.science-runtime-selection-v1", "record.science-runtime-snapshot-v1"], "writes": ["record.science-runtime-selection-v1"], "clears": []},
+      "ordered_effects": ["validate the frontend expected pending SHA-256 against current private state", "before publication revalidate the exact resulting active snapshot root, owner, 0500 mode, single-link identity, size, hash, and source requirements", "atomically promote pending to active for next cold start or append that exact candidate to the bounded dismissed set", "after publication re-read exact selection bytes and revalidate active snapshot before returning success", "never stop or restart the current Science daemon"],
+      "failure_points": [{"id": "science-runtime-update-action.cas", "after_effects": ["a matching selection may have been atomically published before post-write snapshot validation or directory persistence confirmation"], "observed_outcome": "Stale or invalid pending identity is rejected; post-write validation or post-rename persistence failure exact-CAS restores the prior active/pending selection and the UI must refresh.", "compensation": "Restore the exact prior selection only when the just-published identity and bytes still match."}],
+      "compensation": {"kind": "dedicated-rollback", "source_anchor": {"path": "desktop/src-tauri/src/runtime/science/selection.rs", "symbol": "science_runtime_update_action"}, "contract": "The exact pending identity is changed under the private writer lock with pre/post snapshot validation; post-write failure exact-CAS restores the prior selection. No process effect exists to compensate."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::runtime::science::tests::fixed_active_runtime_and_pending_actions_are_durable_and_probe_free"],
+      "known_gaps": ["An accepted pending runtime deliberately waits for the next cold start and is not applied to an already-running daemon."]
+    },
+    {
+      "id": "op.startup-config-migration",
+      "mutation_kind": "startup",
+      "serialization": "none",
+      "entrypoints": [{"kind": "internal-recovery", "name": "config_load_migration", "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "pub fn load_from("}, "bundled_callers": []}, {"kind": "startup-hook", "name": "startup_config_load", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "fn run_startup_config_sequence"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::run_startup_config_sequence("]}, {"kind": "startup-hook", "name": "boot_coordinator_config_load", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "fn run_boot_coordinator("}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::fn run_boot_coordinator("]}, {"kind": "startup-hook", "name": "single_instance_boot_reentry", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "tauri_plugin_single_instance::init"}, "bundled_callers": ["desktop/src-tauri/src/lib.rs::tauri_plugin_single_instance::init"]}],
+      "state_owners": ["config.desired", "config.migration-backups"],
+      "durable_records": {"reads": ["record.config-migration-backups-v1", "record.config-v4"], "writes": ["record.config-migration-backups-v1", "record.config-v4"], "clears": []},
+      "ordered_effects": ["load and validate legacy/current config", "publish one or more non-overwriting version backups for legacy input", "atomically publish the normalized current v4 config", "ignore setup load error and continue to boot coordinator"],
+      "failure_points": [{"id": "startup-config-migration.backup-or-commit", "after_effects": ["zero or more immutable version backups may have been published", "v4 publication may not have committed"], "observed_outcome": "Backup or v4 publication failure returns an error; setup ignores it, while the boot coordinator reloads and surfaces a typed prepare failure if the source remains unreadable.", "compensation": "published version backups are retained; config publication owns its atomic rollback"}],
+      "compensation": {"kind": "partial", "source_anchor": {"path": "desktop/src-tauri/src/config.rs", "symbol": "load_from"}, "contract": "Config migration owns its atomic publication and backup; setup does not add a runtime transaction."},
+      "characterization_tests": ["desktop/src-tauri/Cargo.toml::lib::config::tests::r0_startup_migration_is_single_commit_with_backup", "desktop/src-tauri/Cargo.toml::lib::tests::r0_boot_surfaces_prepare_failure_after_setup_load_error"],
+      "known_gaps": ["Setup intentionally ignores the first load result."]
+    }
+  ],
+  "registered_surface": [
+    {"name": "set_experimental_codex_enabled", "classification": "runtime-mutation", "operation_id": "op.codex-enable", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_experimental_codex_enabled"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "May stop confirmed Codex runtime before committing the feature flag."},
+    {"name": "set_codex_network", "classification": "runtime-mutation", "operation_id": "op.codex-network", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "set_codex_network"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Stops confirmed Codex runtime before committing network intent."},
+    {"name": "codex_auth_status", "classification": "transient-probe", "operation_id": "none", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_status"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Runs an isolated auth status sidecar and updates only process-local safe status after config load, which can become the first successful legacy migration."},
+    {"name": "codex_auth_start", "classification": "runtime-mutation", "operation_id": "op.codex-auth-start", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_start"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Stops confirmed Codex runtime, owns a sidecar operation, and may commit OAuth/profile state."},
+    {"name": "codex_auth_cancel", "classification": "runtime-mutation", "operation_id": "op.codex-auth-cancel", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_cancel"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Mutates the active Codex auth sidecar operation."},
+    {"name": "codex_auth_operation_status", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_operation_status"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Reads the process-local operation snapshot."},
+    {"name": "codex_ensure_profile", "classification": "intent-mutation", "operation_id": "op.codex-ensure-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_ensure_profile"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Idempotently repairs desired profile state after authenticated proof."},
+    {"name": "codex_auth_logout", "classification": "runtime-mutation", "operation_id": "op.codex-logout", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_auth_logout"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Stops confirmed Codex runtime before credential revoke sidecar."},
+    {"name": "codex_downgrade_preview", "classification": "read-only", "operation_id": "none", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_downgrade_preview"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Computes a fingerprinted downgrade preview after config load, which can first migrate legacy config."},
+    {"name": "codex_downgrade_export_all", "classification": "terminal-mutation", "operation_id": "op.codex-downgrade", "source_anchor": {"path": "desktop/src-tauri/src/commands/codex.rs", "symbol": "codex_downgrade_export_all"}, "bundled_callers": ["desktop/src/codex-controller.js"], "reason": "Stops runtime, publishes export/v2 config, and exits."},
+    {"name": "get_config", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "get_config"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Reads canonical v4 config without migration, normalization writes, notice clearing, or writer-fence creation and returns only the redacted frontend projection."},
+    {"name": "acknowledge_pending_notice", "classification": "config-nonruntime", "operation_id": "none", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "acknowledge_pending_notice"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Explicitly clears only the pending notice whose deterministic content identity matches the displayed notice; repeated acknowledgement is idempotent and a stale identity cannot clear a newer notice."},
+    {"name": "set_settings", "classification": "runtime-mutation", "operation_id": "op.set-settings", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "set_settings"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "May stop runtime and revoke SSH artifacts before settings commit."},
+    {"name": "set_mode", "classification": "runtime-mutation", "operation_id": "op.set-mode", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "set_mode"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Switching official may stop runtime before mode commit."},
+    {"name": "open_official", "classification": "external-side-effect", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "open_official"}, "bundled_callers": ["desktop/src/profile-controller.js", "desktop/src-tauri/src/lib.rs::LaunchPath::OpenOfficial"], "reason": "Opens the official app/page but does not mutate managed CSSwitch runtime state."},
+    {"name": "create_profile", "classification": "config-nonruntime", "operation_id": "none", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "create_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Adds an unselected desired profile without changing selected, applied, or live runtime state; its config read/update can first migrate legacy config, while ordinary CRUD remains excluded from runtime operation plans."},
+    {"name": "update_profile_metadata", "classification": "config-nonruntime", "operation_id": "none", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "update_profile_metadata"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Changes only profile name/notes; its config read/update can first migrate legacy config, while ordinary CRUD remains excluded from runtime operation plans."},
+    {"name": "update_profile_connection", "classification": "intent-mutation", "operation_id": "op.update-connection", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "update_profile_connection"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Validates and commits desired connection intent without applying runtime."},
+    {"name": "clear_profile_key", "classification": "runtime-mutation", "operation_id": "op.revoke-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "clear_profile_key"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Config-first credential revoke stops Gateway when runtime_binding marks the profile applied."},
+    {"name": "delete_profile", "classification": "runtime-mutation", "operation_id": "op.revoke-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "delete_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Config-first delete stops Gateway when runtime_binding marks the profile applied."},
+    {"name": "set_active_profile", "classification": "intent-mutation", "operation_id": "op.select-profile", "source_anchor": {"path": "desktop/src-tauri/src/commands/profiles.rs", "symbol": "set_active_profile"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Commits selected intent while preserving applied/live state."},
+    {"name": "fetch_models", "classification": "runtime-mutation", "operation_id": "op.codex-catalog-mutation", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "fetch_models"}, "bundled_callers": ["desktop/src/profile-controller.js"], "reason": "Uses an isolated scratch Gateway, but Codex discovery shares the formal Gateway durable catalog cache/invalidation epoch and may perform a generation-guarded OAuth refresh."},
+    {"name": "stop_all", "classification": "runtime-mutation", "operation_id": "op.stop-all", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "stop_all"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Stops managed Science and Gateway and bumps generation."},
+    {"name": "one_click_login", "classification": "runtime-mutation", "operation_id": "op.one-click", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "one_click_login"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Primary cross-owner runtime transaction."},
+    {"name": "finalize_consumer_state", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "finalize_consumer_state"}, "bundled_callers": ["desktop/src/runtime-controller.js", "desktop/src-tauri/src/lib.rs::run_boot_decision"], "reason": "Reads canonical v4 config without migration or other writes and projects only the one-click consumer journal/binding relation."},
+    {"name": "restore_history_choice", "classification": "runtime-mutation", "operation_id": "op.history-restore", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "restore_history_choice"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Stops managed Science and advances the typed V2 history-recovery journal before mutating history identity; optional resume conditionally re-enters op.one-click."},
+    {"name": "science_runtime_preflight", "classification": "runtime-mutation", "operation_id": "op.science-runtime-preflight", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "science_runtime_preflight"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Validates only fixed active state during normal startup, performs one initial bootstrap when absent, and reconciles exact healthy receipt milestones without update-source discovery."},
+    {"name": "science_runtime_update_status", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "science_runtime_update_status"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Reads only redacted active/pending/check metadata from the private selection record."},
+    {"name": "science_runtime_update_action", "classification": "intent-mutation", "operation_id": "op.science-runtime-update-action", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "science_runtime_update_action"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Promotes or dismisses the exact expected pending runtime without restarting Science."},
+    {"name": "open_science_download_page", "classification": "external-side-effect", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "open_science_download_page"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Opens an external download page."},
+    {"name": "status", "classification": "read-only", "operation_id": "none", "implicit_operation_ids": ["op.startup-config-migration"], "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "status"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Reads current runtime status after config load, which can first migrate legacy config."},
+    {"name": "boot_snapshot", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "boot_snapshot"}, "bundled_callers": ["desktop/src/main.js"], "reason": "Reads the same process-local sequence/state/payload publication emitted on boot://publication without consuming it."},
+    {"name": "open_url", "classification": "external-side-effect", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "open_url"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Opens only the currently authorized local Science URL; does not mutate managed runtime."},
+    {"name": "install_local_skill_package", "classification": "host-bridge-mutation", "operation_id": "op.install-local-skill", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_install.rs", "symbol": "install_local_skill_package"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Commits Skill files and attempts host attachment against a double-checked Science context."},
+    {"name": "list_installed_skills", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/skill_listing.rs", "symbol": "list_installed_skills"}, "bundled_callers": ["desktop/src/skill-page.js"], "reason": "Reads package and attachment state."},
+    {"name": "repair_skill_route", "classification": "host-bridge-mutation", "operation_id": "op.skill-route-repair", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "repair_skill_route"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Only an explicit repair intent acquires the HostBridge lease and invalidates or reconciles the third-party Science route projection."},
+    {"name": "run_doctor_read_only", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "run_doctor_read_only"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Runs redacted local diagnostics against canonical config without migration, route mutation, or implicit Science/Gateway startup."},
+    {"name": "app_version", "classification": "read-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "app_version"}, "bundled_callers": ["desktop/src/main.js", "desktop/src/runtime-controller.js"], "reason": "Returns the build version."},
+    {"name": "open_release_page", "classification": "external-side-effect", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "open_release_page"}, "bundled_callers": ["desktop/src/runtime-controller.js"], "reason": "Opens the public release page."},
+    {"name": "report_bug", "classification": "external-side-effect", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "report_bug"}, "bundled_callers": ["desktop/src/main.js"], "reason": "Opens the issue form."},
+    {"name": "open_logs", "classification": "external-side-effect", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/commands/diagnostics.rs", "symbol": "open_logs"}, "bundled_callers": ["desktop/src/main.js"], "reason": "Creates/opens the CSSwitch logs directory but does not mutate managed runtime."},
+    {"name": "quit_app", "classification": "terminal-mutation", "operation_id": "op.quit-command", "source_anchor": {"path": "desktop/src-tauri/src/commands/runtime.rs", "symbol": "quit_app"}, "bundled_callers": ["desktop/src/main.js"], "reason": "Stops runtime and exits only on successful stop."}
+  ],
+  "native_hooks": [
+    {"name": "setup_config_load", "classification": "startup-mutation", "operation_id": "op.startup-config-migration", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "fn run_startup_config_sequence"}, "reason": "May atomically migrate/normalize durable config before boot."},
+    {"name": "setup_boot", "classification": "runtime-mutation", "operation_id": "op.one-click", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "run_boot_coordinator"}, "reason": "Initial setup can enter the same one-click transaction."},
+    {"name": "science_runtime_update_scheduler", "classification": "runtime-mutation", "operation_id": "op.science-runtime-update-check", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "start_science_runtime_update_scheduler"}, "reason": "Hourly wake-up performs source discovery only when the durable 24-hour interval is due, publishing pending state without changing active runtime."},
+    {"name": "single_instance_boot", "classification": "runtime-mutation", "operation_id": "op.one-click", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "tauri_plugin_single_instance"}, "reason": "Second-instance callback can re-enter boot decision when Idle/Failed."},
+    {"name": "exit_requested_cleanup", "classification": "terminal-mutation", "operation_id": "op.native-exit", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::ExitRequested"}, "reason": "First native terminal cleanup attempt."},
+    {"name": "exit_cleanup", "classification": "terminal-mutation", "operation_id": "op.native-exit", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::Exit"}, "reason": "Second native terminal cleanup attempt."},
+    {"name": "app_state_drop", "classification": "terminal-mutation", "operation_id": "op.native-exit", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "Drop for AppState"}, "reason": "Final owned-Gateway cleanup safety net."},
+    {"name": "window_close_requested", "classification": "ui-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "WindowEvent::CloseRequested"}, "reason": "Prevents close and hides the window without stopping runtime."},
+    {"name": "reopen", "classification": "ui-only", "operation_id": "none", "source_anchor": {"path": "desktop/src-tauri/src/lib.rs", "symbol": "RunEvent::Reopen"}, "reason": "Shows/focuses the window without runtime mutation."}
+  ]
+}

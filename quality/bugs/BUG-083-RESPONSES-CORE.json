@@ -13,7 +13,7 @@
     "resolution_state": "open-not-fixed",
     "affected_paths": [
       "desktop/gateway/src/openai_responses.rs",
-      "desktop/gateway/src/server.rs",
+      "desktop/gateway/src/server/inference_dispatch.rs",
       "test/test_gateway_rust.py",
       "test/test_installed_provider_matrix.py"
     ],

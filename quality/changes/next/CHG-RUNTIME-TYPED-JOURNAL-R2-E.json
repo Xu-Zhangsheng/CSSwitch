@@ -1,0 +1,82 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-RUNTIME-TYPED-JOURNAL-R2-E",
+    "version": "v0.8.4-dev",
+    "title": "Close the typed runtime journal writer and compatibility matrix",
+    "summary": "Inventories every current V1/V2 runtime journal reader, writer, rollback, and clear boundary. One-click journal progress now retains the complete last persisted V2 record, so later checkpoints, success clear, and binding commit use full-record CAS and reject same-identity drift. Existing test identities cover every accepted V1 wire stage without implicit upgrade and every production-writable V2 phase or interrupted-Gateway outcome across save/load/save restart round trips. Checkpoint timing, the F5 pre-intent gap, StopFailed behavior, and journal operation scope remain unchanged.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/context/known-issues.md",
+      "desktop/src-tauri/src/config.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/mod.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/one_click.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/recovery.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/authority_snapshot.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/runtime_journal.rs",
+      "desktop/src-tauri/src/runtime/sandbox_session/transaction_tests/transaction_contract.rs",
+      "docs/architecture/runtime-state-transactions.md",
+      "quality/changes/v0.8.3/CHG-RUNTIME-TYPED-JOURNAL-R2-E.json",
+      "quality/runtime-mutation-inventory.v1.json",
+      "test/test_profile_pin_contract.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P0",
+        "security",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "the focused one-click V2 identity rejects same-id prior-binding, compensation, and valid phase drift before later checkpoint, clear, or binding commit while preserving exact config bytes",
+        "the initial clean-context review found that unified compensation could overwrite a helper-preserved drifted journal; Journaled and Finalized progress now guard config restore with exact Some(record) or None CAS",
+        "the repaired regression crosses the production compensation funnel after checkpoint rejection and preserves drifted config, authority, AppState, and recovery snapshot before any restore effect",
+        "a second clean-context review found the guard order and direct-reader inventory incomplete; the candidate now preflights before restore effects and inventories the omitted boundaries",
+        "the first complete source gate exposed one stale profile-pin source assertion; it now binds the mutable full-record progress commit signature",
+        "the existing config V1 identity round-trips all eight plain stages and both fingerprint-bearing environment stages without nested schema publication or implicit upgrade",
+        "the existing config V2 identity round-trips all eight one-click phases, test-only profile-switch publication, and six interrupted-Gateway recovery outcomes across save/load/save",
+        "the transaction source contract binds complete-record progress, checkpoint publication, terminal clear, binding commit, and canonical compensation/Gateway outcomes",
+        "the complete 15-suite GATE-SOURCE seal passed at exact SHA 8b1471550cf69178770a15f9dcc8378e7f334037 with run d29764f44c9a39f28bf2aaf03a035177 and runner exit zero",
+        "the sealed desktop observation records 528 discovered and executed, 487 passed, zero failed, 41 approved ignored, and no skipped, todo, or not-run identities",
+        "the exact-SHA clean-context completion review verified 15 passing results, 15 passing observations, recursive hashes, a 494-entry snapshot, and zero findings"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

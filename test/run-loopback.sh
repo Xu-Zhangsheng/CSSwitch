@@ -7,14 +7,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 if ! command -v python3 >/dev/null 2>&1; then
   echo "S0_LAYER loopback env-blocked (no python3)"; exit 0
 fi
-if [ "$(python3 test/_capability.py)" != "1" ]; then
+if [ -z "${CSSWITCH_LOOPBACK_TEST_FIXTURE:-}" ] && [ "$(python3 test/_capability.py)" != "1" ]; then
   echo "本环境禁止 loopback bind/connect，跳过 loopback 层。"
   echo "S0_LAYER loopback env-blocked (loopback not permitted)"; exit 0
 fi
 
 # The normal gate must exercise a binary built from the current gateway source.
-# The injected command exists only for the runner's deterministic retry tests.
-if [ -z "${CSSWITCH_LOOPBACK_TEST_CMD:-}" ]; then
+# The fixed fixture exists only for deterministic retry tests.
+if [ -z "${CSSWITCH_LOOPBACK_TEST_FIXTURE:-}" ]; then
   if ! command -v cargo >/dev/null 2>&1; then
     [ -x "$HOME/.cargo/bin/cargo" ] && export PATH="$HOME/.cargo/bin:$PATH"
   fi
@@ -30,13 +30,18 @@ if [ -z "${CSSWITCH_LOOPBACK_TEST_CMD:-}" ]; then
   fi
 fi
 
-# CSSWITCH_LOOPBACK_TEST_CMD 仅测试用：注入确定性 pass/fail 桩以验证重试逻辑，不用于正常运行。
+# 测试只允许固定枚举 fixture；默认 wrapper 不解释任何环境字符串为 shell。
+LOOPBACK_FIXTURE_ATTEMPT=0
 run_loopback_once() {
-  if [ -n "${CSSWITCH_LOOPBACK_TEST_CMD:-}" ]; then
-    eval "$CSSWITCH_LOOPBACK_TEST_CMD"
-  else
-    python3 -m unittest test.test_gateway_rust test.test_provider_mock_scenarios test.test_installed_provider_matrix -v
-  fi
+  case "${CSSWITCH_LOOPBACK_TEST_FIXTURE:-}" in
+    "") python3 -m unittest test.test_gateway_rust test.test_provider_mock_scenarios test.test_installed_provider_matrix -v ;;
+    always-fail) return 1 ;;
+    pass-on-third)
+      LOOPBACK_FIXTURE_ATTEMPT=$((LOOPBACK_FIXTURE_ATTEMPT + 1))
+      [ "$LOOPBACK_FIXTURE_ATTEMPT" -ge 3 ]
+      ;;
+    *) echo "S0_LAYER loopback fail (unknown fixed fixture)"; return 2 ;;
+  esac
 }
 
 MAX_ATTEMPTS=3

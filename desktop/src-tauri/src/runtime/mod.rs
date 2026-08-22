@@ -1,6 +1,9 @@
 pub(crate) mod capability_catalog;
 pub(crate) mod diagnostics;
 pub(crate) mod external_skill_route;
+pub(crate) mod failure;
+pub(crate) mod finalize_consumer;
+pub(crate) mod launch_env;
 pub(crate) mod legacy_proxy;
 pub(crate) mod model_discovery;
 pub(crate) mod operation;
@@ -9,6 +12,7 @@ pub(crate) mod profile_switch;
 pub(crate) mod provider;
 pub(crate) mod proxy;
 pub(crate) mod proxy_lifecycle;
+#[path = "sandbox_session/mod.rs"]
 pub(crate) mod sandbox_session;
 pub(crate) mod science;
 pub(crate) mod settings;

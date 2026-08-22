@@ -1,9 +1,51 @@
-use std::io::{self, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::io::{self, Read, Write};
+use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
+const CONNECT_SESSION_DEADLINE: Duration = Duration::from_secs(30 * 60);
+const CONNECT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_BYTES_PER_DIRECTION: u64 = 256 * 1024 * 1024;
+const MAX_CONNECT_RESOLVERS: usize = 8;
+const CONNECT_LOOPBACK_ONLY_ENV: &str = "CSSWITCH_CONNECT_LOOPBACK_ONLY";
+
+struct ResolverBudget {
+    active: AtomicUsize,
+    limit: usize,
+}
+
+impl ResolverBudget {
+    const fn new(limit: usize) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    fn try_acquire(&self) -> Option<ResolverPermit<'_>> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < self.limit).then_some(active + 1)
+            })
+            .ok()
+            .map(|_| ResolverPermit { budget: self })
+    }
+}
+
+struct ResolverPermit<'a> {
+    budget: &'a ResolverBudget,
+}
+
+impl Drop for ResolverPermit<'_> {
+    fn drop(&mut self) {
+        self.budget.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+static CONNECT_RESOLVER_BUDGET: ResolverBudget = ResolverBudget::new(MAX_CONNECT_RESOLVERS);
 
 fn write_status(mut stream: TcpStream, code: u16, reason: &str) {
     let _ = write!(
@@ -21,6 +63,15 @@ pub fn is_blocked_host(host: &str) -> bool {
         || host.ends_with(".claude.ai")
         || host == "claude.com"
         || host.ends_with(".claude.com")
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches('.');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
 }
 
 fn parse_target(target: &str) -> Result<(String, u16), ()> {
@@ -77,12 +128,51 @@ where
 }
 
 fn connect_upstream(host: &str, port: u16) -> io::Result<TcpStream> {
-    // std::net does not offer deadline-aware DNS resolution. Start the budget before
-    // resolution so a slow lookup cannot also receive a fresh ten-second dial budget;
-    // once resolution returns, all candidate addresses share the remaining time.
     let deadline = Instant::now() + CONNECT_DEADLINE;
-    let addrs = (host, port).to_socket_addrs()?;
-    connect_addrs_until(addrs, deadline, Instant::now, TcpStream::connect_timeout)
+    if let Ok(address) = host.parse::<IpAddr>() {
+        return connect_addrs_until(
+            [SocketAddr::new(address, port)],
+            deadline,
+            Instant::now,
+            TcpStream::connect_timeout,
+        );
+    }
+
+    // The standard resolver has no cancellation API. Bound the client-visible
+    // lookup by the same absolute dial deadline and cap any resolver threads
+    // that remain inside libc after their caller has timed out.
+    let permit = CONNECT_RESOLVER_BUDGET.try_acquire().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "CONNECT resolver budget is exhausted",
+        )
+    })?;
+    let host = host.to_string();
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("csswitch-connect-resolver".into())
+        .spawn(move || {
+            let _permit = permit;
+            let result = (host.as_str(), port).to_socket_addrs().and_then(|addrs| {
+                connect_addrs_until(addrs, deadline, Instant::now, TcpStream::connect_timeout)
+            });
+            let _ = tx.send(result);
+        })
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "CONNECT deadline elapsed"))?;
+    match rx.recv_timeout(remaining) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "CONNECT DNS resolution timed out",
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(io::Error::other("CONNECT resolver terminated unexpectedly"))
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -92,19 +182,27 @@ enum ConnectTargetError {
     DialFailed,
 }
 
-fn open_target_with<T, C>(target: &str, mut connect: C) -> Result<T, ConnectTargetError>
+fn open_target_with<T, C>(
+    target: &str,
+    loopback_only: bool,
+    mut connect: C,
+) -> Result<T, ConnectTargetError>
 where
     C: FnMut(&str, u16) -> io::Result<T>,
 {
     let (host, port) = parse_target(target).map_err(|_| ConnectTargetError::BadTarget)?;
-    if is_blocked_host(&host) {
+    if is_blocked_host(&host) || (loopback_only && !is_loopback_host(&host)) {
         return Err(ConnectTargetError::Blocked);
     }
     connect(&host, port).map_err(|_| ConnectTargetError::DialFailed)
 }
 
 pub fn handle_connect(target: &str, mut client: TcpStream) {
-    let upstream = match open_target_with(target, connect_upstream) {
+    // Managed Gateway children start from an empty environment. The acceptance
+    // build explicitly sets this marker only after validating a loopback fixture
+    // upstream, so any CONNECT side-channel is rejected before DNS or dialing.
+    let loopback_only = std::env::var_os(CONNECT_LOOPBACK_ONLY_ENV).is_some();
+    let upstream = match open_target_with(target, loopback_only, connect_upstream) {
         Ok(stream) => stream,
         Err(ConnectTargetError::BadTarget) => {
             write_status(client, 400, "Bad Request");
@@ -132,27 +230,123 @@ pub fn handle_connect(target: &str, mut client: TcpStream) {
     };
     let mut upstream_r = upstream;
     let mut client_w = client;
+    let deadline = Instant::now() + CONNECT_SESSION_DEADLINE;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancel_upstream = Arc::clone(&cancelled);
+    let cancel_client = Arc::clone(&cancelled);
 
     let to_upstream = thread::spawn(move || {
-        let _ = std::io::copy(&mut client_r, &mut upstream_w);
-        let _ = upstream_w.shutdown(std::net::Shutdown::Write);
+        let _ = relay_direction(
+            &mut client_r,
+            &mut upstream_w,
+            deadline,
+            CONNECT_IDLE_TIMEOUT,
+            CONNECT_BYTES_PER_DIRECTION,
+            &cancel_upstream,
+        )
+        .map(|_| upstream_w.shutdown(Shutdown::Write))
+        .unwrap_or_else(|_| {
+            cancel_upstream.store(true, Ordering::Release);
+            let _ = client_r.shutdown(Shutdown::Both);
+            upstream_w.shutdown(Shutdown::Both)
+        });
     });
     let to_client = thread::spawn(move || {
-        let _ = std::io::copy(&mut upstream_r, &mut client_w);
-        let _ = client_w.shutdown(std::net::Shutdown::Write);
+        let _ = relay_direction(
+            &mut upstream_r,
+            &mut client_w,
+            deadline,
+            CONNECT_IDLE_TIMEOUT,
+            CONNECT_BYTES_PER_DIRECTION,
+            &cancel_client,
+        )
+        .map(|_| client_w.shutdown(Shutdown::Write))
+        .unwrap_or_else(|_| {
+            cancel_client.store(true, Ordering::Release);
+            let _ = upstream_r.shutdown(Shutdown::Both);
+            client_w.shutdown(Shutdown::Both)
+        });
     });
     let _ = to_upstream.join();
     let _ = to_client.join();
 }
 
+fn relay_direction(
+    reader: &mut TcpStream,
+    writer: &mut TcpStream,
+    deadline: Instant,
+    idle_timeout: Duration,
+    byte_limit: u64,
+    cancelled: &AtomicBool,
+) -> io::Result<u64> {
+    relay_io_with_policy(
+        reader,
+        writer,
+        deadline,
+        byte_limit,
+        cancelled,
+        |reader, writer, remaining| {
+            let operation_timeout = idle_timeout.min(remaining);
+            reader.set_read_timeout(Some(operation_timeout))?;
+            writer.set_write_timeout(Some(operation_timeout))
+        },
+    )
+}
+
+fn relay_io_with_policy<R, W, C>(
+    reader: &mut R,
+    writer: &mut W,
+    deadline: Instant,
+    byte_limit: u64,
+    cancelled: &AtomicBool,
+    mut configure_operation: C,
+) -> io::Result<u64>
+where
+    R: Read,
+    W: Write,
+    C: FnMut(&mut R, &mut W, Duration) -> io::Result<()>,
+{
+    let mut transferred = 0_u64;
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "CONNECT peer direction stopped",
+            ));
+        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::TimedOut, "CONNECT session deadline elapsed")
+            })?;
+        configure_operation(reader, writer, remaining)?;
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(transferred);
+        }
+        let next = transferred.saturating_add(read as u64);
+        if next > byte_limit {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "CONNECT byte budget exceeded",
+            ));
+        }
+        writer.write_all(&buffer[..read])?;
+        transferred = next;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_addrs_until, is_blocked_host, open_target_with, parse_target, ConnectTargetError,
-        CONNECT_DEADLINE,
+        connect_addrs_until, is_blocked_host, is_loopback_host, open_target_with, parse_target,
+        relay_io_with_policy, ConnectTargetError, ResolverBudget, CONNECT_DEADLINE,
     };
-    use std::io;
+    use std::io::{self, Cursor};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -178,19 +372,47 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_only_literal_or_named_loopback_hosts() {
+        for host in ["localhost", "LOCALHOST.", "127.0.0.1", "127.23.4.5", "::1"] {
+            assert!(is_loopback_host(host), "{host} must be loopback");
+        }
+        for host in ["example.test", "0.0.0.0", "::", "198.18.0.54"] {
+            assert!(!is_loopback_host(host), "{host} must not be loopback");
+        }
+    }
+
+    #[test]
     fn blocked_and_bad_targets_never_reach_the_dialer() {
         for (target, expected) in [
             ("api.anthropic.com:443", ConnectTargetError::Blocked),
             ("example.com", ConnectTargetError::BadTarget),
         ] {
             let mut dialed = false;
-            let result: Result<(), _> = open_target_with(target, |_host, _port| {
+            let result: Result<(), _> = open_target_with(target, false, |_host, _port| {
                 dialed = true;
                 Ok(())
             });
             assert_eq!(result.unwrap_err(), expected);
             assert!(!dialed, "{target} unexpectedly reached the dialer");
         }
+    }
+
+    #[test]
+    fn loopback_only_rejects_before_dns_or_dial() {
+        let mut dialed = false;
+        let denied: Result<(), _> = open_target_with("example.test:443", true, |_host, _port| {
+            dialed = true;
+            Ok(())
+        });
+        assert_eq!(denied.unwrap_err(), ConnectTargetError::Blocked);
+        assert!(!dialed);
+
+        let allowed = open_target_with("127.0.0.1:443", true, |host, port| {
+            assert_eq!(host, "127.0.0.1");
+            assert_eq!(port, 443);
+            Ok(())
+        });
+        assert_eq!(allowed, Ok(()));
     }
 
     #[test]
@@ -248,5 +470,51 @@ mod tests {
             |_addr, _| Ok(()),
         );
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AddrNotAvailable);
+    }
+
+    #[test]
+    fn relay_direction_stops_at_the_absolute_session_deadline() {
+        let mut reader = Cursor::new(b"x");
+        let mut writer = Vec::new();
+        let cancelled = AtomicBool::new(false);
+        let error = relay_io_with_policy(
+            &mut reader,
+            &mut writer,
+            Instant::now(),
+            1,
+            &cancelled,
+            |_, _, _| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn relay_direction_enforces_its_byte_budget() {
+        let mut reader = Cursor::new(b"too large");
+        let mut writer = Vec::new();
+        let error = relay_io_with_policy(
+            &mut reader,
+            &mut writer,
+            Instant::now() + Duration::from_secs(1),
+            3,
+            &AtomicBool::new(false),
+            |_, _, _| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+    }
+
+    #[test]
+    fn resolver_threads_have_a_fixed_nonblocking_budget() {
+        let budget = ResolverBudget::new(2);
+        let first = budget.try_acquire().unwrap();
+        let second = budget.try_acquire().unwrap();
+        assert!(budget.try_acquire().is_none());
+        drop(first);
+        let replacement = budget.try_acquire().unwrap();
+        drop(second);
+        drop(replacement);
+        assert_eq!(budget.active.load(std::sync::atomic::Ordering::Acquire), 0);
     }
 }

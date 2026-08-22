@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "private-server": {
+      "command": "/inspection-secret-sentinel/bin/server",
+      "args": ["--token=inspection-secret-sentinel"],
+      "env": {
+        "SECRET_ENV": "inspection-secret-sentinel"
+      },
+      "headers": {
+        "Authorization": "inspection-secret-sentinel"
+      },
+      "url": "https://inspection-secret-sentinel.invalid/path?token=inspection-secret-sentinel"
+    }
+  }
+}

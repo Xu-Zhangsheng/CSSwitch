@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-const source = readFileSync(new URL("../desktop/src/main.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../desktop/src/preview-adapter.js", import.meta.url), "utf8");
 const mockInvokeSource = source
-  .split("function mockInvoke(cmd, args) {", 2)[1]
-  .split("\nconst $ =", 1)[0];
+  .split("export function mockInvoke(cmd, args) {", 2)[1]
+  .split("\nexport function getMockCodexOperation", 1)[0];
 
 function makeMock() {
   const context = {
@@ -53,6 +53,14 @@ test("preview pin preserves applied binding until one-click succeeds", async () 
   assert.equal(context.mockStore.selection_pending, true);
   assert.equal(pin.applied_profile_id, "a");
   assert.equal(pin.apply_state, "pending");
+  assert.equal(pin.disposition, "committed");
+  assert.equal(pin.config_state, "committed");
+
+  const repeated = await context.mockInvoke("set_active_profile", { id: "b" });
+  assert.equal(repeated.disposition, "no_change");
+  assert.equal(repeated.config_state, "committed");
+  assert.equal(repeated.committed, true);
+  assert.equal(repeated.apply_state, "pending");
 
   await context.mockInvoke("one_click_login", {});
   assert.equal(context.mockStore.applied_profile_id, "b");
@@ -96,4 +104,10 @@ test("preview selected edits and preset sync become pending without changing app
   await context.mockInvoke("apply_profile_preset_sync", { id: "a" });
   assert.equal(context.mockStore.applied_profile_id, "a");
   assert.equal(context.mockStore.selection_pending, true);
+
+  const commonNotice = "兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。";
+  const geminiNotice = "兼容范围：仅按官方 OpenAI compatibility 接入；文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。";
+  assert.equal(source.includes("0.8.1 limited"), false);
+  assert.equal(source.split(commonNotice).length - 1, 3);
+  assert.equal(source.split(geminiNotice).length - 1, 1);
 });

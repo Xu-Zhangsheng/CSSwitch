@@ -17,6 +17,7 @@ const EXPIRING_WINDOW_SECONDS: i64 = 5 * 60;
 const MAX_NDJSON_LINE_BYTES: usize = 8 * 1024;
 const MAX_NDJSON_TOTAL_BYTES: usize = 64 * 1024;
 const OPERATION_ID_ENV: &str = "CSSWITCH_CODEX_AUTH_OPERATION_ID";
+const START_DIGEST_ENV: &str = "CSSWITCH_CODEX_AUTH_START_DIGEST";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliRun {
@@ -309,6 +310,8 @@ struct StreamingEvent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     disposition: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    authorization_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<StatusView<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<StreamingError<'a>>,
@@ -337,11 +340,34 @@ struct CancelInput {
     command: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartInput {
+    schema_version: u32,
+    operation_id: String,
+    command: String,
+    authorization_digest: String,
+}
+
 fn valid_cancel_input(line: &[u8], operation_id: &str) -> bool {
     serde_json::from_slice::<CancelInput>(line).is_ok_and(|cancel| {
         cancel.schema_version == CLI_SCHEMA_VERSION
             && cancel.operation_id == operation_id
             && cancel.command == "cancel"
+    })
+}
+
+fn valid_start_input(line: &[u8], operation_id: &str, expected_digest: &str) -> bool {
+    serde_json::from_slice::<StartInput>(line).is_ok_and(|start| {
+        start.schema_version == CLI_SCHEMA_VERSION
+            && start.operation_id == operation_id
+            && start.command == "start"
+            && start.authorization_digest == expected_digest
+            && start.authorization_digest.len() == 64
+            && start
+                .authorization_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     })
 }
 
@@ -351,7 +377,7 @@ struct NdjsonWriter {
 }
 
 struct NdjsonWriterInner {
-    output: std::io::Stdout,
+    output: Box<dyn Write + Send>,
     total: usize,
     failed: bool,
 }
@@ -360,7 +386,18 @@ impl NdjsonWriter {
     fn stdout() -> Self {
         Self {
             inner: Arc::new(Mutex::new(NdjsonWriterInner {
-                output: std::io::stdout(),
+                output: Box::new(std::io::stdout()),
+                total: 0,
+                failed: false,
+            })),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_output(output: Box<dyn Write + Send>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NdjsonWriterInner {
+                output,
                 total: 0,
                 failed: false,
             })),
@@ -388,13 +425,26 @@ impl NdjsonWriter {
 }
 
 pub fn run_streaming_cli(args: &[String]) -> Option<i32> {
-    match args {
-        [command] if command == "login-browser" => {}
+    let logout = match args {
+        [command] if command == "login-browser" => false,
+        [command] if command == "logout" && std::env::var_os(OPERATION_ID_ENV).is_some() => true,
+        [command] if command == "logout" => return None,
         [command, ..] if command == "login-device" || command == "login-browser" => return Some(2),
         _ => return None,
-    }
+    };
     let operation_id = match std::env::var(OPERATION_ID_ENV) {
         Ok(value) if value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            value
+        }
+        _ => return Some(2),
+    };
+    let expected_digest = match std::env::var(START_DIGEST_ENV) {
+        Ok(value)
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+        {
             value
         }
         _ => return Some(2),
@@ -411,8 +461,72 @@ pub fn run_streaming_cli(args: &[String]) -> Option<i32> {
             Err(_) => return Some(6),
         };
         let writer = NdjsonWriter::stdout();
-        let control = LoginControl::default();
-        spawn_cancel_reader(operation_id.clone(), control.clone(), writer.clone());
+        let control = LoginControl::awaiting_start();
+        spawn_control_reader(
+            operation_id.clone(),
+            expected_digest,
+            control.clone(),
+            writer.clone(),
+        );
+        if logout {
+            if !control.wait_for_start_blocking() {
+                let terminal = StreamingEvent {
+                    schema_version: CLI_SCHEMA_VERSION,
+                    operation_id: &operation_id,
+                    kind: "terminal",
+                    state: Some("cancelled"),
+                    disposition: None,
+                    authorization_digest: None,
+                    status: None,
+                    error: Some(StreamingError {
+                        code: "auth_cancelled",
+                        stage: "cancelled",
+                        retryable: true,
+                        upstream_status: None,
+                        response_kind: None,
+                        challenge_detected: None,
+                        transport_kind: None,
+                    }),
+                };
+                let _ = writer.emit(&terminal);
+                return Some(exit_code(OAuthErrorCode::AuthCancelled));
+            }
+            let logout_local_only = std::env::var("CSSWITCH_CODEX_LOGOUT_SKIP_REVOKE").as_deref()
+                == Ok("proxy_config_invalid");
+            let result = if logout_local_only {
+                run_production_logout_local(state_root)
+            } else {
+                run_production_logout(state_root)
+            };
+            let (state, status, error, code) = match &result {
+                Ok(status) => (
+                    "succeeded",
+                    Some(status_view(now_seconds(), status)),
+                    None,
+                    0,
+                ),
+                Err(error) => (
+                    "failed",
+                    None,
+                    Some(streaming_error(error)),
+                    exit_code(error.code),
+                ),
+            };
+            let terminal = StreamingEvent {
+                schema_version: CLI_SCHEMA_VERSION,
+                operation_id: &operation_id,
+                kind: "terminal",
+                state: Some(state),
+                disposition: None,
+                authorization_digest: None,
+                status,
+                error,
+            };
+            if writer.emit(&terminal).is_err() {
+                return Some(8);
+            }
+            return Some(code);
+        }
         let progress_writer = writer.clone();
         let progress_operation_id = operation_id.clone();
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -464,6 +578,7 @@ pub fn run_streaming_cli(args: &[String]) -> Option<i32> {
             kind: "terminal",
             state: Some(state),
             disposition: None,
+            authorization_digest: None,
             status,
             error,
         };
@@ -481,6 +596,7 @@ fn progress_event<'a>(operation_id: &'a str, state: &'a str) -> StreamingEvent<'
         kind: "progress",
         state: Some(state),
         disposition: None,
+        authorization_digest: None,
         status: None,
         error: None,
     }
@@ -530,32 +646,85 @@ fn now_seconds() -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-fn spawn_cancel_reader(operation_id: String, control: LoginControl, writer: NdjsonWriter) {
+fn spawn_control_reader(
+    operation_id: String,
+    expected_digest: String,
+    control: LoginControl,
+    writer: NdjsonWriter,
+) {
     std::thread::spawn(move || {
         let mut input =
             std::io::BufReader::new(std::io::stdin()).take((MAX_NDJSON_LINE_BYTES + 1) as u64);
-        let mut line = Vec::new();
-        if input.read_until(b'\n', &mut line).is_err()
-            || line.len() > MAX_NDJSON_LINE_BYTES
-            || !line.ends_with(b"\n")
-        {
+        let mut authorized = false;
+        loop {
+            let mut line = Vec::new();
+            if input.read_until(b'\n', &mut line).is_err()
+                || line.len() > MAX_NDJSON_LINE_BYTES
+                || !line.ends_with(b"\n")
+            {
+                control.cancel();
+                return;
+            }
+            if valid_cancel_input(&line, &operation_id) {
+                let disposition = control.cancel();
+                let event = StreamingEvent {
+                    schema_version: CLI_SCHEMA_VERSION,
+                    operation_id: &operation_id,
+                    kind: "cancel_ack",
+                    state: None,
+                    disposition: Some(disposition.as_str()),
+                    authorization_digest: None,
+                    status: None,
+                    error: None,
+                };
+                let _ = writer.emit(&event);
+                if !authorized {
+                    return;
+                }
+                continue;
+            }
+            if !authorized && valid_start_input(&line, &operation_id, &expected_digest) {
+                if !acknowledge_and_authorize_start(
+                    &writer,
+                    &control,
+                    &operation_id,
+                    &expected_digest,
+                ) {
+                    return;
+                }
+                authorized = true;
+                continue;
+            }
+            control.cancel();
             return;
         }
-        if !valid_cancel_input(&line, &operation_id) {
-            return;
-        }
-        let disposition = control.cancel();
-        let event = StreamingEvent {
-            schema_version: CLI_SCHEMA_VERSION,
-            operation_id: &operation_id,
-            kind: "cancel_ack",
-            state: None,
-            disposition: Some(disposition.as_str()),
-            status: None,
-            error: None,
-        };
-        let _ = writer.emit(&event);
     });
+}
+
+fn acknowledge_and_authorize_start(
+    writer: &NdjsonWriter,
+    control: &LoginControl,
+    operation_id: &str,
+    expected_digest: &str,
+) -> bool {
+    let event = StreamingEvent {
+        schema_version: CLI_SCHEMA_VERSION,
+        operation_id,
+        kind: "start_ack",
+        state: None,
+        disposition: None,
+        authorization_digest: Some(expected_digest),
+        status: None,
+        error: None,
+    };
+    if writer.emit(&event).is_err() {
+        control.cancel();
+        return false;
+    }
+    // emit() includes flush().  The durable controller treats that flushed
+    // start_ack as the linearization point, so network/auth work remains
+    // inert until the exact ACK is visible to the parent process.
+    control.authorize_start()
 }
 
 fn exit_code(code: OAuthErrorCode) -> i32 {
@@ -620,6 +789,51 @@ mod tests {
                 .as_bytes(),
             &operation_id,
         ));
+
+        #[derive(Clone)]
+        struct AckObserver {
+            control: LoginControl,
+            bytes: Arc<Mutex<Vec<u8>>>,
+            observed_inert: Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl Write for AckObserver {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.observed_inert.store(
+                    self.control.is_awaiting_start(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                self.bytes.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                assert!(self.control.is_awaiting_start());
+                Ok(())
+            }
+        }
+        let control = LoginControl::awaiting_start();
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let observed_inert = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = NdjsonWriter::from_output(Box::new(AckObserver {
+            control: control.clone(),
+            bytes: bytes.clone(),
+            observed_inert: observed_inert.clone(),
+        }));
+        let digest = "cd".repeat(32);
+        assert!(acknowledge_and_authorize_start(
+            &writer,
+            &control,
+            &operation_id,
+            &digest,
+        ));
+        assert!(observed_inert.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            !control.authorize_start(),
+            "authorization must happen exactly once"
+        );
+        let ack: Value = serde_json::from_slice(&bytes.lock().unwrap()).unwrap();
+        assert_eq!(ack["kind"], "start_ack");
+        assert_eq!(ack["operation_id"], operation_id);
+        assert_eq!(ack["authorization_digest"], digest);
     }
 
     struct FakeCommands {

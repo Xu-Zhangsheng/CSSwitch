@@ -1,65 +1,144 @@
-# 当前已知问题与证据缺口
+# 当前重构路线与证据缺口
 
-状态：当前；按 v0.8.4 release source 与 2026-07-30 文档治理基线整理
+状态：当前；唯一工程路线；验收层级和执行合同以[生产链路验收](../../docs/operations/real-machine-acceptance.md)为准
 
-最后复核：2026-07-30（Asia/Shanghai）
+最后复核：2026-08-16（Asia/Taipei）
 
-失效条件：对应 change/bug record、Science 版本、release source、artifact 或 installed/live 证据改变时，受影响条目立即失效并须按当前版本重审。
+当前 accepted source candidate：`d786a2d833dfd5f95b02d15f84f122a8b9fd4225`
 
-已解决历史放入 CHANGELOG 或 dated evidence，不在这里重复。
+失效条件：production owner / caller、candidate source、artifact identity、Science / Gateway runtime、Provider capability、质量元数据、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
 
-## 下一轮重构的 P0 前置
+本页是唯一当前路线，只保存“现在到哪、还缺什么、下一步是什么”。稳定机制放在 `docs/`，
+exact SHA / run / artifact / 环境的历史证据放在日期化 audit/evidence；旧阶段编号不能提供当前
+NEXT、实施授权或验收结论。
 
-- 当前 Rust → shell → Science 启动链会继承 parent process 的 ambient
-  environment。隔离 HOME/data-dir 因此还不等于环境变量隔离。
-- 在机械拆分 `sandbox_session` 或 Gateway `server.rs` 前，必须先建立两级
-  allowlist：Runtime 只收到运行必需变量，provider credential 只进入 Gateway，
-  Skill/SSH/Codex bridge 变量逐项 opt-in。
-- 验收至少包含未知 sentinel 不进入 child、provider secret 不进入 Science、
-  bridge-disabled 时变量缺席、必要 proxy/locale/runtime 变量仍可用。该缺口未闭合
-  前不得把“第三方沙箱隔离”表述为完整凭证边界。
+## 一句话判断
 
-## 第三方模型与 Science 原生能力
+P2 non-one-click mutation receipts 已持久化闭合：`d786a2d833dfd5f95b02d15f84f122a8b9fd4225`
+的 metadata ChangeRecord coverage 与 impact-release 均为 `PASS`，其 exact canonical source gate、
+fresh completion review 和 immutable source-candidate record 均已验收。P3 未执行。此结论只覆盖 source；
+不能升级为 artifact、runtime、Provider、Science、SSH、账号、签名或公开 Release 完成。
 
-- CSSwitch 必须管理 Runtime 包络、Model Gateway、必要 network policy 和诊断恢复；
-  Project/session/artifact/permission/memory/kernel/Agent/Plugin 等语义仍由 Science
-  原生拥有。当前 ownership 与 stage 链见
-  [能力地图](../../docs/features/product-science-capability-map.md)。
-- 第三方模型支持不能由“文本聊天成功”代替。stream、tools/`tool_choice`、
-  reasoning、structured output、vision、stop/error semantics 需要按 provider 与
-  operation 分层验证；不支持时必须可定位降级，不能静默改写语义。
-- 最终 v0.8.4 artifact 没有建立所有真实 OpenCode Go、Grok、Gemini、Kimi、
-  DeepSeek、custom relay 或 Codex 账号/模型的 live PASS。
-- Web Search、hosted MCP/Connectors、Reviewer entitlement、官方 catalog/usage
-  依赖 Anthropic 账号与服务；第三方 Gateway 不模拟这些官方 entitlement。
-- 动态 model catalog 在一次修复线观测中仍约耗时 12.756 秒。90 秒级 snapshot
-  回归已修，但首次可用延迟仍是独立 UX 问题。
+## 已完成的结构
 
-## Runtime、网络与窄桥
+- Desktop、Gateway、Codex network 与 Skill package 已形成独立 Cargo 边界；Desktop build 会精确
+  staging Gateway sidecar，Gateway 的普通服务、Codex auth、Skill MCP 与 Science control 入口已分开。
+- `AppState`、`Lifecycle`、`Config`、typed receipt / journal / manifest 已形成当前 runtime ownership
+  骨架；Gateway uncertain-stop、四类 mutation domain、Tauri production 注册面和 exit hook 都有
+  明确 owner。
+- 未注册、未编译的旧 Skill Manager 和旧 profile-switch writer 已删除；one-click durable journal
+  已移动到 private `one_click/transaction.rs`。
+- cooperating authority writer 与 managed-launch writer 已进入共享 authority fence；durable
+  compensation 已覆盖 per-target replay、authority restore、Gateway cleanup、prior Science restart
+  和 snapshot cleanup。
+- `ScienceHostAdapter` 已类型化 launch encoding、health/listener proof、managed receipt 与 stop surface。
+- Desktop post-start `configure-third-party` caller 已改用 same-crate bounded primitive，具备 caller 起算的
+  absolute deadline、双流 output cap、private process group、异常 cleanup/reap 与 typed outcomes。
+- 七类 non-one-click destructive operation 已统一进入 credential-free durable receipt/fence、per-effect
+  attempt WAL、exact Config CAS/tombstone 与 boot fail-closed；one-click/P2-A/P2-B admission 和 Codex auth
+  sidecar exact identity/terminal consumer 已闭合。
+- Skill 扩展面已完成 Phase 2 inspect-only、in-memory package adapter；它不等于 plan、apply、安装或
+  runtime 可达。
 
-- `HTTPS_PROXY` / `NO_PROXY` 与 Gateway raw `CONNECT` 属于 socket transport。
-  connector、文献、云和 updater 等能力即使借道 CONNECT，产品语义仍由
-  Science/账号/外部服务拥有；不能把连接成功写成能力 PASS。
-- 第三方 Science 使用 `--no-auto-update`。官方更新应先在官方 Science 路径完成，
-  CSSwitch 再停止并重新启动受管链，采用通过 fixed-path/identity 检查的候选。
-- 2026-07-30 的 `B-RUNTIME-01` 因没有取得允许的 Science 0.1.25 executable
-  identity 而保持 `INCONCLUSIVE`；start/open/reopen/status/stop/restart 均
-  `NOT-RUN`。这不是产品失败，也不能由历史 release evidence 替代。
-- 外部 Skill install/attach、Science load/trigger、领域执行和重启持久化是不同
-  结论。CSSwitch 只拥有窄安装/投影桥，不拥有 Skill runtime 或通用 MCP 管理面。
-- 系统 SSH 默认关闭；opt-in 后 CSSwitch 只负责 preflight/stub/sidecar 边界。
-  parser、OpenSSH invocation 与真实 server connectivity 必须分开；当前没有特定
-  真实 SSH server 的 current live PASS。
-- Codex 仍是默认关闭的实验窄桥。上游账号权限、动态目录与 Responses 协议会变；
-  不支持设备码、多账号、代理认证、PAC、自定义 CA、系统代理自动发现或 TUN 检测。
+## 部分完成，不能升级表述
 
-## 分发与证据
+- `runtime/proxy_lifecycle.rs`、`runtime/science.rs` 和 authority snapshot 仍大量使用 `include!`；
+  这是物理分文件，不是完整语义模块封装。
+- one-click façade仍协调 prior stop、authority、Gateway、Science phase、route 与 finalize；
+  `AuthorityTransaction` 并未拥有全部 ordering / journal / compensation policy。
+- Desktop bounded Science control runner、Skill package 的 `claude-science url` runner、Gateway
+  Science HTTP control 仍是三套职责不同的控制面；本 P1 只闭合 Desktop post-start caller，没有为
+  “统一”跨 crate 重构，也没有改变 Gateway HTTP policy 或 skill-package 合同。
+- Desktop 与 Gateway 共同读取同一 provider contract JSON，但仍各自定义类型和验证逻辑；共享
+  digest 能防字节漂移，不能防解释逻辑漂移。
+- 大文件不是单独 blocker。只有能形成新的类型 owner、visibility boundary 或 failure contract 时才拆；
+  不按行数机械切分 `commands/runtime/tests.rs`、`config.rs` 或 protocol parser。
 
-- v0.8.4 公开附件为经过完整性验证的 ad-hoc seal；没有 Developer ID、
-  notarization、stapled ticket 或 Gatekeeper acceptance。
-- trusted `GATE-SOURCE` PASS 只证明 exact source/unit；文档治理定向测试也不能
-  外推 artifact、installed/live、provider、signing 或 public release。
-- 真机矩阵只是应执行场景，不表示最终 DMG 已逐项全部执行。每次验收必须绑定
-  exact artifact/environment，并把 PASS、失败、阻断、未执行分开。
-- v0.8.4 已建立的 source、artifact、installed identity、signing 与 public 层见
-  [release evidence](../../docs/evidence/releases/v0.8.4.md)；未列层不得补写为 PASS。
+## 当前证据矩阵
+
+| 层 | 当前状态 | 解释 |
+|---|---|---|
+| Accepted exact source candidate | `SOURCE-GREEN` | `d786a2d833dfd5f95b02d15f84f122a8b9fd4225`；metadata ChangeRecord coverage 与 impact-release 均为 `PASS`；immutable record 为 `quality/source-candidates/d786a2d833dfd5f95b02d15f84f122a8b9fd4225.json`，SHA-256 `5aa204b54c594e2410a7eeee98daf4c278907a83a77e484886dafa603c0b9b95` |
+| Canonical source gate | `PASS` | retained 0700 root `/private/tmp/csg.kTHgJq`；run `7d5319a6343e47741a316d9c883e80e8`；seal `evidence/runs/7d5319a6343e47741a316d9c883e80e8/completion-seal.json` 的 SHA-256 为 `25e170ce5602563ba0ba5e35978de9b5ff2cc2f4f388b8ab28ffc8da209ab148`；runner exit `0`、15/15 suites、15 results + 15 observations |
+| Fresh clean-context completion review | `PASS` | 独立 review 只接受上述 exact candidate；没有把旧 SHA 的 review 继承为当前结论 |
+| Exact artifact | `NOT-RUN` | 本轮未构建 artifact |
+| Temporary / installed runtime | `NOT-RUN` | 本轮未启动临时或已安装 runtime，也未读取、替换或启动已安装 App |
+| Live Provider / Science / SSH / account | `NOT-RUN` | 没有真实 Provider、Science、SSH 或账号请求；真实凭证与 data-dir 未读取 |
+| Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
+| Public release | `NOT-RUN` | 未创建 tag、DMG 或 Release；不得虚构 release readiness |
+
+证据时间线：旧 accepted candidate `d077a1c18892c8ccbfc0b70d049445a799d83fb7` 的 seal 与 review
+没有继承给 P2。已验收 root 是上表明确的 `/private/tmp/csg.kTHgJq`；任何新 implementation SHA、source 修改或
+运行环境变化都不能继承它的 seal。
+
+## P0 source closure 已闭合
+
+- `CHG-SOURCE-CANDIDATE-IMPACT-COVERAGE` 的 current ChangeRecord 覆盖已闭合 11 条既有
+  post-v0.8.4 production path，并与 record 自身精确绑定；这正是本 P0 的范围，未扩展为全仓
+  requirement enforcement、validator、focused test、identity fixture 或 catalog 改动。
+- immutable source-candidate record 已由 fail-closed 工具从 retained g7 生成并读回验证；不得修改、
+  覆写或把它当作可随 Context 一同编辑的文件。
+- 旧 source-candidate 的 `PENDING` / `NOT-RUN`、旧唯一 P0 `NEXT` 和旧 SHA/root/seal 都已退役，
+  不再构成当前 closure 的依据。
+
+## P1 source slice 已闭合
+
+- Desktop/Tauri、Gateway 与 `desktop/skill-package` 的 Science control 职责已先行冻结；production
+  改动只落在 Desktop same-crate runner 与 `skill_install_bridge.rs` caller，没有跨 crate 统一。
+- absolute deadline、bounded stdout/stderr、private process group、timeout/异常 descendant cleanup、
+  direct-child reap/reaper ownership 与 typed failure/timeout/output-limit outcomes 均已闭合。
+- success、spawn failure、nonzero、timeout、双流 oversized output、descendant/no residue、cleanup
+  handoff、invalid JSON 与 incomplete contract 均有 replacement-preserving tests；固定 Gateway argv、
+  environment-only control URL、loopback/JSON/connector/用户错误合同保持不变。
+- 本 slice 没有开始 Skill inspect → plan → confirm → apply，也没有进入 artifact/live/release。
+
+## P2 source slice 已闭合
+
+- set-mode、set-settings、clear/delete applied profile、Codex login/logout 与 Codex network 七类
+  destructive operation 具有 typed plan、credential-free durable receipt/fence、明确 inverse/no-inverse、
+  per-effect Pending→InProgress attempt WAL、exact terminal/clearing tombstone 与 fresh boot replay。
+- ordinary Config writer、P2-A、one-click 和 P2-B 之间的 admission 在真实 effect 前 fail-closed；
+  receipt-only、fence-only、clearing resurrection 与 capture→entry race 均有 zero-effect regression。
+- SSH bridge/stub revoke、applied-profile backup scrub、Gateway rollback、Codex auth sidecar start/cancel/exit
+  均绑定 durable after-image 或 exact process identity；typed terminal consumer 要求 exact mutation ID。
+- 本 slice 没有进入 P3 Skill apply、artifact、temporary/installed runtime、live Provider、Science、SSH、
+  account、signing 或 release。
+
+## 仍开放的工程缺口
+
+### P3｜Skill Phase 3
+
+- 单独设计并实现 inspect → plan → confirm → apply、跨进程 ledger、OPERON attach 与 final-response
+  事务边界。
+- 当前 Phase 2 inspect-only 不得写成产品安装、MCP lifecycle 或 Science attach 已完成。
+
+### P4｜语义收尾
+
+- 对 test-only `runtime/transaction.rs`、operation vocabulary 和 dormant profile preset-sync 明确选择
+  “接通”或“删除”；不能无限期以 `allow(dead_code)` 保存模糊意图。
+- provider contract 适合抽共享 crate 或生成 schema；先定义单一解释 owner，再迁移两套 validator。
+
+### P5｜下游产品证据
+
+只有 source closure 后并分别获得授权，才按 exact source → exact artifact → isolated-live →
+authorized-live 推进；installed、signing/notarization 与 public release 仍是额外独立层。真实 API Key、
+OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本路线获得访问授权。
+
+## 唯一立即 NEXT
+
+本轮停在已闭合的 P2 source slice；P3 未执行。若后续另获授权，唯一下一工程 slice 才是
+P3 Skill Phase 3 的只读 scope freeze 与最小候选，不得由本轮自动进入实现，也不得
+自动启动 artifact、temporary/installed runtime、live Provider、Science、SSH、账号、signing、
+notarization、Gatekeeper 或 public release；这些层当前全部仍为 `NOT-RUN`。
+
+## 文档退役状态
+
+- 审计基线的 167 份 tracked Markdown 中，没有一份满足“整份删除”的 lifecycle 条件。
+- 11 个 tracked 兼容指针仍有有效调用者或 release 条件，继续保留；它们不是重复权威正文。
+- 两份 ignored 临时 handoff 已因 HEAD/checkpoint 变化且任务落地而满足自身失效条件，已在本轮
+  退役；Git 不跟踪它们，删除后不能从本仓库历史恢复。
+- 旧 R3–R11、R4/R5、S7、Post-D0/Post-Q0 只是历史 audit/evidence 标签；后来文档中的 Phase 1/2/5
+  也只表示其绑定 slice，不是当前 NEXT。
+
+完整审计方法、文件分类、Science/CSSwitch 链路和发现见
+[2026-08-14 全仓审计](../../docs/audits/2026-08-14-next-repository-docs-architecture-review.md)。

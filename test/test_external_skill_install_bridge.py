@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import pathlib
@@ -12,6 +13,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_GATEWAY = ROOT / "desktop/gateway/target/debug/csswitch-gateway"
 
 
+def sandbox_session_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = sorted(module_dir.rglob("*.rs"))
+    return "\n".join(path.read_text() for path in sources)
+
+
+def sandbox_session_one_click_source():
+    module_dir = ROOT / "desktop/src-tauri/src/runtime/sandbox_session"
+    sources = [module_dir / "one_click.rs"]
+    sources.extend(sorted((module_dir / "one_click").rglob("*.rs")))
+    return "\n".join(path.read_text() for path in sources)
+
+
 def gateway_bin():
     override = os.environ.get("CSSWITCH_GATEWAY_BIN")
     return pathlib.Path(override) if override else DEFAULT_GATEWAY
@@ -19,6 +33,29 @@ def gateway_bin():
 
 class ExternalSkillInstallBridge(unittest.TestCase):
     BRIDGE_TOKEN = "0123456789abcdef" * 4
+
+    def authority_fence_env(self, root):
+        authority_dir = root / "authority"
+        authority_dir.mkdir(mode=0o700)
+        authority_dir.chmod(0o700)
+        lock = authority_dir / ".runtime-compensation.auth.lock"
+        lock.write_text("", encoding="utf-8")
+        lock.chmod(0o600)
+        directory_stat = authority_dir.stat()
+        lock_stat = lock.stat()
+        fd = os.open(authority_dir, os.O_RDONLY)
+        binding = hashlib.sha256(
+            b"csswitch-skill-authority-fence-v1\0"
+            + self.BRIDGE_TOKEN.encode("ascii")
+        ).hexdigest()
+        return fd, {
+            "CSSWITCH_AUTHORITY_FENCE_FD": str(fd),
+            "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_DEVICE": str(directory_stat.st_dev),
+            "CSSWITCH_AUTHORITY_FENCE_DIRECTORY_INODE": str(directory_stat.st_ino),
+            "CSSWITCH_AUTHORITY_FENCE_LOCK_DEVICE": str(lock_stat.st_dev),
+            "CSSWITCH_AUTHORITY_FENCE_LOCK_INODE": str(lock_stat.st_ino),
+            "CSSWITCH_AUTHORITY_FENCE_NONCE": binding,
+        }
 
     def mcp_env(self):
         handle = tempfile.NamedTemporaryFile(
@@ -76,6 +113,7 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             bridge_dir.mkdir(mode=0o700)
             skills_dir.mkdir(parents=True)
             (data_dir / "active-org.json").write_text('{"org_uuid":"org-test"}\n')
+            authority_fd, authority_env = self.authority_fence_env(root)
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
                 port = probe.getsockname()[1]
@@ -89,9 +127,11 @@ class ExternalSkillInstallBridge(unittest.TestCase):
                     "CSSWITCH_SKILL_BRIDGE_TOKEN": self.BRIDGE_TOKEN,
                 }
             )
+            env.update(authority_env)
             process = subprocess.Popen(
                 [str(binary), "--provider", "deepseek", "--port", str(port)],
                 env=env,
+                pass_fds=(authority_fd,),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -155,6 +195,7 @@ class ExternalSkillInstallBridge(unittest.TestCase):
                     process.wait(timeout=3)
                 if process.stderr is not None:
                     process.stderr.close()
+                os.close(authority_fd)
 
     def test_stdio_mcp_all_mode_keeps_compatibility_and_name_only_needs_url(self):
         binary = gateway_bin()
@@ -317,14 +358,13 @@ class ExternalSkillInstallBridge(unittest.TestCase):
             self.assertEqual(list(bridge_dir.iterdir()), [])
 
     def test_science_startup_registration_is_best_effort_and_prelaunch(self):
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
-        one_click = session.split("fn one_click_login_with_options", 1)[1].split(
-            "\n#[cfg(test)]\nmod transaction_tests", 1
-        )[0]
+        one_click = sandbox_session_one_click_source().split(
+            "fn one_click_login_with_options", 1
+        )[1]
         registration = one_click.index("register_before_science_start(")
-        launch = one_click.index('let launch_child = Command::new("zsh")')
+        launch = one_click.index("ScienceHostAdapter::spawn_launch(")
         self.assertLess(registration, launch)
-        self.assertIn(".spawn();", one_click[launch:])
+        self.assertNotIn('Command::new("zsh")', one_click)
         self.assertIn("RegistrationStatus::Warning(error)", one_click)
         self.assertNotIn("register_before_science_start(&app, &auth_dir)?", one_click)
 
@@ -371,21 +411,29 @@ class ExternalSkillInstallBridge(unittest.TestCase):
         bridge = (
             ROOT / "desktop/src-tauri/src/runtime/skill_install_bridge.rs"
         ).read_text()
-        session = (ROOT / "desktop/src-tauri/src/runtime/sandbox_session.rs").read_text()
-        one_click = session.split("fn one_click_login_with_options", 1)[1].split(
-            "\n#[cfg(test)]\nmod transaction_tests", 1
-        )[0]
+        session = sandbox_session_source()
+        one_click = sandbox_session_one_click_source().split(
+            "fn one_click_login_with_options", 1
+        )[1]
         self.assertIn('ROUTE_SKILL_NAME: &str = "csswitch-external-skill-tools"', gateway)
         self.assertIn('matches!(url.host_str(), Some("127.0.0.1" | "localhost"))', gateway)
         self.assertIn('/api/agents/OPERON/skills', gateway)
         self.assertIn('x-operon-csrf', gateway)
         self.assertIn('CSSWITCH_SCIENCE_CONTROL_URL', bridge)
         self.assertNotIn('.arg(control_url)', bridge)
-        self.assertIn("let control_url = sandbox_url(port, runtime);", session)
+        self.assertIn('run_bounded_control_command(', bridge)
+        self.assertNotIn('.output()', bridge)
+        self.assertIn('.stdin(Stdio::null())', bridge)
+        self.assertIn(
+            "let control_url = ScienceHostAdapter::url(port, runtime);", session
+        )
         self.assertIn(
             "configure_third_party_after_science_start(app, &control_url)", session
         )
-        self.assertIn("let url = sandbox_url(sport, &launch_runtime);", one_click)
+        self.assertIn(
+            "let url = ScienceHostAdapter::url(sport, &launch_runtime);",
+            one_click,
+        )
         self.assertIn("let installer = configure_third_party_best_effort(", one_click)
 
     def test_skill_installer_targets_active_org_and_never_version_runtime(self):

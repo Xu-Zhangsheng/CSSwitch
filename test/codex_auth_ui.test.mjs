@@ -33,7 +33,7 @@ test("keeps normal login, damaged records, and unavailable causes visibly distin
   assert.match(formatCodexAuthCommandError(unavailable), /状态不可用/);
 });
 
-test("rejects unknown fields and illegal reason cause retryability combinations", () => {
+test("rejects unknown fields and illegal reason cause retryability combinations", async () => {
   const invalid = [
     { code: "codex_login_required", reason: "ready", retryable: false },
     { code: "codex_login_required", reason: "state_missing", cause: "keychain_unavailable", retryable: false },
@@ -45,4 +45,86 @@ test("rejects unknown fields and illegal reason cause retryability combinations"
   ];
   for (const value of invalid) assert.throws(() => parseCodexAuthCommandError(value));
   assert.equal(parseCodexAuthCommandError("ordinary error"), null);
+
+  globalThis.window = {
+    __TAURI__: { core: { invoke: async () => null } },
+    location: { search: "" },
+  };
+  const {
+    codexOperationSnapshotTransitionAccepted,
+    parseCodexOperationSnapshot,
+    unwrapCodexAuthEnvelope,
+  } = await import("../desktop/src/codex-controller.js");
+  const durableTerminal = {
+    schema_version: 2,
+    operation_id: "11".repeat(16),
+    sequence: 8,
+    method: "browser",
+    state: "failed",
+    started_at_ms: 100,
+    updated_at_ms: 200,
+    config_mutation_operation_id: "22".repeat(16),
+    error: {
+      code: "config_mutation_attention",
+      stage: "terminal",
+      retryable: false,
+      transport_kind: "durable_receipt",
+    },
+  };
+  const accepted = parseCodexOperationSnapshot(durableTerminal);
+  assert.equal(accepted.error.code, "config_mutation_attention");
+  assert.equal(codexOperationSnapshotTransitionAccepted(null, accepted, false), true);
+  assert.equal(codexOperationSnapshotTransitionAccepted(accepted, accepted, false), false);
+  assert.throws(() => parseCodexOperationSnapshot({
+    ...durableTerminal,
+    error: { ...durableTerminal.error, transport_kind: "unknown" },
+  }));
+  assert.throws(() => parseCodexOperationSnapshot({ ...durableTerminal, error: null }));
+  assert.throws(() => parseCodexOperationSnapshot({
+    ...durableTerminal,
+    state: "succeeded",
+  }));
+  assert.throws(() => codexOperationSnapshotTransitionAccepted(accepted, {
+    ...accepted,
+    sequence: 9,
+    config_mutation_operation_id: "33".repeat(16),
+  }, false));
+
+  const logout = {
+    schema_version: 3,
+    ok: true,
+    command: "logout",
+    config_mutation_operation_id: "44".repeat(16),
+    status: {
+      authenticated: false,
+      reason: "state_uncommitted",
+      account_hash: null,
+      expiry_state: "missing",
+      expires_at: null,
+      auth_epoch: "55".repeat(16),
+      auth_generation: 9,
+    },
+  };
+  assert.equal(unwrapCodexAuthEnvelope(logout, "logout").auth_generation, 9);
+  assert.equal(unwrapCodexAuthEnvelope({
+    ...logout,
+    warning: { code: "revoke_skipped", reason: "proxy_config_invalid" },
+  }, "logout").reason, "state_uncommitted");
+  const invalidLogout = [
+    { ...logout, config_mutation_operation_id: undefined },
+    { ...logout, config_mutation_operation_id: "GG".repeat(16) },
+    { ...logout, status: { ...logout.status, authenticated: true, reason: "ready" } },
+    { ...logout, status: { ...logout.status, reason: "state_missing" } },
+    { ...logout, status: { ...logout.status, account_hash: "aa".repeat(16) } },
+    { ...logout, status: { ...logout.status, expiry_state: "valid" } },
+    { ...logout, status: { ...logout.status, expires_at: 2000000000 } },
+    { ...logout, status: { ...logout.status, auth_epoch: null } },
+    { ...logout, status: { ...logout.status, auth_epoch: "AA".repeat(16) } },
+    { ...logout, status: { ...logout.status, auth_generation: 0 } },
+    { ...logout, warning: { code: "revoke_skipped", reason: "future" } },
+    { ...logout, warning: { code: "revoke_skipped", reason: "proxy_config_invalid", extra: true } },
+  ];
+  for (const value of invalidLogout) {
+    assert.throws(() => unwrapCodexAuthEnvelope(value, "logout"));
+  }
 });

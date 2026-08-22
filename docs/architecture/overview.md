@@ -12,7 +12,7 @@ CSSwitch 是 Claude Science 的 provider 配置转换器、本地 inference Gate
 - 提供默认关闭的 Codex browser-only OAuth、动态模型目录与 Responses bridge；
 - 提供两个窄 bridge：外部 Skill 安装/卸载，以及用户 opt-in 的系统 SSH 配置复用。
 
-Science 仍拥有 project/session/artifact、组织、原生 Skills/connectors/Plugin 上游面、environments/kernels、Reviewer/Specialist、remote compute、updater 与 UI 语义。CSSwitch 不模拟 Anthropic OAuth/catalog，不扩展成通用 Skill/MCP/Plugin 管理器、Science 下载器或远程访问服务。
+Science 仍拥有 project/session/artifact、组织、原生 Skills/connectors/Plugin 上游面、environments/kernels、Reviewer/Specialist、remote compute、updater 与 UI 语义。当前已验证的 CSSwitch 产品范围不模拟 Anthropic OAuth/catalog，不包含通用 Skill/MCP/Plugin 管理器、Science 下载器或远程访问服务。未来受管扩展面的[已接受目标合同](skill-mcp-plugin-control-plane.md)已经冻结支持类型、所有权和生命周期；Phase 2 inspect-only、in-memory package adapter 的 source/tests 已存在，但没有产品 caller，也不建立 plan、apply、artifact 或 runtime 能力。各证据层的当前判定只从[已验证状态](../../.agents/context/verified-state.md)读取，不得把目标合同提前写成当前用户能力。
 
 ## 当前可达性
 
@@ -24,8 +24,8 @@ Science 仍拥有 project/session/artifact、组织、原生 Skills/connectors/P
 Desktop WebView
   -> Tauri command / event
      -> command-specific mutation boundary
-        -> Lifecycle serializer（runtime/profile/mode/doctor reconcile）
-        -> picker 前后 runtime-context recheck + Skill package transaction（本地 Skill 安装）
+        -> Lifecycle serializer（runtime/profile/mode/Skill route repair）
+        -> picker 后短 HostBridge lease + typed host receipt + Skill package transaction（本地 Skill 安装）
         -> Config + AppState / package-private state
         -> Rust Gateway
            -> provider / Codex upstream
@@ -51,7 +51,7 @@ Science remote compute
 
 ### 状态与事务
 
-`AppState` 拥有进程内 Gateway child、Gateway/Science identity、boot refs、Science version observation cache 和 pending authority cleanup 的重试镜像；持久 cleanup manifest 才是跨重启权威。当前产品启动脚本退出后不在 `AppState.sandbox` 保存 Science daemon child，daemon ownership 依赖 runtime identity、managed receipt 与 live listener。`Config` 持久化 profile、端口、mode、binding 与 journal。`Lifecycle` 串行化 runtime/profile/mode 等复合变更和 doctor route reconcile，但生产的本地 Skill 安装不取得该锁，而是依靠文件 picker 前后两次 runtime-context 复核、Skill package commit 以及 Science attach/readback 的局部边界；安装/attach 完成后没有第三次 context 复核。authority snapshot、managed receipt、Skill/SSH/Codex 各有局部状态。锁序、启动/切换/恢复/停止和补偿见[运行时状态与事务](runtime-state-transactions.md)。
+`AppState` 拥有进程内 Gateway child、Gateway/Science identity、boot refs、Science version observation cache 和 pending authority cleanup 的重试镜像；持久 cleanup manifest 才是跨重启权威。当前产品启动脚本退出后不在 `AppState.sandbox` 保存 Science daemon child，daemon ownership 依赖 runtime identity、managed receipt 与 live listener。`Config` 持久化 profile、端口、mode、binding 与 journal。`Lifecycle` 串行化 runtime/profile/mode 等复合变更和显式 Skill route repair；只读 Doctor 不进入 mutation serializer。本地 Skill picker 保持在 lease 外，选择完成后取得短 `HostBridge` lease，在同一 lease-bound typed host receipt 下完成最终 context 复核、package commit 与 Science attach/readback。authority snapshot、managed receipt、Skill/SSH/Codex 各有局部状态。锁序、启动/切换/恢复/停止和补偿见[运行时状态与事务](runtime-state-transactions.md)。
 
 ### Rust Gateway
 
@@ -85,7 +85,7 @@ project/session/artifact、Skills、MCP/connectors、Plugins、environments、Re
 - Science UI port 与 sandbox port 分开校验，`8765` 是用户真实 Science 保留端口。
 - 一次性 Science URL、nonce、CSRF 和 path secret 不进入普通 status/log。
 - 第三方模式不读取或复制真实 Claude 登录数据。
-- Gateway raw `CONNECT` 在 path-secret 认证前分派；listener 虽只在 loopback，任何本机进程仍可使用。它只按 Anthropic/Claude hostname denylist 拒绝目标；DNS resolver 本身没有 deadline，DNS 返回后的地址连接共享剩余 10 秒预算，建立后的双向转发没有 session deadline、idle timeout、byte cap 或并发连接/session-count 上限。这条通用 TCP transport 不证明 Remote MCP。
+- Gateway raw `CONNECT` 在 path-secret 认证前分派；listener 虽只在 loopback，任何本机进程仍可使用。它只按 Anthropic/Claude hostname denylist 拒绝目标。DNS 与 dial 共用 10 秒绝对期限，另以 8 条 resolver 额度界定不可取消的系统 resolver 调用；建立后的 tunnel 受全局 128 连接额度、30 分钟 session deadline、60 秒读写 idle timeout 与每方向 256 MiB byte budget 约束，任一方向超限或失败都会共享取消并回收两端，正常 EOF 则 half-close 对端写入。这条通用 TCP transport 仍不证明 Remote MCP；完整 owner 与失败边界见 [Gateway 路由](gateway-provider-routing.md)。
 - Science app proxy、sandbox network、package mirror、Codex route 与 provider egress 是不同网络面。
 - SSH opt-in 是行为授权；不复制 `.ssh`、不启动 `sshd`、不开放监听。
 

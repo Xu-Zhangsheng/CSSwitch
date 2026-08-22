@@ -96,7 +96,7 @@
 
 ## Provider 与模型
 
-- **内置 Provider：** DeepSeek、通义千问、智谱 GLM、小米 MiMo、硅基流动、Kimi、MiniMax、OpenRouter。
+- **内置 Provider：** DeepSeek、通义千问、智谱 GLM、小米 MiMo、硅基流动、Kimi、MiniMax、OpenRouter、OpenCode Go（OpenAI Chat / Anthropic Messages）、Grok（xAI）和 Gemini（OpenAI 兼容）。
 - **自定义端点：** Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses 兼容 API；模型名称可以直接填写，不依赖自动发现。
 - **模型选择：** 普通配置可只填一个模型，也可以分别设置质量、均衡、快速和 Fable。Science 显示真实模型名，不使用 `default` 占位名称。
 - **Codex：** 使用 CSSwitch 独立浏览器登录和动态账号模型目录；不读取或修改原生 `~/.codex` 登录。
@@ -148,7 +148,7 @@ npm run tauri dev
 完整检查：
 
 ```bash
-GATE_ROOT="$(mktemp -d /private/tmp/csswitch-source-gate.XXXXXX)"
+GATE_ROOT="$(mktemp -d /private/tmp/csg.XXXXXX)"
 chmod 700 "$GATE_ROOT"
 bash test/run_all.sh --output-root "$GATE_ROOT"
 ```

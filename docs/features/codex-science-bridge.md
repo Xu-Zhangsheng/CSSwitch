@@ -1,12 +1,11 @@
 # Codex → Claude Science 实验桥接合同
 
-状态：**当前 v0.8.4 Feature Contract；Codex 仍是默认关闭的实验能力。**
-browser-only 登录、OAuth 后自动 profile、动态模型目录兼容、双 App 数据根隔离与
-无签名前置的私有文件认证已进入发布源码。2026-07-17 的 no-signing Acceptance
-候选曾完成浏览器 OAuth、动态目录、Science 模型选择和文本推理；当前 v0.8.4
-公开 DMG 已有分层发布证据，但没有从该 DMG 安装后重跑真实 Codex OAuth / 推理。
-当前发布边界见 [v0.8.4 发布证据](../evidence/releases/v0.8.4.md)，历史 live 候选见
-[Acceptance evidence](../evidence/investigations/2026-07-17-codex-browser-only-acceptance.md)。
+状态：当前 v0.8.4 Feature Contract；Codex 仍是默认关闭的实验能力。
+
+适用范围：browser-only 登录、CSSwitch 私有认证、动态模型目录、Responses bridge 与隔离数据边界。
+
+当前发布层见 [v0.8.4 发布证据](../evidence/releases/v0.8.4.md)；2026-07-17 live 候选见
+[Acceptance evidence](../evidence/investigations/2026-07-17-codex-browser-only-acceptance.md)。历史候选不能替代当前公开 DMG 的 installed/live OAuth 或推理证据。
 
 本文维护 CSSwitch 将用户自己的 Codex 登录接入隔离 Claude Science 的 v1 稳定
 边界。它是非官方、实验性且默认关闭的本地能力，不代表 OpenAI 或 Anthropic 的
@@ -252,4 +251,4 @@ login/logout 前 Tauri 不能停止其他 provider 的 Science 或 gateway。若
 
 已发布功能不在当前 Feature Contract 保留开发期分阶段 Plan；历史阶段与 Gate 从 Git 历史和日期化 evidence 追溯。
 
-当前隔离步骤、证据层与 RM-35～RM-45 矩阵只在[真机验收](../operations/real-machine-acceptance.md#5-当前验收矩阵)维护。本文不复制该运维正文，也不把矩阵条目写成已执行或 PASS。
+当前隔离步骤、证据层与 Codex / provider / Science RM 场景只在[生产链路验收](../operations/real-machine-acceptance.md#7-rm-场景目录非路线)维护。本文不复制该运维正文，也不把矩阵条目写成已执行或 PASS。

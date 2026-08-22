@@ -426,7 +426,7 @@ pub(crate) fn validate_provider_contracts(catalog: &ProviderContractCatalog) -> 
                     "CSSWITCH_RELAY_KEY",
                     &[ModelPolicy::SavedCatalog][..],
                     ModelPolicy::SavedCatalog,
-                    ModelDiscovery::AnthropicModelsOrManual,
+                    ModelDiscovery::OpenaiModelsOrManual,
                     Transport::AnthropicMessages,
                     EndpointPolicy::ProfileRequired,
                     EndpointJoin::AnthropicV1,

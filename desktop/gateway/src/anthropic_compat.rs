@@ -4,6 +4,7 @@ const RULE_PROVIDER_KIMI_RELAY_THINKING_ENABLED: &str = "provider.kimi.relay-thi
 const RULE_TOOL_RELAY_INPUT_SCHEMA_NORMALIZE: &str = "tool.relay.input-schema-normalize";
 const RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER: &str =
     "tool.kimi.web_search.server-tool-filter";
+const RULE_TRANSPORT_KIMI_DOCUMENT_TEXT_NORMALIZE: &str = "transport.kimi.document-text-normalize";
 const RULE_HISTORY_KIMI_FAILED_TAIL_NORMALIZE: &str = "history.kimi.failed-tail-normalize";
 const RULE_TOOL_SILICONFLOW_FORCED_NAMED_TO_ANY: &str = "tool.siliconflow.forced-named-to-any";
 const SILICONFLOW_API_HOSTS: [&str; 2] = ["api.siliconflow.cn", "api.siliconflow.com"];
@@ -26,9 +27,7 @@ pub struct KimiServerToolFilter {
     next_upstream_index: u64,
     next_output_index: u64,
     active_output_block: Option<(u64, u64)>,
-    dropped_server_tools: usize,
-    dropped_empty_thinking: usize,
-    dropped_server_block: Option<u64>,
+    dropped_thinking: usize,
     thinking: Option<BufferedThinkingBlock>,
 }
 
@@ -66,9 +65,6 @@ impl KimiServerToolFilter {
         if self.thinking.is_some() {
             return Err("Kimi thinking block ended before content_block_stop".into());
         }
-        if self.dropped_server_block.is_some() {
-            return Err("Kimi server tool block ended before content_block_stop".into());
-        }
         if self.active_output_block.is_some() {
             return Err("Kimi content block ended before content_block_stop".into());
         }
@@ -81,11 +77,11 @@ impl KimiServerToolFilter {
     }
 
     pub fn dropped(&self) -> usize {
-        self.dropped_server_tools + self.dropped_empty_thinking
+        self.dropped_thinking
     }
 
-    pub fn dropped_empty_thinking(&self) -> usize {
-        self.dropped_empty_thinking
+    pub fn dropped_thinking(&self) -> usize {
+        self.dropped_thinking
     }
 
     fn validate_block_start(&self, idx: u64) -> Result<(), String> {
@@ -139,9 +135,6 @@ impl KimiServerToolFilter {
         if self.thinking.is_some() {
             return self.rewrite_thinking_frame(event, obj, frame.len() + sep.len());
         }
-        if self.dropped_server_block.is_some() {
-            return self.rewrite_dropped_server_frame(event, obj);
-        }
         if self.active_output_block.is_some() {
             return self.rewrite_output_block_frame(event, obj);
         }
@@ -157,14 +150,6 @@ impl KimiServerToolFilter {
                 .and_then(Value::as_object)
                 .and_then(|block| block.get("type"))
                 .and_then(Value::as_str);
-            if matches!(
-                block_type,
-                Some("server_tool_use" | "web_search_tool_result")
-            ) {
-                self.dropped_server_block = Some(idx);
-                self.dropped_server_tools += 1;
-                return Ok(Vec::new());
-            }
             if block_type == Some("thinking") {
                 let block = obj
                     .get("content_block")
@@ -229,6 +214,9 @@ impl KimiServerToolFilter {
         if !matches!(kind.as_str(), "content_block_delta" | "content_block_stop") {
             return Err("Kimi content block ended before content_block_stop".into());
         }
+        if kind == "content_block_delta" && obj.get("delta").and_then(Value::as_object).is_none() {
+            return Err("Kimi content block delta is invalid".into());
+        }
         if let Some(obj_map) = obj.as_object_mut() {
             obj_map.insert("index".to_string(), Value::Number(mapped.into()));
         }
@@ -239,45 +227,6 @@ impl KimiServerToolFilter {
             debug_assert_eq!(allocated, mapped);
         }
         Ok(render_sse(event.as_deref(), &obj))
-    }
-
-    fn rewrite_dropped_server_frame(
-        &mut self,
-        event: Option<String>,
-        obj: Value,
-    ) -> Result<Vec<u8>, String> {
-        let kind = obj
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or("Kimi server tool block event type is missing")?;
-        if kind == "error" {
-            self.dropped_server_block = None;
-            return Ok(render_sse(event.as_deref(), &obj));
-        }
-        if kind == "ping" {
-            return Ok(render_sse(event.as_deref(), &obj));
-        }
-        let index = obj
-            .get("index")
-            .and_then(Value::as_u64)
-            .ok_or("Kimi server tool block index is missing")?;
-        if Some(index) != self.dropped_server_block {
-            return Err("Kimi server tool block index changed".into());
-        }
-        match kind {
-            "content_block_delta" => {
-                if obj.get("delta").and_then(Value::as_object).is_none() {
-                    return Err("Kimi server tool delta is invalid".into());
-                }
-                Ok(Vec::new())
-            }
-            "content_block_stop" => {
-                self.dropped_server_block = None;
-                self.complete_upstream_block()?;
-                Ok(Vec::new())
-            }
-            _ => Err("Kimi server tool block ended before content_block_stop".into()),
-        }
     }
 
     fn rewrite_thinking_frame(
@@ -363,8 +312,8 @@ impl KimiServerToolFilter {
                 self.complete_upstream_block()?;
                 let has_valid_signature =
                     thinking.signature_structurally_valid && !thinking.signature.is_empty();
-                if thinking.thinking_bytes == 0 && !has_valid_signature {
-                    self.dropped_empty_thinking += 1;
+                if !has_valid_signature {
+                    self.dropped_thinking += 1;
                     let mut pings = Vec::new();
                     for (event, frame) in thinking.frames {
                         if frame.get("type").and_then(Value::as_str) == Some("ping") {
@@ -372,9 +321,6 @@ impl KimiServerToolFilter {
                         }
                     }
                     return Ok(pings);
-                }
-                if thinking.thinking_bytes > 0 && !has_valid_signature {
-                    return Err("Kimi nonempty thinking has no valid signature".into());
                 }
                 let mapped = self.allocate_output_index()?;
                 let mut out = Vec::new();
@@ -434,11 +380,8 @@ pub fn filter_kimi_nonstream_response(body: &[u8]) -> Result<Vec<u8>, String> {
         }
         let has_valid_signature =
             !signature.is_empty() && kimi_signature_fragment_is_valid(signature);
-        if thinking.is_empty() && !has_valid_signature {
+        if !has_valid_signature {
             continue;
-        }
-        if !thinking.is_empty() && !has_valid_signature {
-            return Err("Kimi nonempty thinking has no valid signature".into());
         }
         kept.push(block);
     }
@@ -640,6 +583,13 @@ fn is_anthropic_server_tool(tool: &Value) -> bool {
         || tool_type.starts_with("advisor_")
 }
 
+fn is_kimi_server_web_search(tool: &Value) -> bool {
+    tool.get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|tool_type| tool_type.starts_with("web_search_"))
+        && tool.get("name").and_then(Value::as_str) == Some("web_search")
+}
+
 fn normalize_relay_tools(body: &mut Value, rule_ids: &mut Vec<String>) {
     let Some(tools) = body.get("tools") else {
         return;
@@ -694,35 +644,120 @@ fn normalize_relay_tools(body: &mut Value, rule_ids: &mut Vec<String>) {
 }
 
 fn filter_kimi_server_tools(body: &mut Value, target_model: &str, rule_ids: &mut Vec<String>) {
-    normalize_relay_tools(body, rule_ids);
     if !target_model.to_ascii_lowercase().contains("kimi") {
+        normalize_relay_tools(body, rule_ids);
         return;
     }
     let Some(tools) = body.get("tools").and_then(Value::as_array) else {
+        normalize_relay_tools(body, rule_ids);
         return;
     };
-    let filtered: Vec<Value> = tools
-        .iter()
-        .filter(|tool| !is_anthropic_server_tool(tool))
-        .cloned()
-        .collect();
-    if filtered.len() == tools.len() {
-        return;
-    }
-    append_rule_id(rule_ids, RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER);
-    if filtered.is_empty() {
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("tools");
+    let mut changed = false;
+    let mut has_server_web_search = false;
+    let mut filtered = Vec::with_capacity(tools.len());
+    for tool in tools {
+        if is_kimi_server_web_search(tool) {
+            has_server_web_search = true;
+            filtered.push(tool.clone());
+        } else if is_anthropic_server_tool(tool) {
+            changed = true;
+        } else {
+            filtered.push(tool.clone());
         }
-    } else {
-        body["tools"] = Value::Array(filtered);
+    }
+    if changed {
+        if filtered.is_empty() {
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("tools");
+            }
+        } else {
+            body["tools"] = Value::Array(filtered);
+        }
+    }
+    normalize_relay_tools(body, rule_ids);
+    if has_server_web_search || changed {
+        append_rule_id(rule_ids, RULE_TOOL_KIMI_WEB_SEARCH_SERVER_TOOL_FILTER);
     }
     degrade_missing_tool_choice(body);
 }
 
+fn normalize_kimi_documents(
+    body: &mut Value,
+    target_model: &str,
+    rule_ids: &mut Vec<String>,
+) -> Result<(), String> {
+    if !target_model.to_ascii_lowercase().contains("kimi") {
+        return Ok(());
+    }
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    let mut changed = false;
+    for message in messages {
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let mut normalized = Vec::with_capacity(content.len());
+        for block in content.drain(..) {
+            if block.get("type").and_then(Value::as_str) != Some("document") {
+                normalized.push(block);
+                continue;
+            }
+            changed = true;
+            let source = block
+                .get("source")
+                .and_then(Value::as_object)
+                .ok_or("Kimi document source is invalid")?;
+            match source.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    let text = source
+                        .get("data")
+                        .and_then(Value::as_str)
+                        .ok_or("Kimi document text is invalid")?;
+                    normalized.push(json!({"type": "text", "text": text}));
+                }
+                Some("content") => {
+                    let blocks = source
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .ok_or("Kimi document content is invalid")?;
+                    if blocks.iter().any(|item| {
+                        !matches!(
+                            item.get("type").and_then(Value::as_str),
+                            Some("text" | "image")
+                        )
+                    }) {
+                        return Err(
+                            "Kimi document content must be preprocessed locally to text or images"
+                                .into(),
+                        );
+                    }
+                    normalized.extend(blocks.iter().cloned());
+                }
+                Some("base64")
+                    if source.get("media_type").and_then(Value::as_str)
+                        == Some("application/pdf") =>
+                {
+                    return Err("Kimi does not accept PDF document blocks; preprocess the PDF locally to text or images".into());
+                }
+                _ => {
+                    return Err(
+                        "Kimi document blocks must be preprocessed locally to text or images"
+                            .into(),
+                    );
+                }
+            }
+        }
+        *content = normalized;
+    }
+    if changed {
+        append_rule_id(rule_ids, RULE_TRANSPORT_KIMI_DOCUMENT_TEXT_NORMALIZE);
+    }
+    Ok(())
+}
+
 fn zero_information_kimi_block(block: &Value) -> bool {
     match block.get("type").and_then(Value::as_str) {
-        Some("server_tool_use" | "web_search_tool_result") => true,
         Some("text") => block.get("text").and_then(Value::as_str) == Some(""),
         Some("thinking") => {
             block.get("thinking").and_then(Value::as_str) == Some("")
@@ -952,6 +987,7 @@ pub fn transform_relay_request(
         append_rule_id(&mut rule_ids, RULE_PROVIDER_KIMI_RELAY_THINKING_ENABLED);
     }
     obj.insert("model".to_string(), Value::String(target_model.clone()));
+    normalize_kimi_documents(&mut body, &target_model, &mut rule_ids)?;
     normalize_kimi_failed_history_tail(&mut body, &target_model, &mut rule_ids)?;
     validate_relay_tool_history(&body)?;
     normalize_relay_thinking(&mut body, relay_thinking);
@@ -993,8 +1029,8 @@ mod tests {
                 {"role": "assistant", "content": [{"type": "text", "text": "round one done"}]},
                 {"role": "user", "content": "round two"},
                 {"role": "assistant", "content": [
-                    {"type": "server_tool_use", "name": "web_search"},
-                    {"type": "web_search_tool_result", "content": []},
+                    {"type": "server_tool_use", "id": "srvtoolu_round2", "name": "web_search"},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_round2", "content": []},
                     {"type": "thinking", "thinking": "", "signature": ""},
                     {"type": "text", "text": ""}
                 ]},
@@ -1009,11 +1045,15 @@ mod tests {
         )
         .unwrap();
         let messages = mapped["messages"].as_array().unwrap();
-        assert_eq!(messages.len(), 6);
+        assert_eq!(messages.len(), 7);
         assert_eq!(messages[1]["content"][1]["id"], "toolu_1");
         assert_eq!(messages[2]["content"][0]["tool_use_id"], "toolu_1");
         assert_eq!(messages[3]["content"][0]["text"], "round one done");
-        assert_eq!(messages[5]["content"], "round two edited and resent");
+        assert_eq!(messages[5]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[5]["content"][0]["type"], "server_tool_use");
+        assert_eq!(messages[5]["content"][1]["type"], "web_search_tool_result");
+        assert_eq!(messages[5]["content"][1]["tool_use_id"], "srvtoolu_round2");
+        assert_eq!(messages[6]["content"], "round two edited and resent");
         assert!(metadata
             .rule_ids
             .iter()
@@ -1143,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_kimi_removed_tool_choice_degrades_to_auto_without_enabled_thinking() {
+    fn relay_kimi_server_web_search_passthrough() {
         let (mapped, _metadata) = transform_relay_request(
             json!({
                 "model": "claude-opus-4-8",
@@ -1156,8 +1196,14 @@ mod tests {
             "",
         )
         .unwrap();
-        assert!(mapped.get("tools").is_none());
-        assert_eq!(mapped["tool_choice"], json!({"type": "auto"}));
+        assert_eq!(
+            mapped["tools"],
+            json!([{"type": "web_search_20250305", "name": "web_search"}])
+        );
+        assert_eq!(
+            mapped["tool_choice"],
+            json!({"type": "tool", "name": "web_search"})
+        );
     }
 
     #[test]
@@ -1211,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_filters_server_tools_by_type_without_deleting_same_named_client_tool() {
+    fn kimi_request_compat_normalizes_server_tools_and_documents() {
         let (mapped, metadata) = transform_relay_request(
             json!({
                 "model": "claude-sonnet-5",
@@ -1231,7 +1277,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             mapped["tools"],
-            json!([{"name": "web_search", "input_schema": {"type": "object", "properties": {}}}])
+            json!([
+                {"type": "web_search_20250305", "name": "web_search"},
+                {"name": "web_search", "input_schema": {"type": "object", "properties": {}}}
+            ])
         );
         assert_eq!(
             mapped["tool_choice"],
@@ -1244,17 +1293,61 @@ mod tests {
                 "tool.kimi.web_search.server-tool-filter".to_string(),
             ]
         );
+
+        let (documents, metadata) = transform_relay_request(
+            json!({
+                "model": "claude-sonnet-5",
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "document",
+                        "source": {"type": "text", "media_type": "text/plain", "data": "local OCR text"}
+                    }]
+                }]
+            }),
+            "kimi-k3",
+            None,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            documents["messages"][0]["content"],
+            json!([{"type": "text", "text": "local OCR text"}])
+        );
+        assert!(metadata
+            .rule_ids
+            .contains(&"transport.kimi.document-text-normalize".to_string()));
+
+        let pdf = transform_relay_request(
+            json!({
+                "model": "claude-sonnet-5",
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}
+                    }]
+                }]
+            }),
+            "kimi-k3",
+            None,
+            "",
+        );
+        assert_eq!(
+            pdf.unwrap_err(),
+            "Kimi does not accept PDF document blocks; preprocess the PDF locally to text or images"
+        );
     }
 
     #[test]
-    fn kimi_stream_filter_drops_server_tool_blocks_and_compacts_indexes() {
+    fn kimi_stream_filter_preserves_server_tool_blocks_and_compacts_indexes() {
         let sse = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"name\":\"web_search\"}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_search_1\",\"name\":\"web_search\"}}\n\n",
             "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
-            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":[]}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_search_1\",\"content\":[]}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n",
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":3}\n\n",
@@ -1268,13 +1361,14 @@ mod tests {
         out.extend(filter.feed(&sse.as_bytes()[midpoint..]).unwrap());
         out.extend(filter.finalize().unwrap());
         let text = String::from_utf8(out).unwrap();
-        assert!(!text.contains("server_tool_use"));
-        assert!(!text.contains("web_search_tool_result"));
+        assert!(text.contains("server_tool_use"));
+        assert!(text.contains("web_search_tool_result"));
+        assert!(text.contains("srvtoolu_search_1"));
         assert!(!text.contains("\"type\":\"thinking\""));
-        assert!(text.contains("\"index\":1"));
+        assert!(text.contains("\"index\":3"));
         assert!(text.contains("\"text\":\"OK\""));
-        assert_eq!(filter.dropped(), 3);
-        assert_eq!(filter.dropped_empty_thinking(), 1);
+        assert_eq!(filter.dropped(), 1);
+        assert_eq!(filter.dropped_thinking(), 1);
     }
 
     #[test]
@@ -1305,7 +1399,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_stream_filter_drops_only_zero_information_thinking_and_fails_nonempty_unsigned() {
+    fn kimi_stream_filter_drops_unsigned_thinking() {
         let empty_invalid = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"bad signature\"}}\n\n",
             "event: ping\ndata: {\"type\":\"ping\"}\n\n",
@@ -1315,27 +1409,29 @@ mod tests {
         let output = filter.feed(empty_invalid.as_bytes()).unwrap();
         assert!(!String::from_utf8_lossy(&output).contains("thinking"));
         assert!(String::from_utf8_lossy(&output).contains("event: ping"));
-        assert_eq!(filter.dropped_empty_thinking(), 1);
+        assert_eq!(filter.dropped_thinking(), 1);
 
         let unsigned = concat!(
             "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"secret\",\"signature\":\"\"}}\n\n",
             "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
         );
         let mut filter = KimiServerToolFilter::new();
-        assert_eq!(
-            filter.feed(unsigned.as_bytes()).unwrap_err(),
-            "Kimi nonempty thinking has no valid signature"
-        );
+        assert!(filter.feed(unsigned.as_bytes()).unwrap().is_empty());
+        assert_eq!(filter.dropped_thinking(), 1);
     }
 
     #[test]
-    fn kimi_stream_filter_requires_dropped_server_tool_blocks_to_close() {
+    fn kimi_stream_filter_validates_preserved_server_tool_blocks() {
         let start = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"name\":\"web_search\"}}\n\n";
         let mut missing_stop = KimiServerToolFilter::new();
-        assert!(missing_stop.feed(start.as_bytes()).unwrap().is_empty());
+        assert!(
+            String::from_utf8(missing_stop.feed(start.as_bytes()).unwrap())
+                .unwrap()
+                .contains("server_tool_use")
+        );
         assert_eq!(
             missing_stop.finalize().unwrap_err(),
-            "Kimi server tool block ended before content_block_stop"
+            "Kimi content block ended before content_block_stop"
         );
 
         let mut wrong_index = KimiServerToolFilter::new();
@@ -1344,7 +1440,7 @@ mod tests {
             wrong_index
                 .feed(b"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":4}\n\n")
                 .unwrap_err(),
-            "Kimi server tool block index changed"
+            "Kimi content block index changed"
         );
 
         let mut early_terminal = KimiServerToolFilter::new();
@@ -1353,7 +1449,7 @@ mod tests {
             early_terminal
                 .feed(b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
                 .unwrap_err(),
-            "Kimi server tool block index is missing"
+            "Kimi content block index changed"
         );
 
         let mut malformed_delta = KimiServerToolFilter::new();
@@ -1362,7 +1458,7 @@ mod tests {
             malformed_delta
                 .feed(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0}\n\n")
                 .unwrap_err(),
-            "Kimi server tool delta is invalid"
+            "Kimi content block delta is invalid"
         );
     }
 
@@ -1418,7 +1514,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_nonstream_filter_preserves_signed_thinking_and_rejects_unsigned_content() {
+    fn kimi_nonstream_filter_preserves_signed_and_drops_unsigned_thinking() {
         let body = json!({
             "id": "msg",
             "type": "message",
@@ -1440,9 +1536,9 @@ mod tests {
         let invalid = json!({
             "content": [{"type": "thinking", "thinking": "secret", "signature": ""}]
         });
-        assert_eq!(
-            filter_kimi_nonstream_response(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(),
-            "Kimi nonempty thinking has no valid signature"
-        );
+        let filtered =
+            filter_kimi_nonstream_response(&serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let parsed: Value = serde_json::from_slice(&filtered).unwrap();
+        assert!(parsed["content"].as_array().unwrap().is_empty());
     }
 }

@@ -501,6 +501,7 @@ pub(crate) fn desired_runtime_binding(
         ),
         catalog_fp: catalog_fingerprint(profile)?,
         binding_fp: binding_fingerprint(cfg, runtime)?,
+        science_adoption_attempt_id: runtime.adoption_attempt_id().map(str::to_string),
     })
 }
 
@@ -737,12 +738,14 @@ mod tests {
             route_fp: route_fingerprint(&original, &original_launch, "off"),
             catalog_fp: catalog_fingerprint(&original).unwrap(),
             binding_fp: "binding-a".into(),
+            science_adoption_attempt_id: None,
         };
         let desired = crate::config::RuntimeBindingCommit {
             profile_id: changed.id.clone(),
             route_fp: route_fingerprint(&changed, &changed_launch, "off"),
             catalog_fp: catalog_fingerprint(&changed).unwrap(),
             binding_fp: "binding-a".into(),
+            science_adoption_attempt_id: None,
         };
         assert!(!science_restart_required(Some(&committed), &desired));
     }
@@ -762,6 +765,7 @@ mod tests {
             route_fp: "route-a".into(),
             catalog_fp: original_catalog_fp.clone(),
             binding_fp: "binding-a".into(),
+            science_adoption_attempt_id: None,
         };
 
         let mut display = original.clone();

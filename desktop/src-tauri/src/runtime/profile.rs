@@ -95,11 +95,11 @@ pub(crate) fn profile_capabilities(p: &config::Profile) -> serde_json::Value {
 }
 
 /// 组装 get_config 返回体：profiles 的 key 只回掩码，全 key 绝不出后端。
-fn selection_pending_from_config(cfg: &config::Config) -> Result<bool, String> {
+pub(crate) fn selection_pending_from_config(cfg: &config::Config) -> Result<bool, String> {
     let Some(profile) = cfg.active_profile() else {
         return Ok(false);
     };
-    if cfg.runtime_transaction.is_some() {
+    if cfg.has_open_runtime_journal() {
         return Ok(true);
     }
     let Some(binding) = cfg.runtime_binding.as_ref() else {
@@ -119,7 +119,7 @@ fn selection_pending_from_config(cfg: &config::Config) -> Result<bool, String> {
 }
 
 pub(crate) fn build_get_config(dir: &Path) -> Result<serde_json::Value, String> {
-    let cfg = config::load_from(dir).map_err(|e| e.to_string())?;
+    let cfg = config::load_current_from_read_only(dir).map_err(|e| e.to_string())?;
     let selection_pending = selection_pending_from_config(&cfg).unwrap_or(true);
     let resolved_codex_network = csswitch_codex_network::resolve_from_process(&cfg.codex_network)
         .map(|route| {
@@ -135,11 +135,8 @@ pub(crate) fn build_get_config(dir: &Path) -> Result<serde_json::Value, String> 
                 "error_code": error.code(),
             })
         });
-    // 一次性迁移提示（#9 甲）：读出后立即清盘，避免每次 get_config 重复提示。
     let notice = cfg.pending_notice.clone();
-    if notice.is_some() {
-        config::update(dir, |c| c.pending_notice = None).map_err(|e| e.to_string())?;
-    }
+    let notice_id = notice.as_deref().map(pending_notice_id);
     let profiles: Vec<serde_json::Value> = cfg
         .profiles
         .iter()
@@ -170,8 +167,39 @@ pub(crate) fn build_get_config(dir: &Path) -> Result<serde_json::Value, String> 
         "experimental_codex_enabled": cfg.experimental_codex_enabled,
         "codex_network": cfg.codex_network,
         "codex_network_resolved": resolved_codex_network,
-        "mode": cfg.mode, "pending_notice": notice,
+        "mode": cfg.mode, "pending_notice": notice, "pending_notice_id": notice_id,
     }))
+}
+
+fn pending_notice_id(notice: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"csswitch-pending-notice-v1\0");
+    hasher.update(notice.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+pub(crate) fn acknowledge_pending_notice_inner(
+    dir: &Path,
+    expected_notice_id: &str,
+) -> Result<serde_json::Value, String> {
+    if expected_notice_id.len() != 64
+        || !expected_notice_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("pending notice id 无效".into());
+    }
+    config::update_result(dir, |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
+        let Some(notice) = cfg.pending_notice.as_deref() else {
+            return Ok((json!({"status": "already_acknowledged"}), false));
+        };
+        if pending_notice_id(notice) != expected_notice_id {
+            return Ok((json!({"status": "stale"}), false));
+        }
+        cfg.pending_notice = None;
+        Ok((json!({"status": "acknowledged"}), true))
+    })
 }
 
 /// 模板注册表交前端铺 UI（单一来源，前端不复制常量）。
@@ -218,6 +246,7 @@ pub(crate) fn build_list_templates(experimental_codex_enabled: bool) -> Vec<serd
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_preset_sync_preview(dir: &Path, id: &str) -> Result<serde_json::Value, String> {
     let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
     let profile = cfg
@@ -407,7 +436,12 @@ pub(crate) fn create_profile_with_catalog_inner(
     {
         return Err("中转 / 自定义端点必须选择或填写一个模型，未创建。".to_string());
     }
-    config::update(dir, |c| c.profiles.push(p)).map_err(|e| e.to_string())?;
+    config::update_result(dir, |c| {
+        config::require_no_runtime_transaction(c)?;
+        c.profiles.push(p);
+        Ok(((), true))
+    })
+    .map_err(|e| e.to_string())?;
     Ok(id)
 }
 
@@ -469,8 +503,75 @@ pub(crate) fn ensure_codex_profile_inner(dir: &Path) -> Result<EnsureCodexProfil
         extra: Default::default(),
     };
     config::update_result(dir, |cfg| {
+        config::require_no_runtime_transaction(cfg)?;
         config::require_template_enabled(cfg, "codex")?;
         if let Some(existing) = cfg.profiles.iter().find(|p| is_canonical_codex_profile(p)) {
+            return Ok((
+                EnsureCodexProfileResult {
+                    disposition: EnsureCodexProfileDisposition::Existing,
+                    profile_id: existing.id.clone(),
+                },
+                false,
+            ));
+        }
+        cfg.profiles.push(candidate);
+        Ok((
+            EnsureCodexProfileResult {
+                disposition: EnsureCodexProfileDisposition::Created,
+                profile_id,
+            },
+            true,
+        ))
+    })
+}
+
+/// P2-B-owned profile handoff.  The canonical profile ensure remains an
+/// intent operation everywhere else; this exact-fence variant is used only
+/// after a durable Codex auth-start receipt has authorized the profile
+/// commit, so ordinary Config writers cannot race or erase that receipt.
+pub(crate) fn ensure_codex_profile_with_mutation(
+    dir: &Path,
+    fence: &crate::config::ConfigMutationOperationFence,
+    receipt: &[u8],
+) -> Result<(EnsureCodexProfileResult, String), String> {
+    let template = templates::by_id("codex").ok_or("Codex 模板不可用。")?;
+    let contract = crate::provider_contracts::contract_for(template.id, template.api_format)?;
+    if contract.default_credential_source
+        != crate::provider_contracts::CredentialSource::CsswitchOauth
+    {
+        return Err("Codex provider contract 不是 CSSwitch OAuth。".into());
+    }
+    let profile_id = config::new_id();
+    let candidate = config::Profile {
+        id: profile_id.clone(),
+        name: template.name.to_string(),
+        template_id: template.id.to_string(),
+        category: template.category.to_string(),
+        api_format: template.api_format.to_string(),
+        base_url: template.base_url.to_string(),
+        api_key: String::new(),
+        model: String::new(),
+        model_catalog: Vec::new(),
+        default_model_route_id: String::new(),
+        role_bindings: Default::default(),
+        credential_source: contract.default_credential_source,
+        credential_ref: Some("csswitch:codex:default".to_string()),
+        model_policy: contract.default_model_policy,
+        website_url: Some(template.website_url.to_string()),
+        icon: Some(template.icon.to_string()),
+        icon_color: Some(template.icon_color.to_string()),
+        sort_index: Some(config::now_ms()),
+        created_at: Some(config::now_ms()),
+        notes: None,
+        extra: Default::default(),
+    };
+    config::update_config_mutation_operation_with_after_fingerprint(dir, fence, receipt, |cfg| {
+        config::require_template_enabled(cfg, "codex")?;
+        if let Some(existing) = cfg
+            .profiles
+            .iter()
+            .find(|profile| is_canonical_codex_profile(profile))
+        {
             return Ok((
                 EnsureCodexProfileResult {
                     disposition: EnsureCodexProfileDisposition::Existing,
@@ -504,11 +605,13 @@ pub(crate) fn update_profile_metadata_inner(
     {
         return Err(format!("找不到 profile：{id}"));
     }
-    config::update(dir, |c| {
+    config::update_result(dir, |c| {
+        config::require_no_runtime_transaction(c)?;
         if let Some(p) = c.profile_by_id_mut(id) {
             p.name = name.to_string();
             p.notes = notes.map(str::to_string);
         }
+        Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -531,7 +634,36 @@ pub(crate) fn clear_profile_key_inner(dir: &Path, id: &str) -> Result<(), String
         Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
-    config::drop_rolling_backup(dir); // 清 key 后净化滚动备份，旧明文不可从 .bak 恢复
+    config::drop_rolling_backup(dir).map_err(|error| error.to_string())?; // 清 key 后净化滚动备份，旧明文不可从 .bak 恢复
+    Ok(())
+}
+
+pub(crate) fn clear_profile_key_with_mutation(
+    dir: &Path,
+    fence: &crate::config::ConfigMutationOperationFence,
+    receipt: &[u8],
+    id: &str,
+    expected_before_fingerprint: &str,
+) -> Result<(), String> {
+    config::update_config_mutation_operation(dir, fence, receipt, |cfg| {
+        if config::config_mutation_config_fingerprint(cfg).map_err(|error| error.to_string())?
+            != expected_before_fingerprint
+        {
+            return Err("Config mutation before-image 在 profile key commit 前发生变化".into());
+        }
+        let was_applied = cfg
+            .runtime_binding
+            .as_ref()
+            .map(|binding| binding.profile_id.as_str())
+            == Some(id);
+        if let Some(profile) = cfg.profile_by_id_mut(id) {
+            profile.api_key.clear();
+        }
+        if was_applied {
+            cfg.runtime_binding = None;
+        }
+        Ok(((), true))
+    })?;
     Ok(())
 }
 
@@ -552,7 +684,37 @@ pub(crate) fn delete_profile_inner(dir: &Path, id: &str) -> Result<(), String> {
         Ok(((), true))
     })
     .map_err(|e| e.to_string())?;
-    config::drop_rolling_backup(dir);
+    config::drop_rolling_backup(dir).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn delete_profile_with_mutation(
+    dir: &Path,
+    fence: &crate::config::ConfigMutationOperationFence,
+    receipt: &[u8],
+    id: &str,
+    expected_before_fingerprint: &str,
+) -> Result<(), String> {
+    config::update_config_mutation_operation(dir, fence, receipt, |cfg| {
+        if config::config_mutation_config_fingerprint(cfg).map_err(|error| error.to_string())?
+            != expected_before_fingerprint
+        {
+            return Err("Config mutation before-image 在 profile delete commit 前发生变化".into());
+        }
+        cfg.profiles.retain(|profile| profile.id != id);
+        if cfg.active_id == id {
+            cfg.active_id.clear();
+        }
+        if cfg
+            .runtime_binding
+            .as_ref()
+            .map(|binding| binding.profile_id.as_str())
+            == Some(id)
+        {
+            cfg.runtime_binding = None;
+        }
+        Ok(((), true))
+    })?;
     Ok(())
 }
 
@@ -784,13 +946,13 @@ pub(crate) fn probe_kind_for_model(model: &str) -> scratch::ProbeKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_get_config, build_list_templates, build_preset_sync_preview, clear_profile_key_inner,
-        create_profile_inner, delete_profile_inner, ensure_codex_profile_inner,
-        is_canonical_codex_profile, is_main_list_model, merge_and_sort_models,
-        nonactive_probe_verdict, persist_profile_candidate_inner, probe_kind_for,
-        probe_kind_for_model, profile_capabilities, template_capabilities,
-        update_profile_connection_inner, update_profile_metadata_inner, CatalogEdit,
-        ConnectionEdit, EnsureCodexProfileDisposition,
+        acknowledge_pending_notice_inner, build_get_config, build_list_templates,
+        build_preset_sync_preview, clear_profile_key_inner, create_profile_inner,
+        delete_profile_inner, ensure_codex_profile_inner, is_canonical_codex_profile,
+        is_main_list_model, merge_and_sort_models, nonactive_probe_verdict,
+        persist_profile_candidate_inner, probe_kind_for, probe_kind_for_model,
+        profile_capabilities, template_capabilities, update_profile_connection_inner,
+        update_profile_metadata_inner, CatalogEdit, ConnectionEdit, EnsureCodexProfileDisposition,
     };
     use crate::{
         config,
@@ -812,6 +974,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d.join(".csswitch")
+    }
+
+    fn o1_e1_profile_compensation_marker() -> config::RuntimeCompensationJournal {
+        config::RuntimeCompensationJournal {
+            schema_version: config::RUNTIME_COMPENSATION_SCHEMA_VERSION_V1,
+            compensation_id: "o1-e1-profile-guard".into(),
+            target_profile_id: "guarded-profile".into(),
+            runtime_fingerprint: "e".repeat(64),
+            snapshot_ticket: config::RuntimeSnapshotTicket::verified(
+                ".one-click-rollback-00112233445566778899aabbccddeeff".into(),
+            )
+            .unwrap(),
+            state: config::RuntimeCompensationState::InProgress,
+            steps: Vec::new(),
+            science_adoption_attempt_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn compensation_only_journal_blocks_normal_profile_mutations() {
+        let dir = tmpdir_profile();
+        let id = create_profile_inner(
+            &dir,
+            "glm",
+            "before",
+            Some("test-key"),
+            None,
+            Some("glm-5.2"),
+        )
+        .unwrap();
+        config::update(&dir, |cfg| {
+            cfg.runtime_compensation = Some(o1_e1_profile_compensation_marker())
+        })
+        .unwrap();
+        let before = std::fs::read(dir.join("config.json")).unwrap();
+
+        let create_error = create_profile_inner(
+            &dir,
+            "glm",
+            "blocked",
+            Some("test-key"),
+            None,
+            Some("glm-5.2"),
+        )
+        .unwrap_err();
+        assert!(create_error.contains("runtime_transaction_in_progress"));
+        let metadata_error = update_profile_metadata_inner(&dir, &id, "blocked", None).unwrap_err();
+        assert!(metadata_error.contains("runtime_transaction_in_progress"));
+        assert_eq!(std::fs::read(dir.join("config.json")).unwrap(), before);
     }
 
     // ---------- P2-d: 非 active「如实标记后保存」裁决（明确拒绝才拦；200=已校验；含糊/无响应=落盘但未校验） ----------
@@ -1272,6 +1483,7 @@ mod tests {
                 route_fp: route_fp.clone(),
                 catalog_fp: catalog_fp.clone(),
                 binding_fp: "binding".into(),
+                science_adoption_attempt_id: None,
             });
         })
         .unwrap();
@@ -1313,6 +1525,50 @@ mod tests {
             p["capabilities"]["model_discovery"],
             "anthropic_models_or_manual"
         );
+
+        config::update(&d, |cfg| {
+            cfg.pending_notice = Some("migration notice".into())
+        })
+        .unwrap();
+        let before_read = std::fs::read(d.join("config.json")).unwrap();
+        let first_read = build_get_config(&d).unwrap();
+        let second_read = build_get_config(&d).unwrap();
+        assert_eq!(first_read["pending_notice"], "migration notice");
+        assert_eq!(
+            first_read["pending_notice_id"],
+            second_read["pending_notice_id"]
+        );
+        assert_eq!(std::fs::read(d.join("config.json")).unwrap(), before_read);
+        assert_eq!(
+            config::load_current_from_read_only(&d)
+                .unwrap()
+                .pending_notice
+                .as_deref(),
+            Some("migration notice")
+        );
+
+        let stale = acknowledge_pending_notice_inner(&d, &"0".repeat(64)).unwrap();
+        assert_eq!(stale["status"], "stale");
+        assert_eq!(
+            config::load_current_from_read_only(&d)
+                .unwrap()
+                .pending_notice
+                .as_deref(),
+            Some("migration notice")
+        );
+        let notice_id = first_read["pending_notice_id"].as_str().unwrap();
+        assert_eq!(
+            acknowledge_pending_notice_inner(&d, notice_id).unwrap()["status"],
+            "acknowledged"
+        );
+        assert_eq!(
+            acknowledge_pending_notice_inner(&d, notice_id).unwrap()["status"],
+            "already_acknowledged"
+        );
+        assert!(config::load_current_from_read_only(&d)
+            .unwrap()
+            .pending_notice
+            .is_none());
     }
 
     #[test]
@@ -1395,18 +1651,23 @@ mod tests {
             "openai_models_or_manual"
         );
         assert_eq!(custom["capabilities"]["base_url_required"], true);
-        for id in [
-            "opencode-go-openai",
-            "opencode-go-anthropic",
-            "grok",
-            "gemini",
-        ] {
+        for id in ["opencode-go-openai", "opencode-go-anthropic", "grok"] {
             let template = v.iter().find(|template| template["id"] == id).unwrap();
             assert_eq!(template["capabilities"]["model_required"], true);
-            assert!(template["compatibility_notice"]
-                .as_str()
-                .is_some_and(|notice| notice.contains("limited")));
+            assert_eq!(
+                template["compatibility_notice"],
+                "兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"
+            );
         }
+        let gemini = v
+            .iter()
+            .find(|template| template["id"] == "gemini")
+            .unwrap();
+        assert_eq!(gemini["capabilities"]["model_required"], true);
+        assert_eq!(
+            gemini["compatibility_notice"],
+            "兼容范围：仅按官方 OpenAI compatibility 接入；文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。"
+        );
 
         let enabled = build_list_templates(true);
         assert_eq!(enabled.len(), 16);

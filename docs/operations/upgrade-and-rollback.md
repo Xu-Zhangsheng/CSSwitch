@@ -1,14 +1,22 @@
 # CSSwitch 0.8.4 升级与回滚 / Upgrade and rollback
 
+状态：当前版本化运维合同
+
+适用范围：macOS Apple Silicon、CSSwitch 0.8.4 与受支持的 v1/v2/v3 → v4 配置迁移。
+
+最后复核：2026-08-04（Asia/Taipei）
+
+失效条件：出现 0.8.4 之后的正式 release、配置 schema / migration / backup 合同变化，或公开 artifact / signing 状态变化时立即复核并替换当前版本入口。
+
 本说明适用于 macOS Apple Silicon 的 CSSwitch 0.8.4。0.8.4 继续使用 v4 配置
 schema，复用 Science 持久化 data-dir 与外部 Skill bridge；从 v1/v2/v3 首次升级
-时执行原子迁移并保留不可覆盖备份。现有 API provider、active profile、Codex
+时执行原子迁移并保留不可覆盖备份。现有 API provider、当前选择、Codex
 配置、用户 MCP 配置和未知字段保持不变。
 
 This guide applies to CSSwitch 0.8.4 for macOS Apple Silicon. Version 0.8.4
 keeps schema v4 and reuses Science's persistent data directory and external
 Skill bridge. A first upgrade from v1/v2/v3 performs the atomic migration and
-preserves non-overwriting backups. Existing API providers, the active profile,
+preserves non-overwriting backups. Existing API providers, the selected profile,
 Codex configuration, user MCP entries, and unknown fields remain intact.
 
 ## 升级前 / Before upgrading
@@ -32,15 +40,21 @@ Codex configuration, user MCP entries, and unknown fields remain intact.
 2. 首次打开如果被 macOS 阻止，在 Finder 中右键 CSSwitch，选择「打开」。0.8.4
    的当前公开附件是经过完整性验证的 ad-hoc seal，没有 Developer ID、公证、
    stapled ticket 或 Gatekeeper acceptance；ad-hoc 不等于这些分发证据。
-3. 打开 CSSwitch，确认已有 profile 仍存在，再执行一次「设为当前」。
-4. 先用最小请求验证常用 provider，再恢复日常工作。
+3. 打开 CSSwitch，确认已有 profile 仍存在，再把要验证的 profile「设为当前」。该动作只保存当前选择，不会启动或切换运行链。
+4. 回到首页点击「一键开始」，等待 CSSwitch 核验并应用当前选择、启动或复用受管链路。
+5. Science 打开且 CSSwitch 显示运行链 Ready 后，先用最小请求验证常用 provider，再恢复日常工作。
 
 1. Open the DMG, drag CSSwitch into Applications, and replace the older copy.
 2. If macOS blocks the first launch, right-click CSSwitch in Finder and choose
    “Open.” The current 0.8.4 public artifact has a verified ad-hoc seal, but no
    Developer ID, notarization, stapled ticket, or Gatekeeper acceptance.
-3. Open CSSwitch, confirm that existing profiles remain, then run “Set active” once.
-4. Send one minimal request through your usual provider before resuming normal work.
+3. Open CSSwitch, confirm that existing profiles remain, then select the profile
+   to verify. This only records the selection; it does not start or switch the
+   managed runtime.
+4. Return to the home page and run “One-click start.” Wait for CSSwitch to
+   validate and apply the selection and to start or reuse the managed path.
+5. After Science opens and CSSwitch reports the path Ready, send one minimal
+   request through your usual provider before resuming normal work.
 
 ## 回滚 / Rollback
 
@@ -76,7 +90,7 @@ Rollback replaces only the app; it does not automatically revert or delete `~/.c
 为**每一个**当前 Codex profile 应用 `export_then_remove`，停止全部受管链路，先
 原子导出再提交 v2，在同一配置锁内设置进程终态 latch，随后直接退出。latch 后所有
 配置读取、写入与状态轮询均失败关闭，不能触发常规 v2 → v4 自动迁移；终态退出也
-不再走会重新读取配置的通用 stop 路径。如果当前生效项是 Codex，降级后的
+不再走会重新读取配置的通用 stop 路径。如果当前选择是 Codex，降级后的
 `active_id` 为空。导出只含 profile 和模型目录元数据，不含 token、账号 ID、
 credential payload、模型缓存或代理 URL。降级不会读取、注销或删除 CSSwitch 私有
 OAuth 文件；如要删除该凭据，应在降级前另行点击“退出登录”。API-key profiles、
@@ -93,10 +107,10 @@ to **every** current Codex profile, stops all managed paths, atomically exports
 before committing v2, sets a process-terminal latch under the same config lock,
 then exits directly. After the latch, every config read/write and status poll
 fails closed and cannot trigger the normal v2-to-v4 migration; terminal exit
-also bypasses the generic stop path that may reload config. If Codex is active,
-the downgraded `active_id` is empty. Exports contain profile and model-catalog
-metadata only—never tokens, account IDs, credential payloads, model caches, or
-proxy URLs. Downgrade neither reads nor logs out nor deletes the CSSwitch
+also bypasses the generic stop path that may reload config. If the selected
+profile is Codex, the downgraded `active_id` is empty. Exports contain profile
+and model-catalog metadata only—never tokens, account IDs, credential payloads,
+model caches, or proxy URLs. Downgrade neither reads nor logs out nor deletes the CSSwitch
 private OAuth files; use the separate Logout action first if removal is
 intended. API-key profiles, ports, and all v2-expressible settings remain
 intact; Codex network fields, additional models, and role bindings are
