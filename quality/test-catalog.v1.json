@@ -114,7 +114,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "QUALITY-METADATA"
       }
     },
@@ -198,7 +198,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "QUALITY-FOCUSED"
       }
     },
@@ -355,7 +355,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "RUN-EVIDENCE-CONTRACT"
       }
     },
@@ -562,7 +562,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "QUALITY-INVENTORY"
       }
     },
@@ -639,7 +639,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "PY-OFFLINE"
       }
     },
@@ -717,7 +717,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "PY-LOOPBACK"
       }
     },
@@ -784,7 +784,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "SHELL-SCRIPTS"
       }
     },
@@ -862,7 +862,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "RUST-DESKTOP"
       }
     },
@@ -935,7 +935,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "RUST-GATEWAY"
       }
     },
@@ -1005,7 +1005,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "RUST-CODEX-NETWORK"
       }
     },
@@ -1087,7 +1087,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "RUST-SKILL-PACKAGE"
       }
     },
@@ -1167,7 +1167,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "MJS-FRONTEND"
       }
     },
@@ -1405,7 +1405,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "ORPHAN-SKILL-BRIDGE"
       }
     },
@@ -1475,7 +1475,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "ORPHAN-SKILL-BOUNDARY"
       }
     },
@@ -1683,8 +1683,7 @@
       "build_recipe_paths": [],
       "environment_allowlist": [],
       "source_paths": [
-        "desktop/src-tauri/src/config.rs",
-        "desktop/src-tauri/src/runtime/transaction.rs"
+        "desktop/src-tauri/src/config.rs"
       ],
       "evidence_layer": "source-test",
       "owner": "runtime-state",
@@ -1710,7 +1709,7 @@
       "selection_rule": {
         "mode": "manual",
         "include_paths": [
-          "desktop/src-tauri/src/runtime/transaction.rs"
+          "desktop/src-tauri/src/config.rs"
         ],
         "exclude_statuses": [
           "legacy",
@@ -2093,7 +2092,7 @@
       "environment_allowlist": [],
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6e62a5551dea9b9fd4db3c8826d109d7614fcbf0cdd165f972ac155b479a570c",
+        "sha256": "899a9dcf1fb429a065918b8cd56d053d658c01773a3b83e47b32161d49e40641",
         "suite_key": "SOURCE-GATE-CONTRACT"
       },
       "status": "implemented",

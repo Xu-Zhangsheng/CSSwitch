@@ -29,10 +29,6 @@ static NEXT_OP_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy)]
 pub(crate) enum OperationKind {
-    #[allow(dead_code)]
-    ActivateProfile,
-    #[allow(dead_code)]
-    UpdateActiveConnection,
     ValidateConnection,
     FetchModels,
     OneClickLogin,
@@ -41,8 +37,6 @@ pub(crate) enum OperationKind {
 impl OperationKind {
     fn as_str(self) -> &'static str {
         match self {
-            OperationKind::ActivateProfile => "activate_profile",
-            OperationKind::UpdateActiveConnection => "update_active_connection",
             OperationKind::ValidateConnection => "validate_connection",
             OperationKind::FetchModels => "fetch_models",
             OperationKind::OneClickLogin => "one_click_login",
@@ -59,10 +53,6 @@ pub(crate) enum OperationStage {
     ProxySpawn,
     ProxyHealth,
     CatalogVerify,
-    #[allow(dead_code)]
-    Commit,
-    #[allow(dead_code)]
-    Rollback,
     AuthoritySnapshot,
     SandboxLogin,
     SandboxLaunch,
@@ -81,8 +71,6 @@ impl OperationStage {
             OperationStage::ProxySpawn => "proxy_spawn",
             OperationStage::ProxyHealth => "proxy_health",
             OperationStage::CatalogVerify => "catalog_verify",
-            OperationStage::Commit => "commit",
-            OperationStage::Rollback => "rollback",
             OperationStage::AuthoritySnapshot => "authority_snapshot",
             OperationStage::SandboxLogin => "sandbox_login",
             OperationStage::SandboxLaunch => "sandbox_launch",
