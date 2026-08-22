@@ -23,3 +23,9 @@
 - commit、push、tag、release、替换已安装 App或运行真实 provider 测试均需明确授权。
 - 真实 API Key、OAuth token、Keychain、SSH 私钥和账号数据库始终不得读取或回显；真实 provider 测试只能消费用户显式提供给隔离进程的输入，授权测试不等于授权检查凭证内容。
 - 临时 handoff 放入 `.agents/handoffs/`，长期事实应进入 rules、context 或 docs。
+
+## 收口纪律
+
+- 同一个有界目标或候选的正式独立审查最多两轮：首轮集中发现问题，修复合并完成后只做一轮最终复审；不得因逐项修复反复启动新的 reviewer。详细规则见 [`reviewing.md`](.agents/rules/reviewing.md)。
+- WIP 阶段不因每次小改动反复旋转或核对测试身份 hash；先完成目标内改动并冻结候选，再统一更新一次、验证一次。只有冻结后相关源文件再次变化或 validator 报告具体不一致时才重做。
+- 始终围绕用户当前目标和预先声明的收口清单工作。目标外发现只有直接阻断当前结果的 P0 / P1 才可纳入本轮；其余记录并延后，不得演变成无上限加固或审查循环。

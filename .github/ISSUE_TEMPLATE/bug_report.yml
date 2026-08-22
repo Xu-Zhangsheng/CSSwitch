@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈。请尽量填全，能大幅加快定位。**贴日志前务必先删掉任何 API key / 令牌。**
+        感谢反馈。请尽量填全，能大幅加快定位。**请勿粘贴 API key、OAuth token、邮箱、私有 URL、一次性 nonce、路径 secret 或用户数据。**
   - type: input
     id: version
     attributes:
@@ -52,12 +52,12 @@ body:
     id: logs
     attributes:
       label: 日志（可选，强烈建议）
-      description: 面板「日志」链接会打开 `~/.csswitch/logs/`；把 `proxy.log` / `sandbox.log` 里相关几行贴上来。
+      description: 面板「日志」链接会打开 `~/.csswitch/logs/`；只贴 `proxy.log` / `sandbox.log` 中与问题直接相关的最小片段，先删除密钥、邮箱、私有 URL、nonce、路径 secret 和用户数据；请勿上传整份日志。
       render: text
   - type: checkboxes
     id: safety
     attributes:
       label: 确认
       options:
-        - label: 我已确认贴出的内容里不含 API key、令牌等任何密钥
+        - label: 我已确认贴出的内容不含 API key、OAuth token、邮箱、私有 URL、一次性 nonce、路径 secret 或用户数据，且日志只保留与问题直接相关的最小片段
           required: true

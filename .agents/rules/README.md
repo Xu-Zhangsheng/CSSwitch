@@ -5,6 +5,7 @@
 | 任务类型 | 专用规则 | 当前合同入口 | 质量 / 测试 / Gate | 何时展开 Audit / Evidence |
 |---|---|---|---|---|
 | 文档创建、修改、引用、拆分或删除 | [文档治理](documentation.md) | 对应 [architecture](../../docs/architecture/README.md)、[feature](../../docs/features/README.md) 或 [operation](../../docs/operations/README.md) | 文档链接、索引、生命周期与 changed-path 检查 | 需要判断历史迁移、版本或一次验证结论时 |
+| 跨语言 source 实现、边界或风险判断 | [代码作者](code-authoring.md) | 对应 [architecture](../../docs/architecture/README.md)、[feature](../../docs/features/README.md) 或 [operation](../../docs/operations/README.md) | 按风险选择 owning check；完整 closure 只走唯一 source gate | 结论依赖 artifact、runtime 或历史证据层时 |
 | 普通 feature 实现、一般 bugfix、架构探索或未列出的诊断 | 无额外领域 Rule | 选择最接近的 architecture / feature / operation | 按改动与结论进入相应 test / gate | 结论依赖日期、版本、环境或 artifact 时 |
 | 自动测试与结论 | [测试与证据](testing-and-evidence.md) | 被测行为对应的 architecture / feature，执行方式对应 operation | [自动测试](../../docs/operations/testing.md)与已登记 quality / gate | 解释特定 run、artifact、installed/live 或 release 结果时 |
 | 构建 / 发布 | [发布](release.md) | [发布流程](../../docs/operations/release.md)及相关 feature / architecture | source、artifact、installed/live、signing 与 public gate 分层 | 每次候选与公开发布都必须绑定对应 evidence |

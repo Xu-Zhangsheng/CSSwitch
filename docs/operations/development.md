@@ -18,7 +18,11 @@ npm install
 npm run tauri dev
 ```
 
-完整 source/unit gate 只在准备好 clean exact-HEAD 候选后从仓库根目录运行：
+## 快速 WIP、候选与 source closure
+
+先按[代码作者规则](../../.agents/rules/code-authoring.md)确认 owner、边界和最高风险：`F3 > F2 > F1 > F0`。同一有界 WIP 先完成，再运行完整 diff 和有明确信号的 owning check；`F0` / `F1` 默认不启动正式独立审查或完整 gate。稳定的 `F2` / `F3` candidate 先冻结边界，再按[独立审查规则](../../.agents/rules/reviewing.md)集中审查；文件、进程或 network 副作用的目标、授权、时序、提交点、timeout、cleanup、补偿或失败报告变化一律按 `F3` 处理。
+
+candidate 不自动等于 source closure。只有明确需要声明 exact candidate 的 source closure、修改 quality kernel / gate authority，或影响无法由聚焦检查可信界定时，才在 clean exact-`HEAD` 候选上运行唯一完整 gate：
 
 ```bash
 GATE_ROOT="$(mktemp -d /private/tmp/csg.XXXXXX)"
@@ -27,25 +31,38 @@ bash test/run_all.sh --output-root "$GATE_ROOT"
 ```
 
 固定 15-suite 选择、输出目录约束和判定边界见[测试文档](testing.md)。无参数调用和
-旧 `--require-release-ready` 已不再是有效入口。
+旧 `--require-release-ready` 已不再是有效入口。任何 WIP 或 focused check 的 PASS 都不建立
+`SOURCE-GREEN`；没有运行完整 gate 时报告 `SOURCE-GREEN: NOT-RUN`。
 
 ## 组件级检查
 
+四个 Rust manifest 都是独立入口；从仓库根选择目标，不把单个 crate 结果外推到其他 crate：
+
+| 组件 | manifest | 聚焦命令形态 |
+| --- | --- | --- |
+| Skill 安装核心 | `desktop/skill-package/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/skill-package/Cargo.toml` |
+| Codex network 库 | `desktop/codex-network/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/codex-network/Cargo.toml` |
+| Gateway | `desktop/gateway/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/gateway/Cargo.toml` |
+| Tauri desktop | `desktop/src-tauri/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/src-tauri/Cargo.toml` |
+
+`fmt` 使用 `cargo fmt --check --manifest-path <manifest>`；`clippy` 使用 `cargo clippy --manifest-path <manifest> --all-targets -- -D warnings`；`test` 使用 `cargo test --manifest-path <manifest>`。Python 与前端的常用聚焦入口仍为：
+
 ```bash
-(cd desktop/src-tauri && cargo fmt --check)
-(cd desktop/src-tauri && cargo clippy --all-targets -- -D warnings)
-(cd desktop/src-tauri && cargo test)
-
-(cd desktop/gateway && cargo fmt --check)
-(cd desktop/gateway && cargo clippy --all-targets -- -D warnings)
-(cd desktop/gateway && cargo test)
-
 python3 -m unittest discover -s test -p 'test_*.py' -v
 node --check desktop/src/main.js
 ```
 
 组件命令和单个 `test/run-*.sh` 只适合聚焦诊断；当前完整门禁是上述
 `GATE-SOURCE`，不能由组件结果拼成 `SOURCE-GREEN`。
+
+## 远端协作与 CI 当前状态
+
+当前仓库没有 `.github/workflows/`，也没有已配置的 required check。PR 模板用于复核本地
+exact base / head、风险、变更面和实际执行的分层检查；它不把本地结果变成远端执行证据。
+
+当前决定暂不采用 CI：尚无 macOS runner 耗时或稳定性的实际证据，也未获得启用 required
+check 的授权。在 workflow 和远端执行证据实际存在前，不能写成由 CI 兜底；source closure
+继续只在明确 closure 目标时使用现有本地 exact-candidate gate。
 
 ## Science 相邻功能工作法
 
