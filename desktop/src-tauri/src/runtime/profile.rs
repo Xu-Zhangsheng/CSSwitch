@@ -246,93 +246,6 @@ pub(crate) fn build_list_templates(experimental_codex_enabled: bool) -> Vec<serd
         .collect()
 }
 
-#[allow(dead_code)]
-pub(crate) fn build_preset_sync_preview(dir: &Path, id: &str) -> Result<serde_json::Value, String> {
-    let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
-    let profile = cfg
-        .profile_by_id(id)
-        .ok_or_else(|| format!("找不到 profile：{id}"))?;
-    let template = templates::by_id(&profile.template_id)
-        .ok_or_else(|| format!("未知模板：{}", profile.template_id))?;
-    let preset_id = template
-        .preset_catalog_id
-        .ok_or("该配置没有可同步的内置推荐目录")?;
-    let (mut recommended, mut default, mut roles) =
-        crate::model_catalog::preset_catalog(preset_id)?;
-    let selector_by_generated: std::collections::BTreeMap<String, String> = recommended
-        .iter_mut()
-        .filter_map(|route| {
-            let generated = route.selector_id.clone();
-            let existing = profile
-                .model_catalog
-                .iter()
-                .find(|existing| existing.upstream_model == route.upstream_model)?;
-            route.selector_id = existing.selector_id.clone();
-            Some((generated, existing.selector_id.clone()))
-        })
-        .collect();
-    let remap = |selector: &mut String| {
-        if let Some(existing) = selector_by_generated.get(selector) {
-            *selector = existing.clone();
-        }
-    };
-    remap(&mut default);
-    remap(&mut roles.sonnet);
-    remap(&mut roles.opus);
-    remap(&mut roles.haiku);
-    remap(&mut roles.fable);
-    crate::model_catalog::validate_saved_catalog(&recommended, &default, &roles)?;
-    let current_upstreams: std::collections::BTreeSet<&str> = profile
-        .model_catalog
-        .iter()
-        .map(|route| route.upstream_model.as_str())
-        .collect();
-    let recommended_upstreams: std::collections::BTreeSet<&str> = recommended
-        .iter()
-        .map(|route| route.upstream_model.as_str())
-        .collect();
-    let additions: Vec<&str> = recommended_upstreams
-        .difference(&current_upstreams)
-        .copied()
-        .collect();
-    let removals: Vec<&str> = current_upstreams
-        .difference(&recommended_upstreams)
-        .copied()
-        .collect();
-    let fingerprint_material = serde_json::to_vec(&json!({
-        "profile_id": profile.id,
-        "template_id": profile.template_id,
-        "api_format": profile.api_format,
-        "current_catalog": profile.model_catalog,
-        "current_default": profile.default_model_route_id,
-        "current_roles": profile.role_bindings,
-        "preset_catalog_id": preset_id,
-        "recommended_catalog": recommended,
-        "recommended_default": default,
-        "recommended_roles": roles,
-    }))
-    .map_err(|error| error.to_string())?;
-    let mut digest = Sha256::new();
-    digest.update(b"csswitch-preset-sync-preview-v1\0");
-    digest.update(fingerprint_material);
-    let preview_fingerprint = digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    Ok(json!({
-        "profile_id": id,
-        "preset_catalog_id": preset_id,
-        "additions": additions,
-        "removals": removals,
-        "model_catalog": recommended,
-        "default_model_route_id": default,
-        "role_bindings": roles,
-        "preview_fingerprint": preview_fingerprint,
-        "requires_confirmation": true,
-    }))
-}
-
 #[cfg(test)]
 pub(crate) fn create_profile_inner(
     dir: &Path,
@@ -947,7 +860,7 @@ pub(crate) fn probe_kind_for_model(model: &str) -> scratch::ProbeKind {
 mod tests {
     use super::{
         acknowledge_pending_notice_inner, build_get_config, build_list_templates,
-        build_preset_sync_preview, clear_profile_key_inner, create_profile_inner,
+        clear_profile_key_inner, create_profile_inner,
         delete_profile_inner, ensure_codex_profile_inner, is_canonical_codex_profile,
         is_main_list_model, merge_and_sort_models, nonactive_probe_verdict,
         persist_profile_candidate_inner, probe_kind_for, probe_kind_for_model,
@@ -1258,51 +1171,6 @@ mod tests {
         );
         assert!(custom.unwrap_err().contains("模型"));
         assert!(create_profile_inner(&d, "deepseek", "DS", Some("gk"), None, None).is_ok());
-    }
-
-    #[test]
-    fn preset_sync_fingerprint_changes_with_saved_catalog_default_and_roles() {
-        let d = tmpdir_profile();
-        let id = create_profile_inner(&d, "glm", "GLM", Some("gk"), None, None).unwrap();
-        let first = build_preset_sync_preview(&d, &id).unwrap()["preview_fingerprint"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        config::update(&d, |cfg| {
-            cfg.profile_by_id_mut(&id).unwrap().model_catalog[0]
-                .display_name
-                .push_str(" changed");
-        })
-        .unwrap();
-        let second = build_preset_sync_preview(&d, &id).unwrap()["preview_fingerprint"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_ne!(first, second);
-
-        config::update(&d, |cfg| {
-            let profile = cfg.profile_by_id_mut(&id).unwrap();
-            let replacement = profile.model_catalog[1].selector_id.clone();
-            profile.default_model_route_id = replacement;
-        })
-        .unwrap();
-        let third = build_preset_sync_preview(&d, &id).unwrap()["preview_fingerprint"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_ne!(second, third);
-
-        config::update(&d, |cfg| {
-            let profile = cfg.profile_by_id_mut(&id).unwrap();
-            profile.role_bindings.haiku = profile.model_catalog[2].selector_id.clone();
-        })
-        .unwrap();
-        let fourth = build_preset_sync_preview(&d, &id).unwrap()["preview_fingerprint"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_ne!(third, fourth);
     }
 
     #[test]

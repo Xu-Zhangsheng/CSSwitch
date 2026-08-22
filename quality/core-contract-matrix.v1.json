@@ -56,8 +56,7 @@
         "desktop/src-tauri/Cargo.toml::lib::commands::profiles::tests::r0_select_profile_role_matrix_preserves_applied_and_live_state",
         "test.test_profile_pin_contract.ProfilePinContractTests.test_backend_pin_is_local_and_one_click_remains_the_apply_boundary",
         "test/profile_preview_mock.test.mjs::preview clear and delete remove applied truth only for the applied profile",
-        "test/profile_preview_mock.test.mjs::preview pin preserves applied binding until one-click succeeds",
-        "test/profile_preview_mock.test.mjs::preview selected edits and preset sync become pending without changing applied"
+        "test/profile_preview_mock.test.mjs::preview pin preserves applied binding until one-click succeeds"
       ],
       "planned_test_ids": ["profile_selection_exact_pending_apply_matrix"],
       "suite_ids": ["SUITE-RUST-DESKTOP", "SUITE-PY-OFFLINE", "SUITE-MJS-FRONTEND"],

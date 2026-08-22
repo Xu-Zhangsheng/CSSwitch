@@ -63,9 +63,21 @@ class ProfilePinContractTests(unittest.TestCase):
             r'"Science managed receipt、runtime 与 binding adoption provenance 不一致"\s*'
             r",?\s*\)\);\s*\}\s*\};",
         )
-        preset = profiles.split("fn apply_profile_preset_sync_inner_cmd", 1)[1].split(
-            "// ---------- profile CRUD", 1
+        handler = (ROOT / "desktop/src-tauri/src/lib.rs").read_text().split(
+            ".invoke_handler(tauri::generate_handler![", 1
+        )[1].split(
+            "])\n", 1
         )[0]
+        profile_runtime = (ROOT / "desktop/src-tauri/src/runtime/profile.rs").read_text()
+        preview_mock = (ROOT / "desktop/src/preview-adapter.js").read_text()
+        for retired_command in (
+            "preview_profile_preset_sync",
+            "apply_profile_preset_sync",
+        ):
+            self.assertNotIn(retired_command, handler)
+            self.assertNotIn(retired_command, profiles)
+            self.assertNotIn(retired_command, profile_runtime)
+            self.assertNotIn(retired_command, preview_mock)
         connection = profiles.split("fn update_profile_connection_inner_cmd", 1)[1].split(
             "/// 只把 profile", 1
         )[0]
@@ -75,9 +87,8 @@ class ProfilePinContractTests(unittest.TestCase):
         connection_commit = profiles.split("fn commit_profile_connection_in_dir", 1)[
             1
         ].split("/// 只把 profile", 1)[0]
-        self.assertNotIn("set_active_profile_txn", preset + connection)
-        self.assertNotIn("cfg.active_id == id", preset + connection)
-        self.assertGreaterEqual(preset.count("load_without_runtime_transaction"), 2)
+        self.assertNotIn("set_active_profile_txn", connection)
+        self.assertNotIn("cfg.active_id == id", connection)
         self.assertLess(
             connection_flow.index("load_without_runtime_transaction(dir)"),
             connection_flow.index("let prepared = prepare("),

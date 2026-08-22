@@ -93,21 +93,3 @@ test("preview clear and delete remove applied truth only for the applied profile
   assert.equal(nonAppliedDelete.mockStore.applied_profile_id, "a");
   assert.equal(nonAppliedDelete.mockStore.selection_pending, false);
 });
-
-test("preview selected edits and preset sync become pending without changing applied", async () => {
-  const context = makeMock();
-  await context.mockInvoke("update_profile_connection", { id: "a", baseUrl: "https://changed" });
-  assert.equal(context.mockStore.applied_profile_id, "a");
-  assert.equal(context.mockStore.selection_pending, true);
-
-  context.mockStore.selection_pending = false;
-  await context.mockInvoke("apply_profile_preset_sync", { id: "a" });
-  assert.equal(context.mockStore.applied_profile_id, "a");
-  assert.equal(context.mockStore.selection_pending, true);
-
-  const commonNotice = "兼容范围：文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。";
-  const geminiNotice = "兼容范围：仅按官方 OpenAI compatibility 接入；文本、多轮、tools/tool_choice 与模型发现已纳入门禁；图片、厂商 reasoning、原生流式和结构化输出尚未通过兼容门禁。";
-  assert.equal(source.includes("0.8.1 limited"), false);
-  assert.equal(source.split(commonNotice).length - 1, 3);
-  assert.equal(source.split(geminiNotice).length - 1, 1);
-});

@@ -1,12 +1,11 @@
 use std::path::Path;
 
-use serde_json::json;
 use tauri::State;
 
 use crate::runtime::profile::{
-    acknowledge_pending_notice_inner, build_get_config, build_preset_sync_preview,
-    clear_profile_key_inner, create_profile_with_catalog_inner, delete_profile_inner,
-    persist_profile_candidate_inner, update_profile_metadata_inner, CatalogEdit, ConnectionEdit,
+    acknowledge_pending_notice_inner, build_get_config, clear_profile_key_inner,
+    create_profile_with_catalog_inner, delete_profile_inner, persist_profile_candidate_inner,
+    update_profile_metadata_inner, CatalogEdit, ConnectionEdit,
 };
 use crate::runtime::profile_switch::scratch_validate_candidate;
 use crate::runtime::provider::{reject_openai_custom_anthropic_base, resolve_launch_plan};
@@ -37,19 +36,6 @@ fn catalog_edit_from_parts(
     Ok(catalog_edit)
 }
 
-#[allow(dead_code)]
-fn require_preview_fingerprint(preview: &serde_json::Value, expected: &str) -> Result<(), String> {
-    if preview
-        .get("preview_fingerprint")
-        .and_then(serde_json::Value::as_str)
-        == Some(expected)
-    {
-        Ok(())
-    } else {
-        Err("推荐目录预览已过期；配置或内置推荐已变化，请重新预览后确认。".into())
-    }
-}
-
 fn load_without_runtime_transaction(dir: &Path) -> Result<config::Config, String> {
     let cfg = config::load_from(dir).map_err(|error| error.to_string())?;
     config::require_no_runtime_transaction(&cfg)?;
@@ -66,58 +52,6 @@ pub(crate) fn acknowledge_pending_notice(
     expected_notice_id: String,
 ) -> Result<serde_json::Value, String> {
     acknowledge_pending_notice_inner(&config::default_dir(), &expected_notice_id)
-}
-
-#[allow(dead_code)]
-fn apply_profile_preset_sync_inner_cmd(
-    lifecycle: &lifecycle::Lifecycle,
-    dir: &Path,
-    id: &str,
-    expected_preview_fingerprint: &str,
-) -> Result<serde_json::Value, crate::commands::codex::RuntimeCommandError> {
-    lifecycle
-        .with_mutation(lifecycle::RuntimeMutationDomain::Intent, |_| {
-            apply_profile_preset_sync_in_dir(dir, id, expected_preview_fingerprint)
-        })
-        .map_err(crate::commands::codex::RuntimeCommandError::from)
-}
-
-#[allow(dead_code)]
-fn apply_profile_preset_sync_in_dir(
-    dir: &Path,
-    id: &str,
-    expected_preview_fingerprint: &str,
-) -> Result<serde_json::Value, String> {
-    load_without_runtime_transaction(dir)?;
-    let preview = build_preset_sync_preview(dir, id)?;
-    require_preview_fingerprint(&preview, expected_preview_fingerprint)?;
-    let edit = CatalogEdit {
-        routes: serde_json::from_value(preview["model_catalog"].clone())
-            .map_err(|error| error.to_string())?,
-        default_model_route_id: preview["default_model_route_id"]
-            .as_str()
-            .ok_or("推荐目录缺少默认 selector")?
-            .to_string(),
-        role_bindings: serde_json::from_value(preview["role_bindings"].clone())
-            .map_err(|error| error.to_string())?,
-    };
-    let cfg = load_without_runtime_transaction(dir)?;
-    let mut candidate = cfg
-        .profile_by_id(id)
-        .cloned()
-        .ok_or_else(|| format!("找不到 profile：{id}"))?;
-    ConnectionEdit::default()
-        .with_catalog(Some(edit))
-        .apply(&mut candidate)?;
-    resolve_launch_plan(&candidate)?;
-    persist_profile_candidate_inner(dir, id, &candidate)?;
-    Ok(json!({
-        "committed": true,
-        "status": "ok",
-        "stage": "complete",
-        "recovery_status": "not_needed",
-        "message": "已同步最新推荐；下次一键开始时核验并应用。",
-    }))
 }
 
 // ---------- profile CRUD 命令（薄包装 *_inner，统一经串行器） ----------
@@ -952,11 +886,10 @@ fn pin_active_profile_in_dir(
 #[cfg(test)]
 mod tests {
     use super::{
-        acknowledge_pending_notice_inner, apply_profile_preset_sync_inner_cmd,
-        catalog_edit_from_parts, clear_profile_key_cmd, clear_profile_key_cmd_with,
-        clear_profile_key_p2b, delete_profile_cmd, delete_profile_cmd_with, delete_profile_p2b,
-        persist_profile_candidate_inner, pin_active_profile_in_dir, require_preview_fingerprint,
-        update_profile_connection_with, update_profile_metadata_inner,
+        acknowledge_pending_notice_inner, catalog_edit_from_parts, clear_profile_key_cmd,
+        clear_profile_key_cmd_with, clear_profile_key_p2b, delete_profile_cmd,
+        delete_profile_cmd_with, delete_profile_p2b, persist_profile_candidate_inner,
+        pin_active_profile_in_dir, update_profile_connection_with, update_profile_metadata_inner,
     };
     use crate::{
         config::{self, Config, Profile, RuntimeBindingCommit, RuntimeTransactionJournal},
@@ -1024,31 +957,6 @@ mod tests {
             binding_fp: "binding".into(),
             science_adoption_attempt_id: None,
         }
-    }
-
-    fn matching_binding(profile: &Profile) -> RuntimeBindingCommit {
-        let launch = crate::runtime::provider::resolve_launch_plan(profile)
-            .unwrap()
-            .formal();
-        RuntimeBindingCommit {
-            profile_id: profile.id.clone(),
-            route_fp: crate::runtime::provider::route_fingerprint(
-                profile,
-                &launch,
-                crate::runtime::provider::current_shim_mode_for_adapter(&launch.adapter),
-            ),
-            catalog_fp: crate::runtime::provider::catalog_fingerprint(profile).unwrap(),
-            binding_fp: "binding".into(),
-            science_adoption_attempt_id: None,
-        }
-    }
-
-    fn add_outdated_catalog_entry(profile: &mut Profile) {
-        let mut extra = profile.model_catalog[0].clone();
-        extra.selector_id = format!("claude-csswitch-r0-extra-{}", profile.id);
-        extra.display_name = "R0 obsolete route".into();
-        extra.upstream_model = format!("r0-obsolete-{}", profile.id);
-        profile.model_catalog.push(extra);
     }
 
     fn assert_gateway_identity(state: &SharedAppState, expected_present: bool) {
@@ -1543,123 +1451,6 @@ mod tests {
     }
 
     #[test]
-    fn r0_sync_preset_role_matrix_preserves_selection_pending_and_live_state() {
-        for (label, selected, applied, target, pending_before, pending_after) in [
-            (
-                "selected-only",
-                "selected",
-                "applied",
-                "selected",
-                true,
-                true,
-            ),
-            ("applied-only", "selected", "applied", "applied", true, true),
-            (
-                "selected-applied",
-                "selected",
-                "selected",
-                "selected",
-                false,
-                true,
-            ),
-            ("neither", "selected", "selected", "other", false, false),
-        ] {
-            let dir = tmpdir(&format!("r0-sync-{label}"));
-            let mut profiles = vec![
-                profile("selected", "sk-selected"),
-                profile("applied", "sk-applied"),
-                profile("other", "sk-other"),
-            ];
-            add_outdated_catalog_entry(
-                profiles
-                    .iter_mut()
-                    .find(|profile| profile.id == target)
-                    .unwrap(),
-            );
-            let runtime_binding = matching_binding(
-                profiles
-                    .iter()
-                    .find(|profile| profile.id == applied)
-                    .unwrap(),
-            );
-            let cfg = Config {
-                profiles,
-                active_id: selected.into(),
-                runtime_binding: Some(runtime_binding),
-                ..Default::default()
-            };
-            config::save_to(&dir, &cfg).unwrap();
-            let lifecycle = lifecycle::Lifecycle::new();
-            let generation = lifecycle.current_generation();
-            assert_eq!(
-                crate::runtime::profile::build_get_config(&dir).unwrap()["selection_pending"],
-                pending_before,
-                "{label} before"
-            );
-            let preview = crate::runtime::profile::build_preset_sync_preview(&dir, target).unwrap();
-            let fingerprint = preview["preview_fingerprint"].as_str().unwrap();
-
-            apply_profile_preset_sync_inner_cmd(&lifecycle, &dir, target, fingerprint).unwrap();
-
-            let after = config::load_from(&dir).unwrap();
-            assert_eq!(after.active_id, cfg.active_id, "{label}");
-            assert_eq!(after.runtime_binding, cfg.runtime_binding, "{label}");
-            assert!(after.runtime_transaction.is_none(), "{label}");
-            assert_eq!(
-                crate::runtime::profile::build_get_config(&dir).unwrap()["selection_pending"],
-                pending_after,
-                "{label} after"
-            );
-            assert_eq!(lifecycle.current_generation(), generation, "{label}");
-            let _ = fs::remove_dir_all(&dir);
-        }
-
-        let dir = tmpdir("r0-sync-rejections");
-        let cfg = Config {
-            profiles: vec![profile("selected", "sk-selected")],
-            active_id: "selected".into(),
-            ..Default::default()
-        };
-        config::save_to(&dir, &cfg).unwrap();
-        let preview = crate::runtime::profile::build_preset_sync_preview(&dir, "selected").unwrap();
-        let stale_fingerprint = preview["preview_fingerprint"].as_str().unwrap().to_string();
-        config::update(&dir, |cfg| {
-            add_outdated_catalog_entry(cfg.profile_by_id_mut("selected").unwrap());
-        })
-        .unwrap();
-        let lifecycle = lifecycle::Lifecycle::new();
-        let before_stale = config::load_from(&dir).unwrap();
-        assert!(apply_profile_preset_sync_inner_cmd(
-            &lifecycle,
-            &dir,
-            "selected",
-            &stale_fingerprint
-        )
-        .is_err());
-        assert_eq!(config::load_from(&dir).unwrap(), before_stale);
-
-        config::update(&dir, |cfg| {
-            cfg.runtime_transaction = Some(
-                RuntimeTransactionJournal {
-                    transaction_id: "txn".into(),
-                    target_profile_id: "selected".into(),
-                    stage: "start_gateway".into(),
-                    previous_binding: None,
-                    previous_gateway: None,
-                }
-                .into(),
-            );
-        })
-        .unwrap();
-        let before_transaction = config::load_from(&dir).unwrap();
-        assert!(
-            apply_profile_preset_sync_inner_cmd(&lifecycle, &dir, "selected", "unused").is_err()
-        );
-        assert_eq!(config::load_from(&dir).unwrap(), before_transaction);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn r0_profile_revocation_selected_applied_role_matrix() {
         for operation in ["clear", "delete"] {
             for (role, selected, applied, target, stops_gateway) in [
@@ -2114,11 +1905,4 @@ mod tests {
         .is_err());
     }
 
-    #[test]
-    fn stale_preset_preview_fingerprint_is_rejected() {
-        let preview = serde_json::json!({ "preview_fingerprint": "fingerprint-a" });
-        assert!(require_preview_fingerprint(&preview, "fingerprint-a").is_ok());
-        assert!(require_preview_fingerprint(&preview, "fingerprint-b").is_err());
-        assert!(require_preview_fingerprint(&serde_json::json!({}), "fingerprint-a").is_err());
-    }
 }

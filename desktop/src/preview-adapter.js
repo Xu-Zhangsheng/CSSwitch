@@ -282,23 +282,6 @@ export function mockInvoke(cmd, args) {
         return Promise.resolve({ models: [{ id: "minimax-m3", display_name: "MiniMax M3", supports_tools: true, origin: "discovered", availability: "available", route_known: true }, { id: "qwen3.7-max", display_name: "Qwen 3.7 Max", supports_tools: true, origin: "discovered", availability: "available", route_known: true }], source: "live", error_kind: null, upstream_status: 200, filtered_unknown_count: 1, route_catalog: { schema_version: 1, transport: "anthropic" } });
       }
       return Promise.resolve({ models: [{ id: "provider-model", display_name: "Provider model", supports_tools: true, origin: "discovered", availability: "available" }], source: "live", error_kind: null, upstream_status: 200 });
-    case "preview_profile_preset_sync": {
-      const p = mockStore.profiles.find((x) => x.id === args.id);
-      const t = MOCK_TEMPLATES.find((x) => x.id === p?.template_id);
-      if (!p || !t?.recommended_catalog) return Promise.reject("该配置没有推荐目录");
-      return Promise.resolve({
-        profile_id: p.id, preset_catalog_id: t.id,
-        additions: t.recommended_catalog.map((r) => r.upstream_model).filter((id) => !(p.model_catalog || []).some((r) => r.upstream_model === id)),
-        removals: (p.model_catalog || []).map((r) => r.upstream_model).filter((id) => !t.recommended_catalog.some((r) => r.upstream_model === id)),
-        model_catalog: t.recommended_catalog.map((r) => ({ ...r })),
-        default_model_route_id: t.recommended_default_model_route_id,
-        role_bindings: { ...t.recommended_role_bindings },
-        preview_fingerprint: "a".repeat(64), requires_confirmation: true,
-      });
-    }
-    case "apply_profile_preset_sync":
-      if (mockStore.active_id === args.id) mockStore.selection_pending = true;
-      return Promise.resolve({ committed: true, status: "ok", message: "已同步最新推荐。" });
     case "validate_profile_catalog_model":
       return Promise.resolve({ validated: true, status: "ok", message: "该模型已通过隔离 scratch 请求验证。" });
     case "set_experimental_codex_enabled":
