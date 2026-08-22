@@ -129,6 +129,8 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 - 对 test-only `runtime/transaction.rs`、operation vocabulary 和 dormant profile preset-sync 明确选择
   “接通”或“删除”；不能无限期以 `allow(dead_code)` 保存模糊意图。
 - provider contract 适合抽共享 crate 或生成 schema；先定义单一解释 owner，再迁移两套 validator。
+- 已接受的最小施工顺序、允许路径与收口规则见 [P4 语义收敛](../../docs/architecture/p4-semantic-closure.md)；
+  它不是已实施或 source closure 结论。
 
 ### 下游产品证据
 
