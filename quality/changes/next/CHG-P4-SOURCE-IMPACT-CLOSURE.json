@@ -1,0 +1,74 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-P4-SOURCE-IMPACT-CLOSURE",
+    "version": "v0.8.4-dev",
+    "title": "Close P4 source impact governance coverage",
+    "summary": "Registers the operational governance paths and frozen retirement groups needed for the P4 source-only impact inventory. It neither changes the retired source nor claims an artifact, runtime, signing, or release result.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/skills/csswitch-change-checks/SKILL.md",
+      ".agents/skills/csswitch-code-review/SKILL.md",
+      ".agents/skills/csswitch-doc-governance/SKILL.md",
+      ".github/ISSUE_TEMPLATE/bug_report.yml",
+      ".github/pull_request_template.md",
+      "docs/operations/quality-kernel.md",
+      "quality/changes/next/CHG-P4-PRESET-SYNC-REMOVAL.json",
+      "quality/changes/next/CHG-P4-SOURCE-IMPACT-CLOSURE.json",
+      "quality/production-paths.v1.json",
+      "test/quality/test_quality_kernel.py",
+      "test/quality/validate_quality_metadata.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-EVIDENCE",
+      "REQ-083-INVENTORY",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-PY-OFFLINE",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-IMPACT",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-SOURCE-GATE-CONTRACT"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P1",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "quality metadata, focused kernel, inventory, impact, and source-gate contract checks",
+        "document-governance check for the operation contract update",
+        "release impact remains a clean committed-candidate gate and is not claimed from this worktree"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

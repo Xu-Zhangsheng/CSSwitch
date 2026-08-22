@@ -17,6 +17,9 @@ from unittest import mock
 try:
     from validate_quality_metadata import (
         PRODUCT_BUG_IDS,
+        P4_DEAD_TRANSACTION_CHANGE_ID,
+        P4_DEAD_TRANSACTION_CHANGE_SOURCE,
+        RETIRED_PRODUCTION_DELETION_GROUPS,
         RETIRED_PRODUCTION_CHANGE_SOURCE,
         RETIRED_PRODUCTION_FILES,
         Validator,
@@ -26,6 +29,9 @@ try:
 except ModuleNotFoundError:
     from test.quality.validate_quality_metadata import (
         PRODUCT_BUG_IDS,
+        P4_DEAD_TRANSACTION_CHANGE_ID,
+        P4_DEAD_TRANSACTION_CHANGE_SOURCE,
+        RETIRED_PRODUCTION_DELETION_GROUPS,
         RETIRED_PRODUCTION_CHANGE_SOURCE,
         RETIRED_PRODUCTION_FILES,
         Validator,
@@ -163,14 +169,21 @@ class QualityKernelFocused(unittest.TestCase):
             }
         )
         errors = self.errors_after(validator, validator.check_production_policy_shape)
-        self.assertIn("must equal the frozen Skill Manager orphan set", errors)
+        self.assertIn("must equal the two frozen retirement groups", errors)
 
         validator = self.fresh()
         validator.path_policy["retired_path_deletions"][0]["change_id"] = (
             "CHG-RUNTIME-MUTATION-LEASE-S3"
         )
         errors = self.errors_after(validator, validator.check_production_policy_shape)
-        self.assertIn("must equal the frozen Skill Manager orphan set", errors)
+        self.assertIn("must equal the two frozen retirement groups", errors)
+
+        validator = self.fresh()
+        validator.path_policy["retired_path_deletions"][2]["change_id"] = (
+            "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"
+        )
+        errors = self.errors_after(validator, validator.check_production_policy_shape)
+        self.assertIn("must equal the two frozen retirement groups", errors)
 
         validator = self.fresh()
         errors = self.errors_after(
@@ -212,6 +225,11 @@ class QualityKernelFocused(unittest.TestCase):
 
         exact_retirement = [("D", path) for path in sorted(RETIRED_PRODUCTION_FILES)]
         exact_retirement.append(("??", RETIRED_PRODUCTION_CHANGE_SOURCE))
+        skill_group = next(
+            group
+            for group in RETIRED_PRODUCTION_DELETION_GROUPS
+            if group["change_id"] == "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"
+        )
         validator = self.fresh()
         with mock.patch.object(
             validator,
@@ -226,7 +244,7 @@ class QualityKernelFocused(unittest.TestCase):
                     {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
                 ),
             )
-        activation.assert_called_once_with()
+        activation.assert_called_once_with(skill_group)
         self.assertFalse(errors)
 
         for disguised_copy in (
@@ -247,7 +265,7 @@ class QualityKernelFocused(unittest.TestCase):
                         {"CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"},
                     ),
                 )
-            self.assertIn("manifest must equal the frozen 12 deletions", errors)
+            self.assertIn("manifest must equal the frozen Skill Manager orphan set manifest", errors)
 
         validator = self.fresh()
         errors = self.errors_after(
@@ -255,9 +273,10 @@ class QualityKernelFocused(unittest.TestCase):
             lambda: validator.check_retired_deletion_manifest(
                 exact_retirement[:-2],
                 "malicious-missing-delete",
+                skill_group,
             ),
         )
-        self.assertIn("manifest must equal the frozen 12 deletions", errors)
+        self.assertIn("manifest must equal the frozen Skill Manager orphan set manifest", errors)
 
         validator = self.fresh()
         later_release_diff = exact_retirement + [
@@ -275,8 +294,8 @@ class QualityKernelFocused(unittest.TestCase):
                     "later-release-wide-diff",
                 ),
             )
-        activation.assert_called_once_with()
-        self.assertNotIn("manifest must equal the frozen 12 deletions", errors)
+        activation.assert_called_once_with(skill_group)
+        self.assertNotIn("manifest must equal the frozen Skill Manager orphan set manifest", errors)
         errors = self.errors_after(
             validator,
             lambda: validator.check_changed_paths(
@@ -286,6 +305,63 @@ class QualityKernelFocused(unittest.TestCase):
             ),
         )
         self.assertIn("rename/delete/copy status is fail-closed", errors)
+
+        transaction_group = next(
+            group
+            for group in RETIRED_PRODUCTION_DELETION_GROUPS
+            if group["change_id"] == P4_DEAD_TRANSACTION_CHANGE_ID
+        )
+        exact_transaction_retirement = [
+            ("D", "desktop/src-tauri/src/runtime/transaction.rs"),
+            ("M", "desktop/src-tauri/src/runtime/mod.rs"),
+            ("M", "desktop/src-tauri/src/runtime/operation.rs"),
+            ("??", P4_DEAD_TRANSACTION_CHANGE_SOURCE),
+        ]
+        validator = self.fresh()
+        with mock.patch.object(
+            validator,
+            "retired_deletion_activation_changes",
+            return_value=exact_transaction_retirement,
+        ) as activation:
+            errors = self.errors_after(
+                validator,
+                lambda: validator.check_changed_paths(
+                    exact_transaction_retirement,
+                    "impact-pr",
+                    {P4_DEAD_TRANSACTION_CHANGE_ID},
+                ),
+            )
+        activation.assert_called_once_with(transaction_group)
+        self.assertFalse(errors)
+
+        validator = self.fresh()
+        errors = self.errors_after(
+            validator,
+            lambda: validator.check_changed_paths(
+                [("D", "desktop/src-tauri/src/runtime/mod.rs")],
+                "impact-release",
+                {P4_DEAD_TRANSACTION_CHANGE_ID},
+            ),
+        )
+        self.assertIn("rename/delete/copy status is fail-closed", errors)
+
+        validator = self.fresh()
+        with mock.patch.object(
+            validator,
+            "retired_deletion_activation_changes",
+            return_value=exact_transaction_retirement + [
+                ("A", "desktop/src-tauri/src/runtime/transaction_copy.rs"),
+            ],
+        ):
+            errors = self.errors_after(
+                validator,
+                lambda: validator.check_changed_paths(
+                    exact_transaction_retirement,
+                    "impact-pr",
+                    {P4_DEAD_TRANSACTION_CHANGE_ID},
+                ),
+            )
+        self.assertIn("manifest must equal the frozen P4 dead transaction vocabulary manifest", errors)
 
         original_git = validator.git
 
@@ -338,16 +414,17 @@ class QualityKernelFocused(unittest.TestCase):
             run_git(repo, "commit", "-q", "-m", "malicious first introduction")
 
             history_validator = Validator(repo)
-            activation = history_validator.retired_deletion_activation_changes()
+            activation = history_validator.retired_deletion_activation_changes(skill_group)
             self.assertIsNotNone(activation)
             errors = self.errors_after(
                 history_validator,
                 lambda: history_validator.check_retired_deletion_manifest(
                     activation or [],
                     "malicious-first-introduction",
+                    skill_group,
                 ),
             )
-            self.assertIn("manifest must equal the frozen 12 deletions", errors)
+            self.assertIn("manifest must equal the frozen Skill Manager orphan set manifest", errors)
 
             source.unlink()
             disguise.unlink()
@@ -377,7 +454,7 @@ class QualityKernelFocused(unittest.TestCase):
             run_git(repo, "commit", "-q", "-m", "clean second introduction")
 
             history_validator = Validator(repo)
-            activation = history_validator.retired_deletion_activation_changes()
+            activation = history_validator.retired_deletion_activation_changes(skill_group)
             self.assertIsNone(activation)
             self.assertIn(
                 "must have exactly one introduction commit",

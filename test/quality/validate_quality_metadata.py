@@ -106,10 +106,6 @@ SOURCE_SUITE_ORDER = (
     "SUITE-ORPHAN-SKILL-BOUNDARY",
     "SUITE-SOURCE-GATE-CONTRACT",
 )
-RETIRED_PRODUCTION_DELETIONS = {
-    "desktop/src-tauri/src/commands/skills.rs": "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR",
-    "desktop/src-tauri/src/skill_manager/": "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR",
-}
 RETIRED_PRODUCTION_CHANGE_ID = "CHG-SKILL-MANAGER-NEGATIVE-REFACTOR"
 RETIRED_PRODUCTION_CHANGE_SOURCE = (
     "quality/changes/next/CHG-SKILL-MANAGER-NEGATIVE-REFACTOR.json"
@@ -130,6 +126,60 @@ RETIRED_PRODUCTION_FILES = frozenset(
         "desktop/src-tauri/src/skill_manager/workspace_ingress.rs",
     }
 )
+P4_DEAD_TRANSACTION_CHANGE_ID = "CHG-P4-DEAD-TRANSACTION-VOCAB"
+P4_DEAD_TRANSACTION_CHANGE_SOURCE = (
+    "quality/changes/next/CHG-P4-DEAD-TRANSACTION-VOCAB.json"
+)
+P4_DEAD_TRANSACTION_FILES = frozenset(
+    {
+        "desktop/src-tauri/src/runtime/transaction.rs",
+    }
+)
+RETIRED_PRODUCTION_DELETION_GROUPS = (
+    {
+        "name": "Skill Manager orphan set",
+        "change_id": RETIRED_PRODUCTION_CHANGE_ID,
+        "change_source": RETIRED_PRODUCTION_CHANGE_SOURCE,
+        "policy_paths": frozenset(
+            {
+                "desktop/src-tauri/src/commands/skills.rs",
+                "desktop/src-tauri/src/skill_manager/",
+            }
+        ),
+        "record_desktop_paths": frozenset(
+            {
+                "desktop/src-tauri/src/commands/skills.rs",
+                "desktop/src-tauri/src/skill_manager/",
+            }
+        ),
+        "manifest": frozenset(("D", path) for path in RETIRED_PRODUCTION_FILES),
+    },
+    {
+        "name": "P4 dead transaction vocabulary",
+        "change_id": P4_DEAD_TRANSACTION_CHANGE_ID,
+        "change_source": P4_DEAD_TRANSACTION_CHANGE_SOURCE,
+        "policy_paths": P4_DEAD_TRANSACTION_FILES,
+        "record_desktop_paths": frozenset(
+            {
+                "desktop/src-tauri/src/runtime/transaction.rs",
+                "desktop/src-tauri/src/runtime/mod.rs",
+                "desktop/src-tauri/src/runtime/operation.rs",
+            }
+        ),
+        "manifest": frozenset(
+            {
+                ("D", "desktop/src-tauri/src/runtime/transaction.rs"),
+                ("M", "desktop/src-tauri/src/runtime/mod.rs"),
+                ("M", "desktop/src-tauri/src/runtime/operation.rs"),
+            }
+        ),
+    },
+)
+RETIRED_PRODUCTION_DELETIONS = {
+    path: group["change_id"]
+    for group in RETIRED_PRODUCTION_DELETION_GROUPS
+    for path in group["policy_paths"]
+}
 
 
 class ValidationError(Exception):
@@ -1264,19 +1314,24 @@ class Validator:
         if retirement_bindings != RETIRED_PRODUCTION_DELETIONS:
             self.error(
                 "production-paths.retired_path_deletions",
-                "retired deletions must equal the frozen Skill Manager orphan set",
+                "retired deletions must equal the two frozen retirement groups",
             )
-        retirement_change = self.changes.get(RETIRED_PRODUCTION_CHANGE_ID)
-        if isinstance(retirement_change, dict):
+        for group in RETIRED_PRODUCTION_DELETION_GROUPS:
+            change_id = str(group["change_id"])
+            retirement_change = self.changes.get(change_id)
+            if not isinstance(retirement_change, dict):
+                self.error(change_id, "frozen retirement ChangeRecord is missing")
+                continue
             declared_desktop_paths = {
                 str(path)
                 for path in retirement_change.get("changed_paths", [])
                 if str(path).startswith("desktop/")
             }
-            if declared_desktop_paths != set(RETIRED_PRODUCTION_DELETIONS):
+            expected_desktop_paths = set(group["record_desktop_paths"])
+            if declared_desktop_paths != expected_desktop_paths:
                 self.error(
-                    RETIRED_PRODUCTION_CHANGE_ID,
-                    "desktop changed_paths must equal the frozen retired path declarations",
+                    change_id,
+                    "desktop changed_paths must equal its frozen retirement manifest paths",
                 )
         for index, item in enumerate(retirements):
             retired_path = str(item.get("path", ""))
@@ -1324,18 +1379,21 @@ class Validator:
                         "production-paths.retired_path_deletions",
                         "retired paths must not overlap",
                     )
-        if (
-            isinstance(retirement_change, dict)
-            and retirement_change.get("status") == "active"
-            and self.change_sources.get(RETIRED_PRODUCTION_CHANGE_ID)
-            == RETIRED_PRODUCTION_CHANGE_SOURCE
-        ):
-            activation_changes = self.retired_deletion_activation_changes()
-            if activation_changes is not None:
-                self.check_retired_deletion_manifest(
-                    activation_changes,
-                    "production-paths.retired_path_deletions",
-                )
+        for group in RETIRED_PRODUCTION_DELETION_GROUPS:
+            change_id = str(group["change_id"])
+            retirement_change = self.changes.get(change_id)
+            if (
+                isinstance(retirement_change, dict)
+                and retirement_change.get("status") == "active"
+                and self.change_sources.get(change_id) == group["change_source"]
+            ):
+                activation_changes = self.retired_deletion_activation_changes(group)
+                if activation_changes is not None:
+                    self.check_retired_deletion_manifest(
+                        activation_changes,
+                        "production-paths.retired_path_deletions",
+                        group,
+                    )
 
     def check_impact(self, profile: str, target_ref: Optional[str]) -> None:
         gate_profile = self.gate_for_profile(profile)
@@ -1479,12 +1537,16 @@ class Validator:
                 result.append((status, path))
         return result
 
-    def retired_deletion_activation_changes(self) -> Optional[List[Tuple[str, str]]]:
+    def retired_deletion_activation_changes(
+        self,
+        group: Dict[str, Any],
+    ) -> Optional[List[Tuple[str, str]]]:
+        change_source = str(group["change_source"])
         status_changed = self.status_paths()
         source_statuses = [
             status
             for status, path in status_changed
-            if path == RETIRED_PRODUCTION_CHANGE_SOURCE
+            if path == change_source
         ]
         if any(status == "??" or status.startswith("A") for status in source_statuses):
             return status_changed
@@ -1495,7 +1557,7 @@ class Validator:
                 "--diff-filter=A",
                 "--format=%H",
                 "--",
-                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                change_source,
             ],
             allow_failure=True,
         )
@@ -1506,7 +1568,7 @@ class Validator:
         ]
         if rc != 0 or len(activation_commits) != 1:
             self.error(
-                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                change_source,
                 "retirement ChangeRecord must have exactly one introduction commit; "
                 "missing or delete/re-add history is fail-closed",
             )
@@ -1518,7 +1580,7 @@ class Validator:
         )
         if rc != 0 or not parent:
             self.error(
-                RETIRED_PRODUCTION_CHANGE_SOURCE,
+                change_source,
                 "retirement ChangeRecord introduction must have a parent commit",
             )
             return None
@@ -1528,18 +1590,19 @@ class Validator:
         self,
         changed: Iterable[Tuple[str, str]],
         profile: str,
+        group: Dict[str, Any],
     ) -> None:
         actual = {
             (status, path)
             for status, path in changed
             if path.startswith("desktop/")
         }
-        expected = {("D", path) for path in RETIRED_PRODUCTION_FILES}
+        expected = set(group["manifest"])
         if actual != expected:
             self.error(
                 profile,
-                "retirement activation Desktop manifest must equal the frozen 12 deletions; "
-                "extra or missing A/M/R/C/D paths are fail-closed",
+                "retirement activation Desktop manifest must equal the frozen {} manifest; "
+                "extra or missing A/M/R/C/D paths are fail-closed".format(group["name"]),
             )
 
     @staticmethod
@@ -1557,16 +1620,21 @@ class Validator:
     ) -> None:
         changed = list(changed)
         changed_paths = {path for _, path in changed}
-        if (
-            RETIRED_PRODUCTION_CHANGE_SOURCE in changed_paths
-            and any(
-                status.startswith("D") and path in RETIRED_PRODUCTION_FILES
-                for status, path in changed
-            )
-        ):
-            activation_changes = self.retired_deletion_activation_changes()
-            if activation_changes is not None:
-                self.check_retired_deletion_manifest(activation_changes, profile)
+        for group in RETIRED_PRODUCTION_DELETION_GROUPS:
+            if (
+                group["change_source"] in changed_paths
+                and any(
+                    status.startswith("D")
+                    and any(
+                        self.path_matches(policy_path, path)
+                        for policy_path in group["policy_paths"]
+                    )
+                    for status, path in changed
+                )
+            ):
+                activation_changes = self.retired_deletion_activation_changes(group)
+                if activation_changes is not None:
+                    self.check_retired_deletion_manifest(activation_changes, profile, group)
         policy_paths = [item for item in self.path_policy.get("paths", []) if isinstance(item, dict)]
         exemptions = [item for item in self.path_policy.get("narrative_exemptions", []) if isinstance(item, dict)]
         retired_deletions = [

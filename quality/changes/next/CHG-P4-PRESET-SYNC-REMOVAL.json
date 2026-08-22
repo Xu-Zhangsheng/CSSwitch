@@ -32,6 +32,7 @@
         "SUITE-MJS-FRONTEND",
         "SUITE-PY-OFFLINE",
         "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
         "SUITE-QUALITY-INVENTORY"
       ],
       "required_gate_ids": [
