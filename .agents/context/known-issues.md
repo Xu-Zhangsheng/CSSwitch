@@ -69,7 +69,9 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 | Current exact main source closure | `PASS` | `c678b1bee2475686ebbb8b8172c24112a37c6ce9` 的允许环境 run `fc4630f41a7930244720d4de46019f82`：aggregate `PASS`、runner exit `0`、15/15 suites；详情与首次 `ENV-BLOCKED` run 见[已验证状态](verified-state.md) |
 | Last immutable accepted source candidate | `SOURCE-GREEN` | `d786a2d833dfd5f95b02d15f84f122a8b9fd4225`；其 immutable record 为 `quality/source-candidates/d786a2d833dfd5f95b02d15f84f122a8b9fd4225.json`。这不是 `c678b1b` 的 immutable candidate record |
 | Exact artifact | `PASS` | `c678b1b` 已新构建 `CSSwitch Test.app`；Desktop/Gateway/resources/Info.plist、hash 与 fresh empty-HOME Gateway `codex-auth status` 的受限证据见 [2026-08-22 exact artifact](../../docs/evidence/investigations/2026-08-22-csswitch-c678b1b-exact-artifact.md)。证据提交的 pre-evidence docs-only baseline/parent 是 `434cfe3`；该 docs-only descendant 不是 artifact-producing source |
-| Temporary / installed runtime | `NOT-RUN` | 本轮未启动临时或已安装 runtime，也未读取、替换或启动已安装 App |
+| Guard-managed Acceptance Desktop entry | `PASS(scope=RM-42 Desktop production entry)` | `c678b1b` exact `CSSwitch Test.app` 的 packaged Desktop 在新的隔离 HOME 中实际运行；compiled `$HOME/.csswitch-acceptance`、动态端口、Codex 默认关闭、运行/停止前后的 `8765` guard 与最终 `assert-stopped` 见[2026-08-22 Desktop isolation](../../docs/evidence/investigations/2026-08-22-csswitch-c678b1b-isolated-desktop-entry.md)。这不是 Gateway / Science 全链 PASS |
+| Gateway / Science production wiring | `NOT-RUN` | 空 profile fixture 没有执行 one-click，也没有启动 Gateway / Science；不能把 Desktop entry PASS 外推为完整 isolated-live |
+| Installed runtime | `NOT-RUN` | 未读取、替换、启动或停止 `/Applications/CSSwitch.app` |
 | Live Provider / Science / SSH / account | `NOT-RUN` | 没有真实 Provider、Science、SSH 或账号请求；真实凭证与 data-dir 未读取 |
 | Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
 | Public release | `NOT-RUN` | 未创建 tag、DMG 或 Release；不得虚构 release readiness |
@@ -134,12 +136,13 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 authorized-live 推进；installed、signing/notarization 与 public release 仍是额外独立层。真实 API Key、
 OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本路线获得访问授权。
 
-## 唯一立即 NEXT
+## 下一步边界
 
-P3 source 与 `c678b1b` exact artifact 已闭合。唯一下一证据动作是在该 exact artifact 上、以新的
-guard-managed isolated environment 验证 normal production entry 的 isolated-live wiring；它需要单独的
-环境和范围记录。不得把现有 artifact PASS 外推为 temporary/installed runtime、live Provider、Science、
-SSH、账号、signing、notarization、Gatekeeper 或 public release；这些层当前全部仍为 `NOT-RUN`。
+P3 source、`c678b1b` exact artifact 与其 guard-managed Acceptance Desktop production entry 已分别取证。
+若下一步继续产品证据，未闭合的最小范围是以新的 guard-managed environment 经正常 one-click / production
+caller 取得 Gateway + Science wiring；它仍需单独授权、环境与证据，且不能借空 profile Desktop entry 冒充。
+live Provider、SSH、账号、installed App、signing、notarization、Gatekeeper 与 public release 仍全部是独立的
+`NOT-RUN` 层。
 
 ## 文档退役状态
 

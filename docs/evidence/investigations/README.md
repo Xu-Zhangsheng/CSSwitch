@@ -1,5 +1,6 @@
 # 日期化调查索引
 
+- [2026-08-22 CSSwitch `c678b1b` Acceptance Desktop 隔离生产入口](2026-08-22-csswitch-c678b1b-isolated-desktop-entry.md)
 - [2026-08-22 CSSwitch `c678b1b` exact Acceptance artifact](2026-08-22-csswitch-c678b1b-exact-artifact.md)
 
 - [2026-07-13 Science runtime 与外部 Skill bridge](2026-07-13-science-runtime-and-skill-bridge.md)
