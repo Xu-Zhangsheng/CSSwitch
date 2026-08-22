@@ -4,9 +4,9 @@
 
 最后复核：2026-08-22（Asia/Taipei）
 
-当前 `main` exact source closure：`c678b1bee2475686ebbb8b8172c24112a37c6ce9`；最近 immutable accepted source candidate 仍为 `d786a2d833dfd5f95b02d15f84f122a8b9fd4225`。
-
 失效条件：production owner / caller、candidate source、artifact identity、Science / Gateway runtime、Provider capability、质量元数据、签名或公开 Release 任一相关事实改变时，受影响条目立即失效并须实时重审。
+
+当前 `main` exact source closure 与 immutable accepted source candidate：`a84f868c7f379959743c114f0b89e61703e8cff8`；其 immutable record publication 为 `f0ed7ce562c04b321f43f2f4e448705ce18857d7`，但 publication 不是 artifact-producing source。
 
 本页是唯一当前路线，只保存“现在到哪、还缺什么、下一步是什么”。稳定机制放在 `docs/`，
 exact SHA / run / artifact / 环境的历史证据放在日期化 audit/evidence；旧阶段编号不能提供当前
@@ -14,16 +14,7 @@ NEXT、实施授权或验收结论。
 
 ## 一句话判断
 
-`main@c678b1b` 已合入 P0 至 P3 的 source 实现与仓库治理。其 exact `GATE-SOURCE` 已在
-允许进程观察与 sandbox-exec 的隔离环境取得 `PASS`（runner exit `0`、15/15 suites）；托管 sandbox
-的同 SHA 首次运行因禁止 `ps` / `sandbox-exec` 诊断为 `ENV-BLOCKED`，不是产品失败。P3 的窄范围
-公开 GitHub 固定 commit 单 Skill 已实现 `plan → explicit apply → continue/reconcile` 与确认式卸载的
-durable ledger。此结论只覆盖 source；不能升级为 artifact、runtime、Provider、Science、SSH、账号、
-签名或公开 Release 完成。
-
-`c678b1b` 还没有 `quality/source-candidates/` immutable record，因而不能称为 immutable accepted
-candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted candidate，不能替 `c678b1b`
-继承 P3 或当前 main 的 source 结论。
+当前 main 的 exact source closure candidate `a84f868` 已在允许环境取得 `GATE-SOURCE PASS`（runner exit `0`、16/16 suites），并已有 immutable record；record publication `f0ed7ce` 只记录该状态。P3 的窄范围公开 GitHub 固定 commit 单 Skill source 合同仍保持 `plan → explicit apply → continue/reconcile` 与确认式卸载的 durable ledger。P4 provider contract 由 shared `provider-contracts` 解释，Desktop 与 Gateway 只保留各自 projections。以上是 source/record 结论，不能升级为 runtime、Provider、Science、SSH、账号、签名或公开 Release 完成。
 
 ## 已完成的结构
 
@@ -57,8 +48,9 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 - Desktop bounded Science control runner、Skill package 的 `claude-science url` runner、Gateway
   Science HTTP control 仍是三套职责不同的控制面；本 P1 只闭合 Desktop post-start caller，没有为
   “统一”跨 crate 重构，也没有改变 Gateway HTTP policy 或 skill-package 合同。
-- Desktop 与 Gateway 共同读取同一 provider contract JSON，但仍各自定义类型和验证逻辑；共享
-  digest 能防字节漂移，不能防解释逻辑漂移。
+- shared `provider-contracts` 已拥有 provider catalog 的 schema、semantic validation、digest、exact selector
+  与 unique adapter interpretation；Desktop caller-facing compatibility 与 Gateway runtime projection 仍是不同
+  consumer，后续 live provider 证据必须分别取得。
 - 大文件不是单独 blocker。只有能形成新的类型 owner、visibility boundary 或 failure contract 时才拆；
   不按行数机械切分 `commands/runtime/tests.rs`、`config.rs` 或 protocol parser。
 
@@ -66,19 +58,19 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 
 | 层 | 当前状态 | 解释 |
 |---|---|---|
-| Current exact main source closure | `PASS` | `c678b1bee2475686ebbb8b8172c24112a37c6ce9` 的允许环境 run `fc4630f41a7930244720d4de46019f82`：aggregate `PASS`、runner exit `0`、15/15 suites；详情与首次 `ENV-BLOCKED` run 见[已验证状态](verified-state.md) |
-| Last immutable accepted source candidate | `SOURCE-GREEN` | `d786a2d833dfd5f95b02d15f84f122a8b9fd4225`；其 immutable record 为 `quality/source-candidates/d786a2d833dfd5f95b02d15f84f122a8b9fd4225.json`。这不是 `c678b1b` 的 immutable candidate record |
-| Exact artifact | `PASS` | `c678b1b` 已新构建 `CSSwitch Test.app`；Desktop/Gateway/resources/Info.plist、hash 与 fresh empty-HOME Gateway `codex-auth status` 的受限证据见 [2026-08-22 exact artifact](../../docs/evidence/investigations/2026-08-22-csswitch-c678b1b-exact-artifact.md)。证据提交的 pre-evidence docs-only baseline/parent 是 `434cfe3`；该 docs-only descendant 不是 artifact-producing source |
-| Guard-managed Acceptance Desktop entry | `PASS(scope=RM-42 Desktop production entry)` | `c678b1b` exact `CSSwitch Test.app` 的 packaged Desktop 在新的隔离 HOME 中实际运行；compiled `$HOME/.csswitch-acceptance`、动态端口、Codex 默认关闭、运行/停止前后的 `8765` guard 与最终 `assert-stopped` 见[2026-08-22 Desktop isolation](../../docs/evidence/investigations/2026-08-22-csswitch-c678b1b-isolated-desktop-entry.md)。这不是 Gateway / Science 全链 PASS |
-| Gateway / Science production wiring | `NOT-RUN` | 空 profile fixture 没有执行 one-click，也没有启动 Gateway / Science；不能把 Desktop entry PASS 外推为完整 isolated-live |
+| Current exact main source closure | `PASS` | `a84f868c7f379959743c114f0b89e61703e8cff8` 的允许环境 run `baf12ea37b84c0ddc8d08dc4cff226ec`：aggregate `PASS`、runner exit `0`、16/16 suites |
+| Immutable accepted source candidate | `SOURCE-GREEN` | `a84f868` 的 immutable record 为 `quality/source-candidates/a84f868c7f379959743c114f0b89e61703e8cff8.json`（SHA-256 `655f271d0d2932f0d31e84422334027d7e8ae778917ade439da2b85472cffe2c`）；`f0ed7ce` 只发布 record |
+| P4 S1–S4 source / provider owner | `PASS` | shared `provider-contracts` 是 interpretation owner；Desktop/Gateway 各自 projection 已闭合。此条只覆盖 source，不证明 provider runtime |
+| Exact artifact | `PASS` | `a84f868` 已新构建 `CSSwitch Test.app`；Desktop/Gateway/resources/Info.plist、hash 与两次 fresh empty-HOME Gateway `codex-auth status` 的受限证据见 [2026-08-22 exact artifact](../../docs/evidence/investigations/2026-08-22-csswitch-a84f868-exact-artifact.md) |
+| Desktop entry、Gateway / Science full chain、Skill runtime | `NOT-RUN` | 本 artifact 没有启动 Desktop、Gateway service、Science 或 Skill runtime；不继承历史 `c678b1b` Desktop-entry PASS |
 | Installed runtime | `NOT-RUN` | 未读取、替换、启动或停止 `/Applications/CSSwitch.app` |
 | Live Provider / Science / SSH / account | `NOT-RUN` | 没有真实 Provider、Science、SSH 或账号请求；真实凭证与 data-dir 未读取 |
 | Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
 | Public release | `NOT-RUN` | 未创建 tag、DMG 或 Release；不得虚构 release readiness |
 
-证据时间线：旧 accepted candidate `d077a1c18892c8ccbfc0b70d049445a799d83fb7` 的 seal 与 review
-没有继承给 P2。已验收 root 是上表明确的 `/private/tmp/csg.kTHgJq`；任何新 implementation SHA、source 修改或
-运行环境变化都不能继承它的 seal。
+证据时间线：`a84f868` 的 source root 是 `/private/tmp/csg.4d8jOr`；`f0ed7ce` 是其 immutable record
+publication，不是 producing source。任何新 implementation SHA、source 修改、artifact identity 或运行环境变化都
+不能继承该 seal 或本文 artifact 结论。
 
 ## P0 source closure 已闭合
 
@@ -124,13 +116,15 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 - Plugin、MCP、local-package、bundle、runtime attach/进程与真实服务不在该 source 合同内；不得把
   单 Skill 的 source 通过写成产品安装、MCP lifecycle 或 Science attach 已完成。
 
-### P4｜语义收尾
+### P4｜source / record / artifact 已分别闭合，runtime 仍开放
 
-- S1–S4 source implementation 已集成本地候选；完整 exact-candidate 16-suite `GATE-SOURCE` 与 immutable record
-  仍为 `NOT-RUN`，不得称为 `SOURCE-GREEN`。
-- provider catalog 的稳定单一解释 owner 与 Desktop/Gateway projection 边界见
-  [Gateway 与 provider 路由](../../docs/architecture/gateway-provider-routing.md)。
-- 本条不建立 artifact、runtime、真实 Provider/Science/SSH、installed、signing 或 public release 结论。
+- S1–S4 source implementation、exact 16-suite `GATE-SOURCE` 与 `a84f868` immutable record 均为 `PASS`；
+  `f0ed7ce` 只是 record publication。shared `provider-contracts` 是 provider interpretation owner，Desktop 与
+  Gateway 各自 projection 的稳定边界见[Gateway 与 provider 路由](../../docs/architecture/gateway-provider-routing.md)。
+- exact artifact 为 `PASS(scope=exact-artifact)`，以及两个 fresh empty HOME 的
+  `PASS(scope=isolated-gateway-status)`；详情见[日期化 artifact evidence](../../docs/evidence/investigations/2026-08-22-csswitch-a84f868-exact-artifact.md)。
+- Gateway / Science full chain、Skill runtime、installed、真实 Provider/Science/SSH、signing 与 public release
+  仍为 `NOT-RUN`。
 
 ### 下游产品证据
 
@@ -140,9 +134,9 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 下一步边界
 
-P3 source、`c678b1b` exact artifact 与其 guard-managed Acceptance Desktop production entry 已分别取证。
-若下一步继续产品证据，未闭合的最小范围是以新的 guard-managed environment 经正常 one-click / production
-caller 取得 Gateway + Science wiring；它仍需单独授权、环境与证据，且不能借空 profile Desktop entry 冒充。
+P4 source/record/exact artifact 与 isolated Gateway status 已分别取证。若下一步继续产品证据，未闭合的最小
+范围是以本 artifact 在新的 guard-managed environment 经正常 one-click / production caller 取得 Gateway + Science
+wiring；它仍需单独授权、环境与证据，且不能借 empty-HOME status 冒充。
 live Provider、SSH、账号、installed App、signing、notarization、Gatekeeper 与 public release 仍全部是独立的
 `NOT-RUN` 层。
 
