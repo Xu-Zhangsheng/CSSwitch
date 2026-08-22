@@ -10,7 +10,7 @@
 
 本文同时记录已实现的窄范围 source 合同与尚未实现的目标设计。当前 product caller 是
 Agent route Skill → Gateway coordinator → shared Skill crate：只有已固定 40 位 commit 的公开
-GitHub 单 Skill 可进入 `plan → explicit apply → readback-only reconcile`；Gateway 在持有
+GitHub 单 Skill 可进入 `plan → explicit apply → continue/reconcile`；Gateway 在持有
 Desktop 继承的 authority fence 时才可创建 host-only staging、ledger 与 quarantine root，
 mailbox 只承载 request/status/response。apply 复用同一 archive snapshot、精确 target 与
 capability；legacy omission 仍走既有 bridge 合同。该 source 合同不证明 artifact、安装 App、
@@ -87,9 +87,10 @@ probe 与真实结果分别留在
 5. 初始共同执行面是 Agent Skills 与明确版本的 MCP profile。`agents/`、hooks、UI、
    LSP、monitors、settings 等供应商组件只有在 Science 能力被独立证明且语义可以保持时
    才能晋级；否则必须显式降级或拒绝，禁止静默丢弃后仍报告“完整 Plugin 已安装”。
-6. 当前 v1 bridge 继续原样生效。本合同不注册新 command，不改变 route，不执行安装。
-   旧 Skill Manager 的删除是独立 negative refactor，不实现本合同，也不建立 artifact、
-   installed 或 live `PASS`。
+6. 当前 v1 legacy bridge 继续原样生效。除此之外，窄范围固定-commit GitHub 单 Skill 的
+   Gateway route 已在 source 实现 plan、显式确认后的 apply、continue/reconcile 与 confirmed
+   removal；它不把 Plugin、MCP、local package/bundle 或 runtime attach 纳入该 route。旧 Skill
+   Manager 的删除是独立 negative refactor，不建立 artifact、installed 或 live `PASS`。
 
 ## 2. 外部协议事实与 Science 未验证边界
 
@@ -398,11 +399,12 @@ config、process 与 owned-path 由 CSSwitch host receipt 证明；Science regis
 带来源的 session evidence，不能直接晋升为 host-authoritative `VERIFIED`，也不能补写相邻
 effect。最终响应由 durable ledger 投影，mailbox status 只作进度提示。
 
-Gateway mailbox 与本地 picker 最终必须共享同一跨进程 operation coordinator、目标
-data-dir/org lease、ledger 和恢复规则。当前单 Skill “host quarantine 后由 Agent 调
-detach” 的不对称流程要迁回 deterministic host，与 bundle 共用 detach/readback/补偿；
-route Skill、connector、managed prompt 和 marker 的非原子步骤分别产出 typed receipt，
-不能把部分完成报告成“完全未修改”。
+当前窄范围单 Skill 的 Gateway coordinator 已拥有 install 与 confirmed removal 的 durable
+ledger、target lease 和 recovery projection；removal 顺序是 deterministic host 的
+`operon_detach → package_quarantine`，而非由 Agent 在 host quarantine 后自由 detach。Gateway
+mailbox 与本地 picker 对更广输入面仍必须共享同一跨进程 operation coordinator、目标 data-dir/org
+lease、ledger 和恢复规则；route Skill、connector、managed prompt 和 marker 的非原子步骤分别产出
+typed receipt，不能把部分完成报告成“完全未修改”。
 
 ## 7. MCP profile、认证与 Science 路由
 
@@ -467,7 +469,8 @@ HTTP OAuth 与 stdio credential 必须分开：
 - 未注册、未编译的旧 Skill Manager 已由独立 negative refactor 删除；它不得重新成为
   parser、component graph、operation ledger 或 Science adapter 的依赖，该删除也不构成
   本合同的任何 inspect / plan / apply 实现；
-- inspection 始终无执行；parser、component graph、limits 与 fixture 的存在不打开 apply path；
+- inspection 始终无执行；除已实现的公开 GitHub 固定-commit 单 Skill source route 外，parser、
+  component graph、limits 与 fixture 的存在不打开 apply path；
 - 新的 plan/effect/next-action 表达不得改变当前 v1 public tool schema 或结果，除非该兼容
   边界已经单独冻结、实现并验收；
 - mailbox 与 local picker 的 mutation 最终共享 deterministic host ownership、ledger、
@@ -490,7 +493,8 @@ HTTP OAuth 与 stdio credential 必须分开：
 - 新 source、artifact、isolated-live 和需要授权的 live evidence 各自绑定 exact identity；
 - unsupported vendor component 不被静默遗漏或错误命名为完整兼容。
 
-截至本次复核，inspect-only parser、component graph、limits 与 fixtures 已进入 source；
-它们没有产品 caller，不打开 plan / apply。artifact、installed、Skill/MCP runtime 与真实服务
-证据仍为 `NOT-RUN`；source 验证状态只由 exact-SHA gate 记录判定。本文的通过只代表设计
-边界及该 source-only 范围已复核。
+截至本次复核，公开 GitHub 固定-commit 完整单 Skill 的 source caller 已进入 Gateway coordinator，
+具备 immutable plan、显式 apply、continue/reconcile 和 confirmed removal ledger；其余 parser、
+component graph、Plugin/MCP/local package/bundle 输入仍不打开 apply path。artifact、installed、
+Skill/MCP runtime 与真实服务证据仍为 `NOT-RUN`；source 验证状态只由 exact-SHA gate 记录判定。
+本文的通过只代表设计边界及该 source-only 范围已复核。
