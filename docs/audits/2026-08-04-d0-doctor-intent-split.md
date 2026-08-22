@@ -99,4 +99,3 @@ D0 已在 source-test 层关闭 Post-H4 摸排发现的 Doctor 产品信任 HIGH
 D0 到此停止产品实现。source、artifact、installed/live、signing、release 必须严格分层：本证据只支持
 source-test closure；本窗口没有构建或替换 App/DMG，没有真实 provider/Science/SSH 测试，没有签名、
 公证、push、tag、release，也没有读取真实凭证、Keychain、SSH 私钥或用户 Science 数据。
-
