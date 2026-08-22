@@ -5,6 +5,7 @@
   "discovery_paths": [
     "desktop/codex-network/Cargo.toml",
     "desktop/gateway/Cargo.toml",
+    "desktop/provider-contracts/Cargo.toml",
     "desktop/skill-package/Cargo.toml",
     "desktop/src-tauri/Cargo.toml",
     "test/codex_auth_ui.test.mjs",
@@ -114,7 +115,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "QUALITY-METADATA"
       }
     },
@@ -198,7 +199,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "QUALITY-FOCUSED"
       }
     },
@@ -355,7 +356,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "RUN-EVIDENCE-CONTRACT"
       }
     },
@@ -562,7 +563,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "QUALITY-INVENTORY"
       }
     },
@@ -639,7 +640,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "PY-OFFLINE"
       }
     },
@@ -717,7 +718,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "PY-LOOPBACK"
       }
     },
@@ -784,8 +785,79 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "SHELL-SCRIPTS"
+      }
+    },
+    {
+      "id": "SUITE-RUST-PROVIDER-CONTRACTS",
+      "name": "shared provider-contract Cargo manifest",
+      "kind": "rust",
+      "entrypoint": "cargo test --offline --manifest-path desktop/provider-contracts/Cargo.toml",
+      "entrypoint_id": "ENTRY-SOURCE-RUST-PROVIDER-CONTRACTS",
+      "command_argv": [
+        "{CARGO}",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "desktop/provider-contracts/Cargo.toml"
+      ],
+      "cwd_mode": "repo-root",
+      "profiles": [
+        "source"
+      ],
+      "adapter_protocol": "source-observation.v1",
+      "timeout_seconds": 600,
+      "readiness_timeout_seconds": null,
+      "retry_policy": "none",
+      "fixture_paths": [
+        "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+        "test/quality/source_gate/adapter.py"
+      ],
+      "build_recipe_paths": [],
+      "environment_allowlist": [],
+      "source_paths": [
+        "desktop/provider-contracts/Cargo.toml",
+        "desktop/provider-contracts/Cargo.lock",
+        "desktop/provider-contracts/src/lib.rs"
+      ],
+      "evidence_layer": "source-test",
+      "owner": "quality-kernel",
+      "status": "implemented",
+      "reason": null,
+      "expiry": null,
+      "replacement_id": null,
+      "requirement_ids": [
+        "REQ-083-INVENTORY",
+        "REQ-083-VALIDATOR"
+      ],
+      "bug_ids": [
+        "BUG-083-RUST-COVERAGE"
+      ],
+      "gate_ids": [
+        "GATE-SOURCE"
+      ],
+      "expected_status": "PASS",
+      "historical_case_ids": [
+        "CASE-CARGO-4"
+      ],
+      "selection_rule": {
+        "mode": "manual",
+        "include_paths": [
+          "desktop/provider-contracts/Cargo.toml"
+        ],
+        "exclude_statuses": [
+          "legacy",
+          "manual",
+          "quarantine",
+          "retired",
+          "not-yet-automatable"
+        ]
+      },
+      "test_identity": {
+        "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
+        "suite_key": "RUST-PROVIDER-CONTRACTS"
       }
     },
     {
@@ -862,7 +934,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "RUST-DESKTOP"
       }
     },
@@ -935,7 +1007,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "RUST-GATEWAY"
       }
     },
@@ -1005,7 +1077,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "RUST-CODEX-NETWORK"
       }
     },
@@ -1087,7 +1159,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "RUST-SKILL-PACKAGE"
       }
     },
@@ -1167,7 +1239,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "MJS-FRONTEND"
       }
     },
@@ -1405,7 +1477,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "ORPHAN-SKILL-BRIDGE"
       }
     },
@@ -1475,7 +1547,7 @@
       },
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "ORPHAN-SKILL-BOUNDARY"
       }
     },
@@ -1985,7 +2057,7 @@
       "evidence_layer": "source-test",
       "owner": "science-runtime",
       "status": "manual",
-      "reason": "The isolated fake/local SSH-LATE Acceptance command is implemented and passed manually, but remains excluded from the fixed fifteen-suite source gate and cannot establish production artifact/runtime or real SSH/provider evidence.",
+      "reason": "The isolated fake/local SSH-LATE Acceptance command is implemented and passed manually, but remains excluded from the fixed sixteen-suite source gate and cannot establish production artifact/runtime or real SSH/provider evidence.",
       "expiry": "2026-10-01",
       "replacement_id": "SUITE-RUST-DESKTOP",
       "requirement_ids": [
@@ -2092,7 +2164,7 @@
       "environment_allowlist": [],
       "test_identity": {
         "path": "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
-        "sha256": "6537a30bd4eed43a267dc12126b320bd16909cc20742d448c908fcd5fb10add6",
+        "sha256": "f04b72b9f347b68a71cf0b65aaf73c35ffa133ebd5673afe5f8329e1d90c2a0b",
         "suite_key": "SOURCE-GATE-CONTRACT"
       },
       "status": "implemented",
@@ -2163,6 +2235,7 @@
         "SUITE-RUST-GATEWAY",
         "SUITE-PY-LOOPBACK",
         "SUITE-SHELL-SCRIPTS",
+        "SUITE-RUST-PROVIDER-CONTRACTS",
         "SUITE-RUST-DESKTOP",
         "SUITE-RUST-CODEX-NETWORK",
         "SUITE-RUST-SKILL-PACKAGE",

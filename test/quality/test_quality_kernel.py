@@ -419,6 +419,7 @@ class QualityKernelFocused(unittest.TestCase):
             {
                 "desktop/codex-network/Cargo.toml",
                 "desktop/gateway/Cargo.toml",
+                "desktop/provider-contracts/Cargo.toml",
                 "desktop/skill-package/Cargo.toml",
                 "desktop/src-tauri/Cargo.toml",
             },
@@ -434,7 +435,7 @@ class QualityKernelFocused(unittest.TestCase):
             if rule["name"] == "source-gate"
         )
         self.assertEqual(source_rule["suite_ids"], list(validator.gates["GATE-SOURCE"]["required_suite_ids"]))
-        self.assertEqual(len(source_rule["suite_ids"]), 15)
+        self.assertEqual(len(source_rule["suite_ids"]), 16)
 
         validator = self.fresh()
         rule = next(

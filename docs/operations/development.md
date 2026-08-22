@@ -30,18 +30,19 @@ chmod 700 "$GATE_ROOT"
 bash test/run_all.sh --output-root "$GATE_ROOT"
 ```
 
-固定 15-suite 选择、输出目录约束和判定边界见[测试文档](testing.md)。无参数调用和
+固定 16-suite 选择、输出目录约束和判定边界见[测试文档](testing.md)。无参数调用和
 旧 `--require-release-ready` 已不再是有效入口。任何 WIP 或 focused check 的 PASS 都不建立
 `SOURCE-GREEN`；没有运行完整 gate 时报告 `SOURCE-GREEN: NOT-RUN`。
 
 ## 组件级检查
 
-四个 Rust manifest 都是独立入口；从仓库根选择目标，不把单个 crate 结果外推到其他 crate：
+五个 Rust manifest 都是独立入口；从仓库根选择目标，不把单个 crate 结果外推到其他 crate：
 
 | 组件 | manifest | 聚焦命令形态 |
 | --- | --- | --- |
 | Skill 安装核心 | `desktop/skill-package/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/skill-package/Cargo.toml` |
 | Codex network 库 | `desktop/codex-network/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/codex-network/Cargo.toml` |
+| 共享 provider contract | `desktop/provider-contracts/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/provider-contracts/Cargo.toml` |
 | Gateway | `desktop/gateway/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/gateway/Cargo.toml` |
 | Tauri desktop | `desktop/src-tauri/Cargo.toml` | `cargo <fmt / clippy / test> --manifest-path desktop/src-tauri/Cargo.toml` |
 

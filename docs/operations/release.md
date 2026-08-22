@@ -21,7 +21,7 @@ bash test/run_all.sh --output-root "$GATE_ROOT"
 git diff --check
 ```
 
-该命令必须绑定 clean、non-shallow 的 exact `HEAD`，并取得完整 15-suite PASS
+该命令必须绑定 clean、non-shallow 的 exact `HEAD`，并取得完整 16-suite PASS
 completion seal。preflight、环境或 suite 阻断时应在满足同一候选约束的环境复跑；
 不能把局部测试、stdout 摘要或旧 `current-env clean` / `release-ready green`
 词汇改写成当前 `SOURCE-GREEN`。

@@ -97,6 +97,7 @@ SOURCE_SUITE_ORDER = (
     "SUITE-RUST-GATEWAY",
     "SUITE-PY-LOOPBACK",
     "SUITE-SHELL-SCRIPTS",
+    "SUITE-RUST-PROVIDER-CONTRACTS",
     "SUITE-RUST-DESKTOP",
     "SUITE-RUST-CODEX-NETWORK",
     "SUITE-RUST-SKILL-PACKAGE",
@@ -569,6 +570,7 @@ class Validator:
         expected_cargo_manifests = {
             "desktop/codex-network/Cargo.toml",
             "desktop/gateway/Cargo.toml",
+            "desktop/provider-contracts/Cargo.toml",
             "desktop/skill-package/Cargo.toml",
             "desktop/src-tauri/Cargo.toml",
         }

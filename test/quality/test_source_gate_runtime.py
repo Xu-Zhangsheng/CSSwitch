@@ -222,7 +222,7 @@ class SourceGateRuntime(unittest.TestCase):
         ))
         return True
 
-    def test_fake_fifteen_suite_run_seals_and_returns_zero(self):
+    def test_fake_sixteen_suite_run_seals_and_returns_zero(self):
         dependencies = SourceRuntimeDependencies(
             preflight=self._inputs,
             capture_snapshot=self._capture,
@@ -263,7 +263,7 @@ class SourceGateRuntime(unittest.TestCase):
         self.assertTrue((run_root / "evidence-manifest.json").is_file())
         self.assertEqual(
             len(list((run_root / "results").glob("*.observation.json"))),
-            15,
+            16,
         )
         self.assertEqual(
             len([
@@ -271,15 +271,15 @@ class SourceGateRuntime(unittest.TestCase):
                 for item in (run_root / "results").glob("*.json")
                 if not item.name.endswith(".observation.json")
             ]),
-            15,
+            16,
         )
         self.assertEqual(
             [stage for stage, _, _ in self.calls].count("suite-before"),
-            15,
+            16,
         )
         self.assertEqual(
             [stage for stage, _, _ in self.calls].count("suite-after"),
-            15,
+            16,
         )
         self.assertEqual(self.calls[-1][0], "before-seal")
         state_run = next((self.root / "state" / "runs").iterdir())
@@ -366,7 +366,7 @@ class SourceGateRuntime(unittest.TestCase):
             if plan.suite["id"] == "SUITE-RUST-DESKTOP"
         )
         bound = source_runtime._source_observation_size_bound(desktop)
-        self.assertEqual(len(desktop.expected_test_ids), 666)
+        self.assertEqual(len(desktop.expected_test_ids), 655)
         self.assertGreater(bound, 64 * 1024)
         self.assertLessEqual(
             bound,
@@ -794,7 +794,7 @@ class SourceGateRuntime(unittest.TestCase):
         self.assertFalse((run_root / "completion-seal.json").exists())
         self.assertEqual(
             len(list((run_root / "results").glob("*.observation.json"))),
-            8,
+            9,
         )
 
     def test_failure_record_error_does_not_replace_execute_primary(self):
@@ -1134,7 +1134,7 @@ class ProductionInputAuthority(unittest.TestCase):
                         (record, valid),
                     )
 
-    def test_real_schema_and_only_three_tracked_locks_are_read(self):
+    def test_real_schema_and_only_four_tracked_locks_are_read(self):
         payloads = {
             path: (REPO_ROOT / path).read_bytes()
             for path in (

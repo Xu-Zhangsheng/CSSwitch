@@ -1063,13 +1063,8 @@
         "desktop/src-tauri/Cargo.toml::lib::proc::tests::science_db_health_rejects_declared_body_over_64_kib",
         "desktop/src-tauri/Cargo.toml::lib::proc::tests::science_db_health_requires_both_semantic_flags_to_be_clear",
         "desktop/src-tauri/Cargo.toml::lib::proc::tests::tracked_child_presence_is_not_enough_for_running_status",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::api_contract_runtime_matrix_rejects_behavior_mutations",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::catalog_rejects_unknown_fields_and_empty_contracts",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::codex_characteristics_are_bidirectionally_bound",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::custom_api_format_selects_distinct_runtime_contract",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::duplicate_policy_entries_are_rejected",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::legacy_keychain_oauth_value_reads_but_serializes_as_csswitch_oauth",
-        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::static_provider_contracts_load_and_are_unambiguous",
+        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::desktop_compatibility_projection_keeps_catalog_and_launch_selection",
+        "desktop/src-tauri/Cargo.toml::lib::provider_contracts::tests::desktop_compatibility_projection_selects_api_format_exactly",
         "desktop/src-tauri/Cargo.toml::lib::runtime::capability_catalog::tests::diagnostics_surface_dashscope_responses_rules",
         "desktop/src-tauri/Cargo.toml::lib::runtime::capability_catalog::tests::diagnostics_surface_profile_rules_and_boundaries",
         "desktop/src-tauri/Cargo.toml::lib::runtime::capability_catalog::tests::profile_context_derives_template_adapter_and_policy",
@@ -1394,6 +1389,22 @@
         "desktop/src-tauri/Cargo.toml::lib::tests::should_begin_boot_only_from_idle_or_failed",
         "runtime::sandbox_session::recovery::durable_authority_digest_tests::canonical_tree_digest_separates_legacy_concatenation_collision",
         "runtime::science::tests::managed_launch_authority_writer_leaf_uses_sh_or_scoped_ex_bypass"
+      ]
+    },
+    "RUST-PROVIDER-CONTRACTS": {
+      "approved_ignored_test_ids": [],
+      "approved_ignored_tests": {},
+      "approved_skipped_test_ids": [],
+      "discovered_test_ids": [
+        "desktop/provider-contracts/Cargo.toml::lib::tests::adapter_selection_requires_one_exact_contract",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::api_contract_runtime_matrix_rejects_behavior_mutations",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::catalog_rejects_unknown_fields_and_empty_contracts",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::codex_characteristics_are_bidirectionally_bound",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::custom_api_format_selects_distinct_runtime_contract",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::duplicate_policy_entries_are_rejected",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::every_static_contract_has_the_same_digest_and_exact_selection",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::legacy_keychain_oauth_value_reads_but_serializes_as_csswitch_oauth",
+        "desktop/provider-contracts/Cargo.toml::lib::tests::static_provider_contracts_load_and_are_unambiguous"
       ]
     },
     "RUST-GATEWAY": {
@@ -1952,10 +1963,10 @@
         "test_source_gate_runtime.ProductionInputAuthority.test_process_image_lookup_rejects_unavailable_and_truncated",
         "test_source_gate_runtime.ProductionInputAuthority.test_production_input_digests_accept_bound_directory_records",
         "test_source_gate_runtime.ProductionInputAuthority.test_production_input_digests_are_stable_for_same_identity",
-        "test_source_gate_runtime.ProductionInputAuthority.test_real_schema_and_only_three_tracked_locks_are_read",
+        "test_source_gate_runtime.ProductionInputAuthority.test_real_schema_and_only_four_tracked_locks_are_read",
         "test_source_gate_runtime.SourceGateRuntime.test_execute_exception_publishes_partial_failure_and_never_seals",
         "test_source_gate_runtime.SourceGateRuntime.test_failure_record_error_does_not_replace_execute_primary",
-        "test_source_gate_runtime.SourceGateRuntime.test_fake_fifteen_suite_run_seals_and_returns_zero",
+        "test_source_gate_runtime.SourceGateRuntime.test_fake_sixteen_suite_run_seals_and_returns_zero",
         "test_source_gate_runtime.SourceGateRuntime.test_gateway_driver_or_parent_failure_runs_once_and_never_seals",
         "test_source_gate_runtime.SourceGateRuntime.test_observation_capacity_precheck_stops_before_run_manifest",
         "test_source_gate_runtime.SourceGateRuntime.test_one_failed_suite_still_seals_fail_and_returns_ten",

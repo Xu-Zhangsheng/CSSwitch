@@ -55,7 +55,7 @@ chmod 700 "$GATE_ROOT"
 bash test/run_all.sh --output-root "$GATE_ROOT"
 ```
 
-先在 clean exact-HEAD source 候选上取得完整 15-suite `GATE-SOURCE` completion seal，
+先在 clean exact-HEAD source 候选上取得完整 16-suite `GATE-SOURCE` completion seal，
 记录命令、退出码、HEAD、输出目录和 suite 结果；局部组件结果不能替代。该 gate 只
 建立 source/unit 证据，后续 Acceptance artifact、installed/runtime 与 live 场景仍
 按本矩阵分别取证。Python 仅供测试驱动与 mock 使用；产品 runtime proxy 是 Rust

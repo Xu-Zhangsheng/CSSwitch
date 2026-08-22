@@ -728,6 +728,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "csswitch-provider-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "csswitch-skill-install-core"
 version = "0.1.0"
 dependencies = [
@@ -861,6 +870,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "csswitch-codex-network",
+ "csswitch-provider-contracts",
  "csswitch-skill-install-core",
  "glob",
  "hkdf",

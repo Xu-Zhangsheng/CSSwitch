@@ -1314,12 +1314,12 @@ class SourceGateContracts(unittest.TestCase):
         )
         self.assertEqual(calls, list(SOURCE_SUITE_ORDER))
         self.assertEqual(len(calls), len(set(calls)))
-        self.assertEqual(len(observations), 15)
-        self.assertEqual(len(results), 15)
+        self.assertEqual(len(observations), 16)
+        self.assertEqual(len(results), 16)
         self.assertEqual(aggregate, ("PASS", 0))
         self.assertEqual(
             [phase for phase, _, _ in checks],
-            ["before", "after"] * 15,
+            ["before", "after"] * 16,
         )
 
         failure_calls = []

@@ -4,7 +4,7 @@
   live provider/账号/SSH、签名/公证/Gatekeeper、公开 release。
 - 当前唯一完整 source/unit 入口是
   `bash test/run_all.sh --output-root <absolute-empty-0700-dir>`；只有递归验证的
-  15-suite `GATE-SOURCE` PASS completion seal 才建立
+  16-suite `GATE-SOURCE` PASS completion seal 才建立
   `RUN-EVIDENCE-GREEN` / `SOURCE-GREEN`。
 - 无参数 `test/run_all.sh`、旧 `--require-release-ready`、`current-env clean` 和
   `release-ready green` 只属于历史合同，不能用于当前候选。

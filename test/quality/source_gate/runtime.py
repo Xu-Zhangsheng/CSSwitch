@@ -107,6 +107,7 @@ _SOURCE_METADATA_PATHS = {
 _SELECTED_CARGO_LOCK_PATHS = (
     "desktop/src-tauri/Cargo.lock",
     "desktop/gateway/Cargo.lock",
+    "desktop/provider-contracts/Cargo.lock",
     "desktop/skill-package/Cargo.lock",
 )
 

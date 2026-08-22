@@ -1,0 +1,87 @@
+{
+  "schema": "change-record.v1",
+  "change": {
+    "id": "CHG-P4-PROVIDER-CONTRACT-CORE",
+    "version": "v0.8.4-dev",
+    "title": "Introduce the pure shared provider-contract interpretation core",
+    "summary": "Moves schema-v1 provider catalog parsing, deny-unknown validation, semantic matrix, digest, exact selector, and unique adapter selection into a pure shared crate. Desktop retains its caller-facing compatibility projection; Gateway remains an unchanged legacy parser until P4 S4.",
+    "status": "active",
+    "owner": "quality-kernel",
+    "changed_paths": [
+      ".agents/rules/testing-and-evidence.md",
+      "desktop/provider-contracts/Cargo.lock",
+      "desktop/provider-contracts/Cargo.toml",
+      "desktop/provider-contracts/src/lib.rs",
+      "desktop/src-tauri/Cargo.lock",
+      "desktop/src-tauri/Cargo.toml",
+      "desktop/src-tauri/src/provider_contracts.rs",
+      "docs/operations/development.md",
+      "docs/operations/real-machine-acceptance.md",
+      "docs/operations/release.md",
+      "docs/operations/testing.md",
+      "quality/changes/next/CHG-P4-PROVIDER-CONTRACT-CORE.json",
+      "quality/release-gates.v1.json",
+      "quality/test-catalog.v1.json",
+      "test/quality/fixtures/source_gate/expected_test_ids.v1.json",
+      "test/quality/source_gate/contracts.py",
+      "test/quality/source_gate/runtime.py",
+      "test/quality/test_quality_kernel.py",
+      "test/quality/test_source_gate_contracts.py",
+      "test/quality/test_source_gate_runtime.py",
+      "test/quality/validate_quality_metadata.py"
+    ],
+    "requirement_ids": [
+      "REQ-083-PATHS",
+      "REQ-083-INVENTORY",
+      "REQ-083-EVIDENCE",
+      "REQ-083-VALIDATOR",
+      "REQ-083-FOCUSED"
+    ],
+    "bug_ids": [],
+    "test_impact": {
+      "kind": "update",
+      "required_suite_ids": [
+        "SUITE-RUST-PROVIDER-CONTRACTS",
+        "SUITE-RUST-DESKTOP",
+        "SUITE-QUALITY-METADATA",
+        "SUITE-QUALITY-FOCUSED",
+        "SUITE-QUALITY-INVENTORY",
+        "SUITE-SOURCE-GATE-CONTRACT"
+      ],
+      "required_gate_ids": [
+        "GATE-SOURCE",
+        "GATE-QUALITY-META",
+        "GATE-QUALITY-PR",
+        "GATE-QUALITY-RELEASE"
+      ],
+      "risk_classes": [
+        "P1",
+        "migration",
+        "source-only",
+        "metadata"
+      ]
+    },
+    "claim_state": "confirmed",
+    "evidence_boundary": {
+      "allowed_layers": [
+        "source-test"
+      ],
+      "excluded_layers": [
+        "isolated-test-app",
+        "final-dmg",
+        "installed-final",
+        "live",
+        "signing",
+        "public"
+      ],
+      "basis": [
+        "shared crate unit tests cover the schema-v1 semantic matrix, deny-unknown decoding, all twelve contracts, digest stability, exact template/api-format selection, and unique adapter rejection",
+        "Desktop compatibility tests preserve its existing typed caller surface and launch selection",
+        "source-gate metadata binds the new offline crate as the sixteenth fixed suite",
+        "Gateway remains intentionally unchanged as the S3-to-S4 migration legacy parser"
+      ]
+    },
+    "does_not_claim_fix": true,
+    "retirement": null
+  }
+}

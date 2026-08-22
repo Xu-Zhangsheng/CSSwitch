@@ -19,7 +19,7 @@ macOS 上还必须给 suite 创建的 Unix socket 保留路径预算，因此固
 不代表测试已经执行。
 
 Gate 只接受 clean、non-shallow 的 exact `HEAD`，固定顺序执行
-`quality/release-gates.v1.json` 中 `GATE-SOURCE.required_suite_ids` 的 15 个 suite。
+`quality/release-gates.v1.json` 中 `GATE-SOURCE.required_suite_ids` 的 16 个 suite。
 命令、测试 identity、允许环境、timeout、无 retry 与聚合证据均由
 `quality/test-catalog.v1.json` 和 trusted run-evidence 合同绑定。公共 CLI 不能选择
 子集。
@@ -37,7 +37,7 @@ Gate 只接受 clean、non-shallow 的 exact `HEAD`，固定顺序执行
 不得为了门禁删除用户的 ignored runtime 数据。
 
 报告至少记录命令、退出码、exact `HEAD`、输出目录、最终 completion seal / aggregate
-判定与 15 个 suite 状态。只有递归验证后的 PASS seal 才建立
+判定与 16 个 suite 状态。只有递归验证后的 PASS seal 才建立
 `RUN-EVIDENCE-GREEN` 与 `SOURCE-GREEN`；stdout 摘要或某个组件通过都不是权威。
 固定 suite / entrypoint identity、允许环境、timeout、retry、result 与 seal 的机器合同
 由 `quality/test-catalog.v1.json`、`quality/release-gates.v1.json` 及其 schema 维护；
