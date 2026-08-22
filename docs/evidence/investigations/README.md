@@ -1,5 +1,7 @@
 # 日期化调查索引
 
+- [2026-08-22 CSSwitch `c678b1b` exact Acceptance artifact](2026-08-22-csswitch-c678b1b-exact-artifact.md)
+
 - [2026-07-13 Science runtime 与外部 Skill bridge](2026-07-13-science-runtime-and-skill-bridge.md)
 - [2026-07-16 Codex → Science 实施基线](2026-07-16-codex-science-bridge-baseline.md)
 - [2026-07-16 Codex → Science 模型 ID 兼容实验](2026-07-16-codex-science-model-compat.md)

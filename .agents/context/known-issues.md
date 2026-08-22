@@ -68,7 +68,7 @@ candidate；`d786a2d…` 仍只是此前 P2 线的最近 immutable accepted cand
 |---|---|---|
 | Current exact main source closure | `PASS` | `c678b1bee2475686ebbb8b8172c24112a37c6ce9` 的允许环境 run `fc4630f41a7930244720d4de46019f82`：aggregate `PASS`、runner exit `0`、15/15 suites；详情与首次 `ENV-BLOCKED` run 见[已验证状态](verified-state.md) |
 | Last immutable accepted source candidate | `SOURCE-GREEN` | `d786a2d833dfd5f95b02d15f84f122a8b9fd4225`；其 immutable record 为 `quality/source-candidates/d786a2d833dfd5f95b02d15f84f122a8b9fd4225.json`。这不是 `c678b1b` 的 immutable candidate record |
-| Exact artifact | `NOT-RUN` | 本轮未构建 artifact |
+| Exact artifact | `PASS` | `c678b1b` 已新构建 `CSSwitch Test.app`；Desktop/Gateway/resources/Info.plist、hash 与 fresh empty-HOME Gateway `codex-auth status` 的受限证据见 [2026-08-22 exact artifact](../../docs/evidence/investigations/2026-08-22-csswitch-c678b1b-exact-artifact.md)。证据提交的 pre-evidence docs-only baseline/parent 是 `434cfe3`；该 docs-only descendant 不是 artifact-producing source |
 | Temporary / installed runtime | `NOT-RUN` | 本轮未启动临时或已安装 runtime，也未读取、替换或启动已安装 App |
 | Live Provider / Science / SSH / account | `NOT-RUN` | 没有真实 Provider、Science、SSH 或账号请求；真实凭证与 data-dir 未读取 |
 | Signing / notarization / Gatekeeper | `NOT-RUN` | source `PASS` 不推导签名、notarization 或 Gatekeeper 结论 |
@@ -136,10 +136,10 @@ OAuth、Keychain、SSH key、账号数据库和真实 Science data-dir 不因本
 
 ## 唯一立即 NEXT
 
-P3 source 已闭合；唯一下一证据动作是从 `main@c678b1b` 构建并核验 exact artifact。完成前不得把
-source gate 外推为 temporary/installed runtime、live Provider、Science、SSH、账号、signing、
-notarization、Gatekeeper 或 public release；这些层当前全部仍为 `NOT-RUN`。artifact 通过后才按
-production source → exact artifact → isolated-live → authorized-live 的顺序另行决定后续范围。
+P3 source 与 `c678b1b` exact artifact 已闭合。唯一下一证据动作是在该 exact artifact 上、以新的
+guard-managed isolated environment 验证 normal production entry 的 isolated-live wiring；它需要单独的
+环境和范围记录。不得把现有 artifact PASS 外推为 temporary/installed runtime、live Provider、Science、
+SSH、账号、signing、notarization、Gatekeeper 或 public release；这些层当前全部仍为 `NOT-RUN`。
 
 ## 文档退役状态
 
