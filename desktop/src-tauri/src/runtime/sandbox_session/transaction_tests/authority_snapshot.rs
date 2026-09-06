@@ -12,7 +12,14 @@ fn authority_snapshot_uses_independent_inodes_and_restores_in_place_mutation() {
         AuthoritySnapshotScope::ScienceData,
         AuthoritySnapshotCategory::CondaCache,
     )
-    .expect("observed Science 0.1.25 files below 512 MiB must remain snapshotable");
+    .expect("observed Science 0.1.25 files below 1 GiB must remain snapshotable");
+    AuthorityTreeSnapshot::charge_entry(
+        &mut science_0125_budget,
+        807_103_033,
+        AuthoritySnapshotScope::ScienceData,
+        AuthoritySnapshotCategory::OrgState,
+    )
+    .expect("large Science organization artifacts below 1 GiB must remain snapshotable");
     let mut oversized_budget = AuthorityCopyBudget::default();
     let oversized = AuthorityTreeSnapshot::charge_entry(
         &mut oversized_budget,
@@ -20,14 +27,14 @@ fn authority_snapshot_uses_independent_inodes_and_restores_in_place_mutation() {
         AuthoritySnapshotScope::ScienceData,
         AuthoritySnapshotCategory::ScienceRuntime,
     )
-    .expect_err("authority files above 512 MiB must remain fail-closed");
+    .expect_err("authority files above 1 GiB must remain fail-closed");
     assert!(oversized.contains("code=authority_snapshot_file_limit"));
     assert!(oversized.contains("scope=science_data"));
     assert!(oversized.contains("category=science_runtime"));
     assert!(!oversized.contains('/'));
 
     let mut total_budget = AuthorityCopyBudget::default();
-    for _ in 0..16 {
+    for _ in 0..8 {
         AuthorityTreeSnapshot::charge_entry(
             &mut total_budget,
             MAX_AUTHORITY_SNAPSHOT_FILE_BYTES,
